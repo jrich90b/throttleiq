@@ -30,6 +30,7 @@ import {
   getPricingAttempts,
   incrementPricingAttempt,
   addTodo,
+  upsertPendingIncomingInventoryNotifyTodo,
   addCallTodoIfMissing,
   setFollowUpMode,
   pauseFollowUpCadence,
@@ -6262,14 +6263,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         String((conv.lead as any)?.name ?? "").trim() ||
         String(conv.leadKey ?? "").trim() ||
         "customer";
-      addTodo(
+      // Singleton upsert, NOT bare addTodo — the SMS lane already learned this (Nicholas Braun
+      // 4-copy bug): a per-class merge can't stop cross-class duplicates of the same "notify when
+      // the trade arrives" objective, so the objective-keyed upsert heals + refreshes instead.
+      upsertPendingIncomingInventoryNotifyTodo(
         conv,
-        "call",
         buildPendingIncomingInventoryTaskSummary({ pending, customerName }),
         event.providerMessageId,
-        conv.leadOwner,
-        undefined,
-        "followup"
+        conv.leadOwner
       );
       let ack = buildPendingIncomingInventoryInitialAdfReply(pending);
       ack = await applyInitialAdfPrefix(ack);
@@ -7527,14 +7528,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
             String((conv.lead as any)?.name ?? "").trim() ||
             String(conv.leadKey ?? "").trim() ||
             "customer";
-          addTodo(
+          // Same objective-keyed singleton as the SMS lane — see the note at the other call site.
+          upsertPendingIncomingInventoryNotifyTodo(
             conv,
-            "call",
             buildPendingIncomingInventoryTaskSummary({ pending, customerName: spokenForCustomerName }),
             event.providerMessageId,
-            conv.leadOwner,
-            undefined,
-            "followup"
+            conv.leadOwner
           );
           tail = buildSpokenForIncomingHandoffAck(pending);
           walkInSpokenForHandoff = true;

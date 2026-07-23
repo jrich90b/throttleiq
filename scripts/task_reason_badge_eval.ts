@@ -96,4 +96,26 @@ const invIdx = apiIndex.indexOf('Call customer to confirm inventory and availabi
 assert.ok(schedIdx > 0, "deriveTodoActionLabel must have a scheduling/booking action label");
 assert.ok(schedIdx < invIdx, "the scheduling branch must precede the inventory/availability branch in deriveTodoActionLabel");
 
-console.log("task_reason_badge:eval ok");
+// PARSER-FIRST HINT FALLBACK (Phase 3, +17169306602 "Follow up task should be tagged with
+// pricing"): when reason/action carry no signal, the badge trusts the backend's salesTopicHint —
+// the lead's PARSED classification CTA — instead of staying blank. Structured data, no new regex.
+const hintCases: Array<[any, string | null]> = [
+  [{ reason: "call", action: "Call customer (follow-up)", salesTopicHint: "pricing" }, "pricing"],
+  [{ reason: "call", action: "Call customer (follow-up)", salesTopicHint: "availability" }, "availability"],
+  // The hint is a FALLBACK only — an explicit reason/action signal still wins.
+  [{ reason: "pricing", action: "", salesTopicHint: "availability" }, "pricing"],
+  // Bookkeeping notes never badge, hint or not (a notice on a quote lead is not a buy signal).
+  [{ reason: "note", action: "", salesTopicHint: "pricing" }, null],
+  // Junk/unknown hints are ignored; no hint stays unbadged.
+  [{ reason: "call", action: "Call customer (follow-up)", salesTopicHint: "banana" }, null],
+  [{ reason: "call", action: "Call customer (follow-up)" }, null]
+];
+for (const [todo, expected] of hintCases) {
+  const got = salesCriticalKind(todo);
+  assert.equal(got, expected, `hint fallback: salesCriticalKind(${JSON.stringify(todo)}) => ${got}, expected ${expected}`);
+}
+// Source guard: GET /todos projects the hint from the parsed classification CTA.
+assert.match(apiIndex, /salesTopicHint/, "GET /todos must project salesTopicHint");
+assert.match(apiIndex, /classificationCta === "request_a_quote"/, "hint derives from the PARSED classification CTA");
+
+console.log("task_reason_badge:eval ok (incl. parser-first salesTopicHint fallback)");
