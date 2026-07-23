@@ -10,7 +10,7 @@
  */
 import type { Conversation, InventoryWatch } from "./conversationStore.js";
 import type { InventoryFeedItem } from "./inventoryFeed.js";
-import { modelMatches, unitIsDistinctModelFromWatch, distinct883ModelConflict } from "./inventoryFeed.js";
+import { modelMatches, unitIsDistinctModelFromWatch, distinct883ModelConflict, distinctSportsterModelConflict } from "./inventoryFeed.js";
 import { trikeClassConflict } from "./modelFamily.js";
 import { inventorySnapshotKey } from "./inventoryWatchSnapshot.js";
 import { unitArrivedAfter, type FirstSeenEntry } from "./inventoryFirstSeen.js";
@@ -44,6 +44,9 @@ export function inventoryItemMatchesWatch(item: InventoryFeedItem, watch: Invent
   // Low") — mirrors the live engine's guard so the detector never flags the (correctly) un-fired
   // wrong-model unit as a miss.
   if (distinct883ModelConflict(item.model, watch.model)) return false;
+  // Modern Sportster models (Sportster S / Nightster) — mirror the engine so the detector never flags
+  // the correctly-un-fired 883 Low as a miss.
+  if (distinctSportsterModelConflict(item.model, watch.model)) return false;
   // A distinct sibling model ("Road Glide Limited" for a "Road Glide" watch) is a
   // separate model, not a match — unless the watch is explicitly open to other trims.
   if (!watch.openToOtherTrims && unitIsDistinctModelFromWatch(item.model, watch.model)) return false;

@@ -298,6 +298,40 @@ export function distinct883ModelConflict(unitModelRaw: string | undefined, watch
   return specific883ModelToken(unitModelRaw) !== watchToken;
 }
 
+/**
+ * The MODERN, liquid-cooled Sportster models — Sportster S (RH1250S) and Nightster (RH975) — as a
+ * distinct token, else null. These are specific models, NOT the air-cooled Sportster line, but
+ * detectGenericWatchFamilyLabel maps "Sportster S" to the generic "sportster" family (the bare
+ * "sportster" token wins), so a "Sportster S" watch umbrella-matched a 2006 Sportster 883 Low
+ * (+17705967891). Anchored patterns (require the "sportster s" sequence or an rh12xx/rh9xx code) so a
+ * non-Sportster "…S" model — "Low Rider S", "CVO Road Glide ST" — never trips this.
+ */
+const MODERN_SPORTSTER_MODEL_MATCHERS: ReadonlyArray<readonly [string, RegExp]> = [
+  ["sportster_s", /\bsportster\s+s\b|\brh1250/],
+  ["nightster", /\bnightster\b|\brh975/]
+];
+export function modernSportsterModelToken(modelRaw: string | undefined | null): string | null {
+  const t = normalizeModel(String(modelRaw ?? ""));
+  for (const [token, re] of MODERN_SPORTSTER_MODEL_MATCHERS) {
+    if (re.test(t)) return token;
+  }
+  return null;
+}
+
+/**
+ * True when the WATCH names a modern Sportster model (Sportster S / Nightster) and the in-stock UNIT
+ * is NOT that same model — so a "Sportster S" watch must not fire on a "Sportster 883 Low" (or any
+ * other Sportster). Companion to distinct883ModelConflict, covering the modern liquid-cooled models
+ * the 883 guard doesn't. Purely SUBTRACTIVE, same fail-safe as the 883 guard (worst case a missed
+ * fire the detector re-surfaces, never a false wrong-model alert). A generic "Sportster" watch (no
+ * modern-model token) is unaffected.
+ */
+export function distinctSportsterModelConflict(unitModelRaw: string | undefined, watchModelRaw: string | undefined): boolean {
+  const watchToken = modernSportsterModelToken(watchModelRaw);
+  if (!watchToken) return false; // watch isn't a modern specific Sportster → nothing to constrain here
+  return modernSportsterModelToken(unitModelRaw) !== watchToken;
+}
+
 export function extractImageDate(url: string): Date | null {
   const m = url.match(/\/(\d{4})\/(\d{2})\/(\d{2})\//);
   if (!m) return null;

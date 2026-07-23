@@ -18,7 +18,9 @@ import { inventoryItemMatchesWatch } from "../services/api/src/domain/watchFireM
 import {
   unitIsDistinctModelFromWatch,
   distinct883ModelConflict,
-  specific883ModelToken
+  specific883ModelToken,
+  distinctSportsterModelConflict,
+  modernSportsterModelToken
 } from "../services/api/src/domain/inventoryFeed.ts";
 
 const m = (itemModel: string, watchModel: string) =>
@@ -87,9 +89,29 @@ assert.equal(specific883ModelToken("Iron 883"), "iron", "Iron 883 resolves to it
 assert.equal(specific883ModelToken("883"), null, "a bare 883 has no sub-model token (generic)");
 assert.equal(specific883ModelToken("Road Glide"), null, "a non-883 model has no 883 sub-model token");
 
-// Source guard: BOTH matchers apply the distinct-883 guard (live engine index.ts + detector watchFireMiss).
+// MODERN-SPORTSTER guard (+17705967891, 2026-07-22): "Sportster S" and "Nightster" are specific
+// modern models but detectGenericWatchFamilyLabel maps them to the generic "sportster" family, so the
+// SAME 2006 Sportster 883 Low fired a "Sportster S" watch too. Distinct models, not trims — block.
+assert.equal(m("Sportster 883 Low", "Sportster S"), false, "a 'Sportster S' watch must NOT fire on a Sportster 883 Low (the wrong-model bug)");
+assert.equal(m("2006 Harley-Davidson Sportster 883 Low", "Sportster S"), false, "the exact production unit must NOT fire a Sportster S watch");
+assert.equal(m("Sportster 883 Low", "Nightster"), false, "a 'Nightster' watch must NOT fire on a Sportster 883 Low");
+assert.equal(m("Sportster S", "Sportster S"), true, "a real Sportster S still fires a Sportster S watch");
+assert.equal(m("Sportster 883 Low", "Sportster"), true, "a GENERIC 'Sportster' watcher is still open to a Sportster 883 Low");
+// Pure guard — including the critical NEGATIVES that must never be read as a modern Sportster.
+assert.equal(distinctSportsterModelConflict("Sportster 883 Low", "Sportster S"), true, "Sportster S watch vs 883 Low unit → block");
+assert.equal(distinctSportsterModelConflict("Sportster S", "Sportster S"), false, "same modern model → allow");
+assert.equal(distinctSportsterModelConflict("Sportster 883 Low", "Sportster"), false, "generic Sportster watch → never blocks");
+assert.equal(modernSportsterModelToken("Sportster S"), "sportster_s", "Sportster S resolves to its modern token");
+assert.equal(modernSportsterModelToken("RH1250S"), "sportster_s", "the RH1250 code resolves to Sportster S");
+assert.equal(modernSportsterModelToken("Nightster"), "nightster", "Nightster resolves");
+assert.equal(modernSportsterModelToken("Low Rider S"), null, "a 'Low Rider S' is NOT a modern Sportster (the '…S' false-positive trap)");
+assert.equal(modernSportsterModelToken("CVO Road Glide ST"), null, "a 'Road Glide ST' is NOT a modern Sportster");
+assert.equal(modernSportsterModelToken("Sportster"), null, "a bare Sportster carries no modern-model token (stays generic)");
+
+// Source guard: BOTH matchers apply the distinct-883 + modern-Sportster guards (live engine + detector).
 const wfm = fs.readFileSync("services/api/src/domain/watchFireMiss.ts", "utf8");
 assert.match(wfm, /distinct883ModelConflict\(item\.model, watch\.model\)/, "detector matcher must apply the distinct-883 guard");
+assert.match(wfm, /distinctSportsterModelConflict\(item\.model, watch\.model\)/, "detector matcher must apply the modern-Sportster guard");
 
 // Source guard: the ENGINE's matcher (index.ts) is directional AND carries BOTH the
 // forward and the reverse distinct-model guards, so it stays in sync with the detector
@@ -101,5 +123,6 @@ assert.ok(!/itemModel\.includes\(watchModel\) \|\| watchModel\.includes\(itemMod
 assert.match(idx, /unitIsDistinctModelFromWatch\(item\.model, watch\.model\)/, "engine matcher must apply the forward distinct-model guard");
 assert.match(idx, /unitIsDistinctModelFromWatch\(watch\.model, item\.model\)/, "engine matcher must apply the REVERSE distinct-model guard (a trim-specific watch must not fire on a base unit)");
 assert.match(idx, /distinct883ModelConflict\(item\.model, watch\.model\)/, "engine matcher must apply the distinct-883-model guard");
+assert.match(idx, /distinctSportsterModelConflict\(item\.model, watch\.model\)/, "engine matcher must apply the modern-Sportster guard");
 
 console.log("PASS watch model-match eval — directional (unit⊇watch): trim-specific watches no longer fire on base units (forward + reverse guards); base/exact matches preserved; engine matcher guarded.");
