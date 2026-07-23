@@ -149,4 +149,19 @@ const keepOwnDue = planPendingIncomingNotifyDedup([
 ]);
 assert.equal(keepOwnDue.adoptDueAt, null, "survivor with its own dueAt adopts nothing");
 
-console.log("PASS pending-incoming notify-todo dedup eval (source guard + predicate + planner + arrival-notify family)");
+// EMAIL-LANE PARITY (task-hygiene Phase 3): the SendGrid/ADF lane recreated the exact bug this
+// dedup fixed — TWO bare addTodo sites for the same "notify when the trade arrives" objective
+// bypassed the singleton upsert (audit 7/22). Both must route through the upsert, and no bare
+// pending-incoming addTodo may remain in the email lane.
+{
+  const fs2 = await import("node:fs");
+  const sendgrid = fs2.readFileSync("services/api/src/routes/sendgridInbound.ts", "utf8");
+  const upsertCalls = sendgrid.match(/upsertPendingIncomingInventoryNotifyTodo\(/g) ?? [];
+  assert.ok(upsertCalls.length >= 2, `email lane must use the singleton upsert at both creation sites (found ${upsertCalls.length})`);
+  assert.ok(
+    !/addTodo\(\s*conv,\s*"call",\s*buildPendingIncomingInventoryTaskSummary/.test(sendgrid),
+    "no bare pending-incoming addTodo may remain in the email lane (the cross-class duplicate bug)"
+  );
+}
+
+console.log("PASS pending-incoming notify-todo dedup eval (source guard + predicate + planner + arrival-notify family + email-lane parity)");

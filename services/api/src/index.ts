@@ -752,6 +752,7 @@ import {
   decideDepartmentTaskSoftClose,
   isDepartmentTaskSoftCloseEnabled
 } from "./domain/taskFulfillmentAutoClose.js";
+import { decideCalendarEventReconcile } from "./domain/appointmentCalendarSync.js";
 import {
   resolveAuthoritativeModels,
   modelAuthorityEnabled,
@@ -5206,6 +5207,12 @@ function maybeTagReplyTo(replyTo: string | undefined, conv: any): string | undef
 const INVENTORY_SNAPSHOT_PATH = path.join(getDataDir(), "inventory_snapshot.json");
 const INVENTORY_FIRST_SEEN_PATH = path.join(getDataDir(), "inventory_first_seen.json");
 let inventoryWatchRunning = false;
+// Calendar→store appointment sync throttle (Phase 3): the tick runs every 60s but polling Google
+// for every booked event that often is waste — a ~15-min cadence catches an external edit well
+// before the customer arrives.
+let lastAppointmentCalendarSyncMs = 0;
+const APPOINTMENT_CALENDAR_SYNC_INTERVAL_MS = 15 * 60 * 1000;
+const APPOINTMENT_CALENDAR_SYNC_MAX_PER_SWEEP = 20;
 
 // Track when each unit was FIRST seen in the feed so the watch_fire_miss detector can tell a genuine
 // post-watch arrival (a real cron miss) from a unit that was already in stock when the watch was set
@@ -10758,16 +10765,31 @@ function applyBackRoomInventoryManualTurnover(args: {
         : wantsNumbers
           ? "run/send numbers"
           : "follow up";
-  addTodo(
-    args.conv,
-    wantsNumbers ? "payments" : "other",
-    `Manual follow-up: ${actionLabel} for the unlisted/back-room bike. Customer asked: ${requestText || "back-room inventory follow-up"}`,
-    args.providerMessageId ?? undefined,
-    undefined,
-    undefined,
-    "todo",
-    { skipMerge: true }
+  // Objective-keyed upsert (task-hygiene Phase 3): skipMerge was here so the class-merge
+  // wouldn't CONCATENATE unrelated `other`-class asks into one card — but bare skipMerge meant a
+  // customer re-asking the same thing stacked a new task every turn. Same objective (same
+  // actionLabel) => refresh the open task; a different ask still gets its own.
+  const backRoomSummary = `Manual follow-up: ${actionLabel} for the unlisted/back-room bike. Customer asked: ${requestText || "back-room inventory follow-up"}`;
+  const backRoomPrefix = `Manual follow-up: ${actionLabel} for the unlisted/back-room bike.`;
+  const existingBackRoom = listOpenTodos().find(
+    t => t.convId === args.conv.id && String(t.summary ?? "").startsWith(backRoomPrefix)
   );
+  if (existingBackRoom) {
+    existingBackRoom.summary = backRoomSummary;
+    if (args.providerMessageId) existingBackRoom.sourceMessageId = args.providerMessageId;
+    saveConversation(args.conv);
+  } else {
+    addTodo(
+      args.conv,
+      wantsNumbers ? "payments" : "other",
+      backRoomSummary,
+      args.providerMessageId ?? undefined,
+      undefined,
+      undefined,
+      "todo",
+      { skipMerge: true }
+    );
+  }
   setDialogState(args.conv, wantsNumbers ? "payments_handoff" : "inventory_answered");
   setFollowUpMode(args.conv, "manual_handoff", "unlisted_inventory_check");
   stopFollowUpCadence(args.conv, "manual_handoff");
@@ -30485,6 +30507,78 @@ async function processDueFollowUpsUnlocked() {
   if (bookkeepingNotesRetired > 0) {
     console.log(`[state-reconcile] retired ${bookkeepingNotesRetired} aged bookkeeping notice(s) (TTL ${BOOKKEEPING_NOTE_TTL_DAYS}d)`);
   }
+  // Calendar → store reconcile (task-hygiene Phase 3): an appointment edited DIRECTLY in Google
+  // Calendar (moved/deleted there, not via the console) never reached the store, so the task card
+  // kept asserting the old slot (+17163975098 Kody: 3:00→4:00 move, task still said 3:00). Every
+  // ~15 min, read each FUTURE booked event back and apply the pure decideCalendarEventReconcile:
+  // moved => update whenIso/whenText; explicitly cancelled => clear + close appointment todos
+  // (mirrors the console PATCH-cancel arm); anything uncertain => noop. Capped; fetch failures skip.
+  if (now.getTime() - lastAppointmentCalendarSyncMs >= APPOINTMENT_CALENDAR_SYNC_INTERVAL_MS) {
+    lastAppointmentCalendarSyncMs = now.getTime();
+    try {
+      const cfgForSync = await getSchedulerConfigHot();
+      const tzForSync = cfgForSync.timezone || "America/New_York";
+      const cal = await getAuthedCalendarClient();
+      let checked = 0;
+      let synced = 0;
+      for (const conv of convs) {
+        if (checked >= APPOINTMENT_CALENDAR_SYNC_MAX_PER_SWEEP) break;
+        const appt = conv?.appointment;
+        const eventId = String(appt?.bookedEventId ?? "").trim();
+        const calendarId = String(appt?.bookedCalendarId ?? "").trim();
+        const whenMs = Date.parse(String(appt?.whenIso ?? ""));
+        if (!appt || !eventId || !calendarId) continue;
+        // Only future (or same-day) appointments are worth reconciling — history is history.
+        if (!Number.isFinite(whenMs) || whenMs < now.getTime() - 24 * 60 * 60 * 1000) continue;
+        checked += 1;
+        let event: any = null;
+        try {
+          const resp = await cal.events.get({ calendarId, eventId });
+          event = resp?.data ?? null;
+        } catch {
+          continue; // fetch failure => noop for this conv; never clear on a read error
+        }
+        const decision = decideCalendarEventReconcile({
+          storedWhenIso: appt.whenIso ?? null,
+          eventStartIso: event?.start?.dateTime ?? event?.start?.date ?? null,
+          eventStatus: event?.status ?? null
+        });
+        if (decision.kind === "noop") continue;
+        if (decision.kind === "update_time") {
+          appt.whenIso = decision.whenIso;
+          appt.whenText = formatSlotLocal(decision.whenIso, tzForSync);
+        } else {
+          appt.status = "none";
+          appt.whenText = undefined;
+          appt.whenIso = null;
+          appt.confirmedBy = undefined;
+          appt.bookedEventId = null;
+          appt.bookedEventLink = null;
+          appt.bookedSalespersonId = null;
+          appt.bookedSalespersonName = null;
+          appt.bookedCalendarId = null;
+          appt.matchedSlot = undefined;
+          appt.reschedulePending = true;
+          clearAppointmentStaffPromptState(appt);
+          markOpenTodosDoneForConversationByClass(conv.id, ["appointment"]);
+        }
+        appt.updatedAt = now.toISOString();
+        conv.updatedAt = now.toISOString();
+        saveConversation(conv);
+        synced += 1;
+        recordRouteOutcome("manual", "appointment_calendar_synced", {
+          convId: conv.id,
+          leadKey: conv.leadKey,
+          kind: decision.kind
+        });
+      }
+      if (synced > 0) {
+        console.log(`[state-reconcile] calendar sync: reconciled ${synced} externally-edited appointment(s)`);
+      }
+    } catch (err: any) {
+      console.warn("[state-reconcile] calendar sync skipped:", err?.message ?? err);
+    }
+  }
   const FIRST_TOUCH_TODOS_PER_TICK = 15;
   const convIdsWithOpenTodoNow = new Set(listOpenTodos().map(t => t.convId));
   let firstTouchSurfaced = 0;
@@ -40007,10 +40101,23 @@ app.get("/todos", requirePermission("canAccessTodos"), async (req, res) => {
         // Phase-2 row context: what the customer last said + whether anyone actually replied
         // after this task existed. Display-only (closes nothing); pinned by task_inbox_context:eval.
         const conversationContext = buildTodoConversationContext(conv, t);
+        // Parser-first badge hint (Phase 3): the money badge previously re-guessed from summary
+        // keywords, missing tasks whose reason is generic (a cadence "call" on a lead the ADF
+        // parser ALREADY classified as a quote request — +17169306602, operator-reported "should
+        // be tagged pricing"). The lead's parsed CTA is the structured source of truth; the web
+        // badge uses this hint only as a FALLBACK when reason/action carry no signal.
+        const classificationCta = String(conv?.classification?.cta ?? "").trim();
+        const salesTopicHint =
+          classificationCta === "request_a_quote"
+            ? "pricing"
+            : classificationCta === "check_availability"
+              ? "availability"
+              : null;
         return {
           ...t,
           leadName,
           action,
+          salesTopicHint,
           lastInboundPreview: conversationContext.lastInboundPreview,
           lastInboundAt: conversationContext.lastInboundAt,
           repliedSinceTaskAt: conversationContext.repliedSinceTaskAt,

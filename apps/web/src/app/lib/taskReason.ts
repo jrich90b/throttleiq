@@ -39,6 +39,17 @@ export function salesCriticalKind(todo: any): SalesCriticalKind | null {
     return "financing";
   }
   if (AVAILABILITY_RE.test(text)) return "availability";
+  // Parser-first fallback (Phase 3): when reason/action carry no signal, trust the backend's
+  // salesTopicHint — the lead's PARSED classification CTA (request_a_quote / check_availability),
+  // structured data, not text guessing. Covers the cadence-"call"-on-a-quote-lead miss
+  // (+17169306602, operator-reported "Follow up task should be tagged with pricing").
+  // Never applied to bookkeeping notes — a notice on a quote lead is not a buy signal.
+  if (reason !== "note") {
+    const hint = String(todo?.salesTopicHint ?? "");
+    if (hint === "pricing" || hint === "financing" || hint === "availability") {
+      return hint as SalesCriticalKind;
+    }
+  }
   return null;
 }
 
