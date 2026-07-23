@@ -5,7 +5,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isDealerLeadAppConfirmedDemoRideAdfText } from "../services/api/src/domain/workflowRegressionGuards.ts";
-import { isOptOutKeywordInbound } from "../services/api/src/domain/scoringExclusions.ts";
+import {
+  isBareReactionOnlyInbound,
+  isClosingAckNoAction,
+  isEnthusiasmAckNoAction,
+  isOptOutKeywordInbound,
+  isQuotedReactionEchoInbound,
+  isShortAckNoAction
+} from "../services/api/src/domain/scoringExclusions.ts";
 
 type Provider = "twilio" | "sendgrid_adf" | "web_widget";
 type Verdict = "candidate_safe" | "review" | "expected_no_response" | "no_response" | "error";
@@ -804,6 +811,14 @@ function latestOutboundAfter(conv: Conversation | null, beforeCount: number): Co
 function isExpectedNoCustomerReply(inbound: string): boolean {
   const text = inbound.replace(/\s+/g, " ").trim().toLowerCase();
   if (!text) return false;
+  // Pure reactions first: an iOS/Twilio tapback echo (`Liked "…"`, `Reacted 🫡 to "…"`)
+  // or an emoji-only / emoticon-only turn. The customer pressed a button, not wrote a
+  // word — silence is the designed behavior (AGENTS.md "Twilio Reaction No-Reply
+  // Guardrail"). These run BEFORE the reschedule guard below because a tapback QUOTES
+  // a prior outbound: words like "reschedule" inside the quote are ours, not the
+  // customer's. Canonical, eval-pinned helpers from scoringExclusions.ts — never a
+  // local regex copy (they drift; that is exactly the bug this fixes).
+  if (isQuotedReactionEchoInbound(inbound) || isBareReactionOnlyInbound(inbound)) return true;
   if (
     /\bsource:\s*traffic log pro\b/i.test(inbound) &&
     /\(step\s+\d+\)/i.test(inbound) &&
@@ -817,6 +832,17 @@ function isExpectedNoCustomerReply(inbound: string): boolean {
   if (/\b(reschedule|re-?schedule|can't make|cant make|cannot make|won't make|wont make|not going to be able to make|unable to make|need to cancel|have to cancel)\b/i.test(text)) {
     return false;
   }
+  // Typed acks/closers/enthusiasm ("Awesome 👍", "Sounds great!", "Thanks battle budy",
+  // "Can't wait"): same canonical helpers the tone/reply-coverage scorers use. Each
+  // carries its own length ceiling, question-mark guard, and actionable-cue guard
+  // (price/schedule/finance words force grading), so this stays fail-safe.
+  if (isShortAckNoAction(inbound) || isClosingAckNoAction(inbound) || isEnthusiasmAckNoAction(inbound)) return true;
+  // Whole-message closer pleasantries the canonical ack matchers don't cover:
+  // "You are welcome", "No problem at all.", "Take care". Anchored to the entire
+  // message so any turn carrying real content still gets graded.
+  if (/^(?:you(?:['’]?re| are) welcome|no problem(?: at all)?|no worries(?: at all)?|any\s?time|my pleasure|take care)[.!\s]*$/i.test(text)) {
+    return true;
+  }
   if (/^(ok|okay|cool|great|perfect|sounds good|thank you|thanks|thanx|thx|ty|yes sir|will do|thanks,?\s*will do|👍)[.!?\s]*$/i.test(text)) return true;
   if (
     /\b(let me (?:do some figuring out|figure|find|check)|i(?:'|’)ll (?:let|give) you (?:know|a time|a timeframe|a time frame)|give you a time\s*frame|let you know soon)\b/i.test(
@@ -826,7 +852,18 @@ function isExpectedNoCustomerReply(inbound: string): boolean {
     return true;
   }
   if (/\b(no rush|not urgent|don't mean to bug you|dont mean to bug you|hope you'?re enjoying|figured that would help|you guys are outstanding|much appreciated)\b/i.test(text)) return true;
-  const hasQuestion = /\?|\b(can|could|would|do|does|did|is|are|will|what|when|where|why|how)\b/i.test(text);
+  // Question probe for the gratitude/signoff carve-outs below. The old bare word list
+  // fired on NEGATED contractions ("can't wait" → "can") and on auxiliaries inside
+  // fixed phrases ("will do" → "do", "you are welcome" → "are"), vetoing turns that
+  // are pure signoffs. Strip those shapes first; a real question still trips on "?"
+  // or a surviving interrogative auxiliary. Fail-direction: a false VETO here only
+  // means the turn keeps getting graded (fail-safe), never that a miss is hidden.
+  const questionProbe = text
+    .replace(/\b(?:ca|wo|do|does|did|is|are|was|were|could|would|should|ai)n['’]?t\b/gi, " ")
+    .replace(/\b(?:cant|wont|dont|didnt|doesnt|isnt|arent|couldnt|wouldnt|shouldnt|aint)\b/gi, " ")
+    .replace(/\bwill do\b/gi, " ")
+    .replace(/\byou(?:['’]?re| are) welcome\b/gi, " ");
+  const hasQuestion = /\?|\b(can|could|would|do|does|did|is|are|will|what|when|where|why|how)\b/i.test(questionProbe);
   if (hasQuestion) return false;
   if (/\b(thanks?|thank you|appreciate|have a great day|sounds good|perfect|ok|okay)\b/i.test(text)) return true;
   if (/\b(i'?ll be there|i will be there|be there by then|see you then|talk soon|touch base)\b/i.test(text)) return true;
@@ -836,6 +873,23 @@ function isExpectedNoCustomerReply(inbound: string): boolean {
 function isDealerLeadAppOutcomeAdf(provider: Provider, inbound: string): boolean {
   if (provider !== "sendgrid_adf") return false;
   return isDealerLeadAppConfirmedDemoRideAdfText(inbound);
+}
+
+/**
+ * The one Joe-approved post-ride thank-you already exists on the thread. Mirrors
+ * `hasDealerRideInitialThankYouDraft` in services/api/src/routes/sendgridInbound.ts
+ * (the live dedupe that returns `dealer_ride_initial_thank_you_exists`): the live
+ * path deliberately produces NO second draft when a Dealer Lead App demo-ride ADF
+ * re-fires on an already-thanked rider (Ref 11182 / +17168078517 is the canonical
+ * case — the ADF landed the day AFTER the thank-you went out). Keep the two
+ * regexes in lockstep.
+ */
+function hasDealerRideInitialThankYouOutbound(conv?: Conversation | null): boolean {
+  return (conv?.messages ?? []).some(message => {
+    if (message?.direction !== "out") return false;
+    const body = String(message?.body ?? "");
+    return /thanks again for coming in/i.test(body) && /\b(?:test ride|ride|demo)\b/i.test(body);
+  });
 }
 
 function isWrongNumberInbound(inbound: string): boolean {
@@ -909,6 +963,15 @@ export function classifyDraft(provider: Provider, inbound: string, draft: string
       };
     }
     if (isDealerLeadAppOutcomeAdf(provider, inbound)) {
+      if (hasDealerRideInitialThankYouOutbound(conv)) {
+        // The live path dedupes here (`dealer_ride_initial_thank_you_exists` in
+        // sendgridInbound.ts): one post-ride thank-you per rider, so silence on a
+        // repeat demo-ride ADF is by design, not a miss.
+        return {
+          verdict: "expected_no_response",
+          reasons: ["Dealer Lead App demo-ride ADF on an already-thanked rider — the one Joe-approved post-ride thank-you exists; live path dedupes"]
+        };
+      }
       return {
         verdict: "missing_response",
         reasons: ["Dealer Lead App demo-ride ADF should produce a customer thank-you draft (Joe-approved 2026-07-02); staff keep the outcome"]
