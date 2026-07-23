@@ -32,6 +32,7 @@ export {
   shouldSuppressCommittedBuyerAvailabilityRepitch,
   decideTradeQualifierTurn,
   decideCustomerAckConfirmBooking,
+  decideManualConfirmPendingAppointment,
   decideSchedulingDeferralFollowUpTask,
   tentativeWindowNeedsOwnerFollowUp,
   isStaleBookedAppointmentDay,
