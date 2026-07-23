@@ -893,6 +893,9 @@ function hasDealerRideInitialThankYouOutbound(conv?: Conversation | null): boole
 }
 
 function isWrongNumberInbound(inbound: string): boolean {
+  // "Wrong #" (the literal shorthand customers text) counts too — `\b` can't sit before "#",
+  // so it gets its own alternative outside the word-boundary group.
+  if (/\bwrong\s*#/i.test(inbound)) return true;
   return /\b(wrong\s+number|you\s+(?:have|got)\s+the\s+wrong\s+number|not\s+(?:me|mine|this\s+person)|who\s+is\s+this)\b/i.test(
     inbound
   );
@@ -937,7 +940,17 @@ function isImmediateArrivalInbound(inbound: string): boolean {
   );
 }
 
-export function classifyDraft(provider: Provider, inbound: string, draft: string | null, conv?: Conversation | null): {
+export function classifyDraft(
+  provider: Provider,
+  inbound: string,
+  draft: string | null,
+  conv?: Conversation | null,
+  // The ORIGINAL conversation's mode BEFORE prepareCaseData force-overwrites conv.mode to the
+  // replay mode (autopilot for Twilio). Silence carve-outs must classify against the source
+  // thread's ownership, not the harness's counterfactual override — otherwise the human-mode
+  // branch below is dead code for every Twilio replay (5 phantom judge-fails, 2026-07-23 sweep).
+  sourceConversationMode?: string | null
+): {
   verdict: Verdict;
   reasons: string[];
 } {
@@ -978,16 +991,27 @@ export function classifyDraft(provider: Provider, inbound: string, draft: string
       };
     }
     if (
-      isWrongNumberInbound(inbound) &&
-      (String(conv?.status ?? "").toLowerCase() === "closed" ||
-        String(conv?.closedReason ?? "").toLowerCase() === "wrong_number")
+      // The conversation state alone proves the disposition: closedReason === "wrong_number"
+      // means the number is confirmed not the lead's, so ANY silence toward it is by design —
+      // no inbound-text match required (the text check alone missed shorthand like "Wrong #").
+      String(conv?.closedReason ?? "").toLowerCase() === "wrong_number" ||
+      (isWrongNumberInbound(inbound) &&
+        (String(conv?.status ?? "").toLowerCase() === "closed" ||
+          String(conv?.closedReason ?? "").toLowerCase() === "wrong_number"))
     ) {
       return {
         verdict: "expected_no_response",
         reasons: ["wrong-number suppression closed the conversation"]
       };
     }
-    if (String((conv as any)?.mode ?? "").toLowerCase() === "human") {
+    // Human-owned thread (staff takeover): the live system suppresses customer-facing auto
+    // replies there by design — mirrors the release-gate human-mode skips (c5ae6e32/acbede8d).
+    // Checks the SOURCE mode first because the replay harness overwrites conv.mode with the
+    // forced replay mode; the convAfter check still covers explicit --modes human replays.
+    if (
+      String(sourceConversationMode ?? "").toLowerCase() === "human" ||
+      String((conv as any)?.mode ?? "").toLowerCase() === "human"
+    ) {
       return {
         verdict: "expected_no_response",
         reasons: ["human mode suppresses customer-facing auto replies by design"]
@@ -1186,7 +1210,15 @@ async function replayOne(
       const outbound = latestOutboundAfter(convAfter, beforeCount);
       draft = outbound?.body?.trim() || null;
     }
-    const classification = classifyDraft(candidate.provider, candidate.body, draft, convAfter);
+    const classification = classifyDraft(
+      candidate.provider,
+      candidate.body,
+      draft,
+      convAfter,
+      // The pre-override source mode (prepareCaseData rewrites the temp copy's conv.mode to the
+      // forced replay mode, so convAfter can never say "human" for a default Twilio replay).
+      caseData.convBefore.mode ?? caseData.convBefore.conversationMode ?? null
+    );
     return {
       ...candidate,
       replayMode: mode,
