@@ -6825,6 +6825,73 @@ input[type="reset"],
 .lr-task-likely-done-confirm:hover {
   background: var(--lr-app-hover, rgba(127, 127, 127, 0.12));
 }
+/* Phase-2 task-inbox context + bulk + stale demotion */
+.lr-task-card-customer-said {
+  margin-top: 0.4rem;
+  font-size: 0.78rem;
+  color: var(--lr-app-text, var(--text-primary));
+}
+.lr-task-card-customer-said-label {
+  font-weight: 600;
+  color: var(--lr-app-muted-soft, var(--text-muted));
+}
+.lr-task-card-customer-said-when {
+  color: var(--lr-app-muted-soft, var(--text-muted));
+}
+.lr-task-replied-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-top: 0.35rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--lr-app-border, var(--border-color));
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--accent-text);
+}
+.lr-task-bulk-check {
+  width: 0.95rem;
+  height: 0.95rem;
+  margin-right: 0.35rem;
+  accent-color: var(--accent-text);
+  cursor: pointer;
+}
+.lr-task-bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--lr-app-border, var(--border-color));
+  border-radius: 0.5rem;
+  background: var(--lr-app-hover, rgba(127, 127, 127, 0.08));
+  font-size: 0.8rem;
+}
+.lr-task-bulk-bar-count {
+  font-weight: 700;
+  color: var(--lr-app-text, var(--text-primary));
+}
+.lr-task-bulk-bar-btn {
+  padding: 0.2rem 0.65rem;
+  border-radius: 999px;
+  border: 1px solid var(--lr-app-border, var(--border-color));
+  background: transparent;
+  color: var(--accent-text);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.lr-task-bulk-bar-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.lr-task-bulk-bar-btn--quiet {
+  color: var(--lr-app-muted-soft, var(--text-muted));
+}
+.lr-task-card--stale {
+  opacity: 0.75;
+}
 .lr-task-card-name {
   margin-top: 0.65rem;
   font-size: 1.18rem;

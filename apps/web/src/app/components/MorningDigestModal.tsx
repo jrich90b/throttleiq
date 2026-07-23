@@ -120,12 +120,12 @@ export function MorningDigestModal(props: {
 
         <div className="space-y-4 px-5 py-4">
           {groups.map(group => (
-            <div key={group.bucket}>
+            <div key={`${group.bucket}-${group.stale ? "stale" : "live"}`}>
               <div
-                className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-semibold uppercase tracking-wide ${BUCKET_HEADER_CLASS[group.bucket]}`}
+                className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-semibold uppercase tracking-wide ${group.stale ? BUCKET_HEADER_CLASS.no_date : BUCKET_HEADER_CLASS[group.bucket]}`}
               >
-                <SideNavIcon name={BUCKET_ICON[group.bucket]} className="h-3.5 w-3.5" />
-                {dueBucketLabel(group.bucket)}
+                <SideNavIcon name={group.stale ? "clock" : BUCKET_ICON[group.bucket]} className="h-3.5 w-3.5" />
+                {group.stale ? "Older — worth a review" : dueBucketLabel(group.bucket)}
                 <span className="font-normal">· {group.tasks.length}</span>
               </div>
               <div className="mt-2 space-y-2">

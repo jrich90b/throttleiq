@@ -7,6 +7,7 @@ import {
   dueBucketLabel,
   dueBucketRank,
   isLikelyDoneTask,
+  isStaleOverdueTask,
   parseSaneTaskDateMs,
   relativeDueLabel,
   taskEffectiveDueMs
@@ -162,6 +163,35 @@ export function TaskInboxSection(props: any) {
   } = props;
   const [nowMs, setNowMs] = React.useState(() => Date.now());
   const [snoozeOpenId, setSnoozeOpenId] = React.useState<string | null>(null);
+  // Bulk selection (Phase 2): clearing a messy pile one click at a time was the #1 friction
+  // (UX audit 7/22). Appointment-class tasks are excluded — their close routes through the
+  // outcome modal and must never be bulk-dismissed.
+  const [selectedTaskIds, setSelectedTaskIds] = React.useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = React.useState(false);
+  const toggleTaskSelected = (taskId: string) => {
+    setSelectedTaskIds(prev => {
+      const next = new Set(prev);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
+  };
+  const selectedTasks = (filteredTodos ?? []).filter(
+    (t: any) => selectedTaskIds.has(t.id) && todoInboxSection(t) !== "appointment"
+  );
+  const runBulk = async (action: "close" | "snooze") => {
+    if (bulkBusy || !selectedTasks.length) return;
+    setBulkBusy(true);
+    try {
+      for (const t of selectedTasks) {
+        if (action === "close") await markTodoDone(t, "dismiss");
+        else if (typeof snoozeTodo === "function") await snoozeTodo(t, snoozeTargets(nowMs)[0].iso);
+      }
+      setSelectedTaskIds(new Set());
+    } finally {
+      setBulkBusy(false);
+    }
+  };
 
   React.useEffect(() => {
     const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
@@ -230,6 +260,37 @@ export function TaskInboxSection(props: any) {
           </select>
         </div>
       </div>
+      {selectedTasks.length ? (
+        <div className="lr-task-bulk-bar">
+          <span className="lr-task-bulk-bar-count">{selectedTasks.length} selected</span>
+          <button
+            type="button"
+            className="lr-task-bulk-bar-btn"
+            disabled={bulkBusy}
+            onClick={() => void runBulk("close")}
+            title="Close every selected task"
+          >
+            Close all
+          </button>
+          <button
+            type="button"
+            className="lr-task-bulk-bar-btn"
+            disabled={bulkBusy || typeof snoozeTodo !== "function"}
+            onClick={() => void runBulk("snooze")}
+            title="Snooze every selected task to tomorrow 9am"
+          >
+            Snooze to tomorrow
+          </button>
+          <button
+            type="button"
+            className="lr-task-bulk-bar-btn lr-task-bulk-bar-btn--quiet"
+            disabled={bulkBusy}
+            onClick={() => setSelectedTaskIds(new Set())}
+          >
+            Clear selection
+          </button>
+        </div>
+      ) : null}
       <div className="mt-3 space-y-3">
         {(() => {
           // One card per customer with every open task inside it (Joe,
@@ -258,6 +319,7 @@ export function TaskInboxSection(props: any) {
             bucket: DueBucket;
             urgencyMs: number;
             salesCritical: boolean;
+            stale: boolean;
           }> = [];
           for (const g of byConv.values()) {
             g.tasks.sort((a: any, b: any) => {
@@ -277,10 +339,15 @@ export function TaskInboxSection(props: any) {
               tasks: g.tasks,
               bucket: dueBucketFor(primary, nowMs),
               urgencyMs: taskEffectiveDueMs(primary) ?? Number.POSITIVE_INFINITY,
-              salesCritical: g.tasks.some((t: any) => salesCriticalKind(t) != null)
+              salesCritical: g.tasks.some((t: any) => salesCriticalKind(t) != null),
+              // Stale demotion (Phase 2): a card whose EVERY task is overdue >14d isn't urgent —
+              // it's a "still relevant?" review item. Demoted below all live buckets so ancient
+              // overdue stops burying today's fresh work. A card with ANY fresher task stays put.
+              stale: g.tasks.every((t: any) => isStaleOverdueTask(t, nowMs))
             });
           }
           groups.sort((a, b) => {
+            if (a.stale !== b.stale) return a.stale ? 1 : -1; // stale sinks below everything live
             const ra = dueBucketRank(a.bucket);
             const rb = dueBucketRank(b.bucket);
             if (ra !== rb) return ra - rb;
@@ -288,8 +355,13 @@ export function TaskInboxSection(props: any) {
             if (a.salesCritical !== b.salesCritical) return a.salesCritical ? -1 : 1;
             return a.urgencyMs - b.urgencyMs;
           });
-          const bucketCounts = new Map<DueBucket, number>();
-          for (const g of groups) bucketCounts.set(g.bucket, (bucketCounts.get(g.bucket) ?? 0) + 1);
+          const sectionKeyOf = (g: { stale: boolean; bucket: DueBucket }) =>
+            g.stale ? "stale" : g.bucket;
+          const bucketCounts = new Map<string, number>();
+          for (const g of groups) {
+            const key = sectionKeyOf(g);
+            bucketCounts.set(key, (bucketCounts.get(key) ?? 0) + 1);
+          }
           return groups.map((group, groupIdx) => {
             const rowConv = conversationsById.get(group.convId);
             const first = group.tasks[0];
@@ -307,24 +379,27 @@ export function TaskInboxSection(props: any) {
             const callTask = group.tasks.find(
               (t: any) => !/(^|\b)note(\b|$)/.test(String(t.reason ?? "").toLowerCase())
             );
+            const sectionKey = sectionKeyOf(group);
             const isNewBucket =
-              groupIdx === 0 || groups[groupIdx - 1].bucket !== group.bucket;
-            const cardUrgencyClass = group.salesCritical
-              ? " lr-task-card--priority"
-              : group.bucket === "overdue"
-                ? " lr-task-card--overdue"
-                : group.bucket === "today"
-                  ? " lr-task-card--today"
-                  : "";
+              groupIdx === 0 || sectionKeyOf(groups[groupIdx - 1]) !== sectionKey;
+            const cardUrgencyClass = group.stale
+              ? " lr-task-card--stale"
+              : group.salesCritical
+                ? " lr-task-card--priority"
+                : group.bucket === "overdue"
+                  ? " lr-task-card--overdue"
+                  : group.bucket === "today"
+                    ? " lr-task-card--today"
+                    : "";
             return (
               <React.Fragment key={group.convId}>
                 {isNewBucket ? (
-                  <div className={`lr-task-bucket-h lr-task-bucket-h--${group.bucket}`}>
+                  <div className={`lr-task-bucket-h lr-task-bucket-h--${group.stale ? "no_date" : group.bucket}`}>
                     <span aria-hidden className="inline-flex">
-                      <SideNavIcon name={BUCKET_ICON[group.bucket]} className="w-3.5 h-3.5" />
+                      <SideNavIcon name={group.stale ? "clock" : BUCKET_ICON[group.bucket]} className="w-3.5 h-3.5" />
                     </span>
-                    <span>{dueBucketLabel(group.bucket)}</span>
-                    <span className="lr-task-bucket-count">{bucketCounts.get(group.bucket) ?? 0}</span>
+                    <span>{group.stale ? "Stale — still relevant?" : dueBucketLabel(group.bucket)}</span>
+                    <span className="lr-task-bucket-count">{bucketCounts.get(sectionKey) ?? 0}</span>
                   </div>
                 ) : null}
               <div className={`lr-task-card${cardUrgencyClass}`}>
@@ -350,6 +425,31 @@ export function TaskInboxSection(props: any) {
                   {vehicleLine ? <div className="lr-task-card-vehicle">{vehicleLine}</div> : null}
                   {highlightLine ? <div className="lr-task-card-highlight">{highlightLine}</div> : null}
                   {first.leadName ? <div className="lr-task-card-phone">{first.leadKey}</div> : null}
+                  {/* Phase-2 context: what the customer last said + whether anyone already replied,
+                      so staff never open a conversation just to discover a task is dead. */}
+                  {first.lastInboundPreview ? (
+                    <div className="lr-task-card-customer-said" title="The customer's most recent message">
+                      <span className="lr-task-card-customer-said-label">Customer said:</span>{" "}
+                      &ldquo;{first.lastInboundPreview}&rdquo;
+                      {first.lastInboundAt ? (
+                        <span className="lr-task-card-customer-said-when">
+                          {" "}
+                          · {new Date(first.lastInboundAt).toLocaleDateString()}
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {group.tasks.some((t: any) => t.repliedSinceTaskAt) ? (
+                    <div
+                      className="lr-task-replied-chip"
+                      title="A real reply went out to this customer after the task was created"
+                    >
+                      <span aria-hidden className="inline-flex">
+                        <SideNavIcon name="check" className="w-3 h-3" />
+                      </span>
+                      Replied since
+                    </div>
+                  ) : null}
                   {group.tasks.map((t: any) => {
                     const reason = (t.reason ?? "").toLowerCase();
                     const sectionType = todoInboxSection(t);
@@ -447,9 +547,20 @@ export function TaskInboxSection(props: any) {
                       !appointmentReminderSent &&
                       !dealerRideOutcomeNeeded &&
                       !isApprovalTodoTask;
+                    const bulkSelectable = sectionType !== "appointment";
                     return (
                       <div key={t.id} className="lr-task-card-task">
                         <div className="lr-task-card-pillrow">
+                          {bulkSelectable ? (
+                            <input
+                              type="checkbox"
+                              className="lr-task-bulk-check"
+                              checked={selectedTaskIds.has(t.id)}
+                              onChange={() => toggleTaskSelected(t.id)}
+                              title="Select for bulk close/snooze"
+                              aria-label="Select task"
+                            />
+                          ) : null}
                           {showClassPill ? (
                             <span className={`lr-task-card-pill ${pillVariant}`}>
                               <span aria-hidden className="inline-flex">

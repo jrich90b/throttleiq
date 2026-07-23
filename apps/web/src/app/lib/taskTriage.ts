@@ -24,6 +24,26 @@ const DAY_MS = 86_400_000;
  */
 export const LIKELY_DONE_MIN_CONFIDENCE = 0.7;
 
+/**
+ * Stale-overdue demotion (task-hygiene Phase 2). Overdue floats to the very top of the inbox by
+ * bucket rank REGARDLESS of age, so a months-old overdue card permanently outranked today's fresh
+ * work (UX audit 7/22). An overdue task past this age isn't urgent anymore — it's a "still
+ * relevant?" review item; the inbox renders those in a demoted Stale section at the bottom rather
+ * than letting them bury the day's real work. Display/sort only — nothing closes.
+ */
+export const STALE_OVERDUE_AFTER_DAYS = 14;
+
+export function isStaleOverdueTask(
+  todo: (TaskLike & { createdAt?: string | null }) | null | undefined,
+  nowMs: number
+): boolean {
+  if (!todo) return false;
+  if (dueBucketFor(todo, nowMs) !== "overdue") return false;
+  const due = taskEffectiveDueMs(todo);
+  if (due == null) return false;
+  return nowMs - due > STALE_OVERDUE_AFTER_DAYS * DAY_MS;
+}
+
 export function isLikelyDoneTask(
   todo:
     | {
