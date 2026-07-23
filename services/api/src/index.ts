@@ -20,6 +20,7 @@ import {
   postSaleAccessoryOrEnjoyMessage,
   resolvePostSaleModelLabel
 } from "./domain/postSaleCadence.js";
+import { hasDeliveredOrPendingDealerRideThankYou } from "./domain/dealerRideThankYouDedup.js";
 import { isIndefiniteFollowUpDeferralText } from "./domain/scoringExclusions.js";
 import { findTlpLogCatchupCandidates, isTlpLeadNotFoundError } from "./domain/tlpLogCatchup.js";
 import {
@@ -15108,7 +15109,14 @@ async function queueDealerRideOutcomeCustomerDraft(args: {
   conv.dealerRide = conv.dealerRide ?? {};
   conv.dealerRide.staffNotify = conv.dealerRide.staffNotify ?? {};
   if (conv.dealerRide.staffNotify.customerFollowUpDraftedAt) {
-    return { queued: false, reason: "already_drafted" };
+    // The once-per-conversation latch only holds while the thank-you it latched on was
+    // actually delivered (or is still a live pending draft). If that draft went stale
+    // unsent, the customer never got it — a NEW outcome event may re-draft. Fails toward
+    // one more staff-reviewed draft (deduped below by isRecentDuplicateOutbound), never
+    // toward permanent customer silence (the +17168641440 stale-latch miss).
+    if (hasDeliveredOrPendingDealerRideThankYou(conv.messages)) {
+      return { queued: false, reason: "already_drafted" };
+    }
   }
   if (args.secondaryStatus === "no_change" || args.outcome === "no_change") {
     return { queued: false, reason: "no_change" };
