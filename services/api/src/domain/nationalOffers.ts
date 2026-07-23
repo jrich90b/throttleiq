@@ -170,9 +170,14 @@ export function __resetNationalOffersCache(): void {
 // cadence builder invoke, so the two paths cannot drift (same pattern as decideFinancePricingTurn).
 import { decideProactiveCadenceValue } from "./routeStateReducer.js";
 
-/** Go-live switch for the anti-spam behavior itself (suppress filler / inject offers). Default OFF. */
+/**
+ * Go-live switch for the anti-spam behavior itself (suppress filler / inject offers).
+ * Default ON since 2026-07-23 (graduated after the 7-conversation cadence_quality_suppressed
+ * stream showed the judge repeatedly eating exactly the filler this gate suppresses at the
+ * source). Kill switch: set CADENCE_VALUE_GATE_ENABLED=0 in the runtime env + redeploy.
+ */
 export function isCadenceValueGateEnabled(): boolean {
-  const v = String(process.env.CADENCE_VALUE_GATE_ENABLED ?? "0").trim().toLowerCase();
+  const v = String(process.env.CADENCE_VALUE_GATE_ENABLED ?? "1").trim().toLowerCase();
   return v === "1" || v === "true" || v === "yes";
 }
 
@@ -185,6 +190,21 @@ export function cadenceValueGateMinStep(): number {
   if (!raw) return 3; // Number("") is 0, not NaN — an unset env must fall to the default, never gate step 0
   const n = Number(raw);
   return Number.isFinite(n) && n >= 0 ? n : 3;
+}
+
+/**
+ * First value-gated step for an ENGAGED cadence (the customer replied, then went quiet —
+ * stepIndex resets to 0 on a substantive inbound). The standard min-step (3) does NOT cover
+ * early engaged filler: +17165146963 got a contentless "If the timing shifted, all good..."
+ * bump at engaged step ~1, two days after their last reply, which the cadence-quality judge
+ * suppressed as spam. Step 0 (the day-1 contextual pick-the-thread-back-up bump) still always
+ * fires; from step 1 on, an engaged touch needs a genuine value trigger like any later touch.
+ */
+export function cadenceValueGateEngagedMinStep(): number {
+  const raw = String(process.env.CADENCE_VALUE_GATE_ENGAGED_MIN_STEP ?? "").trim();
+  if (!raw) return 1; // unset env falls to the default; step 0 is never gated by default
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : 1;
 }
 
 /**
@@ -276,6 +296,14 @@ export async function evaluateProactiveCadenceValueGate(args: {
   isPostSale: boolean;
   hasValueOverride: boolean;
   vehicleLabel: string;
+  /**
+   * The persisted followUpCadence.kind ("standard" | "engaged" | ...). An "engaged" cadence
+   * (step counter re-anchored to the customer's last reply) is value-gated from
+   * cadenceValueGateEngagedMinStep (default 1) instead of the standard min step (default 3),
+   * because a contentless bump 2 days after the customer's own reply is exactly the filler
+   * the judge suppresses. Omitted/unknown kinds keep the standard scoping.
+   */
+  cadenceKind?: string | null;
   /** Lead unit condition (leadUnitConditionForOfferMatch) — used/unknown leads only see explicitly-used offers. */
   vehicleCondition?: LeadUnitCondition;
   firstName?: string | null;
@@ -288,7 +316,9 @@ export async function evaluateProactiveCadenceValueGate(args: {
 }): Promise<CadenceValueGateResult> {
   if (!isCadenceValueGateEnabled()) return { action: "send", reason: "gate_disabled" };
   if (args.isPostSale) return { action: "send", reason: "post_sale_exempt" };
-  const isLaterStage = Number(args.stepIndex ?? 0) >= cadenceValueGateMinStep();
+  const isEngagedCadence = String(args.cadenceKind ?? "").trim().toLowerCase() === "engaged";
+  const minStep = isEngagedCadence ? cadenceValueGateEngagedMinStep() : cadenceValueGateMinStep();
+  const isLaterStage = Number(args.stepIndex ?? 0) >= minStep;
   if (!isLaterStage) return { action: "send", reason: "early_stage_touch" };
   if (args.hasValueOverride) return { action: "send", reason: "existing_value_override" };
   const offer = await findNationalOfferForVehicle(args.vehicleLabel, {

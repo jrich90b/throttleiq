@@ -13906,7 +13906,7 @@ async function buildCadenceRegeneratedDraft(
   // applier (evaluateProactiveCadenceValueGate). The three value overrides above already returned, so
   // reaching here means the redraft would be generic filler. On a later step: a genuine national offer
   // REPLACES it; no value trigger → return null (keep the prior draft; regenerate never manufactures a
-  // filler touch the live tick would have suppressed). Flag-gated, default OFF → inert.
+  // filler touch the live tick would have suppressed). LIVE since 2026-07-23 (flag defaults ON; kill switch = 0).
   if (isCadenceValueGateEnabled()) {
     const regenTestRideValueContext =
       !String((conv.appointment as any)?.eventId ?? "").trim() &&
@@ -13918,6 +13918,7 @@ async function buildCadenceRegeneratedDraft(
     const regenInterestPriceDrop = await resolveInterestUnitPriceDrop(conv);
     const valueGate = await evaluateProactiveCadenceValueGate({
       stepIndex: lastSentStep,
+      cadenceKind: String(cadence.kind ?? ""),
       isPostSale: false, // post_sale kinds returned above
       hasValueOverride: false, // the overrides above already returned
       vehicleLabel: vehicleLabelForOfferMatch(conv),
@@ -31888,7 +31889,7 @@ async function processDueFollowUpsUnlocked() {
     // is SUPPRESSED (advance + stay quiet); a genuine national offer on their bike REPLACES the
     // filler. Early steps, post-sale, existing value overrides, the disengaged closeout, and the
     // email lane (its message is template-built below — follow-up scope) pass through unchanged.
-    // Flag-gated: CADENCE_VALUE_GATE_ENABLED default OFF → this block is inert.
+    // LIVE since 2026-07-23 (CADENCE_VALUE_GATE_ENABLED defaults ON; kill switch = set it to 0).
     if (!isPostSale && !useEmail && !disengagedCloseoutActive && isCadenceValueGateEnabled()) {
       // Live test-ride context (wants a ride, nothing booked) = the contextual invite IS the value.
       const testRideValueContext =
@@ -31900,6 +31901,7 @@ async function processDueFollowUpsUnlocked() {
       const interestPriceDrop = await resolveInterestUnitPriceDrop(conv);
       const valueGate = await evaluateProactiveCadenceValueGate({
         stepIndex: Number(cadence.stepIndex ?? 0),
+        cadenceKind: String(cadence.kind ?? ""),
         isPostSale,
         hasValueOverride: !!(
           leadUnitAvailabilityOverride ||
