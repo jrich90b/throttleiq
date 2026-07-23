@@ -58,6 +58,8 @@ export interface VoiceNextStepInput {
   nextStepOwner?: "customer" | "staff" | "none" | null;
   nextStepAction?: string | null;
   nextStepConfidence?: number | null;
+  /** Parser: the customer's next step is a physical VISIT to the store ("I'll come in Saturday"). */
+  customerVisitPlanned?: boolean | null;
   /** next_step_due_text resolved by the caller via parseRequestedDateOnly; null when absent/unparsable. */
   dueDate?: { year: number; month: number; day: number; dayOfWeek?: string } | null;
   confidenceMin?: number;
@@ -74,6 +76,17 @@ export type VoiceNextStepDecision =
   | { kind: "hold_for_customer"; holdUntilIso: string; dueLabel: string }
   | {
       kind: "staff_task";
+      taskSummary: string;
+      taskDueIso: string;
+      holdUntilIso: string;
+      dueLabel: string;
+    }
+  /** Customer committed to a dated VISIT on the call: hold the cadence like hold_for_customer
+   *  AND surface a dated staff task so the store expects them (Zackary Hauff +17165985414,
+   *  operator-reported: "agreed to come in Saturday between 1:30 and 2:00" on a live call —
+   *  said over SMS that creates a soft-visit task; said on a call it created NOTHING). */
+  | {
+      kind: "customer_visit_task";
       taskSummary: string;
       taskDueIso: string;
       holdUntilIso: string;
@@ -173,6 +186,19 @@ export function decideVoiceNextStep(input: VoiceNextStepInput): VoiceNextStepDec
     // if they went quiet the next touch lands naturally ("how did it go?" timing).
     const holdIso = localMorningIso(input.timeZone, due, 1);
     const holdUntilIso = Date.parse(holdIso) > Date.parse(breatherIso) ? holdIso : breatherIso;
+    if (input.customerVisitPlanned) {
+      // A dated VISIT commitment gets the hold AND a dated staff task — a customer walking in
+      // Saturday with nobody expecting them is the miss (Zackary). Task comes due the morning of
+      // the visit day; the cadence hold is identical to hold_for_customer.
+      const leadIn = String(input.summaryLeadIn ?? "").trim() || "Said on the call:";
+      return {
+        kind: "customer_visit_task",
+        taskSummary: `${leadIn} customer plans to VISIT${dueLabel ? ` ${dueLabel}` : ""} — ${action}. Be ready for them.`,
+        taskDueIso: localMorningIso(input.timeZone, due, 0),
+        holdUntilIso,
+        dueLabel
+      };
+    }
     return { kind: "hold_for_customer", holdUntilIso, dueLabel };
   }
 
