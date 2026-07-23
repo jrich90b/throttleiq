@@ -42,6 +42,34 @@ assert.ok(
   "adjustScore excuses a which-model clarify on a placeholder ADF vehicle (deterministic pre-classification, not prompt-tweaking)"
 );
 
+// Design-accept coverage (2026-07-23 sweep, finding flywheel-design-accept-coverage-gap):
+// (1) Reaction-only inbounds (tapback echo / emoji-only) are a designed no-reply signal —
+//     expected silence REUSES the eval-pinned scorer exclusions so the flywheel can't drift
+//     from the live guard's notion (+19198105169).
+assert.ok(
+  /isQuotedReactionEchoInbound/.test(flywheel) && /isBareReactionOnlyInbound/.test(flywheel) &&
+    /scoringExclusions\.ts"/.test(flywheel),
+  "reaction-only silence reuses the shared scoring exclusions (no scorer-local reaction regex)"
+);
+// (2) The post_sale owner-thread step-back: name-greeting + post_sale reason BOTH required, so
+//     a post_sale question with no greeting still fails as unexpected silence (+17166035402).
+assert.ok(
+  /reason === "post_sale" && opensWithPersonNameGreeting/.test(flywheel),
+  "post_sale silence is excused ONLY behind the name-greeting step-back shape"
+);
+// (3) Empty-Inquiry ADF first-touch intro (judge-minor only) and (4) the pinned non-buyer
+//     survey ack (non_buyer_survey_ack:eval copy) pass as accepted design — behavior cases
+//     including the judge-major and real-question fail-direction guards live in the self-test.
+assert.ok(
+  /isEmptyInquiryAdfIntroByDesign\(row, score\.judge\)/.test(flywheel) &&
+    /isNonBuyerSurveyAckByDesign\(row, score\.judge\)/.test(flywheel),
+  "adjustScore hooks the empty-Inquiry ADF intro + non-buyer survey ack design accepts"
+);
+assert.ok(
+  /severity !== "minor"\) return false/.test(flywheel),
+  "the new design accepts excuse judge-minor ONLY — a judge-major still fails"
+);
+
 const audit = fs.readFileSync("scripts/intent_handled_audit.ts", "utf8");
 assert.ok(/export async function realJudge/.test(audit), "realJudge stays exported for the flywheel");
 
