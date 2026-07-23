@@ -646,6 +646,119 @@ export function isStaleBookedAppointmentDay(input: {
   return dayKey(start) < dayKey(new Date(input.nowMs));
 }
 
+// A booked appointment that is SETTLED: its day is already past AND staff recorded that the
+// customer SHOWED. Such an appointment has nothing left to reschedule — the visit happened.
+//
+// Why this exists (+17165011693, James Mercer, 2026-07-22). That thread carried
+// `appointment.reschedulePending: true`, latched since 2026-05-16 and never cleared when staff
+// logged the May 2 outcome as `showed`. The latch is self-renewing (the reschedule arm re-sets it
+// on every fire), so it armed the thread indefinitely. When the agent pitched a newly-arrived Tri
+// Glide and the customer answered with a pure budget objection — "Still a little rich for me. Im
+// looking in the 18 to 20 thousand range. But thanks Gio" — the stale latch routed the turn into
+// the reschedule arm and we texted a test-ride booking link 14 seconds later. Nothing in that
+// sentence is about timing. Three live conversations were armed the same way.
+//
+// FAIL DIRECTION: this reads ONLY already-structured state (`whenIso`, the recorded outcome) and
+// never customer text, so it is a state/side-effect invariant guard — deterministic is correct
+// here (AGENTS.md rule 2), not comprehension. A false positive merely skips the reschedule
+// deflection and lets the turn fall through to the ordinary draft (which, on this very turn,
+// produced the right answer: "I'll keep an eye out for trikes in the $18–20k range"). A false
+// negative is exactly today's behavior. So when the outcome is absent or unrecognized we return
+// false and keep the existing path — never suppress a rebook the customer is genuinely owed.
+//
+// Deliberately scoped to the SHOWED family only: `did_not_show` and `cancelled` latches are real
+// rebook debts and must keep working.
+export function isSettledPastAppointment(input: {
+  whenIso: string | null | undefined;
+  nowMs: number;
+  timeZone: string;
+  outcomePrimaryStatus?: string | null;
+  outcomeLegacyStatus?: string | null;
+}): boolean {
+  const pastDay = isStaleBookedAppointmentDay({
+    whenIso: input.whenIso,
+    nowMs: input.nowMs,
+    timeZone: input.timeZone
+  });
+  if (!pastDay) return false;
+  return isShowedAppointmentOutcome(input.outcomePrimaryStatus, input.outcomeLegacyStatus);
+}
+
+// Normalizes the two ways an attendance outcome is stored to the single question "did they show?".
+// `primaryStatus` is the modern field; older records carry only the legacy `status`, whose
+// showed-family values mirror mapLegacyAppointmentOutcome() in index.ts. Unknown/blank => false
+// (fail toward keeping the current behavior).
+function isShowedAppointmentOutcome(
+  primaryStatusRaw: string | null | undefined,
+  legacyStatusRaw: string | null | undefined
+): boolean {
+  const primary = String(primaryStatusRaw ?? "").trim().toLowerCase();
+  if (primary === "showed" || primary === "showed_up") return true;
+  // An explicit non-showed primary status wins outright — don't second-guess it via the legacy field.
+  if (primary) return false;
+  const legacy = String(legacyStatusRaw ?? "").trim().toLowerCase();
+  return (
+    legacy === "showed" ||
+    legacy === "showed_up" ||
+    legacy === "sold" ||
+    legacy === "hold" ||
+    legacy === "already_on_hold" ||
+    legacy === "no_change" ||
+    legacy === "financing_declined" ||
+    legacy === "financing_needs_info" ||
+    legacy === "bought_elsewhere" ||
+    legacy === "lost" ||
+    legacy === "other"
+  );
+}
+
+// The scheduling cluster — may a PENDING-RESCHEDULE latch stand in for this turn's intent?
+//
+// `appointment.reschedulePending` is STATE, not something the customer said. Treating it as a
+// standalone sufficient condition for "they want to reschedule" means any inbound at all — a
+// budget objection, a thank-you — gets answered with a booking link (+17165011693, above). This
+// function makes the latch an ENABLER: it may only carry the turn when a signal read from THIS
+// turn accompanies it.
+//
+// FAIL DIRECTION: if every signal misses we do NOT send an unsolicited booking link; the turn
+// falls through to the normal draft path. Removal fails toward answering the customer, never
+// toward performing the side effect — so by the AGENTS.md migrate-vs-keep test this is
+// comprehension, and the intent signals must come from the parsers, not from stored state.
+// `explicitReschedulePhrase` stays a KEEP disjunct: it matches explicit reschedule wording only,
+// and its removal would fail toward dropping a real reschedule request.
+export function pendingRescheduleCarriesTurnIntent(input: {
+  reschedulePending: boolean;
+  settledPastAppointment: boolean;
+  explicitReschedulePhrase: boolean;
+  hasRequestedDayTime: boolean;
+  parserExplicitScheduleIntent: boolean;
+  parserSchedulingAckAction?: string | null;
+}): boolean {
+  if (!input.reschedulePending) return false;
+  // A settled (past + showed) appointment has no rebook debt — the latch is dead regardless.
+  if (input.settledPastAppointment) return false;
+  return (
+    input.explicitReschedulePhrase ||
+    input.hasRequestedDayTime ||
+    input.parserExplicitScheduleIntent ||
+    isSchedulingAcceptanceAckAction(input.parserSchedulingAckAction)
+  );
+}
+
+// Ack-parser actions that mean the customer is engaging the rebook we offered ("want to get you
+// back in?" -> "yes please"). Keeps the legitimate no_show/cancelled rebook flow alive once the
+// bare latch stops qualifying on its own.
+function isSchedulingAcceptanceAckAction(action: string | null | undefined): boolean {
+  const value = String(action ?? "").trim();
+  return (
+    value === "confirm_proposed_appointment" ||
+    value === "accept_tentative_appointment" ||
+    value === "ask_for_available_times" ||
+    value === "provide_arrival_window" ||
+    value === "immediate_arrival_request"
+  );
+}
+
 // The finance/pricing cluster — the pricing-CONTINUATION sub-decision.
 //
 // Once a turn is routed to pricing_payments (routeExecPricing, derived from the

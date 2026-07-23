@@ -611,6 +611,8 @@ import {
   decideSchedulingDeferralFollowUpTask,
   tentativeWindowNeedsOwnerFollowUp,
   isStaleBookedAppointmentDay,
+  isSettledPastAppointment,
+  pendingRescheduleCarriesTurnIntent,
   decideVehicleChoiceConfidenceTurn,
   decideVehicleRecommendationTurn,
   shouldBowOutRecommenderForNamedModel,
@@ -52811,6 +52813,17 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     event.provider === "twilio" &&
     channel === "sms" &&
     conv.appointment?.reschedulePending === true &&
+    // Same settled-appointment veto the live path applies: a past appointment the customer already
+    // showed for has no rebook debt, so a stale `reschedulePending` latch must not produce a
+    // reschedule nudge here either. Called inline (no mirrored `regen*` local — the shared reducer
+    // IS the single source of truth). Read-only: regenerate never heals the latch.
+    !isSettledPastAppointment({
+      whenIso: conv.appointment?.whenIso ?? null,
+      nowMs: Date.now(),
+      timeZone: regenTz,
+      outcomePrimaryStatus: conv.appointment?.staffNotify?.outcome?.primaryStatus ?? null,
+      outcomeLegacyStatus: conv.appointment?.staffNotify?.outcome?.status ?? null
+    }) &&
     !regenRequestedDayTime &&
     !isRegenerateInboundActionableForRouting(event.body ?? "")
       ? buildAppointmentOutcomeRescheduleReply({
@@ -59801,9 +59814,24 @@ if (authToken && signature) {
   const isFutureBookedAppointment =
     !!conv.appointment?.bookedEventId &&
     (!Number.isFinite(appointmentWhenMs) || appointmentWhenMs >= Date.now() - 60 * 60 * 1000);
+  // A past appointment the customer already SHOWED for has no rebook debt. Without this veto a
+  // `reschedulePending` latch left over from before the outcome was recorded keeps the appointment
+  // reschedulable forever, and the reschedule arm re-arms the latch every time it fires
+  // (+17165011693 — a budget objection answered with a test-ride booking link). Centralized in
+  // routeStateReducer; the regenerate path applies the same guard.
+  const settledPastAppointmentTz =
+    (await getSchedulerConfigHot().catch(() => null))?.timezone || "America/New_York";
+  const settledPastAppointment = isSettledPastAppointment({
+    whenIso: conv.appointment?.whenIso ?? null,
+    nowMs: Date.now(),
+    timeZone: settledPastAppointmentTz,
+    outcomePrimaryStatus: conv.appointment?.staffNotify?.outcome?.primaryStatus ?? null,
+    outcomeLegacyStatus: conv.appointment?.staffNotify?.outcome?.status ?? null
+  });
   const allowPastAppointmentReschedule =
     !!conv.appointment?.bookedEventId &&
     !isFutureBookedAppointment &&
+    !settledPastAppointment &&
     (
       conv.appointment?.reschedulePending === true ||
       conv.appointment?.staffNotify?.outcome?.status === "no_show"
@@ -59813,6 +59841,12 @@ if (authToken && signature) {
   if (!hasBookedAppointmentForReschedule && conv.scheduler?.pendingSlot?.reschedule) {
     conv.scheduler.pendingSlot = undefined;
     if (conv.appointment) conv.appointment.reschedulePending = false;
+  }
+  // Heal the stuck latch itself (live path only — regenerate must stay non-destructive), so the
+  // thread stops being re-armed on every future inbound.
+  if (settledPastAppointment && conv.appointment?.reschedulePending === true) {
+    conv.appointment.reschedulePending = false;
+    conv.appointment.updatedAt = new Date().toISOString();
   }
 
   // Auto-reschedule if they confirmed a pending reschedule slot
@@ -60253,9 +60287,20 @@ if (authToken && signature) {
         }
       }
     }
+      // The `reschedulePending` LATCH is state, not something the customer said this turn. On its
+      // own it routed a pure budget objection into the reschedule arm (+17165011693). It now only
+      // carries the turn when a signal read from THIS turn accompanies it — centralized in
+      // routeStateReducer so the precedence can't drift.
       const rescheduleIntent =
       !isFinanceDocsQuestionText(event.body) &&
-      (reschedulePending ||
+      (pendingRescheduleCarriesTurnIntent({
+        reschedulePending,
+        settledPastAppointment,
+        explicitReschedulePhrase: reschedulePhrase,
+        hasRequestedDayTime: !!requestedReschedule,
+        parserExplicitScheduleIntent: llmExplicitScheduleIntent,
+        parserSchedulingAckAction: customerAckActionParse?.action ?? null
+      }) ||
         reschedulePhrase ||
         !!requestedReschedule ||
         llmExplicitScheduleIntent);
