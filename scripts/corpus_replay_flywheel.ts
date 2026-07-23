@@ -57,6 +57,8 @@ export type ReplayRow = {
   verdict: "candidate_safe" | "review" | "expected_no_response" | "no_response" | "error";
   reviewReasons?: string[];
   router?: { followUpMode?: string | null; followUpReason?: string | null } | null;
+  /** The SOURCE conversation's mode before the replay harness force-overwrites it (autopilot). */
+  sourceConversationMode?: string | null;
   error?: string;
 };
 
@@ -282,6 +284,12 @@ export function opensWithPersonNameGreeting(text: string | null | undefined): bo
 // replay's own classifier can't prove these; the router state on the replayed conv can.
 export function isExpectedSilence(row: ReplayRow): boolean {
   if (row.verdict !== "no_response") return false;
+  // Human-owned thread (staff takeover): the live system suppresses customer-facing auto replies
+  // there by design — mirrors the release-gate human-mode skips (c5ae6e32/acbede8d). Keyed on the
+  // row's SOURCE mode (pre-override) because the replay harness forces autopilot onto the temp
+  // copy; this also retires phantoms in already-banked replay reports whose rows carry the field
+  // but were classified before the harness-side carve-out learned to read it.
+  if (String(row.sourceConversationMode ?? "").toLowerCase() === "human") return true;
   const mode = String(row.router?.followUpMode ?? "").toLowerCase();
   const reason = String(row.router?.followUpReason ?? "").toLowerCase();
   if (mode === "manual_handoff" || mode === "paused_indefinite") return true;
@@ -1193,6 +1201,36 @@ function selfTest() {
   assert(!adjustScore(scoreTurn(nonDlaAckRow, nonBuyerMinor), nonDlaAckRow).pass, "the no-pressure ack on a real sales question is NOT excused");
   const nonBuyerMajorScore = adjustScore(scoreTurn(nonBuyerAckRow, { ...nonBuyerMinor, severity: "major" }), nonBuyerAckRow);
   assert(!nonBuyerMajorScore.pass && nonBuyerMajorScore.critical, "a judge-major on the survey thread still fails critical");
+  // Human-owned SOURCE thread (staff takeover): the replay harness forces autopilot onto the
+  // temp copy, so expected silence must be keyed on the row's sourceConversationMode — mirrors
+  // the release-gate human-mode skips (c5ae6e32). Shapes pinned from the 2026-07-23 phantom
+  // cluster: sold post-sale (+17169982451), wrong-number (+17163083346), owner-greeting/other
+  // (+17168619251) — all mode:"human" threads whose replayed silence was scored as a miss.
+  for (const [label, body] of [
+    ["sold post-sale ack", "Thanks again, loving the new bike!"],
+    ["wrong-number", "Wrong #"],
+    ["owner-greeting", "Hey Stone, it's Mike"]
+  ] as const) {
+    const humanSilence = mk({ body, draft: null, verdict: "no_response", sourceConversationMode: "human" });
+    assert(isExpectedSilence(humanSilence), `human-owned silence (${label}) is by design, not a miss`);
+    const humanSilenceScore = adjustScore(scoreTurn(humanSilence, null), humanSilence);
+    assert(
+      humanSilenceScore.pass && humanSilenceScore.adjustment === "design_accepted_handoff",
+      `human-owned silence (${label}) passes as accepted design`
+    );
+  }
+  // Guard against over-broadening: same silence on an agent-owned thread stays an unexpected miss…
+  assert(
+    !isExpectedSilence(mk({ body: "is the low rider st still available?", draft: null, verdict: "no_response", sourceConversationMode: "autopilot" })),
+    "agent-owned (autopilot) silence is still an unexpected miss"
+  );
+  // …and a human-owned thread that DID produce a bad draft gets no free pass (carve-out is silence-only).
+  const humanBadDraft = mk({ sourceConversationMode: "human" });
+  const humanBadDraftScore = adjustScore(
+    scoreTurn(humanBadDraft, { addressed: false, customerAsk: "availability", why: "answered wrong thing", severity: "major" }),
+    humanBadDraft
+  );
+  assert(!humanBadDraftScore.pass, "a judge-failed DRAFT on a human-owned thread still fails (carve-out is silence-only)");
 
   // prompt builder reachable (shared with the nightly audit — same judging semantics)
   assert(buildIntentJudgePrompt({ convId: "x", at: "t", inboundText: "hi", replyText: "hey", replyKind: "draft", context: [] }).length > 50, "judge prompt builder shared");
