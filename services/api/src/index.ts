@@ -506,6 +506,7 @@ import {
   modelMatches,
   unitIsDistinctModelFromWatch,
   distinct883ModelConflict,
+  distinctSportsterModelConflict,
   type InventoryFeedItem
 } from "./domain/inventoryFeed.js";
 import {
@@ -5899,6 +5900,11 @@ function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
   // family, so one 2006 883 Low notified every Iron 883 watcher (+15164197791, +12399612259,
   // +18728882220). Subtractive; a generic "883" watch is unaffected.
   if (distinct883ModelConflict(item.model, watch.model)) return false;
+  // Same fix for the MODERN Sportster models: a "Sportster S"/"Nightster" watch is mapped to the generic
+  // "sportster" family by detectGenericWatchFamilyLabel, so it umbrella-fired on the same 2006 883 Low
+  // (+17705967891). Distinct models, not trims — block it. Subtractive; a generic "Sportster" watch is
+  // unaffected.
+  if (distinctSportsterModelConflict(item.model, watch.model)) return false;
   // DIRECTIONAL: the in-stock UNIT's model must contain the WATCHED model — never the reverse. The old
   // bidirectional `|| watchModel.includes(itemModel)` let a trim-specific watch fire on a base unit
   // (Jason, 6/26: a "Street Glide Special" watch matched a base 2013 "Street Glide"; "Electra Glide Ultra
