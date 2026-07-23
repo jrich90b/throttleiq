@@ -186,6 +186,35 @@ function stripDanglingParenthetical(raw?: string | null): string | undefined {
   return cut.replace(/[\s\-–—:,(]+$/u, "").trim() || undefined;
 }
 
+// Marketplace-relay ADF feeds (AutoDealers.Digital etc.) glue the whole inventory line into
+// the vehicle "model" field: "Freewheeler 2016 FLRT U893-16 Vivid Black" — the model name
+// followed by the model YEAR, the OEM code, the dealer STOCK code, and the color/trim, all of
+// which the intake has ALREADY extracted into their own lead.vehicle fields (year, stockId,
+// color). Echoed raw, the customer intro read "the 2016 Freewheeler 2016 FLRT U893-16 Vivid
+// Black" (adf_ref_11655 / 11421 / 11634, corpus replay 2026-07-23). Cut the glued tail at the
+// first model-year token (19xx/20xx) or dealer stock-code token (U893-16 / T24-26 / #650
+// shapes) — the same mechanic as the display-side cleanModelDisplayName (conversationStore),
+// extended with the stock-code anchor for year-less shapes. Structured extraction of our own
+// intake format — deterministic per AGENTS.md. Fail direction: the result is always a
+// non-empty leading prefix of the input (the anchor is never token 0), so at worst it
+// shortens a label toward vaguer-but-correct ("Freewheeler"); it can never blank a model or
+// invent junk. Real numeric model suffixes (Iron 883, Fat Bob 114, Road Glide 3, Pan America
+// 1250, Super Meteor 650) are not 19xx/20xx and have no digits-hyphen-digits stock shape, so
+// they survive untouched.
+const MODEL_YEAR_TOKEN_RE = /^(?:19|20)\d{2}$/;
+const DEALER_STOCK_CODE_TOKEN_RE = /^(?:#\d{2,5}|[A-Z]{1,4}\d{1,4}-\d{1,4}[A-Z]?)$/;
+
+export function stripFeedInventoryTailFromModel(raw?: string | null): string | undefined {
+  const value = String(raw ?? "").replace(/\s+/g, " ").trim();
+  if (!value) return undefined;
+  const tokens = value.split(" ");
+  const anchorIdx = tokens.findIndex(
+    (t, idx) => idx > 0 && (MODEL_YEAR_TOKEN_RE.test(t) || DEALER_STOCK_CODE_TOKEN_RE.test(t))
+  );
+  if (anchorIdx <= 0) return value;
+  return tokens.slice(0, anchorIdx).join(" ");
+}
+
 function parseColorTrimFromItem(item?: string) {
   if (!item) return {};
   let working = item.replace(/\s+/g, " ").trim();

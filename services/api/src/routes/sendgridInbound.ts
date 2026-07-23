@@ -3,7 +3,7 @@ import multer from "multer";
 import twilio from "twilio";
 import crypto from "node:crypto";
 import { XMLParser } from "fast-xml-parser";
-import { extractAdfXmlFromEmail, parseAdfXml } from "../domain/adfParser.js";
+import { extractAdfXmlFromEmail, parseAdfXml, stripFeedInventoryTailFromModel } from "../domain/adfParser.js";
 import { parsePreferredAdfDate } from "../domain/preferredAdfDate.js";
 import { resolveModelDiscontinuation } from "../domain/modelDiscontinuation.js";
 import { decideWatchYearPin, decideWatchConditionPin } from "../domain/watchYearPin.js";
@@ -2917,6 +2917,12 @@ function normalizeVehicleModel(raw?: string | null, make?: string | null): strin
   }
   model = model.replace(/\bharley[-\s]?davidson\b/gi, "").replace(/\bh[-\s]?d\b/gi, "").trim();
   model = model.replace(/^[\s\-–—:,]+|[\s\-–—:,]+$/g, "").trim();
+  // Feed "model" fields glue the whole inventory line on (year + OEM code + stock code +
+  // color — all already extracted into their own lead.vehicle fields). Cut that tail so the
+  // stored model and every customer-facing bike label read make+model only, never
+  // "Freewheeler 2016 FLRT U893-16 Vivid Black" (adf_ref_11655/11421/11634). See the
+  // helper's comment in adfParser.ts for the fail-direction reasoning.
+  model = stripFeedInventoryTailFromModel(model) ?? model;
   const normalized = model.toLowerCase();
   const compact = normalized.replace(/[^a-z0-9]/g, "");
   if (/^(full line|full lineup|other|unknown|null)$/.test(normalized)) {
