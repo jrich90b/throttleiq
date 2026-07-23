@@ -36,7 +36,11 @@ import {
   type IntentJudgeCandidate,
   type IntentVerdict
 } from "./intent_handled_audit.ts";
-import { isTestLeadEmail } from "../services/api/src/domain/scoringExclusions.ts";
+import {
+  isBareReactionOnlyInbound,
+  isQuotedReactionEchoInbound,
+  isTestLeadEmail
+} from "../services/api/src/domain/scoringExclusions.ts";
 import { isPlaceholderModel } from "../services/api/src/domain/modelDeflection.ts";
 
 export type ReplayRow = {
@@ -254,6 +258,25 @@ export function isBlockedTestRideWithWatchOffer(row: ReplayRow, judge: IntentVer
   );
 }
 
+// A greeting that ADDRESSES a person by first name in the opening clause ("Good morning Scott,",
+// "Hey Scott this is Mark"). Harness-local approximation of the live owner-thread step-back's
+// greeting matcher (routeStateReducer.decideOwnerThreadStepBack): the live rule matches the
+// KNOWN assigned-owner name; the replay row doesn't carry the owner roster, so this matches the
+// greeting SHAPE and the post_sale router reason narrows it (see isExpectedSilence). Generic
+// tokens ("hi there", "hey all") are excluded so a name is actually required, and the live
+// rule's 3-char name floor is kept.
+export function opensWithPersonNameGreeting(text: string | null | undefined): boolean {
+  const m = String(text ?? "")
+    .trim()
+    .match(/^(?:hey|hi|hello|good\s+(?:morning|afternoon|evening)|yo|hiya)[,!. ]+([a-z][a-z'’-]{2,})\b/i);
+  if (!m) return false;
+  // Stoplist: generic address terms + common sentence-starters ("Hello, when does the shop
+  // open?") so an ordinary message after a bare greeting never reads as a name-greeting.
+  return !/^(?:there|all|guys|y'?all|everyone|team|folks|again|good|sir|ma'?am|you|are|was|were|does|did|can|could|will|would|should|just|the|this|that|thanks|thank|sorry|what|when|where|who|how|why|please|any|got|still|hope|hoping|looking|wanted|want|need|checking|question|quick)$/i.test(
+    m[1]
+  );
+}
+
 // Deliberate-silence BY DESIGN: states whose correct behavior is NO auto-draft (handoff family
 // incl. tonight's in_process_deal, paused/closed dispositions, walk-in phone-log records). The
 // replay's own classifier can't prove these; the router state on the replayed conv can.
@@ -263,11 +286,81 @@ export function isExpectedSilence(row: ReplayRow): boolean {
   const reason = String(row.router?.followUpReason ?? "").toLowerCase();
   if (mode === "manual_handoff" || mode === "paused_indefinite") return true;
   if (/in_process_deal|walk_?in|phone_log|marketplace_relay|credit_app|dealer_ride|handoff/.test(reason)) return true;
+  // Pure reaction turns — an iOS/Twilio tapback echo (`Liked "…"`) or an emoji-only body — are
+  // a designed no-reply signal (AGENTS.md "Twilio Reaction No-Reply Guardrail"); the customer
+  // pressed a button, they didn't write a word. Reuses the eval-pinned scorer exclusions
+  // (scoringExclusions.ts) so the flywheel can't drift from the live guard's notion
+  // (+19198105169, `Liked “Gotcha — yes…”` on an inventory-watch thread, 7/23 sweep).
+  const body = String(row.body ?? "");
+  if (isQuotedReactionEchoInbound(body) || isBareReactionOnlyInbound(body)) return true;
+  // Owner-thread step-back on a post_sale thread (Joe, 2026-07-09): a customer who opens by
+  // greeting their salesperson BY NAME on a human-owned post-sale thread is talking to that
+  // person — the designed behavior is NO auto-draft (the owner gets a reply task instead), so
+  // the replayed silence is correct (+17166035402, "Good morning Scott, the delivery went
+  // well…"). Fail-direction: this HIDES silences from scoring, so BOTH conditions are required
+  // — a post_sale customer message that doesn't greet a person still fails as unexpected
+  // silence, and a name-greeting on a normal sales thread still fails.
+  if (reason === "post_sale" && opensWithPersonNameGreeting(body)) return true;
   // A Dealer Lead App post-ride survey log is staff-filed and never a customer question. The
   // FIRST one earns its one by-design thank-you (isDealerRideThankYou); a REPEAT log correctly
   // stays silent (the thank-you already went out). Body-keyed so it holds even when the replayed
   // router state doesn't carry a dealer_ride reason (the case the reason-list above misses).
   return isDealerRideLogBody(String(row.body ?? ""));
+}
+
+// Structured extraction of our own ADF intake format: the free-text Inquiry section (everything
+// after the "Inquiry:" header). Not customer-intent comprehension — the intake formatter wrote it.
+export function extractAdfInquirySection(body: string): string | null {
+  const m = String(body ?? "").match(/\bInquiry:\s*\n?([\s\S]*)$/i);
+  return m ? m[1].trim() : null;
+}
+
+// An ADF web lead whose Inquiry section carries NO customer question — empty, or nothing but
+// vendor placeholders ("Lead arrived" — the AutoDealers.Digital shape — "None", a bare
+// preferred-contact line). The customer clicked a listing; they wrote nothing.
+export function isEmptyInquiryAdfBody(body: string): boolean {
+  const b = String(body ?? "");
+  if (!/^\s*WEB LEAD \(ADF\)/i.test(b)) return false;
+  const inquiry = extractAdfInquirySection(b);
+  if (inquiry == null) return false; // no Inquiry section at all -> can't prove, not this class
+  const lines = inquiry.split(/\n/).map(l => l.trim()).filter(Boolean);
+  return lines.every(
+    l => /^lead arrived\.?$/i.test(l) || /^none\.?$/i.test(l) || /^preferred method of contact\b/i.test(l)
+  );
+}
+
+// First-touch intro on an empty-Inquiry ADF BY DESIGN: when the customer asked NOTHING, the
+// Joe-approved first touch is the intro + "Thanks for your inquiry about the <bike>" + the
+// availability-true invite (sendgridInbound's isPurchaseIntentLead builder, pinned by
+// tone_quality:fixture_eval). The judge invents asks the customer never made ("didn't confirm
+// availability/price/financing") and fails it as minor (4 of the 7/23 sweep's fails —
+// adf_ref_11626/11617/11613/11592). Fail-direction: ONLY a judge-minor is excused — a
+// judge-major on the same shape (wrong bike, fabricated claim) still fails — and a body whose
+// Inquiry carries a real question never matches, so ignoring an actual ask stays a miss.
+export function isEmptyInquiryAdfIntroByDesign(row: ReplayRow, judge: IntentVerdict | null | undefined): boolean {
+  if (!judge || judge.addressed || judge.severity !== "minor") return false;
+  if (!isEmptyInquiryAdfBody(String(row.body ?? ""))) return false;
+  const draft = String(row.draft ?? "").toLowerCase();
+  if (!/thanks for your inquiry about the /.test(draft)) return false;
+  return (
+    /just say the word/.test(draft) ||
+    /currently on hold, but i can text you first/.test(draft) ||
+    /no longer available, but i can help/.test(draft)
+  );
+}
+
+// Non-buyer survey ack BY DESIGN (Elizabeth Klapa class, 2026-06-25): a Dealer Lead App
+// passenger/marketing survey whose respondent is explicitly NOT a buyer gets the one warm,
+// no-pressure acknowledgement — deliberately NO models, prices, lessons, or next steps (those
+// are exactly the out-of-context failure modes for a self-declared non-buyer). The judge wants
+// "helpful info or next steps" and fails the designed restraint as minor (+17168618586, Susan,
+// 7/23 sweep). Matched on the pinned buildNonBuyerSurveyAck copy (non_buyer_survey_ack:eval)
+// on a Dealer Lead App body, judge-minor only — a major on the same thread still fails.
+export function isNonBuyerSurveyAckByDesign(row: ReplayRow, judge: IntentVerdict | null | undefined): boolean {
+  if (!judge || judge.addressed || judge.severity !== "minor") return false;
+  if (!/dealer lead app/i.test(String(row.body ?? ""))) return false;
+  const draft = String(row.draft ?? "").toLowerCase();
+  return /no pressure at all/.test(draft) && /bike of your own down the road/.test(draft);
 }
 
 /** A row worth spending a judge call on: it produced a draft on an actionable inbound. */
@@ -353,6 +446,12 @@ export function adjustScore(score: TurnScore, row: ReplayRow): TurnScore & { adj
     return { ...score, pass: true, critical: false, adjustment: "design_accepted_handoff" };
   }
   if (!score.pass && isEventPromoAckByDesign(row)) {
+    return { ...score, pass: true, critical: false, adjustment: "design_accepted_handoff" };
+  }
+  if (!score.pass && isEmptyInquiryAdfIntroByDesign(row, score.judge)) {
+    return { ...score, pass: true, critical: false, adjustment: "design_accepted_handoff" };
+  }
+  if (!score.pass && isNonBuyerSurveyAckByDesign(row, score.judge)) {
     return { ...score, pass: true, critical: false, adjustment: "design_accepted_handoff" };
   }
   if (!score.pass && isManagerQuotePricingPath(row, score.judge)) {
@@ -1002,6 +1101,98 @@ function selfTest() {
   const plainSilence = mk({ body: "is the low rider st still available?", draft: null, verdict: "no_response" });
   const plainSilenceScore = adjustScore(scoreTurn(plainSilence, null), plainSilence);
   assert(!plainSilenceScore.pass && plainSilenceScore.adjustment === "none", "a plain customer message with no reply still fails as unexpected silence");
+
+  // Reaction-only turns: an iOS tapback echo / emoji-only body is a designed no-reply signal
+  // (pinned from prod +19198105169, `Liked “Gotcha — yes…”` on an inventory-watch thread).
+  const tapbackSilence = mk({
+    body: "Liked “Gotcha — yes, they are supposed to be coming back out with the Sportster. I’ll hold onto your info and text you when we see one come in.”",
+    draft: null,
+    verdict: "no_response",
+    router: { followUpMode: "holding_inventory", followUpReason: "inventory_watch" }
+  });
+  const tapbackScore = adjustScore(scoreTurn(tapbackSilence, null), tapbackSilence);
+  assert(tapbackScore.pass && tapbackScore.adjustment === "design_accepted_handoff", "a tapback echo producing silence is expected, not a miss");
+  const emojiSilence = mk({ body: "👍👍", draft: null, verdict: "no_response" });
+  assert(adjustScore(scoreTurn(emojiSilence, null), emojiSilence).pass, "an emoji-only reaction producing silence is expected");
+
+  // Owner-thread step-back on a post_sale thread: greeting the salesperson BY NAME on the
+  // human-owned thread → designed silence (prod +17166035402, "Good morning Scott…"). BOTH the
+  // post_sale reason AND the name-greeting opener are required (fail-direction guards below).
+  const postSaleGreetingSilence = mk({
+    body: "Good morning Scott, the delivery went well. I hope to stop by weather permitting. Thank you Scott & Stone for making Sue & I very happy.",
+    draft: null,
+    verdict: "no_response",
+    router: { followUpMode: "active", followUpReason: "post_sale" }
+  });
+  const postSaleGreetingScore = adjustScore(scoreTurn(postSaleGreetingSilence, null), postSaleGreetingSilence);
+  assert(postSaleGreetingScore.pass && postSaleGreetingScore.adjustment === "design_accepted_handoff", "greeting the rep by name on a post_sale thread producing silence is the designed step-back");
+  assert(opensWithPersonNameGreeting("Hey Scott this is Mark") && !opensWithPersonNameGreeting("Hi there, is it available?"), "the greeting matcher requires a personal name, not a generic token");
+  const postSaleQuestionSilence = mk({
+    body: "When is my part coming in?",
+    draft: null,
+    verdict: "no_response",
+    router: { followUpMode: "active", followUpReason: "post_sale" }
+  });
+  assert(!adjustScore(scoreTurn(postSaleQuestionSilence, null), postSaleQuestionSilence).pass, "a post_sale question WITHOUT a name greeting still fails as unexpected silence");
+  const activeGreetingSilence = mk({
+    body: "Hey Scott, is the low rider st still available?",
+    draft: null,
+    verdict: "no_response",
+    router: { followUpMode: "active", followUpReason: "" }
+  });
+  assert(!adjustScore(scoreTurn(activeGreetingSilence, null), activeGreetingSilence).pass, "a name greeting on a normal sales thread still fails as unexpected silence");
+
+  // Empty-Inquiry ADF first touch: the customer clicked a listing and wrote NOTHING, so the
+  // Joe-approved intro + invite IS the designed first touch; the judge invents asks and fails
+  // it as minor (adf_ref_11626/11617/11613/11592, 7/23 sweep).
+  const emptyInquiryAdfBody =
+    "WEB LEAD (ADF)\nSource: AutoDealers.Digital - autodealersdigital.com\nRef: 11626\nName: Russ Bottoni\nStock: U119-13\nVIN: 1HD1CT314DC443563\nYear: 2013\nVehicle: Harley-Davidson 1200 Custom 2013 XL1200C U119-13 Vivid Black\n\nInquiry:\nLead arrived";
+  const adfIntroDraft =
+    "Hey Russ, it's Alexandra over at American Harley-Davidson. Thanks for your inquiry about the 2013 1200 Custom 2013 XL1200C U119-13 Vivid Black. If you’d like to stop in and check it out, just say the word.";
+  const adfIntroMinor: IntentVerdict = {
+    addressed: false,
+    customerAsk: "likely wants availability, price, financing, next steps",
+    why: "no concrete info offered",
+    severity: "minor"
+  };
+  const adfIntroRow = mk({ body: emptyInquiryAdfBody, draft: adfIntroDraft });
+  assert(isEmptyInquiryAdfBody(emptyInquiryAdfBody), "an Inquiry of 'Lead arrived' is an empty-Inquiry ADF");
+  const adfIntroScore = adjustScore(scoreTurn(adfIntroRow, adfIntroMinor), adfIntroRow);
+  assert(adfIntroScore.pass && adfIntroScore.adjustment === "design_accepted_handoff", "the approved intro on an empty-Inquiry ADF passes as accepted design");
+  // Fail-direction guards: a judge-MAJOR is never excused, and a real Inquiry question never matches.
+  const adfIntroMajorScore = adjustScore(
+    scoreTurn(adfIntroRow, { ...adfIntroMinor, severity: "major" }),
+    adfIntroRow
+  );
+  assert(!adfIntroMajorScore.pass && adfIntroMajorScore.critical, "a judge-major on the same intro shape still fails critical");
+  const realAskAdf = mk({
+    body: emptyInquiryAdfBody.replace("Lead arrived", "Is it still available? What's your best out-the-door price?"),
+    draft: adfIntroDraft
+  });
+  assert(!isEmptyInquiryAdfBody(String(realAskAdf.body)), "an Inquiry carrying a real question is NOT the empty-Inquiry class");
+  assert(!adjustScore(scoreTurn(realAskAdf, adfIntroMinor), realAskAdf).pass, "an intro that ignores an actual Inquiry question stays a miss");
+
+  // Non-buyer survey ack: a Dealer Lead App passenger survey (explicit non-buyer) gets the one
+  // warm no-pressure ack — the pinned buildNonBuyerSurveyAck copy (prod +17168618586, Susan).
+  const nonBuyerBody =
+    "WEB LEAD (ADF)\nSource: Dealer Lead App - Passenger\nRef: 11181\nName: Susan Fiegel\nVehicle: Harley-Davidson Full Line\n\nInquiry:\nMarketing Questions: Dealer Lead App - Type: N - Do you currently own a motorcycle? No, never owned - Do you expect to make a motorcycle purchase in the near future? No";
+  const nonBuyerAckRow = mk({
+    body: nonBuyerBody,
+    draft:
+      "Hey Susan, it's Alexandra over at American Harley-Davidson. Thanks for reaching out — no pressure at all. If you ever decide you'd like a bike of your own down the road, I'm here whenever you're ready."
+  });
+  const nonBuyerMinor: IntentVerdict = {
+    addressed: false,
+    customerAsk: "likely wanted info or next steps (lessons, models, demos)",
+    why: "only a vague no-pressure statement",
+    severity: "minor"
+  };
+  const nonBuyerScore = adjustScore(scoreTurn(nonBuyerAckRow, nonBuyerMinor), nonBuyerAckRow);
+  assert(nonBuyerScore.pass && nonBuyerScore.adjustment === "design_accepted_handoff", "the pinned non-buyer survey ack passes as accepted design");
+  const nonDlaAckRow = mk({ body: "is the low rider st still available?", draft: String(nonBuyerAckRow.draft) });
+  assert(!adjustScore(scoreTurn(nonDlaAckRow, nonBuyerMinor), nonDlaAckRow).pass, "the no-pressure ack on a real sales question is NOT excused");
+  const nonBuyerMajorScore = adjustScore(scoreTurn(nonBuyerAckRow, { ...nonBuyerMinor, severity: "major" }), nonBuyerAckRow);
+  assert(!nonBuyerMajorScore.pass && nonBuyerMajorScore.critical, "a judge-major on the survey thread still fails critical");
 
   // prompt builder reachable (shared with the nightly audit — same judging semantics)
   assert(buildIntentJudgePrompt({ convId: "x", at: "t", inboundText: "hi", replyText: "hey", replyKind: "draft", context: [] }).length > 50, "judge prompt builder shared");
