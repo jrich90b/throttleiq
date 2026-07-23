@@ -14,6 +14,7 @@ import {
   isQuotedReactionEchoInbound,
   isShadowReplayMessage,
   isShortAckNoAction,
+  isStaffAuthoredOutbound,
   isTestLeadEmail
 } from "../services/api/src/domain/scoringExclusions.ts";
 
@@ -254,6 +255,23 @@ function main() {
       }
 
       const matchedOut = match.matchedOut;
+
+      // A reply a staff member TYPED FROM SCRATCH (author marker, no
+      // `originalDraftBody`) has no agent draft behind it at all — there is nothing of
+      // the agent's to grade, so counting it as an agent tone failure is a phantom.
+      // Production 2026-07-22: Joe's own one-character "😂" answer to Scott Gresko's
+      // joke (+15857552622) scored 65 / `intent_mismatch` against the AGENT. This is
+      // narrower than the human-mode skip above (that one covers whole threads) and
+      // distinct from the rewrite case below (there an agent draft exists and IS
+      // graded), so the sample only loses turns the agent never wrote.
+      if (isStaffAuthoredOutbound(matchedOut ?? {})) {
+        skippedTurns += 1;
+        skippedReasonMap.set(
+          "staff_typed_reply_no_agent_draft",
+          (skippedReasonMap.get("staff_typed_reply_no_agent_draft") ?? 0) + 1
+        );
+        continue;
+      }
 
       // When a staff member rewrote the agent's draft before sending, the SENT
       // body is the human's words, not the agent's — grading the agent on it is a

@@ -399,6 +399,31 @@ export function isHumanRewrittenOutbound(msg: {
 }
 
 /**
+ * Staff-authored outbound. A message a staff member typed and sent from the console
+ * carries `actorUserId` / `actorUserName`; the agent's own auto-sends never do. Grading
+ * the dealership's own people against the Agent Voice Charter is a phantom — production
+ * 2026-07-23: Stone Giuga's hand-typed "hello Annie its stone from American Harley just
+ * checking in making sure you and the bike are both doing well!" tripped `bare_check_in`,
+ * which is a TEMPLATE-SOURCED check, and dirtied the release gate on its own.
+ *
+ * Fail-safe by construction. The marker's PRESENCE proves a human sent it, so this can
+ * only ever skip a staff message; its ABSENCE proves nothing (most legacy outbounds carry
+ * no author marker and most of those ARE agent sends) and is never used to skip. An EDITED
+ * agent draft also carries `originalDraftBody`, and stays owned by isHumanRewrittenOutbound
+ * so the edit-feedback miner keeps grading the agent's half of it.
+ */
+export function isStaffAuthoredOutbound(msg: {
+  actorUserId?: string | null;
+  actorUserName?: string | null;
+  originalDraftBody?: string | null;
+}): boolean {
+  const hasActor =
+    !!String(msg?.actorUserId ?? "").trim() || !!String(msg?.actorUserName ?? "").trim();
+  if (!hasActor) return false;
+  return !String(msg?.originalDraftBody ?? "").trim();
+}
+
+/**
  * Year-rollover park fingerprint. The fixed-but-must-stay-caught cadence bug
  * (parsePauseUntil / bumpCadenceNextDueAt parking a lead a year out) lands on
  * the FIRST of a month at a round 9-o'clock boundary: 09:00 UTC (`{month}-01T09:00Z`,

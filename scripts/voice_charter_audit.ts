@@ -14,7 +14,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { isCampaignBroadcastSend, isShadowReplayMessage } from "../services/api/src/domain/scoringExclusions.ts";
+import {
+  isCampaignBroadcastSend,
+  isShadowReplayMessage,
+  isStaffAuthoredOutbound
+} from "../services/api/src/domain/scoringExclusions.ts";
 
 type Violation = {
   check: string;
@@ -240,6 +244,13 @@ function main() {
       // send, so it must not count against the Agent Voice Charter (report-only
       // exclusion; see scoringExclusions.isCampaignBroadcastSend).
       if (isCampaignBroadcastSend(m, campaignThread)) continue;
+      // A staff member typing their own SMS from the console is not the agent's voice.
+      // Their message still marks staffHasSent below (that IS charter-relevant context
+      // for the agent's next turn) — it just is not graded as an agent message.
+      if (isStaffAuthoredOutbound(m)) {
+        staffHasSent = true;
+        continue;
+      }
       const provider = String(m?.provider ?? "");
       const body = String(m?.body ?? "");
       const isDraft = provider === "draft_ai";

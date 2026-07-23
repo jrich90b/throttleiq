@@ -23,6 +23,7 @@ import {
   isEnthusiasmAckNoAction,
   isQuotedReactionEchoInbound,
   isShadowReplayMessage,
+  isStaffAuthoredOutbound,
   isShortAckNoAction,
   isTestLeadEmail,
   isYearRolloverParkFingerprint
@@ -489,5 +490,51 @@ assert.equal(isQuotedReactionEchoInbound("I liked the black one, is it still ava
 assert.equal(isQuotedReactionEchoInbound("liked"), false);
 assert.equal(isQuotedReactionEchoInbound("Loved meeting you today, can I come Saturday?"), false);
 assert.equal(isQuotedReactionEchoInbound(""), false);
+
+// A staff member typing their own SMS from the console is not the agent's voice.
+// Production 2026-07-23: Stone Giuga's hand-typed check-in to Annie (+17165361711)
+// tripped the TEMPLATE-SOURCED `bare_check_in` charter check and dirtied the release
+// gate by itself.
+assert.equal(
+  isStaffAuthoredOutbound({
+    actorUserId: "ce35060e-1c3e-4fcf-9d02-9ca62fca56d4",
+    actorUserName: "Stone Giuga"
+  }),
+  true
+); // live 7/22 phantom (+17165361711)
+assert.equal(isStaffAuthoredOutbound({ actorUserName: "Joe Hartrich" }), true);
+assert.equal(isStaffAuthoredOutbound({ actorUserId: "95e86615-1e33-49b9-adb2-69f557d98a65" }), true);
+// Fail-direction guards. Only the marker's PRESENCE may skip a message — its absence
+// proves nothing, because most legacy outbounds carry no author marker and most of
+// those ARE agent sends. An EDITED agent draft keeps being graded here and stays
+// owned by isHumanRewrittenOutbound.
+assert.equal(isStaffAuthoredOutbound({}), false);
+assert.equal(isStaffAuthoredOutbound({ actorUserName: "   " }), false);
+assert.equal(
+  isStaffAuthoredOutbound({
+    actorUserName: "Joe Hartrich",
+    originalDraftBody: "Happy to help. I’ll get you the exact out‑the‑door number by text."
+  }),
+  false
+); // edited agent draft — not staff-authored from scratch
+
+// Wiring pins: both release-gate scorers must actually apply the exclusion.
+const charterSource = await fs.readFile(path.resolve("scripts/voice_charter_audit.ts"), "utf8");
+assert.match(
+  charterSource,
+  /isStaffAuthoredOutbound\(m\)/,
+  "voice charter audit must skip staff-authored outbounds"
+);
+const toneSource = await fs.readFile(path.resolve("scripts/tone_quality_eval.ts"), "utf8");
+assert.match(
+  toneSource,
+  /isStaffAuthoredOutbound\(matchedOut \?\? \{\}\)/,
+  "tone quality audit must skip staff-typed replies"
+);
+assert.match(
+  toneSource,
+  /staff_typed_reply_no_agent_draft/,
+  "tone quality audit must record the staff-typed skip reason"
+);
 
 console.log("PASS scoring exclusions eval");
