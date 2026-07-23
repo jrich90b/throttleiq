@@ -15,7 +15,11 @@ import { google } from "googleapis";
 import sharp from "sharp";
 import { orchestrateInbound } from "./domain/orchestrator.js";
 import { buildAgentIntro, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildWatchAvailableReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, hasCustomerReceivedOutbound } from "./domain/agentVoice.js";
-import { postSaleVehicleIsNew, postSaleAccessoryOrEnjoyMessage } from "./domain/postSaleCadence.js";
+import {
+  postSaleVehicleIsNew,
+  postSaleAccessoryOrEnjoyMessage,
+  resolvePostSaleModelLabel
+} from "./domain/postSaleCadence.js";
 import { isIndefiniteFollowUpDeferralText } from "./domain/scoringExclusions.js";
 import { findTlpLogCatchupCandidates, isTlpLeadNotFoundError } from "./domain/tlpLogCatchup.js";
 import {
@@ -30894,18 +30898,10 @@ async function processDueFollowUpsUnlocked() {
       .trim();
     return normalizePostSaleModelAcronyms(noParenSuffix);
   };
-  const getPostSaleModel = (conv: any) => {
-    const sale = conv?.sale ?? {};
-    const saleLabel =
-      String(sale?.label ?? "").trim() ||
-      [sale?.year, sale?.make, sale?.model, sale?.trim, sale?.color]
-        .filter(Boolean)
-        .join(" ")
-        .trim();
-    const raw = saleLabel || conv?.lead?.vehicle?.model || conv?.lead?.vehicle?.description || "";
-    const normalized = normalizeModelForPostSale(String(raw));
-    return normalized || "bike";
-  };
+  // Placeholder ADF vehicles ("Harley-Davidson Full Line", "Other") must never leak into
+  // post-sale copy — candidate selection + placeholder screening live in postSaleCadence.ts
+  // (resolvePostSaleModelLabel) so the eval pins the exact production shape.
+  const getPostSaleModel = (conv: any) => resolvePostSaleModelLabel(conv, normalizeModelForPostSale);
 
   const getLastInbound = (conv: any) =>
     [...(conv.messages ?? [])].reverse().find((m: any) => m.direction === "in") ?? null;
