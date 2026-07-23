@@ -204,9 +204,43 @@ export function isAffordabilityRideConfidenceObjectionText(text: string): boolea
   return hasAffordabilityConcern && hasRideConfidenceConcern;
 }
 
+/**
+ * Deterministic INVARIANT guard — KEEP (AGENTS.md "invariant guards"). A turn that asks
+ * for information about a specific unit (pictures, price, mileage, specs) carries a LIVE
+ * ask that is owed an answer, no matter what soft-decline language surrounds it.
+ *
+ * Production miss 2026-07-22 (Jaydon Gerolimos +16813891971): a watch-alert reply —
+ * "Im still interested but not in the market right now. I do however still like to know
+ * when bikes come in! Could o see pictures of that 883 and the price?" — parsed as a
+ * defer closeout, so the agent answered "I hear you. If anything changes down the road,
+ * just give me a shout." and never sent the pictures or the price he asked for.
+ *
+ * Same bug class as the Joshua Ricksgers per-unit price objection (2026-07-15). Fail
+ * direction if retired = a wrongful close on a customer who just asked us a question
+ * (fail-UNSAFE), so this stays deterministic alongside the parser few-shot.
+ */
+export function hasUnitInfoRequestText(text: string | null | undefined): boolean {
+  const t = String(text ?? "")
+    .toLowerCase()
+    .replace(/[’]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!t) return false;
+  const asksForMedia =
+    /\b(?:see|send|sent|share|get|got|have|post|text|email)\b[^.?!]{0,40}\b(?:pic|pics|picture|pictures|photo|photos|image|images|video|videos)\b/.test(
+      t
+    ) ||
+    /\b(?:any|some|more|the)\s+(?:pic|pics|picture|pictures|photo|photos|image|images|video|videos)\b/.test(t);
+  const asksForNumbers =
+    /\b(?:what(?:'s| is| are)?|how much|how many|how far|send|share|see|get|tell me)\b[^.?!]{0,40}\b(?:price|pricing|cost|asking|out the door|otd|mileage|miles|specs?|details?|info|information)\b/.test(
+      t
+    ) || /\b(?:and\s+)?the\s+(?:price|pricing|cost|mileage|miles|specs?)\b/.test(t);
+  return asksForMedia || asksForNumbers;
+}
+
 // Deterministic INVARIANT guard — KEEP (AGENTS.md "invariant guards"). Detects a
-// competing active intent (availability / scheduling / buying / location) so a lead
-// with a live ask is not prematurely disposition/closed. This is not reply
+// competing active intent (availability / scheduling / buying / unit-info / location) so a
+// lead with a live ask is not prematurely disposition/closed. This is not reply
 // comprehension; fail direction if retired = a wrongful close (fail-UNSAFE), so it
 // stays deterministic even though it reads customer text.
 function hasCompetingActiveIntentText(text: string): boolean {
@@ -227,7 +261,13 @@ function hasCompetingActiveIntentText(text: string): boolean {
     /\b(ready to buy|pull the trigger|i want (it|that bike)|i['’]?m interested|interested in|want to move forward)\b/.test(
       t
     );
-  return hasAvailabilityAsk || hasSchedulingAsk || hasActiveBuyingSignal || isDealerLocationQuestionText(t);
+  return (
+    hasAvailabilityAsk ||
+    hasSchedulingAsk ||
+    hasActiveBuyingSignal ||
+    hasUnitInfoRequestText(t) ||
+    isDealerLocationQuestionText(t)
+  );
 }
 
 export function isDispositionParserAccepted(parsed: {

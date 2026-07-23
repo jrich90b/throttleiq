@@ -6713,7 +6713,13 @@ inbound: "Sounds like it could be a nice bike but a little out of my current pri
 output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","confidence":0.9}`,
     `EXAMPLE T
 inbound: "Money's just too tight right now, I've got to stop looking for a while."
-output: {"disposition":"defer_no_window","explicit_disposition":true,"timeframe_text":"","confidence":0.92}`
+output: {"disposition":"defer_no_window","explicit_disposition":true,"timeframe_text":"","confidence":0.92}`,
+    `EXAMPLE U
+inbound: "Im still interested but not in the market right now. I do however still like to know when bikes come in! Could o see pictures of that 883 and the price?"
+output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","confidence":0.94}`,
+    `EXAMPLE V
+inbound: "Not buying today but definitely keep me posted when something comes in. How many miles on that one?"
+output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","confidence":0.93}`
   ];
 
   const prompt = [
@@ -6733,6 +6739,7 @@ output: {"disposition":"defer_no_window","explicit_disposition":true,"timeframe_
     "- If customer says they have to pass at this point because of health, injury, recovery, or life circumstances, treat as stepping_back.",
     "- Price objection, ONE bike: if the customer says a SPECIFIC bike is too expensive / out of their range but is still shopping (e.g. 'a little out of my range, keep me posted', 'I'll wait for something else', 'anything else come in?'), that is a live objection on that unit, NOT a closeout — return none (the lead is still active).",
     "- Budget stop, no continued shopping: if the customer says they generally can't afford anything right now / are stopping the search over money with no continued-shopping signal, treat as defer_no_window unless they give a clear timeframe (then defer_with_window).",
+    "- Not-buying-now but still SUBSCRIBED, or with a live ask: if the customer says they are not in the market / not buying right now BUT (a) asks us to keep telling them when bikes come in ('still like to know when bikes come in', 'keep me posted', 'text me when one shows up'), or (b) asks a direct question about a specific unit in the same message (pictures, price, mileage, specs, availability), that is NOT a closeout — return none. The lead is active and is owed an answer to the question they just asked. This is different from a customer who will contact US later with no ask of their own (that is still defer_no_window).",
     "- explicit_disposition=true only when disposition is clearly expressed.",
     "- timeframe_text should contain the raw timeframe phrase when disposition is defer_with_window; otherwise empty string.",
     "- If a clear disposition is mixed with another active request, still parse the disposition but preserve any raw timeframe phrase.",

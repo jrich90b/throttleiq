@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-const { canApplyDispositionCloseout, hasActiveDealCloseoutBlockers } = await import(
+const { canApplyDispositionCloseout, hasActiveDealCloseoutBlockers, hasUnitInfoRequestText } = await import(
   "../services/api/src/domain/transitionSafety.ts"
 );
 
@@ -85,6 +85,60 @@ assert.equal(
   "clean sell-on-own without active deal still closes"
 );
 
+// Unit-info-request guard. Production miss 2026-07-22 (Jaydon Gerolimos +16813891971):
+// a watch-alert reply that deferred AND asked for pictures + price was closed out with
+// "I hear you. If anything changes down the road, just give me a shout."
+const JAYDON =
+  "Im still interested but not in the market right now. I do however still like to know when bikes come in! Could o see pictures of that 883 and the price?";
+assert.equal(hasUnitInfoRequestText(JAYDON), true, "pictures + price ask is a live unit-info request");
+assert.equal(
+  hasUnitInfoRequestText("Not buying today but keep me posted. How many miles on that one?"),
+  true,
+  "mileage ask is a live unit-info request"
+);
+assert.equal(
+  hasUnitInfoRequestText("Can you send me some pics of it?"),
+  true,
+  "bare pics ask is a live unit-info request"
+);
+assert.equal(
+  hasUnitInfoRequestText("What's the out the door price?"),
+  true,
+  "out-the-door price ask is a live unit-info request"
+);
+// Genuine closeouts carry no unit-info ask and must stay closeable.
+for (const closeout of [
+  "Money's just too tight right now, I've got to stop looking for a while.",
+  "I think I'm going to keep my bike and hold off for now.",
+  "I'm just going to sell it myself.",
+  "I'm not looking right now but I'll get a hold of you when I'm ready.",
+  "I am going to take care of the pipes myself"
+]) {
+  assert.equal(hasUnitInfoRequestText(closeout), false, `must not read a unit-info ask in: ${closeout}`);
+}
+assert.equal(
+  canApplyDispositionCloseout({
+    conv: { id: "+16813891971", messages: [] },
+    text: JAYDON,
+    parsedAccepted: true,
+    hasDecision: true,
+    openTodos: []
+  }),
+  false,
+  "a turn that asks for pictures and price must never close the lead, however confident the disposition parse"
+);
+assert.equal(
+  canApplyDispositionCloseout({
+    conv: { id: "z", messages: [] },
+    text: "Money's just too tight right now, I've got to stop looking for a while.",
+    parsedAccepted: true,
+    hasDecision: true,
+    openTodos: []
+  }),
+  true,
+  "a genuine budget stop with no live ask still closes"
+);
+
 // Wiring + parser pins.
 const apiSource = await fs.readFile(path.resolve("services/api/src/index.ts"), "utf8");
 assert.ok(
@@ -101,6 +155,16 @@ assert.match(
   llmSource,
   /handling parts, accessories, pipes, installs, or service themselves/i,
   "disposition parser rules exclude self-service scope statements"
+);
+assert.match(
+  llmSource,
+  /Not-buying-now but still SUBSCRIBED, or with a live ask/,
+  "disposition parser rules carve out the alert-keeper / live-ask turn"
+);
+assert.match(
+  llmSource,
+  /Could o see pictures of that 883 and the price/,
+  "disposition parser few-shots pin the Jaydon Gerolimos production fixture"
 );
 
 console.log("PASS disposition close guard eval");

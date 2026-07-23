@@ -63,4 +63,37 @@ assert.equal(
   `a price defer with a timeframe should stay defer_with_window, got ${deferWindow.disposition}`
 );
 
-console.log("PASS customer disposition eval — price-objection carve-out (none / defer_no_window / defer_with_window)");
+// 4) THE FIX — an alert-keeper with a live in-turn ask is not a closeout.
+// Production miss (Jaydon Gerolimos +16813891971, 2026-07-22): to a watch alert on a
+// 2006 Sportster 883 Low he replied "Im still interested but not in the market right now.
+// I do however still like to know when bikes come in! Could o see pictures of that 883 and
+// the price?" — parsed as a defer closeout, answered with "I hear you. If anything changes
+// down the road, just give me a shout.", and his pictures + price were never sent.
+// Paraphrased (not the verbatim few-shot) to test generalization.
+const alertKeeper = await disp(
+  "Still interested, just not in the market at the moment. I'd still like to hear when bikes show up though. Can you send me some pics of that one and what you want for it?",
+  [
+    { direction: "out", body: "Hey — a 2006 Sportster 883 Low you were watching for just came in. Are you still looking?" }
+  ]
+);
+assert.ok(
+  !CLOSEOUT_DISPOSITIONS.has(alertKeeper.disposition),
+  `a deferring customer who asks for pics + price must NOT close the lead — got ${alertKeeper.disposition}`
+);
+assert.equal(
+  alertKeeper.disposition,
+  "none",
+  `alert-keeper with a live ask should parse as none, got ${alertKeeper.disposition}`
+);
+
+// 5) REGRESSION GUARD — deferring with NO ask of our own still closes out.
+const deferNoAsk = await disp("I'm not looking right now but I'll get a hold of you when I'm ready.");
+assert.equal(
+  deferNoAsk.disposition,
+  "defer_no_window",
+  `a defer with no live ask should stay defer_no_window, got ${deferNoAsk.disposition}`
+);
+
+console.log(
+  "PASS customer disposition eval — price-objection carve-out + alert-keeper live-ask carve-out (none / defer_no_window / defer_with_window)"
+);
