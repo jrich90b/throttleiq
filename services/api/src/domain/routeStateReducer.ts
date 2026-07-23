@@ -531,6 +531,36 @@ export function decideCustomerAckConfirmBooking(input: ConfirmBookingDecisionInp
   return { kind: "offer_alternatives", hasAlternatives: input.hasAlternatives };
 }
 
+// Staff-side confirm of a PENDING appointment request (manual outbound). The customer asked for a
+// concrete slot (an open "Appointment requested." todo carries it) and a staff member typed an
+// affirmative reply ("Sounds good! See you then"). That confirmation must BOOK the calendar — the
+// task's objective is a calendar entry, and closing anything short of booking buries an un-booked
+// visit. The old inline gate required existingBookedAppointmentIsPast, i.e. it ONLY worked as a
+// REBOOK after an old appointment — a FIRST booking (no appointment at all) fell through entirely:
+// William +17163591526 (7/20) asked "thursday 9a", staff replied "Sounds good! See you then", and
+// nothing was booked, the request todo sat open (operator-reported). The fix: fire when there is NO
+// live booking (first booking) OR the existing booking is already past (the original rebook case);
+// a LIVE future booking still hard-excludes (never silently rebook over it — the dedupe guard owns
+// that turn). An affirmative WITH a question mark is a question, not a confirm. Booking IO failure
+// downstream fails safe (state reverts + a staff conflict task; pinned by the caller's own arm).
+export type ManualConfirmPendingAppointmentInput = {
+  hasPendingRequestText: boolean; // an open "Appointment requested." todo with a parseable Requested: phrase
+  hasBookedEvent: boolean; // a calendar event id exists on the conversation
+  existingBookedAppointmentIsPast: boolean; // that event's time is >1h in the past
+  hasAffirmativeAck: boolean; // the staff outbound contains an affirmative phrase
+  hasQuestionMark: boolean; // the staff outbound asks something instead of confirming
+};
+
+export function decideManualConfirmPendingAppointment(
+  input: ManualConfirmPendingAppointmentInput
+): { confirm: boolean } {
+  if (!input.hasPendingRequestText) return { confirm: false };
+  if (!input.hasAffirmativeAck) return { confirm: false };
+  if (input.hasQuestionMark) return { confirm: false };
+  if (input.hasBookedEvent && !input.existingBookedAppointmentIsPast) return { confirm: false };
+  return { confirm: true };
+}
+
 // A scheduling turn where the agent DEFERRED ("I'll check / I'll confirm that time and follow up")
 // but did NOT book this turn and did NOT offer alternative slots is a silent promise with nothing
 // behind it — the salesperson never sees the requested time. That turn MUST leave an owner follow-up

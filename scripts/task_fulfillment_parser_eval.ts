@@ -47,7 +47,16 @@ const douglas: Act[] = [
   { direction: "in", channel: "sms", text: "Thanks. I was just curious." }
 ];
 
-const cases: { id: string; activity: Act[]; summary: string; want: boolean; reason?: string }[] = [
+const cases: {
+  id: string;
+  activity: Act[];
+  summary: string;
+  want: boolean;
+  reason?: string;
+  /** Also assert the verdict is NOT engaged_pending_customer (a bare dealer handoff leaves the
+   *  ball with the DEALER — soft-close must not snooze the task away). */
+  wantNotEngagedPending?: boolean;
+}[] = [
   // Paul Foley (6/22): a PARTS availability question answered by text must close; an ORDER
   // task with only a promise must stay open. Pins the broadened eligibility (any reason; the
   // classifier judges accomplished-vs-promise) as safe.
@@ -101,6 +110,54 @@ const cases: { id: string; activity: Act[]; summary: string; want: boolean; reas
     activity: [{ direction: "out", channel: "sms", text: "Hey, just checking in - how is it going?" }],
     summary: "Call customer to follow up on their financing application.",
     want: false
+  },
+  // HANDOFF with no substance (Joe, 2026-07-23): "I'll have someone follow up" answers NOTHING —
+  // the money-question task must stay open, and it is NOT engaged_pending_customer either (the
+  // next action still belongs to the DEALER, so soft-close must not snooze it away).
+  {
+    id: "financing_handoff_no_details_stays_open",
+    reason: "payments",
+    activity: [
+      { direction: "in", channel: "sms", text: "What kind of financing rates could I get on that Street Glide?" },
+      { direction: "out", channel: "sms", text: "Great question — I will have our finance manager follow up with you on that." }
+    ],
+    summary: "Customer asked about financing options and rates for the Street Glide.",
+    want: false,
+    wantNotEngagedPending: true
+  },
+  {
+    id: "pricing_handoff_no_details_stays_open",
+    reason: "pricing",
+    activity: [
+      { direction: "in", channel: "sms", text: "What would my out the door price be?" },
+      { direction: "out", channel: "sms", text: "Let me get someone from the team to help with pricing, they will reach out shortly." }
+    ],
+    summary: "Customer asked for the out-the-door price on the 2024 Road Glide.",
+    want: false,
+    wantNotEngagedPending: true
+  },
+  {
+    id: "availability_handoff_no_details_stays_open",
+    reason: "other",
+    activity: [
+      { direction: "in", channel: "sms", text: "Do you have any 2025 Low Rider S in stock?" },
+      { direction: "out", channel: "sms", text: "I'll have someone check on that for you and get back to you." }
+    ],
+    summary: "Customer asked whether a 2025 Low Rider S is in stock.",
+    want: false,
+    wantNotEngagedPending: true
+  },
+  // CONTRAST: a handoff that ALSO delivers the substantive answer fulfills the question.
+  {
+    id: "financing_handoff_with_real_rate_closes",
+    reason: "payments",
+    activity: [
+      { direction: "in", channel: "sms", text: "What rate would I qualify for?" },
+      { direction: "out", channel: "sms", text: "Our finance manager will reach out, but to answer your question: you are pre-qualified at 7.29% APR up to 72 months on that model." },
+      { direction: "in", channel: "sms", text: "Perfect, thanks!" }
+    ],
+    summary: "Customer asked what financing rate they would qualify for.",
+    want: true
   }
 ];
 
@@ -119,6 +176,13 @@ for (const c of cases) {
     c.want,
     `[${c.id}] expected fulfilled=${c.want}, got ${v.fulfilled} (conf ${v.confidence}; ${String(v.evidence ?? "").slice(0, 120)})`
   );
+  if (c.wantNotEngagedPending) {
+    assert.equal(
+      !!v.engagedPendingCustomer,
+      false,
+      `[${c.id}] a bare dealer handoff must NOT be engaged_pending_customer (the dealer still owes the follow-up); got true (${String(v.evidence ?? "").slice(0, 120)})`
+    );
+  }
 }
 
 console.log(

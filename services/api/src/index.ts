@@ -607,6 +607,7 @@ import {
   shouldSuppressCommittedBuyerAvailabilityRepitch,
   decideTradeQualifierTurn,
   decideCustomerAckConfirmBooking,
+  decideManualConfirmPendingAppointment,
   decideSchedulingDeferralFollowUpTask,
   tentativeWindowNeedsOwnerFollowUp,
   isStaleBookedAppointmentDay,
@@ -50414,13 +50415,20 @@ app.post("/conversations/:id/send", async (req, res) => {
     const pendingAppointmentRequestText = String(pendingAppointmentRequestTodo?.summary ?? "")
       .match(/\bRequested(?: time)?:\s*(.+?)(?:\.|$)/i)?.[1]
       ?.trim() ?? "";
-    const confirmsPendingAppointmentRequest =
-      !!pendingAppointmentRequestText &&
-      existingBookedAppointmentIsPast &&
-      /\b(yes|yep|yeah|yup|sure|ok|okay|perfect|sounds good|that should work|that works|should work|works for me)\b/i.test(
-        lower
-      ) &&
-      !/\?/.test(text);
+    // Pure decision (routeStateReducer, pinned by manual_confirm_pending_appointment:eval). The old
+    // inline gate required existingBookedAppointmentIsPast, so a FIRST booking (no appointment at
+    // all) never confirmed — William +17163591526: "thursday 9a" requested, staff "Sounds good! See
+    // you then", nothing booked, todo sat open. A live FUTURE booking still never rebooks from here.
+    const confirmsPendingAppointmentRequest = decideManualConfirmPendingAppointment({
+      hasPendingRequestText: !!pendingAppointmentRequestText,
+      hasBookedEvent,
+      existingBookedAppointmentIsPast,
+      hasAffirmativeAck:
+        /\b(yes|yep|yeah|yup|sure|ok|okay|perfect|sounds good|that should work|that works|should work|works for me)\b/i.test(
+          lower
+        ),
+      hasQuestionMark: /\?/.test(text)
+    }).confirm;
 
     // Hard dedupe guard for manual outbound confirmations:
     // if an appointment event is already booked, do not mutate/rebook from
@@ -50508,11 +50516,14 @@ app.post("/conversations/:id/send", async (req, res) => {
     const parserRequestedText = parserConfirmedBooking
       ? manualOutboundAppointmentRequestedPhrase(manualOutboundAppointmentParse)
       : "";
-    const manualOutboundRequested = explicitBookingStatement
-      ? parseRequestedDayTime(text, schedulerTimezone)
-      : confirmsPendingAppointmentRequest
+    // The staff text is the primary day/time source, but an affirmative confirm usually names NO
+    // time ("Sounds good! See you then") — the time lives in the PENDING request. Fall through to
+    // it instead of letting an unparseable explicit-confirm text null out the whole booking.
+    const manualOutboundRequested =
+      (explicitBookingStatement ? parseRequestedDayTime(text, schedulerTimezone) : null) ??
+      (confirmsPendingAppointmentRequest
         ? parseRequestedDayTime(pendingAppointmentRequestText, schedulerTimezone)
-      : null;
+        : null);
     const normalizedText = String(
       parserRequestedText ||
         (bookingParse?.normalizedText ??
