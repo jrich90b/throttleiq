@@ -9,6 +9,8 @@
  * received the factory-warranty reminder on a non-new purchase (post-sale cadence step 2).
  */
 
+import { isPlaceholderModel } from "./modelDeflection.js";
+
 const USED_HINT = /\b(used|pre[\s-]?owned|cpo|certified\s+pre)\b/i;
 
 function condText(value: unknown): string {
@@ -57,6 +59,43 @@ export function postSaleVehicleIsNew(conv: any): boolean {
     if (saleYear - modelYear > MAX_NEW_MODEL_YEAR_GAP) return false;
   }
   return true;
+}
+
+/**
+ * Resolve the model label used in post-sale check-in copy ("Thanks again for coming to
+ * see us for your {model}"). ADF lead sources (Traffic Log Pro, Meta promo) routinely
+ * attach a PLACEHOLDER vehicle — "Harley-Davidson Full Line", "Other" — which is lead-form
+ * junk, not a bike we can name; without a guard it leaked into a real customer text
+ * ("Thanks again for coming to see us for your Full Line", +17163975098, 2026-07).
+ *
+ * Candidate precedence is unchanged from the original inline resolver (sale label, then
+ * joined sale fields, then lead vehicle model, then description) — but every candidate is
+ * screened through isPlaceholderModel (modelDeflection.ts), the same invariant helper every
+ * other placeholder-suppression surface uses, BOTH raw and after the caller's display
+ * normalization (the normalizer strips the make prefix, so "Harley-Davidson Full Line"
+ * would otherwise come back as a plausible-looking "Full Line").
+ *
+ * Deterministic is correct here: classifying our OWN lead/sale field values is structured
+ * extraction, not customer comprehension. FAIL DIRECTION: safe — a false-positive
+ * placeholder call only downgrades copy to the generic "bike" (the established rendering
+ * for unknown models, Joe 2026-06-21); a false negative is the junk-leak bug itself.
+ */
+export function resolvePostSaleModelLabel(conv: any, normalize: (raw: string) => string): string {
+  const sale = conv?.sale ?? {};
+  const saleLabel =
+    String(sale?.label ?? "").trim() ||
+    [sale?.year, sale?.make, sale?.model, sale?.trim, sale?.color]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+  const candidates = [saleLabel, conv?.lead?.vehicle?.model, conv?.lead?.vehicle?.description];
+  for (const candidate of candidates) {
+    const raw = String(candidate ?? "").trim();
+    if (!raw || isPlaceholderModel(raw)) continue;
+    const normalized = String(normalize(raw) ?? "").trim();
+    if (normalized && !isPlaceholderModel(normalized)) return normalized;
+  }
+  return "bike";
 }
 
 /**
