@@ -53,6 +53,47 @@ export function stripLeadingVinCodes(model: string | null | undefined): string {
 }
 
 /**
+ * Strip a leading MAKE name off a watch model label (2026-07-23). ADF/lead vehicle model fields
+ * sometimes arrive with the make glued in front ("HARLEY-DAVIDSON Street Glide", +17165600980's
+ * held-guard watch) — the make already lives in the watch's own `make` field, so keeping it in the
+ * model both blocks matching (feed unit models never carry the make) and made the outcome audit
+ * read the watch as "more specific" than the unit it correctly notified (phantom
+ * watch_fired_wrong_model). Deterministic structured-extraction cleanup of our own intake format.
+ *
+ * FAIL-SAFE: only a LEADING make token is removed, and a label that IS just the make is returned
+ * unchanged (never empty). No real H-D model name starts with "Harley"/"H-D", so a genuine model
+ * is never touched.
+ */
+const LEADING_MAKE_NAME_RE = /^(?:harley[\s._-]*davidson|harley|h[\s._-]?d)\b[\s:,._-]*/i;
+export function stripLeadingMakeName(model: string | null | undefined): string {
+  const raw = String(model ?? "").trim();
+  if (!raw) return "";
+  const stripped = raw.replace(LEADING_MAKE_NAME_RE, "").trim();
+  return stripped || raw; // never return empty
+}
+
+/**
+ * Drop make + OEM/VIN-code junk tokens ANYWHERE in a watch model label, for SPECIFICITY COMPARISON
+ * only (the outcome audit's watch_fired_wrong_model check). Stored watches hold feed lines like
+ * "Flhtcutg 1mad Tri Glide Ultra" (OEM model code + paint code + friendly name, +17166021492):
+ * against a notified unit "Tri Glide Ultra" the junk made the watch look STRICTLY more specific,
+ * firing a phantom wrong-model anomaly for a fire that was exactly right.
+ *
+ * READ-TIME, detector-only: never used for matching, notifications, or customer-facing text.
+ * FAIL-SAFE: over-stripping can only make the audit compare on fewer tokens (fewer phantom flags);
+ * a REAL trim regression ("Street Glide Special" fired on a base "Street Glide") is built from
+ * plain model words this filter never touches, so it still flags. Never returns empty (falls back
+ * to the make-stripped input).
+ */
+export function stripWatchModelJunkTokens(model: string | null | undefined): string {
+  const raw = stripLeadingMakeName(model);
+  if (!raw) return "";
+  const kept = raw.split(/\s+/).filter(tok => !isVinCodeToken(tok));
+  const result = kept.join(" ").trim();
+  return result || raw; // never return empty
+}
+
+/**
  * Clean existing watches in place: strip VIN codes off each model, then collapse the duplicates the
  * cleaning creates (e.g. six "Fxst Bhl_ Softail Standard" all become "Softail Standard"). Dedup key is
  * model + condition + year-band + price-band; the survivor keeps a lastNotifiedAt if any duplicate had

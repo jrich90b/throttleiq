@@ -113,4 +113,43 @@ const { normalizeWatchModelsVin } = await import("../services/api/src/domain/wat
   assert.equal(r.removedDuplicates, 0);
 }
 
-console.log("PASS watch_model_vin_codes eval — VIN codes stripped to the friendly model; real names untouched; in-place normalize + dedup");
+// --- stripLeadingMakeName: a glued make prefix comes off; real models are never touched (2026-07-23) ---
+const { stripLeadingMakeName, stripWatchModelJunkTokens } = await import("../services/api/src/domain/watchModelVinCodes.ts");
+assert.equal(stripLeadingMakeName("HARLEY-DAVIDSON Street Glide"), "Street Glide", "the +17165600980 held-guard watch shape");
+assert.equal(stripLeadingMakeName("Harley Davidson Road Glide"), "Road Glide");
+assert.equal(stripLeadingMakeName("harley-davidson Tri Glide Ultra"), "Tri Glide Ultra");
+assert.equal(stripLeadingMakeName("Harley Fat Boy"), "Fat Boy");
+assert.equal(stripLeadingMakeName("HD Street Bob"), "Street Bob");
+assert.equal(stripLeadingMakeName("Harley-Davidson"), "Harley-Davidson", "a label that IS just the make stays (never empty)");
+for (const clean of ["Street Glide", "Heritage Softail Classic", "Hydra-Glide", "Road Glide 3", "Low Rider S", "Iron 883"]) {
+  assert.equal(stripLeadingMakeName(clean), clean, `real model untouched by make-strip: ${clean}`);
+}
+assert.equal(stripLeadingMakeName(""), "");
+assert.equal(stripLeadingMakeName(null as any), "");
+
+// --- stripWatchModelJunkTokens (AUDIT-only specificity comparison): make + OEM/paint codes anywhere ---
+assert.equal(stripWatchModelJunkTokens("Flhtcutg 1mad Tri Glide Ultra"), "Tri Glide Ultra", "the +17166021492 feed-line watch shape");
+assert.equal(stripWatchModelJunkTokens("Flhtcutg 1maf Tri Glide Ultra"), "Tri Glide Ultra");
+assert.equal(stripWatchModelJunkTokens("HARLEY-DAVIDSON Street Glide"), "Street Glide");
+assert.equal(stripWatchModelJunkTokens("Flhtcutg"), "Flhtcutg", "a lone code never strips to empty");
+for (const clean of ["Street Glide Special", "CVO Street Glide", "Road Glide Limited", "Tri Glide Ultra", "Electra Glide Ultra Classic", "Iron 883"]) {
+  assert.equal(stripWatchModelJunkTokens(clean), clean, `real trim words survive the junk filter: ${clean}`);
+}
+
+// --- Source guards: the write-time chokepoint + the raw followup-action path are wired ---
+{
+  const fs = await import("node:fs");
+  const idx = fs.readFileSync("services/api/src/index.ts", "utf8");
+  assert.match(
+    idx,
+    /stripLeadingVinCodes\(stripLeadingMakeName\(/,
+    "canonicalizeWatchModelLabel strips a glued make prefix before VIN codes (write-time fix for the held-guard path)"
+  );
+  const canonicalized = idx.match(/const model = canonicalizeWatchModelLabel\(item\?\.model\);/g) || [];
+  assert.ok(
+    canonicalized.length >= 2,
+    `the followup-action buildWatchList must canonicalize item.model like the /watch endpoint (found ${canonicalized.length}, need >= 2)`
+  );
+}
+
+console.log("PASS watch_model_vin_codes eval — VIN codes stripped to the friendly model; real names untouched; in-place normalize + dedup; make/OEM junk never fakes specificity");

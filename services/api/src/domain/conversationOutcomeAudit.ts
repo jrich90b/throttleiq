@@ -19,6 +19,7 @@
  */
 import { REAL_OUTBOUND_CONTACT_PROVIDERS, collectInventoryWatches } from "./conversationStore.js";
 import { modelMatches } from "./inventoryFeed.js";
+import { stripWatchModelJunkTokens } from "./watchModelVinCodes.js";
 import { isCampaignBroadcastSend } from "./scoringExclusions.js";
 
 export type OutcomeSeverity = "P1" | "P2" | "P3";
@@ -160,8 +161,16 @@ export function auditConversationOutcome(conv: AuditableConv, opts: { now?: Date
     if (!watchModel || !notifiedModel) continue;
     const firedAtMs = Date.parse(String(w?.lastNotifiedAt ?? ""));
     if (!Number.isFinite(firedAtMs) || now.getTime() - firedAtMs > WRONG_MODEL_FIRE_WINDOW_MS) continue;
+    // Compare on JUNK-STRIPPED labels: stored watch models sometimes carry a glued make prefix
+    // ("HARLEY-DAVIDSON Street Glide", +17165600980) or OEM model/paint codes ("Flhtcutg 1mad Tri
+    // Glide Ultra", +17166021492) from feed-sourced creation paths. Those tokens are FAKE
+    // specificity — the fire was correct — so they must not trip the strictly-more-specific test.
+    // Real trim words (Special/Limited/ST/CVO/Ultra/Classic) are plain words the stripper never
+    // touches, so a genuine directional-matcher regression still flags.
+    const watchModelCore = stripWatchModelJunkTokens(watchModel);
+    const notifiedModelCore = stripWatchModelJunkTokens(notifiedModel);
     // watch strictly MORE specific than the unit it notified (watch includes unit, unit does NOT include watch).
-    if (modelMatches(watchModel, notifiedModel) && !modelMatches(notifiedModel, watchModel)) {
+    if (modelMatches(watchModelCore, notifiedModelCore) && !modelMatches(notifiedModelCore, watchModelCore)) {
       out.push({
         ...base,
         dimension: "watch_fired_wrong_model",

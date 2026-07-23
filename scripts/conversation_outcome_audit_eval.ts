@@ -52,6 +52,14 @@ eq(dims({ id: "w8", inventoryWatches: [{ model: "Road Glide Limited", lastNotifi
   eq(a[0].healed, false, "watch_fired_wrong_model is net-new (no auto-heal; the fix is the matcher)");
   assert.ok(a[0].detail.includes("Street Glide Special") && a[0].detail.includes("Street Glide"), "detail names both the watched + notified model"); n++;
 }
+// JUNK-TOKEN fake specificity (2026-07-23): make/OEM-code junk stored in the watch model field must
+// not read as "more specific than the unit" — both are pinned PRODUCTION shapes whose fires were
+// exactly right (the customer got the bike they asked about) yet flagged every sweep.
+eq(dims({ id: "w10", inventoryWatches: [{ model: "HARLEY-DAVIDSON Street Glide", lastNotifiedModel: "Street Glide", lastNotifiedAt: RECENT_FIRE }] }), [], "a glued MAKE prefix is not specificity (+17165600980 held-guard watch) => clean");
+eq(dims({ id: "w11", inventoryWatches: [{ model: "Flhtcutg 1mad Tri Glide Ultra", lastNotifiedModel: "Tri Glide Ultra", lastNotifiedAt: RECENT_FIRE }] }), [], "OEM model+paint codes are not specificity (+17166021492 feed-line watch) => clean");
+// …but junk must never MASK a real regression: a genuine trim word still flags through the junk.
+eq(dims({ id: "w12", inventoryWatches: [{ model: "HARLEY-DAVIDSON Street Glide Special", lastNotifiedModel: "Street Glide", lastNotifiedAt: RECENT_FIRE }] }), ["watch_fired_wrong_model"], "junk-prefixed but genuinely trim-specific watch fired on a base unit => still an anomaly");
+
 // SOURCE GUARD: both watch-fire sites must stamp the UNIT's model (matchedItem.model), not the watch's.
 {
   const idx = fs.readFileSync("services/api/src/index.ts", "utf8");
