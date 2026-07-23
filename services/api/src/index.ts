@@ -807,6 +807,8 @@ import {
   CONTEXT_FIDELITY_HELD_TODO_MARKER,
   shouldNudgeStaleHandoffLead,
   shouldSurfaceUnsentFirstTouch,
+  isFirstTouchTodo,
+  decideFirstTouchTodoResolution,
   REAL_OUTBOUND_CONTACT_PROVIDERS,
   collectInventoryWatches,
   pruneInventoryWatchesByModel,
@@ -30436,6 +30438,37 @@ async function processDueFollowUpsUnlocked() {
   // AutoDealers.Digital inventory leads, 6/25). Surface ONE channel-aware staff todo so the first touch
   // actually goes out. Fresh open-todo set so it never stacks on a todo another sweep just created;
   // deduped via firstTouchSurfacedAt; capped per tick.
+  // First-touch todo lifecycle (task-hygiene, 7/23): these are reason=`note`/`call` tasks the LLM
+  // fulfillment auto-close never evaluates (note is ineligible), so they had NO closer at all — a
+  // "Send the first reply" task stayed open even after the reply went out, and the 6/25 backfill
+  // batch sat 27 days untouched while the 7-day re-nudge stood ready to recreate it. Resolve them
+  // deterministically: contacted → done (objective achieved by definition); aged out → retire +
+  // permanent stamp so the creator below never recreates it.
+  let firstTouchClosed = 0;
+  let firstTouchRetired = 0;
+  {
+    const convByIdForFirstTouch = new Map(convs.map(c => [c.id, c]));
+    for (const t of listOpenTodos()) {
+      if (!isFirstTouchTodo(t)) continue;
+      const conv = convByIdForFirstTouch.get(t.convId);
+      if (!conv) continue;
+      const resolution = decideFirstTouchTodoResolution(conv, t, now);
+      if (resolution === "keep") continue;
+      if (!markTodoDone(conv.id, t.id)) continue;
+      if (resolution === "close_contacted") {
+        firstTouchClosed += 1;
+      } else {
+        conv.firstTouchRetiredAt = now.toISOString();
+        firstTouchRetired += 1;
+      }
+      saveConversation(conv);
+    }
+  }
+  if (firstTouchClosed > 0 || firstTouchRetired > 0) {
+    console.log(
+      `[state-reconcile] first-touch todos: closed ${firstTouchClosed} (contact made), retired ${firstTouchRetired} (aged out)`
+    );
+  }
   const FIRST_TOUCH_TODOS_PER_TICK = 15;
   const convIdsWithOpenTodoNow = new Set(listOpenTodos().map(t => t.convId));
   let firstTouchSurfaced = 0;

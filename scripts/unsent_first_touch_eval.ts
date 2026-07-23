@@ -18,9 +18,13 @@ import path from "node:path";
 
 process.env.CONVERSATIONS_DB_PATH =
   process.env.CONVERSATIONS_DB_PATH || path.join(os.tmpdir(), `unsent-first-touch-eval-${Date.now()}.json`);
-const { shouldSurfaceUnsentFirstTouch, upsertConversationByLeadKey } = await import(
-  "../services/api/src/domain/conversationStore.ts"
-);
+const {
+  shouldSurfaceUnsentFirstTouch,
+  upsertConversationByLeadKey,
+  decideFirstTouchTodoResolution,
+  isFirstTouchTodo,
+  FIRST_TOUCH_TODO_MAX_AGE_DAYS
+} = await import("../services/api/src/domain/conversationStore.ts");
 
 const NOW = new Date("2026-06-25T18:00:00.000Z");
 const daysAgo = (d: number) => new Date(NOW.getTime() - d * 24 * 60 * 60 * 1000).toISOString();
@@ -87,6 +91,40 @@ ok(shouldSurfaceUnsentFirstTouch(mk({ messages: [inbound(new Date(NOW.getTime() 
 // --- Dedup + re-nudge. ---
 ok(shouldSurfaceUnsentFirstTouch(mk({ firstTouchSurfacedAt: daysAgo(2) }), false, NOW) === false, "surfaced 2d ago => within the 7d re-nudge window, skip");
 ok(shouldSurfaceUnsentFirstTouch(mk({ firstTouchSurfacedAt: daysAgo(10) }), false, NOW) === true, "surfaced 10d ago => past re-nudge, surface again");
+// Retired for good: once the todo aged out unactioned, the re-nudge loop must NOT recreate it.
+{
+  const retired = mk({ firstTouchSurfacedAt: daysAgo(20) });
+  (retired as any).firstTouchRetiredAt = daysAgo(3);
+  ok(shouldSurfaceUnsentFirstTouch(retired, false, NOW) === false, "firstTouchRetiredAt permanently stops the re-nudge loop");
+  n += 1;
+}
+
+// --- First-touch todo LIFECYCLE (task-hygiene, 7/23): the class had NO closer at all — reason
+// `note` is ineligible for the LLM fulfillment auto-close, so "Send the first reply" tasks stayed
+// open even after the reply went out (Annie +17165361711, 20 days), and the 6/25 backfill batch sat
+// 27 days with the re-nudge loop standing by to recreate it. The resolution is deterministic
+// (the objective is a FACT): contacted => close; aged out uncontacted => retire; young => keep. ---
+{
+  const noteTodo = { summary: "Send the first reply to Annie — a reply was drafted but never sent (check the Email tab).", createdAt: daysAgo(20) };
+  const callTodo = { summary: "Call Ron — they prefer a call and no first contact has gone out yet.", createdAt: daysAgo(2) };
+  ok(isFirstTouchTodo(noteTodo) === true, "the email-variant summary is recognized");
+  ok(isFirstTouchTodo(callTodo) === true, "the call-variant summary is recognized");
+  ok(isFirstTouchTodo({ summary: "Call customer (follow-up)" }) === false, "an ordinary call todo is NOT a first-touch todo");
+
+  const contacted = mk({ messages: [inbound(daysAgo(20)), { direction: "out", provider: "twilio", body: "hello Annie its stone", at: daysAgo(1) }] });
+  ok(decideFirstTouchTodoResolution(contacted, noteTodo, NOW) === "close_contacted", "a real outbound after the task => objective achieved => close (the Annie case)");
+
+  const stillUncontactedOld = mk({});
+  ok(decideFirstTouchTodoResolution(stillUncontactedOld, noteTodo, NOW) === "retire_aged", `open ${20} days with no contact => retire (past the ${FIRST_TOUCH_TODO_MAX_AGE_DAYS}d actionable window; the 6/25 batch)`);
+
+  const stillUncontactedYoung = mk({});
+  ok(decideFirstTouchTodoResolution(stillUncontactedYoung, callTodo, NOW) === "keep", "a young uncontacted first-touch task keeps doing its job");
+
+  // A pending draft_ai is NOT contact — the task must not close off an unsent draft.
+  const draftOnly = mk({ messages: [inbound(daysAgo(3)), { direction: "out", provider: "draft_ai", body: "Hi...", at: daysAgo(2) }] });
+  ok(decideFirstTouchTodoResolution(draftOnly, callTodo, NOW) === "keep", "an unsent draft is not contact — task stays");
+  n += 7;
+}
 
 // --- Source guards: the reconcile runs it, channel-aware, recorded. ---
 const api = fs.readFileSync("services/api/src/index.ts", "utf8");
@@ -97,6 +135,9 @@ assert.match(api, /Send the first reply to \$\{who\}/, "else => a send-the-draft
 // The auto-close backfill only runs on a REAL prior outbound (not an unsent draft_ai), so it can't
 // silently close a never-contacted lead's fresh first-touch todo.
 assert.match(api, /REAL_OUTBOUND_CONTACT_PROVIDERS\.has\(String\(m\?\.provider \?\? ""\)\)/, "auto-close backfill gates on a REAL outbound, not a draft");
-n += 5;
+// The lifecycle sweep is wired into the reconcile tick, and retirement stamps the permanent stop.
+assert.match(api, /decideFirstTouchTodoResolution\(conv, t, now\)/, "the reconcile resolves open first-touch todos");
+assert.match(api, /firstTouchRetiredAt = now\.toISOString\(\)/, "aged-out retirement stamps the permanent stop");
+n += 7;
 
 console.log(`PASS unsent first-touch eval (${n} assertions)`);

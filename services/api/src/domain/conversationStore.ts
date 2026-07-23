@@ -859,6 +859,10 @@ export type Conversation = {
   // Dedup marker: when the reconcile last surfaced a "first touch was drafted but never sent" staff
   // todo for a NEVER-contacted lead (the email-first-touch silence pool, 6/25); re-nudges after a window.
   firstTouchSurfacedAt?: string;
+  // Permanent stop: the first-touch todo aged out unactioned (task-hygiene retirement, 7/23) — the
+  // moment for a "first" touch has passed; cold re-engagement belongs to cadence/stale-handoff, and
+  // without this stamp the 7-day re-nudge would recreate the same junk task forever.
+  firstTouchRetiredAt?: string;
   inventoryContext?: {
     model?: string;
     year?: string;
@@ -3033,20 +3037,31 @@ export function isSchedulingLeakConversation(
   const msgs = Array.isArray(conv.messages) ? conv.messages : [];
   if (!msgs.some(m => m?.direction === "in" && String(m?.body ?? "").trim())) return false;
   let lastMs = 0;
+  let lastInboundMs = 0;
   for (const m of msgs) {
     const t = Date.parse(String(m?.at ?? ""));
-    if (Number.isFinite(t) && t > lastMs) lastMs = t;
+    if (!Number.isFinite(t)) continue;
+    if (t > lastMs) lastMs = t;
+    if (m?.direction === "in" && String(m?.body ?? "").trim() && t > lastInboundMs) lastInboundMs = t;
   }
-  if (!lastMs) return false;
-  const idleHours = (now.getTime() - lastMs) / 3_600_000;
+  if (!lastMs || !lastInboundMs) return false;
   // Window: idle enough that it's STALLED (not mid-exchange), but RECENT enough to still be worth
   // chasing. A scheduling thread idle for weeks is a cold/dead lead, NOT an actionable "agreed but
   // never booked" leak — most candidates skew old (age-distribution sweep 6/25: 26 of 34 were 7+
   // days idle), so flagging them all floods the task inbox. Mirrors the stale-handoff min/max
   // windowing; same state-invariants lesson (model the engine's hold conditions, not just "past due").
+  //
+  // The RECENCY side must anchor to the customer's LAST INBOUND, never to our own outbound: a
+  // campaign broadcast resets an any-message clock across the whole store, which made 26
+  // months-dead scheduling threads (customer quiet 60-115 days) look "freshly active" the day the
+  // 7/18 event blast went out — one blast, 26 junk "book the visit" tasks (2026-07-17 sweep). A
+  // blast we sent does not revive the customer's intent. The STALLED side (minIdle) stays on
+  // any-message so a live back-and-forth is still never flagged mid-exchange.
   const minIdle = opts?.minIdleHours ?? 2;
   const maxIdle = opts?.maxIdleHours ?? 24 * 7; // 7 days
-  return idleHours >= minIdle && idleHours <= maxIdle;
+  const idleHours = (now.getTime() - lastMs) / 3_600_000;
+  const inboundIdleHours = (now.getTime() - lastInboundMs) / 3_600_000;
+  return idleHours >= minIdle && inboundIdleHours <= maxIdle;
 }
 
 const WALK_IN_SOURCE_RE = /traffic log pro|walk[\s_-]*in|dealer lead app/i;
@@ -5633,6 +5648,9 @@ export function shouldSurfaceUnsentFirstTouch(
   if (String(conv.followUpCadence?.status ?? "").toLowerCase() === "active") return false;
   if (conv.followUp?.mode === "paused_indefinite") return false;
   if (conv.classification?.bucket === "event_promo") return false;
+  // Retired for good: the surfaced todo aged out unactioned — stop the re-nudge loop (else the same
+  // junk task is recreated every reNudge window forever on a lead nobody is going to first-touch).
+  if (conv.firstTouchRetiredAt) return false;
   // Dedup with re-nudge so a persistent orphan re-surfaces but never floods.
   if (conv.firstTouchSurfacedAt) {
     const t = Date.parse(conv.firstTouchSurfacedAt);
@@ -5648,6 +5666,61 @@ export function shouldSurfaceUnsentFirstTouch(
   if (!Number.isFinite(lastMs)) return false;
   const minIdleMs = (opts?.minIdleHours ?? 4) * 60 * 60 * 1000;
   return now.getTime() - lastMs >= minIdleMs; // NO max-idle: a missed first touch is always worth surfacing
+}
+
+/**
+ * Summary fragments identifying the two first-touch todo templates (call-preferred / email-draft).
+ * Must match the strings the reconcile tick has ALREADY written to production tasks — the resolver
+ * below keys on them, exactly like SCHEDULING_LEAK's marker. Own-artifact matching, not customer text.
+ */
+export const FIRST_TOUCH_TODO_MARKERS = [
+  "no first contact has gone out yet",
+  "a reply was drafted but never sent"
+] as const;
+
+export const FIRST_TOUCH_TODO_MAX_AGE_DAYS = 14;
+
+export function isFirstTouchTodo(todo: Pick<TodoTask, "summary"> | null | undefined): boolean {
+  const s = String(todo?.summary ?? "");
+  return FIRST_TOUCH_TODO_MARKERS.some(m => s.includes(m));
+}
+
+/**
+ * Lifecycle decision for an OPEN first-touch todo — pure. The task's objective is "get the first
+ * message out", so its resolution is a FACT, not a judgment (AGENTS.md: deterministic side-effect
+ * guards are allowed; no LLM needed):
+ *   - "close_contacted": a real customer-facing outbound (text/email/call) exists → the objective is
+ *     done BY DEFINITION. This is the closer the class never had — reason `note` is ineligible for
+ *     the LLM fulfillment auto-close, so "Send the first reply" tasks stayed open even after the
+ *     reply went out (Annie +17165361711: replied 7/22, task from 7/2 still open).
+ *   - "retire_aged": open past FIRST_TOUCH_TODO_MAX_AGE_DAYS with still no contact → the moment for
+ *     a FIRST touch has passed; a month-old cold lead is cadence/stale-handoff territory, and the
+ *     task has proven it isn't getting actioned (the 6/25 backfill batch sat 27 days). Callers must
+ *     stamp conv.firstTouchRetiredAt so the re-nudge loop can't recreate it.
+ *   - "keep": young and still uncontacted — the task is doing its job.
+ * FAIL DIRECTION: "close_contacted" only fires on hard evidence of contact; "retire_aged" only
+ * after 2 weeks of nobody acting, when the task is noise, not signal. A revived lead (customer
+ * writes in) is caught by the unanswered-inbound net regardless.
+ */
+export function decideFirstTouchTodoResolution(
+  conv: Pick<Conversation, "messages"> | null | undefined,
+  todo: Pick<TodoTask, "summary" | "createdAt"> | null | undefined,
+  now: Date = new Date()
+): "close_contacted" | "retire_aged" | "keep" {
+  if (!conv || !todo || !isFirstTouchTodo(todo)) return "keep";
+  const messages = Array.isArray(conv.messages) ? conv.messages : [];
+  const contacted = messages.some(
+    m => m?.direction === "out" && REAL_OUTBOUND_CONTACT_PROVIDERS.has(String(m?.provider ?? ""))
+  );
+  if (contacted) return "close_contacted";
+  const createdMs = Date.parse(String(todo.createdAt ?? ""));
+  if (
+    Number.isFinite(createdMs) &&
+    now.getTime() - createdMs > FIRST_TOUCH_TODO_MAX_AGE_DAYS * 24 * 60 * 60 * 1000
+  ) {
+    return "retire_aged";
+  }
+  return "keep";
 }
 
 function businessDaysBetween(fromMs: number, toMs: number): number {
