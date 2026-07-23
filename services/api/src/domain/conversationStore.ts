@@ -5673,6 +5673,51 @@ export function shouldSurfaceUnsentFirstTouch(
  * Must match the strings the reconcile tick has ALREADY written to production tasks — the resolver
  * below keys on them, exactly like SCHEDULING_LEAK's marker. Own-artifact matching, not customer text.
  */
+/**
+ * Bookkeeping-notice templates eligible for TTL retirement — an explicit WHITELIST of our own
+ * `reason: "note"` summary templates that merely RECORD something that already happened (a staff
+ * SMS sent/failed, an arrival heads-up). Their useful life is days; with reason=note ineligible
+ * for the LLM fulfillment auto-close and excluded from escalation, nothing else can ever clear
+ * them (prod 7/23: four "Business manager outcome prompt sent" notices — two exact duplicates —
+ * and a 5-day-old "on my way" arrival note, visit long since happened).
+ *
+ * WHITELIST, not a blacklist, on purpose: an unknown/new note template is NEVER swept, so an
+ * actionable note (photo-ID "reply with match", "Send VIN", held-draft "needs a human", the
+ * first-touch tasks) can't be lost by omission — fail direction is "noise lingers", never
+ * "work disappears".
+ */
+export const BOOKKEEPING_NOTE_TTL_MARKERS = [
+  "Business manager outcome prompt sent to",
+  "Business manager SMS sent to",
+  "Business manager SMS failed for",
+  "Salesperson SMS failed for",
+  "Callback link SMS failed for",
+  "Callback reminder SMS failed for",
+  "Customer plans pickup/delivery arrival"
+] as const;
+
+export const BOOKKEEPING_NOTE_TTL_DAYS = 7;
+
+export function isBookkeepingNoticeTodo(
+  todo: Pick<TodoTask, "summary" | "reason"> | null | undefined
+): boolean {
+  if (String(todo?.reason ?? "") !== "note") return false;
+  const s = String(todo?.summary ?? "");
+  return BOOKKEEPING_NOTE_TTL_MARKERS.some(m => s.includes(m));
+}
+
+/** Pure: an OPEN whitelisted bookkeeping notice older than the TTL should retire. */
+export function shouldRetireBookkeepingNotice(
+  todo: Pick<TodoTask, "summary" | "reason" | "status" | "createdAt"> | null | undefined,
+  now: Date = new Date()
+): boolean {
+  if (!todo || String(todo.status ?? "") !== "open") return false;
+  if (!isBookkeepingNoticeTodo(todo)) return false;
+  const createdMs = Date.parse(String(todo.createdAt ?? ""));
+  if (!Number.isFinite(createdMs)) return false;
+  return now.getTime() - createdMs > BOOKKEEPING_NOTE_TTL_DAYS * 24 * 60 * 60 * 1000;
+}
+
 export const FIRST_TOUCH_TODO_MARKERS = [
   "no first contact has gone out yet",
   "a reply was drafted but never sent"

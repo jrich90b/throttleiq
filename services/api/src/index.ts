@@ -809,6 +809,8 @@ import {
   shouldSurfaceUnsentFirstTouch,
   isFirstTouchTodo,
   decideFirstTouchTodoResolution,
+  shouldRetireBookkeepingNotice,
+  BOOKKEEPING_NOTE_TTL_DAYS,
   REAL_OUTBOUND_CONTACT_PROVIDERS,
   collectInventoryWatches,
   pruneInventoryWatchesByModel,
@@ -30468,6 +30470,18 @@ async function processDueFollowUpsUnlocked() {
     console.log(
       `[state-reconcile] first-touch todos: closed ${firstTouchClosed} (contact made), retired ${firstTouchRetired} (aged out)`
     );
+  }
+  // Bookkeeping-notice TTL (task-hygiene Phase 1b): whitelisted informational `note` tasks (staff-SMS
+  // sent/failed notices, arrival heads-ups) retire after BOOKKEEPING_NOTE_TTL_DAYS — reason=note is
+  // ineligible for the fulfillment auto-close and excluded from escalation, so these had NO closer at
+  // all and sat as permanent inbox noise. Whitelist-only: unknown/actionable notes are never swept.
+  let bookkeepingNotesRetired = 0;
+  for (const t of listOpenTodos()) {
+    if (!shouldRetireBookkeepingNotice(t, now)) continue;
+    if (markTodoDone(t.convId, t.id)) bookkeepingNotesRetired += 1;
+  }
+  if (bookkeepingNotesRetired > 0) {
+    console.log(`[state-reconcile] retired ${bookkeepingNotesRetired} aged bookkeeping notice(s) (TTL ${BOOKKEEPING_NOTE_TTL_DAYS}d)`);
   }
   const FIRST_TOUCH_TODOS_PER_TICK = 15;
   const convIdsWithOpenTodoNow = new Set(listOpenTodos().map(t => t.convId));
