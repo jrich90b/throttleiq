@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isDealerLeadAppConfirmedDemoRideAdfText } from "../services/api/src/domain/workflowRegressionGuards.ts";
+import { hasDeliveredOrPendingDealerRideThankYou } from "../services/api/src/domain/dealerRideThankYouDedup.ts";
 import {
   isBareReactionOnlyInbound,
   isClosingAckNoAction,
@@ -876,20 +877,17 @@ function isDealerLeadAppOutcomeAdf(provider: Provider, inbound: string): boolean
 }
 
 /**
- * The one Joe-approved post-ride thank-you already exists on the thread. Mirrors
+ * The one Joe-approved post-ride thank-you already exists on the thread. Same helper as
  * `hasDealerRideInitialThankYouDraft` in services/api/src/routes/sendgridInbound.ts
  * (the live dedupe that returns `dealer_ride_initial_thank_you_exists`): the live
  * path deliberately produces NO second draft when a Dealer Lead App demo-ride ADF
  * re-fires on an already-thanked rider (Ref 11182 / +17168078517 is the canonical
- * case — the ADF landed the day AFTER the thank-you went out). Keep the two
- * regexes in lockstep.
+ * case — the ADF landed the day AFTER the thank-you went out). Sharing the domain
+ * helper IS the lockstep — a STALE never-sent draft counts for neither path
+ * (+17168641440: stale 5/16 draft must not make the 5/18 re-fire "expected silence").
  */
 function hasDealerRideInitialThankYouOutbound(conv?: Conversation | null): boolean {
-  return (conv?.messages ?? []).some(message => {
-    if (message?.direction !== "out") return false;
-    const body = String(message?.body ?? "");
-    return /thanks again for coming in/i.test(body) && /\b(?:test ride|ride|demo)\b/i.test(body);
-  });
+  return hasDeliveredOrPendingDealerRideThankYou(conv?.messages ?? []);
 }
 
 function isWrongNumberInbound(inbound: string): boolean {

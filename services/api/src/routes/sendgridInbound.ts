@@ -8,6 +8,7 @@ import { parsePreferredAdfDate } from "../domain/preferredAdfDate.js";
 import { resolveModelDiscontinuation } from "../domain/modelDiscontinuation.js";
 import { decideWatchYearPin, decideWatchConditionPin } from "../domain/watchYearPin.js";
 import { customerVisitConfirmed, phantomVisitGuardEnabled } from "../domain/visitFraming.js";
+import { hasDeliveredOrPendingDealerRideThankYou } from "../domain/dealerRideThankYouDedup.js";
 import {
   upsertConversationByLeadKey,
   createConversationForLeadKey,
@@ -5775,13 +5776,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
     return { ok: true, draft: invariant.draftText };
   };
+  // A stale (never-sent) thank-you draft must NOT count as "already thanked" — that latched
+  // +17168641440 into permanent silence when the 5/16 draft went stale and the 5/18 repeat
+  // DLA ADF was deduped away. Shared helper = lockstep with the replay-classifier mirror.
   const hasDealerRideInitialThankYouDraft = () =>
-    Array.isArray(conv.messages) &&
-    conv.messages.some((message: any) => {
-      if (message?.direction !== "out") return false;
-      const body = String(message?.body ?? "");
-      return /thanks again for coming in/i.test(body) && /\b(?:test ride|ride|demo)\b/i.test(body);
-    });
+    hasDeliveredOrPendingDealerRideThankYou(conv.messages);
   const publishDealerRideInitialThankYouDraft = async () => {
     // Deliberately NOT gated on appointmentOutcomeWinsDealerRideOutcome: the appointment-outcome
     // flow only messages STAFF (attendance question + outcome prompt), so suppressing here left
