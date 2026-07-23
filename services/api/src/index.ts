@@ -21,6 +21,10 @@ import {
   resolvePostSaleModelLabel
 } from "./domain/postSaleCadence.js";
 import { hasDeliveredOrPendingDealerRideThankYou } from "./domain/dealerRideThankYouDedup.js";
+import {
+  hasDealProgressParserHintText,
+  hasStaffOutboundDealProgressHintText
+} from "./domain/dealProgressHint.js";
 import { isIndefiniteFollowUpDeferralText } from "./domain/scoringExclusions.js";
 import { findTlpLogCatchupCandidates, isTlpLeadNotFoundError } from "./domain/tlpLogCatchup.js";
 import {
@@ -25097,16 +25101,9 @@ type CustomerDispositionDecision = {
   state: "customer_sell_on_own" | "customer_keep_current_bike" | "customer_stepping_back";
 };
 
-// Cheap pre-filter that GATES the deal-progress LLM parser call (cost control, same pattern as
-// the disposition hint below) — never a routing decision itself. A miss just means today's
-// behavior (the turn drafts normally).
-function hasDealProgressParserHintText(text: string | null | undefined): boolean {
-  const lower = String(text ?? "").toLowerCase();
-  if (!lower.trim()) return false;
-  return /\b(insurance|insured|allstate|geico|progressive|state farm|payoff|paid off|pay[- ]?off|delivery|deliver(?:ed|ing)?|pick(?:ing)?\s*up|pickup|trailer|paperwork|title|plates?|registration|notar|sign(?:ing)?\s+(?:the\s+)?(?:docs|papers|paperwork)|deposit|down payment|install(?:ed|ing)?)\b/.test(
-    lower
-  );
-}
+// The cheap pre-filters that GATE the deal-progress LLM parser call (cost control, same
+// pattern as the disposition hint below) — never a routing decision — live in
+// domain/dealProgressHint.ts so the eval can pin their fixture tables directly.
 
 // Shared transition into the staff-driven deal state (Joe-approved 2026-07-02): per-turn
 // auto-drafts stop (staff answer with off-system deal facts), cadence goes quiet, and the
@@ -57368,14 +57365,20 @@ if (authToken && signature) {
   }
   // Entry detection (parser-first, hint-gated): a deal-logistics turn on a not-yet-protected
   // conversation transitions it into in_process_deal on the spot — this turn already belongs to
-  // the salesperson, so it gets the owner task instead of a draft.
+  // the salesperson, so it gets the owner task instead of a draft. Two hint sources open the
+  // parser gate (2026-07-23, Kevin Short +17166035402 / Jaden Capozzi +17166046117 corrections):
+  // the inbound's own text, OR the rep's recent HUMAN sends — on staff-worked deals the deal
+  // language often lives only in the rep's texts ("...finalize and take delivery...") while the
+  // customer answers with hint-free turns ("Is Wednesday around noon fine?"). Hints only invoke
+  // the parser; the decision stays in decideInProcessDealTurn.
   if (
     event.provider === "twilio" &&
     conv.followUp?.mode !== "manual_handoff" &&
     conv.followUp?.mode !== "paused_indefinite" &&
     !conv.sale?.soldAt &&
     conv.status !== "closed" &&
-    hasDealProgressParserHintText(event.body)
+    (hasDealProgressParserHintText(event.body) ||
+      hasStaffOutboundDealProgressHintText(conv.messages ?? []))
   ) {
     const dealProgressParse = await safeLlmParse("deal_progress_parser", () =>
       parseDealProgressSignalWithLLM({
