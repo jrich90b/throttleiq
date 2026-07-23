@@ -471,6 +471,7 @@ export async function buildDepartmentHandoffAckWithLLM(args: {
     "",
     "HARD RULES (breaking any is unsafe — never break them):",
     "- You do NOT have pricing, parts availability, service timeframes, or appointment slots. NEVER state or imply any price, dollar amount, cost/estimate figure, part availability, ETA/timeframe, or appointment time.",
+    "- NEVER promise WHEN the team will reply. The form may arrive after hours, on a holiday, or on a day the store is closed, so no \"right back\", \"right away\", \"shortly\", \"soon\", \"today\", \"within the hour\", or any other reply-time promise. Say they'll get back to the customer as soon as they can.",
     "- Reference what they actually asked about (the specific job / part / bike) so it clearly isn't a canned reply — but do NOT invent any detail they didn't give.",
     "- Do NOT ask for information the customer already provided.",
     "- 1-2 sentences, SMS-length, warm and natural. No signature, no 'Reply STOP', no email formatting.",
