@@ -161,6 +161,11 @@ import {
   type InventoryFirstSeenMap
 } from "./domain/inventoryFirstSeen.js";
 import { hasPriorInventoryWatchOutboundForItem } from "./domain/inventoryWatchDedup.js";
+import {
+  planInventoryWatchMerge,
+  type WatchMergeRecord,
+  type WatchMergeNormalizers
+} from "./domain/inventoryWatchMerge.js";
 import { runClaudeAgentTask } from "./domain/claudeAgent.js";
 import {
   addAutomationRun,
@@ -23660,41 +23665,36 @@ function splitContextNoteSentences(text: string): string[] {
   return parts.length ? parts : [source];
 }
 
-function buildInventoryWatchSignature(watch: InventoryWatch | null | undefined): string {
-  if (!watch) return "";
-  return [
-    normalizeModelText(watch.model),
-    String(watch.year ?? ""),
-    String(watch.yearMin ?? ""),
-    String(watch.yearMax ?? ""),
-    normalizeWatchCondition(watch.condition),
-    normalizeModelText(watch.trim ?? ""),
-    sanitizeColorPhrase(watch.color) ?? "",
-    String(watch.minPrice ?? ""),
-    String(watch.maxPrice ?? "")
-  ].join("|");
-}
+// Watch records merge by COVERAGE, not by an exact field signature. The old signature keyed on
+// model|year|range|condition|trim|color|price, so any REFINEMENT of a want we already watch for
+// (a narrowed budget, a year pin, a color filled in by a second intake path) hashed to a new key
+// and forked a SECOND active record on the same model. Per-record state then split — worst of all
+// the sibling-scope "never re-ask" stamp: +15857552622 (Scott, 2026-07-22) answered the "open to
+// Tri Glide Ultras?" question at 13:55, a duplicate record created at 15:28 re-armed it, and we
+// asked him the same question again at 16:20. planInventoryWatchMerge folds a refinement into the
+// record it refines and only ever KEEPS THE BROADER record, so watch coverage can never shrink
+// (fail-safe: a watch that fires too often is recoverable, a silent one is a broken promise). It
+// also self-heals arrays that already carry duplicates. Pure logic + property test in
+// domain/inventoryWatchMerge.ts (pinned by inventory_watch_merge:eval). normalizeModelText /
+// normalizeWatchCondition are passed in so aliases collapse exactly as the live matcher reads them.
+const WATCH_MERGE_NORMALIZERS: WatchMergeNormalizers = {
+  model: normalizeModelText,
+  condition: normalizeWatchCondition
+};
 
 function mergeInventoryWatches(
   existing: InventoryWatch[],
   incoming: InventoryWatch[]
 ): { merged: InventoryWatch[]; added: InventoryWatch[] } {
-  const bySig = new Map<string, InventoryWatch>();
-  const added: InventoryWatch[] = [];
-  for (const watch of existing) {
-    const sig = buildInventoryWatchSignature(watch);
-    if (!sig) continue;
-    bySig.set(sig, watch);
-  }
-  for (const watch of incoming) {
-    const sig = buildInventoryWatchSignature(watch);
-    if (!sig) continue;
-    if (!bySig.has(sig)) {
-      bySig.set(sig, watch);
-      added.push(watch);
-    }
-  }
-  return { merged: Array.from(bySig.values()), added };
+  const plan = planInventoryWatchMerge({
+    existing: (existing ?? []) as unknown as WatchMergeRecord[],
+    incoming: (incoming ?? []) as unknown as WatchMergeRecord[],
+    normalizers: WATCH_MERGE_NORMALIZERS
+  });
+  return {
+    merged: plan.merged as unknown as InventoryWatch[],
+    added: plan.added as unknown as InventoryWatch[]
+  };
 }
 
 function hasLikelyFollowUpCue(text: string): boolean {
