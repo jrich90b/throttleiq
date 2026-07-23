@@ -6805,6 +6805,26 @@ input[type="reset"],
   font-size: 0.72rem;
   color: var(--lr-app-muted-soft, var(--text-muted));
 }
+/* Likely-done band: the fulfillment judge says this task WAS handled (just under the auto-close
+   floor) — surfaced in plain language with a one-click confirm, visually distinct from held. */
+.lr-task-likely-done {
+  color: var(--lr-app-text, var(--text-primary));
+  flex-wrap: wrap;
+}
+.lr-task-likely-done-confirm {
+  margin-left: 0.35rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--lr-app-border, var(--border-color));
+  background: transparent;
+  color: var(--accent-text);
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.lr-task-likely-done-confirm:hover {
+  background: var(--lr-app-hover, rgba(127, 127, 127, 0.12));
+}
 .lr-task-card-name {
   margin-top: 0.65rem;
   font-size: 1.18rem;

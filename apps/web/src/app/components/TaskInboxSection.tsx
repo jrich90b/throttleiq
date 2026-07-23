@@ -6,6 +6,7 @@ import {
   dueBucketFor,
   dueBucketLabel,
   dueBucketRank,
+  isLikelyDoneTask,
   parseSaneTaskDateMs,
   relativeDueLabel,
   taskEffectiveDueMs
@@ -595,7 +596,30 @@ export function TaskInboxSection(props: any) {
                             <div className="lr-task-card-box-value">{actionDisplay}</div>
                           </div>
                         </div>
-                        {t.autoCloseCheck && t.autoCloseCheck.decision !== "closed" ? (
+                        {isLikelyDoneTask(t) ? (
+                          // Likely-done band (Phase 1b): the fulfillment judge says this WAS handled but
+                          // its confidence sat just under the auto-close floor, so it stayed open looking
+                          // like undone work (Curtis: fulfilled at 82%). Say so in plain language and give
+                          // a one-click confirm instead of the cryptic diagnostic line.
+                          <div
+                            className="lr-task-autoclose-check lr-task-likely-done"
+                            title="The system believes this was already handled but wasn't sure enough to close it on its own"
+                          >
+                            <span aria-hidden className="inline-flex">
+                              <SideNavIcon name="check" className="w-3 h-3" />
+                            </span>
+                            Probably already handled
+                            {t.autoCloseCheck?.evidence ? ` — ${t.autoCloseCheck.evidence}` : ""}
+                            <button
+                              type="button"
+                              className="lr-task-likely-done-confirm"
+                              onClick={() => void markTodoDone(t, "dismiss")}
+                              title="Yes, this was handled — close the task"
+                            >
+                              Confirm &amp; close
+                            </button>
+                          </div>
+                        ) : t.autoCloseCheck && t.autoCloseCheck.decision !== "closed" ? (
                           <div
                             className="lr-task-autoclose-check"
                             title="Why this task hasn't auto-closed yet"

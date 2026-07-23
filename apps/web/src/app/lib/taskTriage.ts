@@ -13,6 +13,33 @@ type TaskLike = {
 
 const DAY_MS = 86_400_000;
 
+/**
+ * "Likely done" band (task-hygiene Phase 1b): the backend fulfillment judge said the task's
+ * objective WAS accomplished but its confidence fell just under the 0.85 auto-close floor, so
+ * the task stayed open looking like undone work (Curtis +17163812367: fulfilled at 0.82, held).
+ * The floor is right — a wrong close silently drops a follow-up — but the UI shouldn't present
+ * "the system is 82% sure you already did this" identically to fresh work. These rows get a
+ * plain-language "probably already handled — confirm & close" treatment instead of the cryptic
+ * diagnostic line. Band floor 0.70: below that the judge is guessing, treat as ordinary work.
+ */
+export const LIKELY_DONE_MIN_CONFIDENCE = 0.7;
+
+export function isLikelyDoneTask(
+  todo:
+    | {
+        status?: string | null;
+        autoCloseCheck?: { fulfilled?: boolean; confidence?: number | null; decision?: string } | null;
+      }
+    | null
+    | undefined
+): boolean {
+  if (!todo || (todo.status ?? "open") !== "open") return false;
+  const check = todo.autoCloseCheck;
+  if (!check || check.fulfilled !== true) return false;
+  if (check.decision !== "below_confidence") return false;
+  return typeof check.confidence === "number" && check.confidence >= LIKELY_DONE_MIN_CONFIDENCE;
+}
+
 function parseMs(value: unknown): number | null {
   const t = new Date(String(value ?? "").trim()).getTime();
   return Number.isFinite(t) ? t : null;
