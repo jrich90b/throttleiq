@@ -2,13 +2,15 @@
  * cadence_value_gate:eval — pins the GO-LIVE wiring of the proactive cadence value gate
  * (Joe 2026-07-20: "no spam — later cadences must be high quality").
  *
- * 1. Behavioral: evaluateProactiveCadenceValueGate (the SHARED applier both paths call) — gate off →
- *    send; post-sale exempt; early steps always send; an existing value override sends; a later filler
- *    step with offers dark → suppress (quiet, never fabricate). All without any LLM call.
- * 2. vehicleLabelForOfferMatch + cadenceValueGateMinStep helpers.
+ * 1. Behavioral: evaluateProactiveCadenceValueGate (the SHARED applier both paths call) — LIVE by
+ *    default since 2026-07-23 (kill switch CADENCE_VALUE_GATE_ENABLED=0); post-sale exempt; early
+ *    steps always send; an existing value override sends; a later filler step with offers dark →
+ *    suppress (quiet, never fabricate). ENGAGED cadences are gated from step 1 (production pin:
+ *    +17165146963's contentless day-2 engaged bump). All without any LLM call.
+ * 2. vehicleLabelForOfferMatch + cadenceValueGateMinStep/cadenceValueGateEngagedMinStep helpers.
  * 3. Source guards (route-parity): the live tick AND the regenerate cadence builder both call the SAME
- *    shared applier; tick suppress = advance + continue (skip the send); regen suppress = return null
- *    (keep the prior draft); both flag-gated by CADENCE_VALUE_GATE_ENABLED (default OFF — dark).
+ *    shared applier and both pass the persisted cadence kind; tick suppress = advance + continue (skip
+ *    the send); regen suppress = return null (keep the prior draft).
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -16,6 +18,7 @@ import {
   evaluateProactiveCadenceValueGate,
   isCadenceValueGateEnabled,
   cadenceValueGateMinStep,
+  cadenceValueGateEngagedMinStep,
   vehicleLabelForOfferMatch,
   filterOffersForDedup,
   normalizeOfferTitle,
@@ -38,17 +41,26 @@ const eq = (id: string, actual: unknown, expected: unknown) => {
   const envBackup = {
     gate: process.env.CADENCE_VALUE_GATE_ENABLED,
     offers: process.env.NATIONAL_OFFERS_ENABLED,
-    minStep: process.env.CADENCE_VALUE_GATE_MIN_STEP
+    minStep: process.env.CADENCE_VALUE_GATE_MIN_STEP,
+    engagedMinStep: process.env.CADENCE_VALUE_GATE_ENGAGED_MIN_STEP
   };
 
   // --- helpers ---------------------------------------------------------------
+  // GO-LIVE pin (2026-07-23): unset flag = gate LIVE; "0" is the kill switch.
   delete process.env.CADENCE_VALUE_GATE_ENABLED;
-  eq("gate_dark_by_default", isCadenceValueGateEnabled(), false);
+  eq("gate_live_by_default", isCadenceValueGateEnabled(), true);
+  process.env.CADENCE_VALUE_GATE_ENABLED = "0";
+  eq("gate_kill_switch_zero", isCadenceValueGateEnabled(), false);
   delete process.env.CADENCE_VALUE_GATE_MIN_STEP;
   eq("min_step_default_3", cadenceValueGateMinStep(), 3);
   process.env.CADENCE_VALUE_GATE_MIN_STEP = "5";
   eq("min_step_env_override", cadenceValueGateMinStep(), 5);
   delete process.env.CADENCE_VALUE_GATE_MIN_STEP;
+  delete process.env.CADENCE_VALUE_GATE_ENGAGED_MIN_STEP;
+  eq("engaged_min_step_default_1", cadenceValueGateEngagedMinStep(), 1);
+  process.env.CADENCE_VALUE_GATE_ENGAGED_MIN_STEP = "2";
+  eq("engaged_min_step_env_override", cadenceValueGateEngagedMinStep(), 2);
+  delete process.env.CADENCE_VALUE_GATE_ENGAGED_MIN_STEP;
 
   eq(
     "vehicle_label_from_lead",
@@ -64,7 +76,7 @@ const eq = (id: string, actual: unknown, expected: unknown) => {
 
   // --- behavioral decision table (offers stay DARK → matcher never fires → no LLM) ---
   const base = { stepIndex: 5, isPostSale: false, hasValueOverride: false, vehicleLabel: "2026 Low Rider S" };
-  delete process.env.CADENCE_VALUE_GATE_ENABLED;
+  process.env.CADENCE_VALUE_GATE_ENABLED = "0";
   eq("gate_off_sends", (await evaluateProactiveCadenceValueGate(base)).action, "send");
 
   process.env.CADENCE_VALUE_GATE_ENABLED = "1";
@@ -76,6 +88,32 @@ const eq = (id: string, actual: unknown, expected: unknown) => {
   eq("later_filler_no_value_suppresses", later.action, "suppress");
   eq("suppress_reason_is_stay_quiet", (later as any).reason, "no_value_trigger_stay_quiet");
   eq("boundary_step_3_is_later", (await evaluateProactiveCadenceValueGate({ ...base, stepIndex: 3 })).action, "suppress");
+
+  // --- engaged-cadence scoping (production pin +17165146963, 2026-07-17): the customer replied
+  // 7/15 (stepIndex re-anchored to 0), and two days later the pipeline drafted "If the timing
+  // shifted, all good. Shoot me a day that works..." — engaged step ~1, contentless, judge-
+  // suppressed as spam. The standard min step (3) misses it; engaged cadences gate from step 1.
+  eq(
+    "engaged_step_1_contentless_suppresses",
+    (await evaluateProactiveCadenceValueGate({ ...base, stepIndex: 1, cadenceKind: "engaged" })).action,
+    "suppress"
+  );
+  eq(
+    "engaged_step_0_first_bump_sends",
+    (await evaluateProactiveCadenceValueGate({ ...base, stepIndex: 0, cadenceKind: "engaged" })).action,
+    "send"
+  );
+  eq(
+    "engaged_step_1_with_test_ride_sends",
+    (await evaluateProactiveCadenceValueGate({ ...base, stepIndex: 1, cadenceKind: "engaged", hasTestRideOffer: true })).action,
+    "send"
+  );
+  // standard kind keeps the standard scoping — step 1/2 filler still sends
+  eq(
+    "standard_step_1_still_sends",
+    (await evaluateProactiveCadenceValueGate({ ...base, stepIndex: 1, cadenceKind: "standard" })).action,
+    "send"
+  );
 
   // --- the other value triggers (gate on, offers dark → no LLM) --------------
   const testRide = await evaluateProactiveCadenceValueGate({ ...base, hasTestRideOffer: true });
@@ -132,7 +170,8 @@ const eq = (id: string, actual: unknown, expected: unknown) => {
   for (const [k, v] of [
     ["CADENCE_VALUE_GATE_ENABLED", envBackup.gate],
     ["NATIONAL_OFFERS_ENABLED", envBackup.offers],
-    ["CADENCE_VALUE_GATE_MIN_STEP", envBackup.minStep]
+    ["CADENCE_VALUE_GATE_MIN_STEP", envBackup.minStep],
+    ["CADENCE_VALUE_GATE_ENGAGED_MIN_STEP", envBackup.engagedMinStep]
   ] as const) {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
@@ -178,6 +217,8 @@ const eq = (id: string, actual: unknown, expected: unknown) => {
   eq("regen_never_records_dedup_ledger", /conv\.nationalOfferTouches = \[/.test(regenBlock), false);
   eq("regen_never_commits_price_anchor", /commitInterestUnitPriceDropFire/.test(regenBlock), false);
   eq("both_paths_pass_test_ride_context", (idx.match(/hasTestRideOffer: (testRideValueContext|regenTestRideValueContext)/g) ?? []).length, 2);
+  // engaged scoping parity: BOTH paths pass the persisted cadence kind to the shared applier
+  eq("both_paths_pass_cadence_kind", (idx.match(/cadenceKind: String\(cadence\.kind \?\? ""\)/g) ?? []).length, 2);
 
   if (failures.length) {
     console.error("FAIL cadence_value_gate eval:");
@@ -185,6 +226,6 @@ const eq = (id: string, actual: unknown, expected: unknown) => {
     process.exit(1);
   }
   console.log(
-    "PASS cadence_value_gate eval — shared-applier decision table (7 cases), helpers, and both-path wiring guards (tick suppress=advance+skip, regen suppress=null), dark by default"
+    "PASS cadence_value_gate eval — shared-applier decision table (incl. engaged step-1 scoping), helpers, and both-path wiring guards (tick suppress=advance+skip, regen suppress=null), LIVE by default (kill switch =0)"
   );
 })();
