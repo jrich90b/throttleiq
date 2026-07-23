@@ -532,7 +532,7 @@ import {
   humanThreadNudgeMaxCount,
   humanThreadNudgeSpacingDays
 } from "./domain/humanThreadNudge.js";
-import { stripLeadingVinCodes, normalizeWatchModelsVin } from "./domain/watchModelVinCodes.js";
+import { stripLeadingVinCodes, stripLeadingMakeName, normalizeWatchModelsVin } from "./domain/watchModelVinCodes.js";
 import { trikeClassConflict, isFamilyOnlyModelLabel, referencesFamilyOnlyInText } from "./domain/modelFamily.js";
 import { decideWatchSiblingScopeAsk } from "./domain/watchSiblingScope.js";
 import {
@@ -5859,9 +5859,10 @@ function modelBelongsToGenericWatchFamily(
 }
 
 function canonicalizeWatchModelLabel(model: string | null | undefined): string {
-  // Strip a VIN-decoded prefix first ("Xl1200x 1lc3 Forty-Eight" -> "Forty-Eight") so every
-  // watch-creation path routing through here stores the friendly model, not the raw VIN string.
-  const raw = stripLeadingVinCodes(String(model ?? "").trim());
+  // Strip a glued MAKE prefix ("HARLEY-DAVIDSON Street Glide" -> "Street Glide"; the make lives in
+  // the watch's own `make` field) and then a VIN-decoded prefix ("Xl1200x 1lc3 Forty-Eight" ->
+  // "Forty-Eight") so every watch-creation path routing through here stores the friendly model.
+  const raw = stripLeadingVinCodes(stripLeadingMakeName(String(model ?? "").trim()));
   if (!raw) return "";
   const cleaned = raw
     .replace(/\s*\/\s*anniversary\s+edition\b/gi, " ")
@@ -39425,7 +39426,10 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
       const createdAt = nowIso;
       const list = watchItemsInput
         .map((item: any) => {
-          const model = String(item?.model ?? "").trim();
+          // Canonicalize like every other watch-creation path (shared chokepoint): staff-picked
+          // items can carry the raw feed line ("FLHTCUTG 1MAD TRI GLIDE ULTRA") or a glued make
+          // prefix — junk that blocks matching and fires phantom wrong-model audits (+17166021492).
+          const model = canonicalizeWatchModelLabel(item?.model);
           if (!model) return null;
           const yearNum = Number(String(item?.year ?? "").trim());
           const year = Number.isFinite(yearNum) && yearNum > 1900 ? yearNum : undefined;
