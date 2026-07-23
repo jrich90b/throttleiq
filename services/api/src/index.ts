@@ -24,6 +24,7 @@ import {
 } from "./domain/heldDraftBackstop.js";
 import { leadVehicleRelevantToFollowUp } from "./domain/followUpVehicleRelevance.js";
 import { parsePreferredAdfDate } from "./domain/preferredAdfDate.js";
+import { buildDeptHandoffAckFallback, buildWebTextWidgetSalesAckFallback } from "./domain/webWidgetAckTemplates.js";
 import { decideConversationAccess } from "./domain/conversationAccess.js";
 import { isProactiveContactPaused } from "./domain/proactiveContactPause.js";
 import {
@@ -7025,15 +7026,11 @@ app.post("/public/widget/text-us", async (req, res) => {
       // 2026-06-13: asked the price of a used 2013 Street Glide with no posted
       // price; the agent handed off and a staff task waited, but the customer
       // heard nothing). When nothing substantive is drafted, acknowledge the
-      // request and commit to a follow-up — never guess a price.
+      // request and commit to a follow-up — never guess a price. Shared approved
+      // template (webWidgetAckTemplates.ts): no immediate-reply promise.
       const widgetAckFallback = (() => {
         const v = conv.inventoryContext ?? {};
-        const label = [String(v?.year ?? "").trim(), String(v?.model ?? "").trim()]
-          .filter(Boolean)
-          .join(" ")
-          .trim();
-        const lead = label ? `the ${label}` : "that";
-        return `Hi ${firstName || "there"} — thanks for reaching out about ${lead}. Let me look into that for you and I'll text you right back.`;
+        return buildWebTextWidgetSalesAckFallback({ firstName, year: v?.year, model: v?.model });
       })();
       const draftText = String(
         buyTradeDraft ||
@@ -7112,7 +7109,10 @@ app.post("/public/widget/text-us", async (req, res) => {
       // held 7/13). The LLM ack references the real request + commits the dept to follow up, and NEVER
       // fabricates a price/availability (no DMS). Fail-safe: any failure falls back to the static
       // template so we never go silent. The draft still passes through the quality gate + suggest review.
-      const deptAckFallback = `Hi ${firstName || "there"} — thanks for reaching out to our ${deptLabel} team. I've passed your message along and they'll text you right back.`;
+      // Shared approved template (webWidgetAckTemplates.ts): commits the department to
+      // follow up but NEVER promises WHEN (Tom Bradsky +16054313150: "right back" on the
+      // July 4 holiday had to be hand-corrected by staff to "on Monday").
+      const deptAckFallback = buildDeptHandoffAckFallback({ firstName, deptLabel });
       const deptAckEngaged = await buildDepartmentHandoffAckWithLLM({ message, deptLabel, firstName });
       const deptAck = deptAckEngaged || deptAckFallback;
       const evaluateDeptAckInvariant = (
@@ -51395,12 +51395,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     event.provider === "web_widget"
       ? (() => {
           const v = regenWebTextWidgetSalesContext?.requestedVehicle ?? conv.inventoryContext ?? {};
-          const label = [String((v as any)?.year ?? "").trim(), String((v as any)?.model ?? "").trim()]
-            .filter(Boolean)
-            .join(" ")
-            .trim();
-          const lead = label ? `the ${label}` : "that";
-          return `Hi ${conv.lead?.firstName || "there"} — thanks for reaching out about ${lead}. Let me look into that for you and I'll text you right back.`;
+          return buildWebTextWidgetSalesAckFallback({
+            firstName: conv.lead?.firstName,
+            year: (v as any)?.year,
+            model: (v as any)?.model
+          });
         })()
       : "";
   const regenWebTextWidgetSalesDraft =

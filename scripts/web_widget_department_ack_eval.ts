@@ -18,14 +18,26 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { buildDepartmentHandoffAckWithLLM } from "../services/api/src/domain/llmDraft.ts";
+import {
+  buildDeptHandoffAckFallback,
+  buildWebTextWidgetSalesAckFallback
+} from "../services/api/src/domain/webWidgetAckTemplates.ts";
 
 const JAMES = {
   message: "Looking for a quote for a lower cylinder head replacement on a 2018 street glide special",
   deptLabel: "Service",
   firstName: "James"
 };
-const STATIC_TEMPLATE =
-  "Hi James — thanks for reaching out to our Service team. I've passed your message along and they'll text you right back.";
+const STATIC_TEMPLATE = buildDeptHandoffAckFallback({ firstName: "James", deptLabel: "Service" });
+
+// No immediate-reply promise, ever (Tom Bradsky +16054313150, 2026-07-04): his Parts web
+// form arrived mid-day on the July 4 holiday and the old template promised "they'll text
+// you right back" — staff had to hand-edit the send to "they'll text you back on Monday"
+// (human_correction_material). The ack — static OR LLM — commits the department to follow
+// up but never promises WHEN. This is an eval assertion over OUR OWN template output
+// (structured copy check), not customer-intent comprehension.
+const IMMEDIATE_REPLY_PROMISE_RE =
+  /right (?:back|away)|straight back|momentarily|immediately|in (?:a|just a) (?:minute|moment|second|bit|few minutes)|within (?:the hour|minutes|a few minutes)|shortly|very soon|asap|right now|(?:text|get back to|reach out to|contact|call) you (?:today|soon|tonight)/i;
 
 // --- Deterministic fail-safes (no LLM needed) ---
 
@@ -53,6 +65,47 @@ assert.equal(
   null,
   "empty request => null"
 );
+
+// --- Approved static fallback templates: warm, committed, NO reply-time promise ---
+{
+  // Tom's exact production shape: Parts form, first name known.
+  const tomAck = buildDeptHandoffAckFallback({ firstName: "Tom", deptLabel: "Parts" });
+  assert.equal(
+    tomAck,
+    "Hi Tom — thanks for reaching out to our Parts team. I've passed your message along and they'll get back to you as soon as they can.",
+    "dept handoff ack is the approved timing-neutral template"
+  );
+  const deptVariants = [
+    tomAck,
+    buildDeptHandoffAckFallback({ firstName: null, deptLabel: "Service" }),
+    buildDeptHandoffAckFallback({ firstName: "", deptLabel: "" })
+  ];
+  for (const v of deptVariants) {
+    assert.doesNotMatch(v, IMMEDIATE_REPLY_PROMISE_RE, `dept ack promises no reply time: ${v}`);
+    assert.match(v, /passed your message along/i, "dept ack still reads as a design-accepted handoff (replay classifier shape)");
+    assert.match(v, /they'll get back to you/i, "dept ack still commits the department to follow up");
+  }
+  // Sales widget "never leave silence" ack (live + regen share this builder).
+  const salesVariants = [
+    buildWebTextWidgetSalesAckFallback({ firstName: "Mike", year: 2013, model: "Street Glide" }),
+    buildWebTextWidgetSalesAckFallback({ firstName: null })
+  ];
+  assert.match(salesVariants[0], /the 2013 Street Glide/, "sales ack references the requested unit");
+  assert.match(salesVariants[1], /about that\b/, "sales ack degrades gracefully with no unit context");
+  for (const v of salesVariants) {
+    assert.doesNotMatch(v, IMMEDIATE_REPLY_PROMISE_RE, `sales widget ack promises no reply time: ${v}`);
+    assert.match(v, /I'll get back to you/i, "sales widget ack still commits to a follow-up");
+  }
+}
+
+// The LLM prompt carries the same hard rule (so the engaged ack can't re-introduce the promise).
+{
+  const llmDraftSrc = fs.readFileSync(path.resolve("services/api/src/domain/llmDraft.ts"), "utf8");
+  assert.ok(
+    llmDraftSrc.includes("NEVER promise WHEN the team will reply"),
+    "buildDepartmentHandoffAckWithLLM prompt forbids reply-time promises"
+  );
+}
 
 // --- Source guard: index.ts engages via the LLM and falls back to the static template ---
 const indexSrc = fs.readFileSync(path.resolve("services/api/src/index.ts"), "utf8");
@@ -90,7 +143,20 @@ if (process.env.OPENAI_API_KEY) {
   // NEVER fabricates a price / dollar figure (no DMS).
   assert.doesNotMatch(text, /\$\s?\d/, "the ack contains no fabricated dollar price");
   assert.doesNotMatch(text, /\b\d{2,5}\s*(dollars|bucks)\b/i, "the ack states no fabricated price in words");
+  // NEVER promises when the department will reply (Tom Bradsky, July 4).
+  assert.doesNotMatch(text, IMMEDIATE_REPLY_PROMISE_RE, `the LLM ack promises no reply time: ${text}`);
   console.log(`  LLM coverage ack: ${text}`);
+
+  // Tom Bradsky's exact production request (Parts form on a holiday).
+  const tomLLM = await buildDepartmentHandoffAckWithLLM({
+    message: "Are parts available for the serial 1 ebikes",
+    deptLabel: "Parts",
+    firstName: "Tom"
+  });
+  assert.ok(tomLLM && tomLLM.trim().length > 0, "LLM produces an ack for Tom's parts request");
+  assert.doesNotMatch(String(tomLLM), IMMEDIATE_REPLY_PROMISE_RE, `Tom's ack promises no reply time: ${tomLLM}`);
+  assert.doesNotMatch(String(tomLLM), /\$\s?\d/, "Tom's ack contains no fabricated price");
+  console.log(`  LLM coverage ack (Tom): ${tomLLM}`);
 } else {
   console.log("  (LLM coverage skipped — no OPENAI_API_KEY)");
 }

@@ -349,7 +349,7 @@ cases.push(
     id: "sales_widget_never_leaves_silence_acknowledgment_fallback",
     actual:
       widgetRoute.includes("widgetAckFallback") &&
-      widgetRoute.includes("I'll text you right back") &&
+      widgetRoute.includes("buildWebTextWidgetSalesAckFallback") &&
       widgetRoute.includes("const draftText = String(") &&
       /\|\|\s*widgetAckFallback/.test(widgetRoute) &&
       widgetRoute.includes("if (draftText) {"),
@@ -381,7 +381,7 @@ cases.push(
     id: "regenerate_widget_never_leaves_silence_acknowledgment_fallback",
     actual:
       regenerateRoute.includes("regenWebTextWidgetAckFallback") &&
-      regenerateRoute.includes("I'll text you right back") &&
+      regenerateRoute.includes("buildWebTextWidgetSalesAckFallback") &&
       /\|\|\s*regenWebTextWidgetAckFallback/.test(regenerateRoute),
     expected: true
   },
@@ -416,7 +416,7 @@ cases.push({
   id: "nonsales_widget_publishes_department_handoff_ack",
   actual:
     apiSource.includes("evaluateDeptAckInvariant") &&
-    apiSource.includes("they'll text you right back") &&
+    apiSource.includes("buildDeptHandoffAckFallback") &&
     apiSource.includes("_ack_draft_created"),
   expected: true
 });
