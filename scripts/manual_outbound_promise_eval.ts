@@ -133,6 +133,53 @@ const HINT_NO = [
 for (const t of HINT_YES) check(`hint_yes:${t.slice(0, 34)}`, hasManualPromiseHint(t), t);
 for (const t of HINT_NO) check(`hint_no:${t.slice(0, 34)}`, !hasManualPromiseHint(t), t);
 
+// ── "probably next week" resolves to a real date (Nicholas Braun +17166286477, operator-
+// reported: "I told him I'd call when the trade comes in, probably next week — but the call
+// task is for tomorrow"). parseRequestedDateOnly now anchors relative week phrases to next
+// MONDAY, so an event-conditioned promise with a stated timeframe comes due when the promise
+// does, not on the no-date tomorrow default. The parser-side few-shot (EXAMPLE G) makes the
+// LLM carry due_text "next week" for such promises; this pins the deterministic resolution. ──
+{
+  const { parseRequestedDateOnly } = await import("../services/api/src/domain/conversationStore.ts");
+  const nextWeek = parseRequestedDateOnly("probably next week", "America/New_York");
+  if (!nextWeek || nextWeek.dayOfWeek !== "monday") {
+    console.error(`"probably next week" must resolve to next Monday, got ${JSON.stringify(nextWeek)}`);
+    failures += 1;
+  }
+  const couple = parseRequestedDateOnly("in a couple weeks", "America/New_York");
+  if (!couple || couple.dayOfWeek !== "monday") {
+    console.error(`"in a couple weeks" must resolve to a Monday, got ${JSON.stringify(couple)}`);
+    failures += 1;
+  } else if (nextWeek) {
+    const gap =
+      Date.UTC(couple.year, couple.month - 1, couple.day) - Date.UTC(nextWeek.year, nextWeek.month - 1, nextWeek.day);
+    if (gap !== 7 * 86_400_000) {
+      console.error(`"couple weeks" must land one week after "next week", gap=${gap}`);
+      failures += 1;
+    }
+  }
+  // A resolved next-week due flows through the decision as a dated staff task (not tomorrow).
+  if (nextWeek) {
+    const d = decideManualOutboundPromise(
+      base({
+        parse: parse({ kind: "check_and_get_back", action: "call when the trade with the backrest arrives", dueText: "next week" }),
+        dueDate: nextWeek
+      })
+    );
+    if (d.kind !== "staff_task" || !/Mon/.test(d.dueLabel)) {
+      console.error(`event-conditioned promise with "next week" must yield a Monday-due staff task, got ${JSON.stringify(d)}`);
+      failures += 1;
+    }
+  }
+  // The parser prompt must carry the event-conditioned few-shot so due_text survives the parse.
+  const fs2 = await import("node:fs");
+  const llm = fs2.readFileSync("services/api/src/domain/llmDraft.ts", "utf8");
+  if (!/probably next week/.test(llm) || !/EXAMPLE G/.test(llm)) {
+    console.error("the manual-promise parser must keep the event-conditioned-timeframe few-shot (EXAMPLE G)");
+    failures += 1;
+  }
+}
+
 if (failures) {
   console.error(`manual outbound promise eval: ${failures} failure(s)`);
   process.exit(1);

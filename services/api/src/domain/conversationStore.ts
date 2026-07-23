@@ -5209,6 +5209,28 @@ export function parseRequestedDateOnly(
     };
   }
 
+  // Relative week phrases (task-hygiene follow-up, Nicholas Braun +17166286477): a staff promise
+  // "I'll call you when the trade comes in, probably next week" resolved to NO date, so the dated
+  // task fell back to due-tomorrow — nagging a week early. "next week" anchors to next MONDAY
+  // (the earliest day the promise could be due); "in a couple weeks" to Monday after. Deterministic
+  // date-word extraction, not comprehension.
+  if (/\bnext week\b/.test(t) || /\bin a (?:week|few days)\b/.test(t) || /\bcouple (?:of )?weeks\b/.test(t)) {
+    const now = new Date();
+    const nowParts = getZonedParts(now, timeZone);
+    const todayIdx = weekdayIndex((nowParts.weekday ?? "").slice(0, 3));
+    const daysToNextMonday = ((8 - todayIdx) % 7) || 7;
+    const addDays = /\bcouple (?:of )?weeks\b/.test(t) ? daysToNextMonday + 7 : daysToNextMonday;
+    const base = new Date(Date.UTC(nowParts.year, nowParts.month - 1, nowParts.day, 12, 0));
+    base.setUTCDate(base.getUTCDate() + addDays);
+    const parts = getZonedParts(base, timeZone);
+    return {
+      year: parts.year,
+      month: parts.month,
+      day: parts.day,
+      dayOfWeek: weekdayFull((parts.weekday ?? "").slice(0, 3))
+    };
+  }
+
   const dayToken = parseDayToken(t);
   if (!dayToken) return null;
 

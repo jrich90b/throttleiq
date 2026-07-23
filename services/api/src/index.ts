@@ -67695,6 +67695,7 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
                 nextStepOwner: voiceFactsParse?.nextStepOwner ?? "none",
                 nextStepAction: voiceFactsParse?.nextStepAction ?? "",
                 nextStepConfidence: voiceFactsParse?.nextStepConfidence ?? 0,
+                customerVisitPlanned: voiceFactsParse?.nextStepIsVisit === true,
                 dueDate: dueText ? parseRequestedDateOnly(dueText, nsTimezone) : null,
                 confidenceMin: resolveVoiceNextStepConfidenceMin(
                   process.env.VOICE_NEXT_STEP_CONFIDENCE_MIN
@@ -67735,6 +67736,28 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
                   taskCreated: !!nsTask,
                   taskDueAt: nsDecision.taskDueIso,
                   holdUntil: nsDecision.holdUntilIso
+                });
+              } else if (nsDecision.kind === "customer_visit_task") {
+                // Dated visit committed ON THE CALL (Zackary +17165985414): hold the cadence like
+                // hold_for_customer AND surface a dated task so the store expects the visit — the
+                // SMS lane already does this via the soft-visit arm; the voice lane created nothing.
+                const visitTask = addTodo(
+                  conv,
+                  "other",
+                  nsDecision.taskSummary,
+                  callScopedMessageId ?? undefined,
+                  conv.leadOwner,
+                  { dueAt: nsDecision.taskDueIso },
+                  "reminder"
+                );
+                pauseFollowUpCadence(conv, nsDecision.holdUntilIso, "voice_customer_visit");
+                recordRouteOutcome("manual", "voice_next_step_customer_visit_task", {
+                  convId: conv.id,
+                  leadKey: conv.leadKey,
+                  taskCreated: !!visitTask,
+                  taskDueAt: nsDecision.taskDueIso,
+                  holdUntil: nsDecision.holdUntilIso,
+                  dueLabel: nsDecision.dueLabel
                 });
               }
               saveConversation(conv);
