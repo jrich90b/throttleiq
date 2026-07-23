@@ -5718,6 +5718,60 @@ export function shouldRetireBookkeepingNotice(
   return now.getTime() - createdMs > BOOKKEEPING_NOTE_TTL_DAYS * 24 * 60 * 60 * 1000;
 }
 
+/**
+ * Conversation context for a Task Inbox row (task-hygiene Phase 2) — pure. Staff triaging the
+ * task list couldn't see WHAT the customer said or WHETHER anyone already replied without
+ * opening every conversation (UX audit 7/22: no message preview, no replied indicator — every
+ * stale task cost a click to discover it was dead). Three facts per task:
+ *   - lastInboundPreview/lastInboundAt: the customer's latest real message, whitespace-collapsed
+ *     and capped. An ADF web-lead blob previews as its Inquiry line (the human part), not the
+ *     "WEB LEAD (ADF) Source: ..." header noise.
+ *   - repliedSinceTaskAt: the newest REAL customer-facing outbound (twilio/sendgrid/human/voice —
+ *     not an unsent draft) AFTER the task was created. This is the row's "Replied ✓" signal:
+ *     display-only context; it closes nothing (the fulfillment judge owns closes).
+ */
+export function buildTodoConversationContext(
+  conv: Pick<Conversation, "messages"> | null | undefined,
+  todo: Pick<TodoTask, "createdAt"> | null | undefined
+): { lastInboundPreview: string | null; lastInboundAt: string | null; repliedSinceTaskAt: string | null } {
+  const messages = Array.isArray(conv?.messages) ? conv!.messages : [];
+  const taskCreatedMs = Date.parse(String(todo?.createdAt ?? ""));
+  let lastInbound: { body: string; at: string } | null = null;
+  let repliedSinceTaskAt: string | null = null;
+  for (const m of messages) {
+    const body = String((m as any)?.body ?? "").trim();
+    const at = String((m as any)?.at ?? "").trim();
+    if (!body || !at) continue;
+    if ((m as any)?.direction === "in") {
+      if (!lastInbound || at > lastInbound.at) lastInbound = { body, at };
+      continue;
+    }
+    if (
+      (m as any)?.direction === "out" &&
+      REAL_OUTBOUND_CONTACT_PROVIDERS.has(String((m as any)?.provider ?? "")) &&
+      Number.isFinite(taskCreatedMs) &&
+      Date.parse(at) > taskCreatedMs
+    ) {
+      if (!repliedSinceTaskAt || at > repliedSinceTaskAt) repliedSinceTaskAt = at;
+    }
+  }
+  let preview: string | null = null;
+  if (lastInbound) {
+    let text = lastInbound.body;
+    if (/^WEB LEAD \(ADF\)/i.test(text)) {
+      // The human part of an ADF blob is its Inquiry section; the rest is routing metadata.
+      const inquiry = text.match(/\bInquiry:\s*([\s\S]+)$/i)?.[1]?.trim() ?? "";
+      text = inquiry || "New web lead (no written inquiry)";
+    }
+    preview = text.replace(/\s+/g, " ").trim().slice(0, 140) || null;
+  }
+  return {
+    lastInboundPreview: preview,
+    lastInboundAt: lastInbound?.at ?? null,
+    repliedSinceTaskAt
+  };
+}
+
 export const FIRST_TOUCH_TODO_MARKERS = [
   "no first contact has gone out yet",
   "a reply was drafted but never sent"

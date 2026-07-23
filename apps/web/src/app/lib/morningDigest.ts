@@ -8,7 +8,7 @@
 // and closes it). Fail-direction of a digest bug is cosmetic: worst case the
 // popup shows twice or not at all — it never touches task state or a customer.
 
-import { dueBucketFor, dueBucketRank, taskEffectiveDueMs, type DueBucket } from "./taskTriage";
+import { dueBucketFor, dueBucketRank, isStaleOverdueTask, taskEffectiveDueMs, type DueBucket } from "./taskTriage";
 import { salesCriticalKind } from "./taskReason";
 
 /** Local calendar-day key ("2026-07-14") — the digest shows at most once per key. */
@@ -40,7 +40,7 @@ export function shouldShowMorningDigest(args: {
   return String(args.lastShownDayKey ?? "") !== morningDigestDayKey(args.nowMs);
 }
 
-export type DigestGroup = { bucket: DueBucket; tasks: any[] };
+export type DigestGroup = { bucket: DueBucket; tasks: any[]; stale?: boolean };
 
 /**
  * Order tasks for the digest: urgency bucket first (overdue → today → this week
@@ -50,7 +50,16 @@ export type DigestGroup = { bucket: DueBucket; tasks: any[] };
  */
 export function groupTasksForDigest(todos: any[], nowMs: number): DigestGroup[] {
   const groups = new Map<DueBucket, any[]>();
+  // Stale demotion (Phase 2): overdue >14d re-surfaced at the TOP of the digest every single
+  // morning with no way to act on it from the popup (UX audit 7/22) — the same item greeting
+  // the rep daily reads as noise and trains them to ignore the digest. Stale items still show,
+  // but in a trailing "worth a review" group instead of leading the day.
+  const staleTasks: any[] = [];
   for (const t of todos ?? []) {
+    if (isStaleOverdueTask(t, nowMs)) {
+      staleTasks.push(t);
+      continue;
+    }
     const bucket = dueBucketFor(t, nowMs);
     let list = groups.get(bucket);
     if (!list) {
@@ -75,6 +84,10 @@ export function groupTasksForDigest(todos: any[], nowMs: number): DigestGroup[] 
     ordered.push({ bucket, tasks });
   }
   ordered.sort((a, b) => dueBucketRank(a.bucket) - dueBucketRank(b.bucket));
+  if (staleTasks.length) {
+    staleTasks.sort((a, b) => (taskEffectiveDueMs(b) ?? 0) - (taskEffectiveDueMs(a) ?? 0)); // least-ancient first
+    ordered.push({ bucket: "overdue", stale: true, tasks: staleTasks });
+  }
   return ordered;
 }
 
@@ -82,6 +95,9 @@ export function groupTasksForDigest(todos: any[], nowMs: number): DigestGroup[] 
 export function digestAttentionCount(todos: any[], nowMs: number): number {
   let n = 0;
   for (const t of todos ?? []) {
+    // A stale-overdue item is a review candidate, not one of today's "N need you today" —
+    // counting it forever inflated the header and dulled the number's meaning.
+    if (isStaleOverdueTask(t, nowMs)) continue;
     const bucket = dueBucketFor(t, nowMs);
     if (bucket === "overdue" || bucket === "today") n += 1;
   }

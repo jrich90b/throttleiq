@@ -812,6 +812,7 @@ import {
   decideFirstTouchTodoResolution,
   shouldRetireBookkeepingNotice,
   BOOKKEEPING_NOTE_TTL_DAYS,
+  buildTodoConversationContext,
   REAL_OUTBOUND_CONTACT_PROVIDERS,
   collectInventoryWatches,
   pruneInventoryWatchesByModel,
@@ -40003,10 +40004,16 @@ app.get("/todos", requirePermission("canAccessTodos"), async (req, res) => {
         const dealerRideOutcomeSecondaryStatus =
           String(dealerRideOutcome?.secondaryStatus ?? "").trim() || null;
         const action = deriveTodoActionLabel(t, conv, actionTimeZone);
+        // Phase-2 row context: what the customer last said + whether anyone actually replied
+        // after this task existed. Display-only (closes nothing); pinned by task_inbox_context:eval.
+        const conversationContext = buildTodoConversationContext(conv, t);
         return {
           ...t,
           leadName,
           action,
+          lastInboundPreview: conversationContext.lastInboundPreview,
+          lastInboundAt: conversationContext.lastInboundAt,
+          repliedSinceTaskAt: conversationContext.repliedSinceTaskAt,
           callbackTimeLabel,
           appointmentWhenText,
           appointmentWhenIso,
