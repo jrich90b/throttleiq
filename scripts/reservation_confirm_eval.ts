@@ -30,6 +30,17 @@ const LIMITED_RUN_HISTORY: Case["history"] = [
   { direction: "out", body: "Hey Kody - just following up with you about the 2026 Street Bob. What are your thoughts?" }
 ];
 
+const OUT_OF_STATE_PRICE_HISTORY: Case["history"] = [
+  {
+    direction: "in",
+    body: "WEB LEAD (ADF) Stock: U902-24 Year: 2024 Vehicle: Harley-Davidson Street Glide"
+  },
+  {
+    direction: "out",
+    body: "Hey Dennis, thanks for your inquiry about the 2024 Street Glide. If you'd like to stop in and check it out, just say the word. Any specific questions I can answer?"
+  }
+];
+
 const CASES: Case[] = [
   {
     // THE production turn (pinned verbatim).
@@ -60,9 +71,34 @@ const CASES: Case[] = [
     expected: "reserve_now"
   },
   {
+    // Production miss (Dennis Daffron +16303628805, 2026-07-23T01:06Z, pinned verbatim): the
+    // customer asked for an out-the-door number and offered a deposit CONDITIONAL on it. The
+    // verifier read the word "deposit" as reserve_now, the reservation handoff fired, and the
+    // reply ("those limited runs move quick — I'll have Stone reach out with how to get one
+    // reserved") never answered the price question at all. A conditional deposit is a pricing
+    // turn: the customer is naming what would earn the deposit, not asking us to hold anything.
+    id: "conditional_deposit_on_unanswered_price_is_not_reserve_now",
+    text: "I live in Illinois im hard of hearing text is best whats the out the door price? I will put a deposit if its a good number",
+    history: OUT_OF_STATE_PRICE_HISTORY,
+    expected: "not_reserve_now"
+  },
+  {
+    id: "conditional_deposit_best_price_is_not_reserve_now",
+    text: "Whats your best out the door price? I will put a deposit down if the number is right",
+    history: OUT_OF_STATE_PRICE_HISTORY,
+    expected: "not_reserve_now"
+  },
+  {
+    // The other side of the same line — an UNCONDITIONAL deposit/hold ask must still fire.
     id: "deposit_to_hold_is_reserve_now",
     text: "Can I put a deposit down to hold it?",
     history: LIMITED_RUN_HISTORY,
+    expected: "reserve_now"
+  },
+  {
+    id: "deposit_to_hold_alongside_price_ask_is_reserve_now",
+    text: "Can you put a deposit on it to hold it for me? Also what's the out the door price",
+    history: OUT_OF_STATE_PRICE_HISTORY,
     expected: "reserve_now"
   },
   {
