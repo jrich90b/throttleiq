@@ -116,17 +116,27 @@ export async function findNationalOfferForVehicle(
     firstName?: string | null;
     /** Lead unit condition (leadUnitConditionForOfferMatch). Omitted = "unknown" = treated like used. */
     condition?: LeadUnitCondition;
+    /**
+     * Rider-training-graduate eligibility (leadRiderTrainingEligibilityForOffer). Omitted =
+     * "not_evident" = the lead never sees a rider-training grad offer (Joe ruling 2026-07-23).
+     */
+    riderEligibility?: RiderTrainingEligibility;
   }
 ): Promise<NationalOfferMatch | null> {
   if (!isNationalOffersEnabled()) return null;
   const veh = String(vehicle ?? "").trim();
   if (!veh) return null;
   const condition: LeadUnitCondition = opts?.condition ?? "unknown";
-  // NEW-bike promo scope (Joe 2026-07-22): deterministic filter BEFORE the LLM sees the
-  // offer list — a used/unknown-condition lead only ever sees explicitly-used offers.
-  const offers = filterOffersForLeadCondition(
-    filterOffersForDedup(await getNationalOffers(), opts?.excludeTitles ?? []),
-    condition
+  // Two deterministic pre-filters BEFORE the LLM sees the offer list (fail direction = fewer offers):
+  // - NEW-bike promo scope (Joe 2026-07-22): a used/unknown-condition lead only ever sees explicitly-used offers.
+  // - Rider-training grad scope (Joe 2026-07-23): a lead without affirmative rider-training eligibility
+  //   never sees a Riding Academy graduate offer (the +17164812815 grad-APR miss).
+  const offers = filterOffersForRiderEligibility(
+    filterOffersForLeadCondition(
+      filterOffersForDedup(await getNationalOffers(), opts?.excludeTitles ?? []),
+      condition
+    ),
+    opts?.riderEligibility ?? "not_evident"
   );
   if (offers.length === 0) return null;
   const match = await matchNationalOfferToLeadWithLLM({
@@ -259,6 +269,62 @@ export function filterOffersForLeadCondition(
   return offers.filter(offerExplicitlyCoversUsed);
 }
 
+// === Rider-training-graduate eligibility gate (Joe ruling 2026-07-23) =============================
+// A national offer scoped to Riding Academy / rider-training GRADUATES (a beginner-rider financing
+// program, e.g. the 6.64% grad used-APR) may ONLY be pitched to a lead affirmatively known to be a
+// new/unlicensed rider OR who referenced the Academy / rider course. Production miss: +17164812815
+// (Selviana) got the grad-APR pitch on 7/22 and replied she's ridden for years with a license.
+// This mirrors the new-vs-used condition gate: a deterministic pre-filter ahead of the LLM matcher.
+// Fail direction is "no offer": ABSENT affirmative eligibility evidence, the grad offer is dropped
+// (stay quiet), never pitched to an unknown/experienced rider.
+
+/** Affirmative eligibility evidence for a rider-training-graduate offer, or "not_evident" (absent). */
+export type RiderTrainingEligibility = "eligible" | "not_evident";
+
+/**
+ * Does the offer's OWN parsed text scope it to rider-training / Riding Academy graduates (a
+ * beginner-rider financing program)? Deterministic read of our parsed offer format
+ * (title/appliesTo/terms/eligibility) — structured extraction, the same shape as
+ * offerExplicitlyCoversUsed, not a read of any customer message.
+ */
+export function offerRequiresRiderTrainingEligibility(offer: NationalOffer): boolean {
+  const hay = [offer?.title, offer?.appliesTo, offer?.terms, offer?.eligibility]
+    .map(v => String(v ?? ""))
+    .join(" ");
+  return /\b(riding academy|rider training|rider(?:'s)? course|rider education|msf(?: course)?|graduate)\b/i.test(hay);
+}
+
+/**
+ * The lead's rider-training-graduate eligibility, from structured lead data + persisted parser
+ * signals (never a fresh regex over customer text — parser-first law):
+ *  - lead.hasMotoLicense === false → explicitly unlicensed → a new rider → "eligible";
+ *  - the thread's persisted dialogState is first_time_rider or rider_course_info (the intent
+ *    classifier's output — they referenced the rider course / are a first-timer) → "eligible".
+ * Anything else — including no evidence either way — is "not_evident" (fail toward NOT pitching a
+ * beginner offer to an experienced rider).
+ */
+export function leadRiderTrainingEligibilityForOffer(conv: {
+  lead?: any;
+  dialogState?: { name?: string } | null;
+}): RiderTrainingEligibility {
+  if ((conv?.lead as any)?.hasMotoLicense === false) return "eligible";
+  const state = String(conv?.dialogState?.name ?? "").trim().toLowerCase();
+  if (state === "first_time_rider" || state === "rider_course_info") return "eligible";
+  return "not_evident";
+}
+
+/**
+ * A lead without affirmative rider-training eligibility never sees a rider-training-graduate offer.
+ * Deterministic pre-filter ahead of the LLM matcher; fail direction is "fewer offers → quieter".
+ */
+export function filterOffersForRiderEligibility(
+  offers: NationalOffer[],
+  eligibility: RiderTrainingEligibility
+): NationalOffer[] {
+  if (eligibility === "eligible") return offers;
+  return offers.filter(o => !offerRequiresRiderTrainingEligibility(o));
+}
+
 /** The lead's bike-of-interest label for offer matching (lead vehicle, else the inventory watch). */
 export function vehicleLabelForOfferMatch(conv: { lead?: any; inventoryWatch?: any }): string {
   const v = (conv?.lead?.vehicle ?? {}) as any;
@@ -306,6 +372,11 @@ export async function evaluateProactiveCadenceValueGate(args: {
   cadenceKind?: string | null;
   /** Lead unit condition (leadUnitConditionForOfferMatch) — used/unknown leads only see explicitly-used offers. */
   vehicleCondition?: LeadUnitCondition;
+  /**
+   * Rider-training-graduate eligibility (leadRiderTrainingEligibilityForOffer) — a lead without
+   * affirmative eligibility never sees a Riding Academy grad offer (Joe ruling 2026-07-23).
+   */
+  riderEligibility?: RiderTrainingEligibility;
   firstName?: string | null;
   /** Offer titles already texted to this lead (conv.nationalOfferTouches) — same promo never repeats. */
   alreadySentOfferTitles?: string[];
@@ -324,7 +395,8 @@ export async function evaluateProactiveCadenceValueGate(args: {
   const offer = await findNationalOfferForVehicle(args.vehicleLabel, {
     excludeTitles: args.alreadySentOfferTitles ?? [],
     firstName: args.firstName,
-    condition: args.vehicleCondition ?? "unknown"
+    condition: args.vehicleCondition ?? "unknown",
+    riderEligibility: args.riderEligibility ?? "not_evident"
   });
   const decision = decideProactiveCadenceValue({
     isLaterStage: true,
