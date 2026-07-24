@@ -187,6 +187,34 @@ if (process.argv.includes("--self-test")) {
     );
   }
 
+  // Engine-parity HELD-LEAD guard (2026-07-24). The engine skips a conversation that is off
+  // proactive outreach before it reads any watch, so a never-fired watch on a held lead is the
+  // design working, not a miss. Live phantoms: James Mcclain +17164253400 and Shane Smith
+  // +17163852815 (both manual_handoff) were 2 of the 4 highs that morning.
+  {
+    const heldFeed = [{ stockId: "CVO-1", model: "CVO Road Glide ST", year: "2026", condition: "New" }] as any[];
+    const heldConvs = [
+      // staff own the thread — engine skips (isProactiveContactPaused)
+      { id: "h1", leadKey: "+17164253400", followUp: { mode: "manual_handoff" }, inventoryWatch: { model: "CVO Road Glide ST", year: 2026, status: "active", createdAt: "2026-05-07" } },
+      // explicit "hold off" — engine skips
+      { id: "h2", leadKey: "+1555000010", followUp: { mode: "paused_indefinite" }, inventoryWatch: { model: "CVO Road Glide ST", year: 2026, status: "active", createdAt: "2026-05-07" } },
+      // customer asked us to stop alerting — engine skips (durable opt-out)
+      { id: "h3", leadKey: "+1555000011", inventoryWatchOptOut: { at: "2026-06-01", reason: "watch_opt_out" }, inventoryWatch: { model: "CVO Road Glide ST", year: 2026, status: "active", createdAt: "2026-05-07" } },
+      // holding_inventory is deliberately NOT held — this lead WANTS the alert, so a never-notified
+      // matching unit stays a real high miss.
+      { id: "h4", leadKey: "+1555000012", followUp: { mode: "holding_inventory" }, inventoryWatch: { model: "CVO Road Glide ST", year: 2026, status: "active", createdAt: "2026-05-07" } }
+    ] as any[];
+    const heldMisses = findWatchFireMisses({ conversations: heldConvs, feedItems: heldFeed });
+    const heldIds = heldMisses.map(m => m.convId);
+    for (const id of ["h1", "h2", "h3"]) {
+      assert.ok(!heldIds.includes(id), `${id}: a held/opted-out lead is off proactive outreach => not a miss (engine parity); got ${JSON.stringify(heldIds)}`);
+    }
+    assert.ok(
+      heldMisses.some(m => m.convId === "h4" && m.confidence === "high"),
+      "h4: holding_inventory is NOT a hold — a never-notified match must stay flagged"
+    );
+  }
+
   // Price-band parity at the conversation level: a null-price unit against a banded watch is not a
   // miss (mirrors the +17162264009 live case).
   {
@@ -226,7 +254,7 @@ if (process.argv.includes("--self-test")) {
     `c1: a unit first seen before the watch (${watchCreated}) must NOT be flagged`
   );
 
-  console.log("PASS watch fire miss audit (self-test: matcher + dedup + group-notified parity + arrival-gate, 10 fixtures)");
+  console.log("PASS watch fire miss audit (self-test: matcher + dedup + group-notified parity + held-lead parity + arrival-gate, 14 fixtures)");
   process.exit(0);
 }
 

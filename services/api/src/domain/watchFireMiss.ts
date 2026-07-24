@@ -14,6 +14,8 @@ import { modelMatches, unitIsDistinctModelFromWatch, distinct883ModelConflict, d
 import { trikeClassConflict } from "./modelFamily.js";
 import { inventorySnapshotKey, inventoryWatchGroupMatchesLastNotifiedStock } from "./inventoryWatchSnapshot.js";
 import { unitArrivedAfter, type FirstSeenEntry } from "./inventoryFirstSeen.js";
+import { isProactiveContactPaused } from "./proactiveContactPause.js";
+import { isInventoryWatchOptedOut } from "./inventoryWatchOptOut.js";
 
 export type WatchFireMiss = {
   convId: string;
@@ -135,6 +137,17 @@ export function findWatchFireMisses(args: {
   const misses: WatchFireMiss[] = [];
   for (const conv of args.conversations ?? []) {
     if (isClosedOrSold(conv)) continue;
+    // Engine-parity HELD-LEAD guard (2026-07-24). The live engine skips any conversation that is
+    // off proactive outreach — `isProactiveContactPaused` (followUp.mode manual_handoff /
+    // paused_indefinite) and `isInventoryWatchOptedOut` — BEFORE it looks at a single watch
+    // (index.ts processInventoryWatchlist). A watch that never fired on a held lead is the engine
+    // behaving as designed, not a miss. Without this the detector cried wolf every sweep on
+    // staff-owned threads (7/24 highs: James Mcclain +17164253400 `manual_handoff/
+    // vehicle_fact_followup`, Shane Smith +17163852815 `manual_handoff/credit_app_needs_info` —
+    // 2 of 4 highs were phantoms). Note `holding_inventory` is deliberately NOT held: that lead
+    // WANTS the alert, so those stay eligible to be flagged.
+    if (isProactiveContactPaused(conv as any)) continue;
+    if (isInventoryWatchOptedOut(conv)) continue;
     // Engine-parity GROUP guard (2026-07-23). The live engine skips any unit that ANY of the
     // conversation's watches already notified (`inventoryWatchGroupAlreadyNotifiedStock` in
     // index.ts, which delegates to the shared `inventoryWatchGroupMatchesLastNotifiedStock`
