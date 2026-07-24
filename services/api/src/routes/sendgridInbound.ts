@@ -129,6 +129,7 @@ import {
   shouldForceInitialTestRideSourceScheduleCopy,
   shouldRouteRoom58PriceHandoff
 } from "../domain/adfPolicy.js";
+import { isInternalNoteFollowUpTopic } from "../domain/walkInFollowUpTopic.js";
 import {
   isDealerLocationQuestionText,
   isFirstTimeRiderGuidanceParserAccepted,
@@ -2271,6 +2272,11 @@ function extractTrafficLogProFollowUpTopic(text?: string | null): string | undef
       .replace(/\s+/g, " ")
       .trim();
     if (!topic) continue;
+    // A TLP "Inquiry" is often an internal staff log written ABOUT the customer ("gave him trade in
+    // value on his 2018 Heritage that was here for inspection ($8000)"). Never echo an internal-note
+    // topic back to the customer — skip it so the tail falls back to the generic walk-in line
+    // (+17168638237, 2026-07-22). Fail-safe: worst case we drop a real topic for the warm generic line.
+    if (isInternalNoteFollowUpTopic(topic)) continue;
     const truncated =
       topic.length > 100 ? `${topic.slice(0, 97).trim().replace(/[,\-:]$/, "")}...` : topic;
     if (truncated) return truncated;
