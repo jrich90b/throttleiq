@@ -1,23 +1,31 @@
 /**
- * Human-thread quiet nudge (Joe 2026-07-20: "this should be as hands off as possible").
+ * Quiet-thread nudge on human-owned AND handed-off threads (Joe 2026-07-20: "this should be as
+ * hands off as possible"; Joe 2026-07-23 ruling: flip LIVE in draft mode + widen to manual-handoff
+ * threads).
  *
- * A HUMAN-owned thread (mode=human) deliberately gets no cadence and no auto-drafts — the agent
- * never talks over a rep mid-deal. But when the CUSTOMER goes quiet after the rep's last message,
- * the old fallback was a task for the owner (hands-ON). This module adds the hands-off lane: after
- * N quiet days the agent composes a short bump that CONTINUES the rep's own thread in the rep's own
- * voice (no persona intro — composeHumanThreadNudgeWithLLM), which lands as a suggest-mode DRAFT
- * (one tap to send). Full auto-send exists behind a second flag, DARK until Joe graduates it.
+ * A HUMAN-owned thread (mode=human) or a HANDED-OFF thread (followUp.mode=manual_handoff)
+ * deliberately gets no cadence and no auto-drafts — the agent never talks over a rep mid-deal.
+ * But when the CUSTOMER goes quiet after our last message, the old fallback was a task for the
+ * owner (hands-ON) — and production showed those tasks getting closed with NO customer contact
+ * (Zackary +17165985414: financing approved 7/16, 7 quiet days, 5 owner tasks closed, zero
+ * outreach; Michael Spence +17169306602: web-widget price answered 7/06, silent since). This
+ * module is the hands-off lane: after N quiet days the agent composes a short bump that CONTINUES
+ * the thread in the rep's own voice (no persona intro, zero new facts —
+ * composeHumanThreadNudgeWithLLM is the value gate), which lands as a suggest-mode DRAFT (one tap
+ * to send). Full auto-send exists behind a second flag, DARK until Joe graduates it.
  *
  * This is the pure decision (no store, no clock, no LLM) — the cadenceHoldTtl.ts pattern. It
- * enumerates every stop-state so the nudge can never fire into: a non-human thread (those have
- * cadences), opt-out, closed, call-only, a booked appointment, an UNANSWERED customer message (that
- * stays the owner's "needs YOUR reply" task — the agent can't answer deal specifics), a pending
- * draft, or a pending dated staff promise ("I'll send numbers Monday" → the promise task owns the
- * follow-up, no "just checking in" over it). Capped per thread with spacing between nudges.
+ * enumerates every stop-state so the nudge can never fire into: a thread that is neither
+ * human-owned nor handed off (those have cadences), opt-out, closed, call-only, a booked
+ * appointment, an UNANSWERED customer message (that stays the owner's "needs YOUR reply" task —
+ * the agent can't answer deal specifics), a pending draft, or a pending dated staff promise
+ * ("I'll send numbers Monday" → the promise task owns the follow-up, no "just checking in" over
+ * it). Capped per thread (max 2) with spacing between nudges.
  *
  * FAIL DIRECTION: every uncertain state → no nudge (silence). A missed bump costs a little
  * momentum; a wrong bump talks over a human deal. Flags:
- *   HUMAN_THREAD_NUDGE_ENABLED   (default OFF) — the feature (drafts to the approval queue)
+ *   HUMAN_THREAD_NUDGE_ENABLED   (default ON since Joe's 7/23 ruling — drafts to the approval
+ *                                 queue only; kill switch: set =0 + deploy)
  *   HUMAN_THREAD_NUDGE_AUTOSEND  (default OFF) — the zero-touch carve-out (skips the queue)
  */
 
@@ -27,8 +35,8 @@ export const HUMAN_THREAD_NUDGE_SPACING_DAYS_DEFAULT = 5;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-function envFlag(name: string): boolean {
-  const v = String(process.env[name] ?? "0").trim().toLowerCase();
+function envFlag(name: string, fallback = "0"): boolean {
+  const v = (String(process.env[name] ?? "").trim() || fallback).toLowerCase();
   return v === "1" || v === "true" || v === "yes";
 }
 
@@ -40,7 +48,8 @@ function envNum(name: string, fallback: number): number {
 }
 
 export function isHumanThreadNudgeEnabled(): boolean {
-  return envFlag("HUMAN_THREAD_NUDGE_ENABLED");
+  // Default ON (Joe ruling 2026-07-23): draft-mode nudges are LIVE. Kill switch = set to 0.
+  return envFlag("HUMAN_THREAD_NUDGE_ENABLED", "1");
 }
 
 export function isHumanThreadNudgeAutosendEnabled(): boolean {
@@ -60,7 +69,9 @@ export function humanThreadNudgeSpacingDays(): number {
 }
 
 export interface HumanThreadNudgeInput {
-  conversationMode?: string | null; // must be "human"
+  conversationMode?: string | null; // "human" qualifies
+  /** conv.followUp.mode — "manual_handoff" qualifies (Joe 7/23 widening). */
+  followUpMode?: string | null;
   suppressed?: boolean; // STOP / opt-out / do-not-contact
   conversationStatus?: string | null;
   closedAt?: string | null;
@@ -71,8 +82,6 @@ export interface HumanThreadNudgeInput {
   /** Last DELIVERED message in the thread (twilio/human/sendgrid/web_widget — not draft_ai). */
   lastMessageDirection?: "in" | "out" | null;
   lastMessageAtMs?: number | null;
-  /** The thread's last outbound was a real human send (actor user / provider human). */
-  lastOutboundWasHuman?: boolean;
   /** An open todo with a FUTURE due date exists (a dated staff promise owns the follow-up). */
   hasOpenFutureDatedTodo?: boolean;
   nudgeCount?: number;
@@ -86,8 +95,13 @@ export interface HumanThreadNudgeInput {
 export type HumanThreadNudgeDecision = { nudge: false; reason: string } | { nudge: true; quietDays: number };
 
 export function decideHumanThreadNudge(input: HumanThreadNudgeInput): HumanThreadNudgeDecision {
-  if (String(input.conversationMode ?? "").trim().toLowerCase() !== "human") {
-    return { nudge: false, reason: "not_human_mode" };
+  // Eligible classes (Joe 7/23): a human-OWNED thread (mode=human) or a handed-off thread
+  // (followUp.mode=manual_handoff). Everything else has a cadence/auto-draft lane of its own —
+  // nudging there would double-message.
+  const isHumanOwned = String(input.conversationMode ?? "").trim().toLowerCase() === "human";
+  const isHandedOff = String(input.followUpMode ?? "").trim().toLowerCase() === "manual_handoff";
+  if (!isHumanOwned && !isHandedOff) {
+    return { nudge: false, reason: "not_human_or_handoff" };
   }
   if (input.suppressed) return { nudge: false, reason: "suppressed" };
   const closed =
@@ -105,7 +119,11 @@ export function decideHumanThreadNudge(input: HumanThreadNudgeInput): HumanThrea
   // An unanswered CUSTOMER message stays the owner's job (the "needs YOUR reply" task, PR #223) —
   // the agent must not bump a customer who is waiting on the rep.
   if (input.lastMessageDirection !== "out") return { nudge: false, reason: "owner_reply_needed" };
-  if (!input.lastOutboundWasHuman) return { nudge: false, reason: "no_human_outbound" };
+  // NOTE (Joe 7/23): the old "last outbound must be a HUMAN send" gate is gone. Production showed
+  // it blocking exactly the threads Joe wants bumped — Zackary's last delivered outbounds were an
+  // agent credit-app ack and an event blast, so 7 quiet days produced nothing. On both eligible
+  // classes every outbound was staff-approved (human send or suggest-queue approval), so the
+  // rep-voice continuity the gate protected still holds.
   if (input.hasOpenFutureDatedTodo) return { nudge: false, reason: "staff_promise_pending" };
   const lastAtMs = Number(input.lastMessageAtMs);
   if (!Number.isFinite(lastAtMs)) return { nudge: false, reason: "no_message_anchor" };

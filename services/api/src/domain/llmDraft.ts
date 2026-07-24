@@ -718,7 +718,8 @@ export async function composeHumanThreadNudgeWithLLM(args: {
   /** The last few DELIVERED thread messages, oldest first. */
   recentMessages: { direction: "in" | "out"; body: string }[];
 }): Promise<string | null> {
-  const enabled = String(process.env.HUMAN_THREAD_NUDGE_ENABLED ?? "0").trim().toLowerCase();
+  // Default ON (Joe ruling 2026-07-23: nudge LIVE in draft mode). Kill switch = set to 0.
+  const enabled = String(process.env.HUMAN_THREAD_NUDGE_ENABLED ?? "1").trim().toLowerCase();
   if (enabled === "0" || enabled === "false" || enabled === "no") return null;
   const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
   if (!useLLM) return null;

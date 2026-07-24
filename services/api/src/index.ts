@@ -30301,14 +30301,16 @@ async function processDueFollowUpsUnlocked() {
       `[state-reconcile] resumed ${inventoryHoldsExpired} expired inventory-hold cadence(s) (TTL ${holdTtlDays}d)`
     );
   }
-  // Human-thread quiet nudge (Joe 2026-07-20: "as hands off as possible"): a HUMAN-owned thread
-  // whose customer went quiet after the rep's last message gets ONE short agent-composed bump that
-  // continues the rep's own thread in the rep's voice (composeHumanThreadNudgeWithLLM — no persona
-  // intro, zero new facts). DRAFT-FIRST: it lands in the suggest-mode approval queue (one tap);
-  // HUMAN_THREAD_NUDGE_AUTOSEND (dark) is the zero-touch carve-out. The pure decision
-  // (domain/humanThreadNudge.ts) enumerates every stop-state: unanswered customer message (stays
-  // the owner's "needs YOUR reply" task), dated staff promise, pending draft, opt-out, closed,
-  // call-only, booked appointment, cap + spacing. Capped per tick; every failure path = silence.
+  // Quiet-thread nudge (Joe 2026-07-20 "as hands off as possible"; Joe 2026-07-23 ruling: LIVE in
+  // draft mode + widened to handed-off threads): a HUMAN-owned thread (mode=human) OR a handed-off
+  // thread (followUp.mode=manual_handoff) whose customer went quiet after our last message gets ONE
+  // short agent-composed bump that continues the thread in the rep's voice
+  // (composeHumanThreadNudgeWithLLM — no persona intro, zero new facts). DRAFT-FIRST: it lands in
+  // the suggest-mode approval queue (one tap); HUMAN_THREAD_NUDGE_AUTOSEND (dark) is the zero-touch
+  // carve-out. The pure decision (domain/humanThreadNudge.ts) enumerates every stop-state:
+  // unanswered customer message (stays the owner's "needs YOUR reply" task), dated staff promise,
+  // pending draft, opt-out, closed, call-only, booked appointment, cap (2/thread) + spacing.
+  // Capped per tick; every failure path = silence.
   if (isHumanThreadNudgeEnabled()) {
     const nudgeQuietDays = humanThreadNudgeQuietDays();
     const nudgeMaxCount = humanThreadNudgeMaxCount();
@@ -30316,16 +30318,15 @@ async function processDueFollowUpsUnlocked() {
     let humanNudges = 0;
     for (const conv of convs) {
       if (humanNudges >= 10) break;
-      if (String((conv as any).mode ?? "").toLowerCase() !== "human") continue;
+      const nudgeConvMode = String((conv as any).mode ?? "").toLowerCase();
+      const nudgeFollowUpMode = String(conv.followUp?.mode ?? "").toLowerCase();
+      if (nudgeConvMode !== "human" && nudgeFollowUpMode !== "manual_handoff") continue;
       const delivered = (conv.messages ?? []).filter(
         (m: any) =>
           ["twilio", "human", "sendgrid", "web_widget", "sendgrid_adf"].includes(String(m?.provider ?? "")) &&
           String(m?.body ?? "").trim()
       );
       const lastMsg: any = delivered[delivered.length - 1] ?? null;
-      const lastOut: any = [...delivered].reverse().find((m: any) => m?.direction === "out") ?? null;
-      const lastOutboundWasHuman =
-        !!lastOut && (!!lastOut.actorUserId || !!lastOut.actorUserName || lastOut.provider === "human");
       const openFutureTodo = openTodos.some((t: any) => {
         if (t?.convId !== conv.id) return false;
         const dueMs = Date.parse(String(t?.dueAt ?? ""));
@@ -30333,6 +30334,7 @@ async function processDueFollowUpsUnlocked() {
       });
       const nudgeDecision = decideHumanThreadNudge({
         conversationMode: (conv as any).mode ?? null,
+        followUpMode: conv.followUp?.mode ?? null,
         suppressed: isSuppressed(conv.leadKey),
         conversationStatus: conv.status ?? null,
         closedAt: conv.closedAt ?? null,
@@ -30342,7 +30344,6 @@ async function processDueFollowUpsUnlocked() {
         hasPendingDraft: !!getLatestPendingDraft(conv),
         lastMessageDirection: lastMsg?.direction ?? null,
         lastMessageAtMs: Date.parse(String(lastMsg?.at ?? "")),
-        lastOutboundWasHuman,
         hasOpenFutureDatedTodo: openFutureTodo,
         nudgeCount: conv.humanThreadNudge?.count ?? 0,
         lastNudgeAtMs: Date.parse(String(conv.humanThreadNudge?.lastAt ?? "")),
