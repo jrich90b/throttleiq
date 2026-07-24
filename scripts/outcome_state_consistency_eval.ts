@@ -39,7 +39,12 @@ const checks = [
   ],
   [
     "finance_helper_allows_suppressing_stale_appointment_sync",
-    financeHelperBlock.includes("opts?: { syncAppointmentOutcome?: boolean }") &&
+    // The opts bag grew a second, unrelated knob (openNeedsInfoManagerTask — Joe ruling 7/23), so
+    // match the FIELD rather than the whole one-line object literal. What this check protects is
+    // unchanged: the caller can suppress a stale appointment sync, and all three appointment writes
+    // stay behind that flag.
+    /opts\?:\s*\{[\s\S]*?syncAppointmentOutcome\?:\s*boolean/.test(financeHelperBlock) &&
+      financeHelperBlock.includes("const syncAppointmentOutcome = opts?.syncAppointmentOutcome !== false;") &&
       countMatches(financeHelperBlock, /syncAppointmentOutcome && conv\.appointment/g) === 3
   ],
   [

@@ -46,6 +46,87 @@ export function isAutoCloseEligibleTask(task: {
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// REPLY-OWED deterministic closer (Joe ruling 2026-07-23, part 1 of 3).
+//
+// A "needs YOUR reply" task exists for exactly one reason: the customer wrote in on a thread staff
+// owns, and staff owes them a reply (human-mode re-engagement PR #223, and owner-thread step-back).
+// For THAT task the reply ITSELF is the accomplishment — there is no separate objective to judge.
+// The LLM fulfillment judge kept them open on a promise-shaped reply: Curtis Samuel (+17163812367,
+// 2026-07-23) — task created 17:46:46, Joe replied 17:47:41 ("Ok, we will try to call and see if
+// they can do a 2nd review on the app. Ill let you know how we make out."), verdict came back
+// not_fulfilled ("Dealer did not directly…") and the task sat open. So close these
+// DETERMINISTICALLY on the first real staff outbound after creation, no judge — mirroring the
+// first-touch closer (#253) and the context-fidelity held-flag clear-on-send.
+//
+// AGENTS.md bucket: SIDE-EFFECT / STATE gate (deterministic is allowed; this reads OUR OWN task
+// summary, never customer intent). Fail direction: closing on a real staff send IS the objective,
+// and any further customer inbound mints a fresh reply-owed task — so an early close can never
+// silently drop a live lead. The failure we are fixing (task nags after staff already replied) is
+// the costly one.
+// ---------------------------------------------------------------------------
+
+/** Marker substring carried by BOTH "needs YOUR reply" task summaries produced in index.ts. */
+export const REPLY_OWED_TODO_MARKER = "needs YOUR reply";
+
+export function isReplyOwedTask(task: { status?: string | null; summary?: string | null }): boolean {
+  if (String(task?.status ?? "") !== "open") return false;
+  return String(task?.summary ?? "").includes(REPLY_OWED_TODO_MARKER);
+}
+
+export type ReplyOwedCloseDecision = { close: boolean; reason: string };
+
+/**
+ * Pure. A reply-owed task closes on the first REAL staff/agent outbound sent AFTER it was created.
+ * Not a staff outbound, or an outbound that predates the task, leaves it open.
+ */
+export function decideReplyOwedTaskClose(input: {
+  task: { status?: string | null; summary?: string | null; createdAt?: string | null };
+  /** true only for a delivered staff/agent OUTBOUND (SMS/email) — never an inbound trigger. */
+  isStaffOutbound: boolean;
+  outboundAtMs: number;
+}): ReplyOwedCloseDecision {
+  if (!isReplyOwedTask(input.task)) return { close: false, reason: "not_reply_owed" };
+  if (!input.isStaffOutbound) return { close: false, reason: "not_staff_outbound" };
+  if (!Number.isFinite(input.outboundAtMs)) return { close: false, reason: "no_outbound_time" };
+  const createdMs = input.task?.createdAt ? Date.parse(String(input.task.createdAt)) : NaN;
+  if (Number.isFinite(createdMs) && input.outboundAtMs <= createdMs) {
+    return { close: false, reason: "outbound_not_after_creation" };
+  }
+  return { close: true, reason: "staff_reply_is_accomplishment" };
+}
+
+// ---------------------------------------------------------------------------
+// MEDIA-ONLY outbound visibility (Joe ruling 2026-07-23, part 2 of 3).
+//
+// A picture-only MMS has an EMPTY body, so it was invisible to the fulfillment auto-closer twice
+// over: the runner bailed on an empty action text, and the activity window it hands the classifier
+// drops empty-body messages. Safvan (+18728882220, 2026-07-22): the salesman sent 3 pictures against
+// the task "Manual follow-up: send photos for the unlisted/back-room bike" and the verdict came back
+// "No photos/details were delivered." — because the closer literally could not see them.
+//
+// This renders OUR OWN outbound media as a short structured line so the classifier can judge it. The
+// fulfillment verdict itself stays with the parser (comprehension); this is structured description of
+// our own send, not customer-intent detection. Fail direction: a missing/zero count just yields "" and
+// the closer behaves exactly as before.
+// ---------------------------------------------------------------------------
+
+/** Structured one-liner describing media attached to one of OUR outbound messages. "" when none. */
+export function describeOutboundMedia(mediaCount: number | null | undefined): string {
+  const raw = Number(mediaCount);
+  if (!Number.isFinite(raw) || raw <= 0) return "";
+  const n = Math.round(raw);
+  return `[dealer sent ${n} photo${n === 1 ? "" : "s"} (picture-only message, no text)]`;
+}
+
+/** Activity/action text for one of OUR outbound messages, folding in media when the body is empty. */
+export function outboundActivityText(body: string | null | undefined, mediaCount?: number | null): string {
+  const text = String(body ?? "").replace(/\s+/g, " ").trim();
+  const media = describeOutboundMedia(mediaCount);
+  if (text && media) return `${text} ${media}`;
+  return text || media;
+}
+
 export type TaskFulfillmentVerdict = {
   taskId: string;
   /** Did the action accomplish the task's objective (not merely promise to)? */

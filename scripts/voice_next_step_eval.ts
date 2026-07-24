@@ -10,6 +10,8 @@ import {
   decideVoiceNextStep,
   resolveVoiceLiveCallBreatherHours,
   resolveVoiceNextStepConfidenceMin,
+  buildFinanceNeedsMoreInfoTaskSummary,
+  FINANCE_NEEDS_INFO_MAX_ITEMS,
   VOICE_LIVE_CALL_BREATHER_HOURS_DEFAULT,
   VOICE_NEXT_STEP_CONFIDENCE_MIN_DEFAULT,
   type VoiceNextStepDecision,
@@ -214,8 +216,81 @@ for (const [id, ok] of resolverChecks) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// FINANCE "needs more info" business-manager checklist (Joe ruling 2026-07-23, part 3).
+//
+// A finance call that ends "needs more info" used to leave only an internal note + a heads-up SMS.
+// Joe's ruling: it opens a business-manager task that LISTS the required lender items. This is the
+// pure summary builder — it formats items the typed parser extracted, and NEVER invents one.
+// ---------------------------------------------------------------------------
+const financeChecks: Array<[string, boolean]> = [];
+const push = (id: string, ok: boolean) => financeChecks.push([id, ok]);
+
+const itemized = buildFinanceNeedsMoreInfoTaskSummary({
+  requiredItems: ["Two recent pay stubs", "Proof of residence", "A qualified co-signer"],
+  reasonText: "bank needs pay stubs, residence proof and a co-signer",
+  customerName: "Curtis Samuel"
+});
+push("itemized_names_the_customer", itemized.startsWith("Finance needs more info — Curtis Samuel:"));
+push("itemized_says_lender_is_waiting", /the lender is waiting on the following/.test(itemized));
+push(
+  "itemized_lists_every_item",
+  itemized.includes("\n- Two recent pay stubs") &&
+    itemized.includes("\n- Proof of residence") &&
+    itemized.includes("\n- A qualified co-signer")
+);
+push("itemized_drops_the_prose_fallback", !itemized.includes("bank needs pay stubs"));
+
+// Blank/duplicate/trailing-punctuation junk from the parser must not reach the checklist.
+const messy = buildFinanceNeedsMoreInfoTaskSummary({
+  requiredItems: ["Proof of income.", "  ", "proof of income", null, "Insurance binder;"],
+  reasonText: "",
+  customerName: "  "
+});
+push("messy_no_customer_suffix", messy.startsWith("Finance needs more info: "));
+push(
+  "messy_dedupes_and_trims",
+  messy.includes("\n- Proof of income") &&
+    messy.includes("\n- Insurance binder") &&
+    messy.split("\n- ").length === 3
+);
+
+// No items parsed => fall back to the reason phrase, never an empty task.
+const reasonOnly = buildFinanceNeedsMoreInfoTaskSummary({
+  requiredItems: [],
+  reasonText: "lender needs more information before they can decide",
+  customerName: "Curtis Samuel"
+});
+push(
+  "reason_fallback_when_no_items",
+  reasonOnly.includes("\n- lender needs more information before they can decide")
+);
+
+// Nothing at all => an explicit "confirm with the lender" line, so the task is still actionable.
+const bare = buildFinanceNeedsMoreInfoTaskSummary({ requiredItems: null, reasonText: null, customerName: null });
+push("bare_never_empty", /\n- Item\(s\) not captured on the call — confirm with the lender\./.test(bare));
+
+// A runaway parse can't produce a wall of text.
+const flood = buildFinanceNeedsMoreInfoTaskSummary({
+  requiredItems: Array.from({ length: 25 }, (_, i) => `Item ${i + 1}`),
+  reasonText: "",
+  customerName: "Curtis"
+});
+push("flood_capped", flood.split("\n- ").length - 1 === FINANCE_NEEDS_INFO_MAX_ITEMS);
+
+for (const [id, ok] of financeChecks) {
+  if (!ok) {
+    failures += 1;
+    console.error(`FAIL finance_needs_info:${id}`);
+  } else {
+    console.log(`PASS finance_needs_info:${id}`);
+  }
+}
+
 if (failures) {
   console.error(`voice next-step eval: ${failures} failure(s)`);
   process.exit(1);
 }
-console.log(`voice next-step eval: all ${CASES.length + resolverChecks.length} checks passed`);
+console.log(
+  `voice next-step eval: all ${CASES.length + resolverChecks.length + financeChecks.length} checks passed`
+);

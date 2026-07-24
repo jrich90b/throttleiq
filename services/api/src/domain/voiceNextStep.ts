@@ -213,3 +213,48 @@ export function decideVoiceNextStep(input: VoiceNextStepInput): VoiceNextStepDec
   const summary = `${leadIn} ${action}${dueLabel ? ` — by ${dueLabel}` : ""}`;
   return { kind: "staff_task", taskSummary: summary, taskDueIso, holdUntilIso, dueLabel };
 }
+
+// ---------------------------------------------------------------------------
+// FINANCE "needs more info" business-manager checklist (Joe ruling 2026-07-23, part 3 of 3).
+//
+// A finance call that ends "needs more info" already flips the lead to a manual handoff, drops an
+// internal `note`, and texts the business manager. What it never produced was an OPEN, actionable
+// task that says WHAT the lender is waiting on — so the itemized needs from the call ("pay stubs,
+// proof of residence, a co-signer") lived only inside a summary sentence and nobody worked a
+// checklist. Joe's ruling: the needs-more-info outcome opens a business-manager task listing the
+// required lender items.
+//
+// This is the PURE summary builder. The items themselves come from the typed finance-outcome parser
+// (required_items — structured extraction, parser-first); this function only formats them, and
+// degrades safely to the parser's reasonText, then to an explicit "confirm with the lender" line, so
+// the task is NEVER empty and never invents an item. Fail direction: deterministic side-effect gate —
+// the worst case is one extra business-manager task, versus the current failure of a stalled deal
+// nobody is chasing.
+// ---------------------------------------------------------------------------
+
+/** Max items rendered on the checklist — keeps one bad parse from producing a wall of text. */
+export const FINANCE_NEEDS_INFO_MAX_ITEMS = 8;
+
+export function buildFinanceNeedsMoreInfoTaskSummary(input: {
+  requiredItems?: (string | null | undefined)[] | null;
+  reasonText?: string | null;
+  customerName?: string | null;
+}): string {
+  const name = String(input.customerName ?? "").replace(/\s+/g, " ").trim();
+  const seen = new Set<string>();
+  const items: string[] = [];
+  for (const raw of input.requiredItems ?? []) {
+    const item = String(raw ?? "").replace(/\s+/g, " ").trim().replace(/[.;,]+$/, "");
+    if (!item) continue;
+    const key = item.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    items.push(item);
+    if (items.length >= FINANCE_NEEDS_INFO_MAX_ITEMS) break;
+  }
+  const header = `Finance needs more info${name ? ` — ${name}` : ""}: the lender is waiting on the following before this deal can move.`;
+  if (items.length) return `${header}\n${items.map(i => `- ${i}`).join("\n")}`;
+  const reason = String(input.reasonText ?? "").replace(/\s+/g, " ").trim();
+  if (reason) return `${header}\n- ${reason}`;
+  return `${header}\n- Item(s) not captured on the call — confirm with the lender.`;
+}

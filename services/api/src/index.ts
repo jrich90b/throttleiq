@@ -61,7 +61,8 @@ import { applyVoiceDurableFacts, buildVoiceFactsCadenceLine, ensureVoiceFactsFre
 import {
   decideVoiceNextStep,
   resolveVoiceLiveCallBreatherHours,
-  resolveVoiceNextStepConfidenceMin
+  resolveVoiceNextStepConfidenceMin,
+  buildFinanceNeedsMoreInfoTaskSummary
 } from "./domain/voiceNextStep.js";
 import {
   decideManualOutboundPromise,
@@ -769,7 +770,9 @@ import {
   isTaskFulfillmentAutoCloseEnabled,
   taskFulfillmentAutoCloseShadowEnabled,
   decideDepartmentTaskSoftClose,
-  isDepartmentTaskSoftCloseEnabled
+  isDepartmentTaskSoftCloseEnabled,
+  decideReplyOwedTaskClose,
+  outboundActivityText
 } from "./domain/taskFulfillmentAutoClose.js";
 import { decideCalendarEventReconcile } from "./domain/appointmentCalendarSync.js";
 import {
@@ -11266,7 +11269,12 @@ async function applyPostCallSummaryActions(opts: {
         conv,
         outcomeStatus,
         reasonText || summaryText || customerText || transcriptText,
-        sourceId
+        sourceId,
+        // Itemized lender needs heard on the call → the business-manager checklist task.
+        {
+          requiredItems: parsedFinanceOutcome.requiredItems ?? [],
+          openNeedsInfoManagerTask: true
+        }
       );
     }
   }
@@ -12961,21 +12969,80 @@ function hasEligibleAutoCloseInboundContext(conv: any): boolean {
   if (!hasEligible) return false;
   return (conv.messages ?? [])
     .slice(-8)
-    .some((m: any) => m?.direction === "out" && String(m?.body ?? "").trim());
+    .some(
+      (m: any) =>
+        m?.direction === "out" &&
+        // Picture-only MMS counts as a prior dealer reply (empty body, real communication).
+        outboundActivityText(m?.body, Array.isArray(m?.mediaUrls) ? m.mediaUrls.length : 0)
+    );
+}
+
+/**
+ * A "needs YOUR reply" task closes the moment a real staff outbound goes out after it was created —
+ * deterministically, with no LLM judge (Joe ruling 2026-07-23; Curtis Samuel +17163812367: Joe
+ * replied in 1 minute and the judge still said not_fulfilled because the reply was promise-shaped).
+ * For a reply-owed task the reply IS the accomplishment. Returns the ids it closed so the judge pass
+ * skips them. Deterministic SIDE-EFFECT/STATE gate; fail-safe (a further inbound mints a fresh task).
+ */
+function closeReplyOwedTasksOnStaffOutbound(conv: any, outboundAtMs: number): string[] {
+  const closed: string[] = [];
+  for (const task of listOpenTodos()) {
+    if (task.convId !== conv.id) continue;
+    const decision = decideReplyOwedTaskClose({
+      task: { status: task.status, summary: task.summary, createdAt: task.createdAt },
+      isStaffOutbound: true,
+      outboundAtMs
+    });
+    if (!decision.close) continue;
+    markTodoDone(conv.id, task.id);
+    closed.push(task.id);
+    recordDecisionTrace({
+      scope: "live",
+      stage: "task_autoclose.reply_owed_closed",
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      detail: {
+        taskId: task.id,
+        reason: task.reason,
+        summary: String(task.summary ?? "").slice(0, 140),
+        createdAt: task.createdAt ?? null,
+        decision: decision.reason
+      }
+    });
+  }
+  return closed;
 }
 
 async function runTaskFulfillmentAutoClose(
   conv: any,
-  action: { channel: "sms" | "email" | "call"; text: string; direction?: "out" | "in" }
+  action: {
+    channel: "sms" | "email" | "call";
+    text: string;
+    direction?: "out" | "in";
+    /** Media attached to the just-sent outbound. A picture-only MMS has an EMPTY body, so without
+     *  this the whole run bailed and the photo-request task stayed open (+18728882220). */
+    mediaCount?: number;
+  }
 ): Promise<void> {
   try {
     if (!conv?.id) return;
+    const isOutboundTrigger = (action?.direction ?? "out") !== "in";
+    // Media-only outbound: render OUR OWN attachments so both the trigger and the classifier can
+    // see a picture-only send (structured description of our send, not customer-intent parsing).
+    const actionText = isOutboundTrigger
+      ? outboundActivityText(action?.text, action?.mediaCount)
+      : String(action?.text ?? "").trim();
+    // Deterministic reply-owed closer runs FIRST and independently of the fulfillment flags — the
+    // staff reply itself is the accomplishment, so no verdict is needed or wanted.
+    const replyOwedClosed = isOutboundTrigger && actionText
+      ? closeReplyOwedTasksOnStaffOutbound(conv, Date.now())
+      : [];
     if (!taskFulfillmentAutoCloseShadowEnabled() && !isTaskFulfillmentAutoCloseEnabled()) return;
-    const actionText = String(action?.text ?? "").trim();
     if (!actionText) return;
     const eligible = listOpenTodos().filter(
       t =>
         t.convId === conv.id &&
+        !replyOwedClosed.includes(t.id) &&
         isAutoCloseEligibleTask({
           status: t.status,
           reason: t.reason,
@@ -12990,7 +13057,12 @@ async function runTaskFulfillmentAutoClose(
       .map((m: any) => ({
         direction: (m?.direction === "in" ? "in" : "out") as "in" | "out",
         channel: provChannel(String(m?.provider ?? "")),
-        text: String(m?.body ?? "")
+        // Outbound media-only messages carry no body — describe them, or the classifier concludes
+        // "no photos were delivered" while the salesman was staring at 3 sent pictures.
+        text:
+          m?.direction === "in"
+            ? String(m?.body ?? "")
+            : outboundActivityText(m?.body, Array.isArray(m?.mediaUrls) ? m.mediaUrls.length : 0)
       }))
       .filter(a => a.text.trim());
     // For an OUTBOUND trigger (a staff/agent send), make sure that just-sent message is the final
@@ -17529,12 +17601,77 @@ function ensureFinanceOutcomeToken(conv: any): string {
   return notifyState.outcomeToken;
 }
 
+/**
+ * Business-manager CHECKLIST task for a finance outcome of "needs more info" (Joe ruling 2026-07-23).
+ * Before this, needs-more-info produced an internal `note` plus a heads-up SMS — nothing OPEN and
+ * nothing that said WHAT the lender wanted, so an itemized ask heard on the call ("two pay stubs and
+ * proof of residence") died in a summary sentence and the deal stalled. Items come from the typed
+ * finance-outcome parser (structured extraction); the summary builder is pure + eval-pinned and never
+ * invents an item. Created ONCE per conversation-outcome (guarded on needsInfoTaskAt), owned by the
+ * same person the outcome SMS goes to, and skipMerge so it can't be swallowed by an unrelated todo.
+ * Deterministic side-effect gate; fail direction = at worst one extra manager task.
+ */
+async function openFinanceNeedsMoreInfoManagerTask(
+  conv: any,
+  args: { requiredItems?: string[] | null; reasonText?: string | null; sourceMessageId?: string }
+): Promise<void> {
+  try {
+    const notifyState = ((conv as any).financeOutcomeNotify = (conv as any).financeOutcomeNotify ?? {});
+    if (String(notifyState.needsInfoTaskAt ?? "").trim()) return;
+    const customerName =
+      [conv?.lead?.firstName, conv?.lead?.lastName].filter(Boolean).join(" ").trim() ||
+      String(conv?.lead?.name ?? "").trim() ||
+      "";
+    const summary = buildFinanceNeedsMoreInfoTaskSummary({
+      requiredItems: args.requiredItems ?? [],
+      reasonText: args.reasonText ?? "",
+      customerName
+    });
+    const target = await resolveFinanceOutcomeNotifyTarget(conv);
+    const created = addTodo(
+      conv,
+      "manager",
+      summary,
+      args.sourceMessageId,
+      target.user
+        ? { id: String(target.user?.id ?? "") || undefined, name: target.name }
+        : undefined,
+      undefined,
+      "todo",
+      { skipMerge: true, allowSoldLead: true }
+    );
+    if (!created) return;
+    notifyState.needsInfoTaskAt = nowIso();
+    recordDecisionTrace({
+      scope: "live",
+      stage: "finance_outcome.needs_info_manager_task",
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      detail: {
+        taskId: created.id,
+        owner: target.name,
+        itemCount: (args.requiredItems ?? []).length,
+        reasonText: String(args.reasonText ?? "").slice(0, 140)
+      }
+    });
+  } catch {
+    // Best-effort staff surface — never block the finance outcome state change.
+  }
+}
+
 async function applyFinanceOutcomeStatusFromSignal(
   conv: any,
   status: "approved" | "declined" | "needs_more_info",
   note?: string,
   sourceMessageId?: string,
-  opts?: { syncAppointmentOutcome?: boolean }
+  opts?: {
+    syncAppointmentOutcome?: boolean;
+    /** Itemized lender needs parsed off a finance CALL — drives the business-manager checklist. */
+    requiredItems?: string[] | null;
+    /** Opt-in: only the finance-CALL outcome lane opens the checklist task (Joe's ruling scope).
+     *  Console/staff-SMS outcome updates keep their existing note + notify behavior. */
+    openNeedsInfoManagerTask?: boolean;
+  }
 ): Promise<void> {
   const nowIsoValue = nowIso();
   const sourceId = String(sourceMessageId ?? "").trim() || undefined;
@@ -17598,6 +17735,16 @@ async function applyFinanceOutcomeStatusFromSignal(
       `Finance outcome parsed from call: needs more info${reasonText ? ` (${reasonText})` : ""}.`,
       sourceId
     );
+    // Joe ruling 7/23: a finance CALL that ends "needs more info" must leave an OPEN business-manager
+    // task that LISTS what the lender is waiting on — the internal note above is a log line, not a
+    // work item.
+    if (opts?.openNeedsInfoManagerTask) {
+      await openFinanceNeedsMoreInfoManagerTask(conv, {
+        requiredItems: opts?.requiredItems ?? [],
+        reasonText,
+        sourceMessageId: sourceId
+      });
+    }
     await notifyBusinessManagerFinanceOutcome(conv, "needs_more_info", reasonText || undefined);
   } else {
     setFollowUpMode(conv, "manual_handoff", "credit_app_approved");
@@ -30755,7 +30902,9 @@ async function processDueFollowUpsUnlocked() {
         (m: any) =>
           m?.direction === "out" &&
           REAL_OUTBOUND_CONTACT_PROVIDERS.has(String(m?.provider ?? "")) &&
-          String(m?.body ?? "").trim()
+          // A picture-only MMS is a real communication with an EMPTY body — count it, or a thread
+          // whose latest dealer contact was photos never gets re-checked (+18728882220).
+          outboundActivityText(m?.body, Array.isArray(m?.mediaUrls) ? m.mediaUrls.length : 0)
       );
       if (!hasDealerOutbound) continue;
       autoCloseBackfillRan += 1;
@@ -51144,7 +51293,13 @@ app.post("/conversations/:id/send", async (req, res) => {
     queueTuningLog(msg.sid);
     queueTlpLog();
     // Shadow auto-close: did this SMS fulfill an open call/follow-up task? (fire-and-forget)
-    void runTaskFulfillmentAutoClose(conv, { channel: "sms", text: smsBody });
+    // mediaCount makes a PICTURE-ONLY MMS visible — an empty body used to abort the whole check, so
+    // a "send photos" task stayed open after the salesman actually sent 3 pictures (+18728882220).
+    void runTaskFulfillmentAutoClose(conv, {
+      channel: "sms",
+      text: smsBody,
+      mediaCount: Array.isArray(mediaUrls) ? mediaUrls.length : 0
+    });
     // Net 2: a staff edit to the AI draft is a labeled correction → judge material-vs-cosmetic (fire-and-forget).
     maybeRecordDraftEditCorrection(conv, fin, smsBody, "sms", draftId);
 
