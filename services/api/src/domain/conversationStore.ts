@@ -805,6 +805,10 @@ export type Conversation = {
     passedAt?: string;
     passedTo?: "sales" | "service" | "parts" | "apparel" | "financing" | "general";
   };
+  /** Set once when an out-of-country (non-NANP) number is logged + closed as an international
+   *  lead (Joe ruling 2026-07-22). Durable so the side effect is once-per-conversation and so
+   *  the console/CRM record says WHY the thread is closed and unanswered. */
+  internationalLead?: { detectedAt: string; dialCode: string };
   scheduler?: SchedulerMemory;
   followUpCadence?: FollowUpCadence;
   /** Set once when a stale manual-handoff lead is surfaced as a staff follow-up todo, so it is never re-nudged. */
@@ -2018,6 +2022,28 @@ export function isBareAckInboundText(text: string | null | undefined): boolean {
   );
 }
 
+// The closedReason vocabulary a CLEAN DECLINE produces: the customer said some version of "no
+// thanks" and the disposition / response-control closeout shut the lead down. Joe ruling
+// 2026-07-22 (Mark Palmer, +17168304817, "No thanks" on 7/21): a clean decline ARCHIVES the
+// thread out of the working inbox rather than leaving it hanging around — while a later REAL
+// customer SMS still reopens it. Same shape as the staff-archive rule and the hold-thread rule
+// below: only a bare, content-free ack leaves a declined thread archived.
+//
+// BUCKET: deterministic state/side-effect gate over OUR OWN closedReason vocabulary (never
+// customer prose — the comprehension that produced the decline already happened in the typed
+// disposition/response-control parsers). FAIL DIRECTION: reopen — any reason this list doesn't
+// recognize is not a decline, so the conversation reopens exactly as it does today.
+export function isDeclineCloseoutReason(reason: string | null | undefined): boolean {
+  const r = String(reason ?? "").trim().toLowerCase();
+  if (!r) return false;
+  return (
+    r === "not_interested" ||
+    r === "customer_sell_on_own" ||
+    r === "customer_keep_current_bike" ||
+    r === "customer_stepping_back"
+  );
+}
+
 export function appendInbound(conv: Conversation, evt: InboundMessageEvent) {
   if (conv.status === "closed") {
     const closedReason = String(conv.closedReason ?? "").toLowerCase();
@@ -2044,8 +2070,11 @@ export function appendInbound(conv: Conversation, evt: InboundMessageEvent) {
     const bareAck = !(evt.mediaUrls && evt.mediaUrls.length) && isBareAckInboundText(evt.body);
     const stickyClosed = soldSticky || (holdSticky && bareAck);
     // Staff-archived + a bare content-free ack (no media) => stay archived. Any real message,
-    // question, or attachment still reopens (fail-safe toward reopening).
-    const archivedAckHold = /archive/.test(closedReason) && bareAck;
+    // question, or attachment still reopens (fail-safe toward reopening). A CLEAN DECLINE
+    // closeout ("No thanks") archives on the same terms (Joe ruling 2026-07-22) so a stray
+    // "ok"/👍 can't drag a lead the customer already declined back into the working inbox.
+    const archivedAckHold =
+      (/archive/.test(closedReason) || isDeclineCloseoutReason(closedReason)) && bareAck;
     if (!stickyClosed && !archivedAckHold) {
       conv.status = "open";
       conv.closedAt = undefined;

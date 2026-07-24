@@ -2714,3 +2714,86 @@ export function shouldSuppressCommittedBuyerAvailabilityRepitch(
   if (input.directAvailabilityQuestionThisTurn) return false; // explicit availability ask is legit mid-deal
   return true;
 }
+
+// --- International (out-of-country) inbound lead: log + close (Joe ruling 2026-07-22) ---
+// Joe, on +6282245353758 (Indonesia): "leave it but make sure the crm is updated with
+// international lead and close it." So the SILENCE stays — we do not sell or ship overseas and
+// have never replied to these — but the lead stops sitting open with nobody on it: the CRM gets
+// an "international lead" note and the conversation is CLOSED.
+//
+// BUCKET: deterministic structured extraction (the E.164 country code is carrier metadata, never
+// customer prose) feeding a SIDE-EFFECT gate (close + CRM write). No comprehension is involved,
+// so no parser is required — per AGENTS.md this is exactly the deterministic-allowed class.
+//
+// FAIL DIRECTION: DOMESTIC. Only a clean E.164 number whose country code is outside the +1 North
+// American Numbering Plan flags. Anything we cannot read as E.164 — a short code, an alphanumeric
+// sender ID, a bare 10-digit string, empty input — is treated as domestic and handled normally,
+// because a false positive would silence AND close a real local customer.
+// Applied identically in /webhooks/twilio and /conversations/:id/regenerate.
+
+// E.164 country codes that are exactly two digits. Everything else outside +1 / +7 is a
+// three-digit code. Used only to LABEL the CRM note — the domestic/international verdict itself
+// depends solely on the leading digits, so an imperfect label can never mis-route a lead.
+const TWO_DIGIT_DIAL_CODES = new Set([
+  "20", "27", "30", "31", "32", "33", "34", "36", "39", "40", "41", "43", "44", "45", "46", "47",
+  "48", "49", "51", "52", "53", "54", "55", "56", "57", "58", "60", "61", "62", "63", "64", "65",
+  "66", "81", "82", "84", "86", "90", "91", "92", "93", "94", "95", "98"
+]);
+
+/** The non-NANP country dial code on an E.164 number, or null when the number is domestic/unreadable. */
+export function internationalDialCode(rawPhone: string | null | undefined): string | null {
+  const raw = String(rawPhone ?? "").trim();
+  if (!raw.startsWith("+")) return null; // not E.164 — never guess
+  const digits = raw.slice(1).replace(/\D/g, "");
+  if (!digits) return null;
+  if (digits.startsWith("1")) return null; // +1 = US / Canada / NANP Caribbean → domestic
+  if (digits.length < 8) return null; // too short to be a real international subscriber number
+  if (digits.startsWith("7")) return "7"; // Russia / Kazakhstan — the other single-digit code
+  const two = digits.slice(0, 2);
+  if (TWO_DIGIT_DIAL_CODES.has(two)) return two;
+  return digits.slice(0, 3);
+}
+
+export function isInternationalLeadPhone(rawPhone: string | null | undefined): boolean {
+  return internationalDialCode(rawPhone) !== null;
+}
+
+export type InternationalLeadTurnInput = {
+  provider: string;
+  channel: "sms" | "email";
+  fromPhone: string | null | undefined;
+  /** The CRM note already landed on an earlier turn — write it once, not once per text. */
+  alreadyLogged: boolean;
+};
+
+export type InternationalLeadTurnDecision = {
+  kind: "international_lead_log_close";
+  routeOutcome: "international_lead_log_close";
+  shouldStop: true;
+  shouldReply: false;
+  dialCode: string;
+  closeReason: "international_lead";
+  /** First detection only. Repeat texts still stop + re-close (appendInbound reopens a closed
+   *  thread on any real inbound, so re-closing is what keeps it out of the inbox) — they just
+   *  don't re-write the CRM note. */
+  logCrmNote: boolean;
+  crmNote: string;
+};
+
+export function decideInternationalLeadTurn(
+  input: InternationalLeadTurnInput
+): InternationalLeadTurnDecision | null {
+  if (input.provider !== "twilio" || input.channel !== "sms") return null;
+  const dialCode = internationalDialCode(input.fromPhone);
+  if (!dialCode) return null;
+  return {
+    kind: "international_lead_log_close",
+    routeOutcome: "international_lead_log_close",
+    shouldStop: true,
+    shouldReply: false,
+    dialCode,
+    closeReason: "international_lead",
+    logCrmNote: !input.alreadyLogged,
+    crmNote: `International lead (country code +${dialCode}) — out-of-country number. No reply sent; lead closed.`
+  };
+}
