@@ -85,6 +85,7 @@ import {
   parseInventoryStatusWithLLM,
   parseVehicleInfoRequestWithLLM,
   parseVehicleFactQuestionWithLLM,
+  isVehicleFactQuestionParserConfidentNone,
   parseFirstTimeRiderGuidanceWithLLM,
   parseWalkInOutcomeWithLLM,
   parseAdfDepartmentInterestWithLLM,
@@ -3099,6 +3100,19 @@ function resolveAdfVehicleFactDecision(
       confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0,
       source: "parser"
     };
+  }
+
+  // Parser-first (mirror of resolveVehicleFactQuestionDecision, adf_ref_11422 replay miss):
+  // a confident parser "none" suppresses the keyword fallback below so a parts NEED like
+  // "I need a front tire" never gets the service-RECORDS canned reply. Null/low-confidence
+  // parse (parser outage) skips this guard — the keyword fallback stays as the outage fail-safe.
+  if (
+    isVehicleFactQuestionParserConfidentNone(
+      parsed,
+      Number(process.env.LLM_VEHICLE_FACT_CONFIDENCE_MIN ?? 0.74)
+    )
+  ) {
+    return null;
   }
 
   const lower = String(text ?? "").toLowerCase().trim();

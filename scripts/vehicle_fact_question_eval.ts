@@ -136,6 +136,27 @@ const fixtures: Fixture[] = [
     expectedFieldContains: "price_cap"
   },
   {
+    // Replay of the adf_ref_11422 miss (6/19): after a resale-value chat about his own bike,
+    // the customer stated a parts NEED ("I need a front tire and probably back"). The word
+    // "tire" must NOT read as a service-records/history question — the parser classifies
+    // none so the turn falls through to the parts/service assistance routing.
+    id: "parts_need_tires_not_service_records",
+    text: "Fair enough. And I need a front tire and probably back. I appreciate the advice.",
+    expectedType: "none",
+    expectedExplicit: false,
+    history: [
+      {
+        direction: "out",
+        body: "Congratulations on the new purchase! If there is anything we can do for you and your new bike please don't hesitate to reach out"
+      },
+      {
+        direction: "in",
+        body: "Any idea what I should be fairly asking for my 2015 street glide with 15,000 miles?"
+      },
+      { direction: "out", body: "They're selling for about $15,000 at dealerships" }
+    ]
+  },
+  {
     id: "schedule_not_vehicle_fact_1",
     text: "Tuesday around 11am would work great",
     expectedType: "none",
