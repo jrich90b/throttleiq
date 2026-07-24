@@ -20,6 +20,9 @@ import {
   leadUnitConditionForOfferMatch,
   offerExplicitlyCoversUsed,
   filterOffersForLeadCondition,
+  offerRequiresRiderTrainingEligibility,
+  leadRiderTrainingEligibilityForOffer,
+  filterOffersForRiderEligibility,
   type NationalOffer
 } from "../services/api/src/domain/nationalOffers.ts";
 
@@ -82,6 +85,33 @@ eq("filter_used_lead_only_used_offers", filterOffersForLeadCondition([newPromo, 
 eq("filter_unknown_treated_as_used", filterOffersForLeadCondition([newPromo, usedPromo], "unknown").map(o => o.title), ["Rider Training Graduate Used APR"]);
 eq("filter_used_lead_no_used_offers_empty", filterOffersForLeadCondition([newPromo], "used"), []);
 
+// --- 1c. Rider-training-graduate eligibility gate (Joe 2026-07-23): a Riding Academy /
+//         rider-training GRADUATE offer (a beginner-rider financing program) may pitch ONLY to a
+//         lead affirmatively known to be a new/unlicensed rider OR who referenced the Academy.
+//         Pins the miss verbatim: +17164812815 (Selviana) got the 6.64% grad used-APR pitch on a
+//         used 2025 Street Bob and replied she's ridden for years with a license. -----------------
+const gradOffer = usedPromo; // "Rider Training Graduate Used APR", eligibility "Riding Academy graduates"
+const plainUsedOffer = offer({ title: "Used Bike APR Special", appliesTo: "used motorcycles", terms: "5.99% APR" });
+eq("offer_grad_detected_by_title", offerRequiresRiderTrainingEligibility(gradOffer), true);
+eq("offer_grad_detected_by_eligibility", offerRequiresRiderTrainingEligibility(offer({ eligibility: "MSF course graduates only" })), true);
+eq("offer_grad_detected_rider_training", offerRequiresRiderTrainingEligibility(offer({ appliesTo: "Rider Training program grads" })), true);
+eq("offer_plain_used_not_grad", offerRequiresRiderTrainingEligibility(plainUsedOffer), false);
+eq("offer_new_promo_not_grad", offerRequiresRiderTrainingEligibility(newPromo), false);
+// Lead-side eligibility: structured hasMotoLicense===false OR a persisted rider-course/first-timer state.
+const E = leadRiderTrainingEligibilityForOffer;
+eq("elig_unlicensed_is_eligible", E({ lead: { hasMotoLicense: false } }), "eligible");
+eq("elig_first_time_rider_state", E({ dialogState: { name: "first_time_rider" } }), "eligible");
+eq("elig_rider_course_state", E({ dialogState: { name: "rider_course_info" } }), "eligible");
+// The miss: licensed, experienced rider, no Academy reference → not eligible for a grad offer.
+eq("elig_licensed_not_evident", E({ lead: { hasMotoLicense: true } }), "not_evident");
+eq("elig_no_evidence_not_evident", E({ lead: { firstName: "Selviana", vehicle: { condition: "used" } } }), "not_evident");
+eq("elig_empty_conv_not_evident", E({}), "not_evident");
+// The filter: an eligible lead sees the grad offer; a not-evident lead never does; plain used offers
+// always survive (they aren't grad-scoped). Fail direction: absent evidence → drop the grad offer.
+eq("rider_filter_eligible_sees_grad", filterOffersForRiderEligibility([gradOffer, plainUsedOffer], "eligible").map(o => o.title), ["Rider Training Graduate Used APR", "Used Bike APR Special"]);
+eq("rider_filter_not_evident_drops_grad", filterOffersForRiderEligibility([gradOffer, plainUsedOffer], "not_evident").map(o => o.title), ["Used Bike APR Special"]);
+eq("rider_filter_not_evident_only_grad_empty", filterOffersForRiderEligibility([gradOffer], "not_evident"), []);
+
 // --- 2. stripHtmlToText ------------------------------------------------------
 eq("strip_removes_tags_and_scripts", stripHtmlToText("<div>Hello <script>var x=1</script>&amp; <b>world</b></div>"), "Hello & world");
 eq("strip_collapses_whitespace", stripHtmlToText("  a\n\n  b   c "), "a b c");
@@ -113,6 +143,10 @@ eq("matcher_null_when_no_apply", /if \(!match \|\| !match\.applies \|\| !match\.
 // in the shared funnel BEFORE the LLM matcher, and BOTH paths (live cadence tick + regen
 // mirror) must pass the lead's condition — two-path parity by construction.
 eq("funnel_filters_by_condition_before_llm", /filterOffersForLeadCondition\(\s*filterOffersForDedup/.test(mod), true);
+// Rider-training grad scope wiring (Joe 2026-07-23): the deterministic eligibility filter wraps the
+// condition filter in the shared funnel, and BOTH paths pass the lead's eligibility → parity by construction.
+eq("funnel_filters_by_rider_eligibility_before_llm", /filterOffersForRiderEligibility\(\s*filterOffersForLeadCondition/.test(mod), true);
+eq("funnel_rider_eligibility_defaults_not_evident", /opts\?\.riderEligibility \?\? "not_evident"/.test(mod), true);
 eq("matcher_receives_condition", /matchNationalOfferToLeadWithLLM\(\{[\s\S]{0,200}?condition/.test(mod), true);
 eq("prompt_hard_rule_new_bike_scope", /NEW motorcycles unless the offer EXPLICITLY says used\/pre-owned/.test(llm), true);
 const indexSrc = fs.readFileSync(path.join(process.cwd(), "services/api/src/index.ts"), "utf8");
@@ -121,10 +155,15 @@ eq(
   (indexSrc.match(/vehicleCondition: leadUnitConditionForOfferMatch\(conv\)/g) ?? []).length,
   2
 );
+eq(
+  "both_paths_pass_rider_eligibility",
+  (indexSrc.match(/riderEligibility: leadRiderTrainingEligibilityForOffer\(conv\)/g) ?? []).length,
+  2
+);
 
 if (failures.length) {
   console.error("FAIL national_offers eval:");
   for (const f of failures) console.error(f);
   process.exit(1);
 }
-console.log("PASS national_offers eval — value gate (11 decision cases), NEW-bike promo scope (condition resolver + offer filter + two-path wiring), HTML strip, dark-by-default flag + parser source guards");
+console.log("PASS national_offers eval — value gate (11 decision cases), NEW-bike promo scope (condition resolver + offer filter + two-path wiring), rider-training grad scope (offer detector + lead eligibility + filter + two-path wiring), HTML strip, dark-by-default flag + parser source guards");
