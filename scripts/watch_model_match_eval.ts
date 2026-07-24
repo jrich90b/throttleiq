@@ -108,6 +108,20 @@ assert.equal(modernSportsterModelToken("Low Rider S"), null, "a 'Low Rider S' is
 assert.equal(modernSportsterModelToken("CVO Road Glide ST"), null, "a 'Road Glide ST' is NOT a modern Sportster");
 assert.equal(modernSportsterModelToken("Sportster"), null, "a bare Sportster carries no modern-model token (stays generic)");
 
+// FAMILY-LABEL letter-suffix guard (Cory Fiegel +17169490089, Joe ruling 2026-07-23): a "Low Rider S"
+// watch fired on a "Low Rider ST". The watch label maps to a generic family id (low_rider_s), which
+// bypassed the ENGINE's forward distinct-model guard (it was gated on !genericWatchFamily) — and the
+// substring directMatch ("low rider st".includes("low rider s")) fired even though the unit is NOT a
+// family member ("st" fails the exact "low rider s" token sequence). S and ST are distinct models.
+// The DETECTOR matcher applies the guard ungated, so pin the behavior here + a source guard below
+// that the engine's gate no longer requires !genericWatchFamily.
+assert.equal(m("Low Rider ST", "Low Rider S"), false, "a 'Low Rider S' watch must NOT fire on a 'Low Rider ST' (Cory — distinct letter-suffix model)");
+assert.equal(m("2025 Harley-Davidson Low Rider ST", "Low Rider S"), false, "the year/make-prefixed ST unit must not fire an S watch either");
+assert.equal(m("Low Rider S", "Low Rider S"), true, "a real Low Rider S still fires a Low Rider S watch");
+assert.equal(m("Low Rider S 117", "Low Rider S"), true, "an engine-size suffix is not a distinct model — still fires");
+assert.equal(mo("Low Rider ST", "Low Rider S", true), true, "openToOtherTrims still relaxes the guard");
+assert.equal(unitIsDistinctModelFromWatch("Low Rider ST", "Low Rider S"), true, "the pure guard reads ST as a distinct-model token the S watch lacks");
+
 // Source guard: BOTH matchers apply the distinct-883 + modern-Sportster guards (live engine + detector).
 const wfm = fs.readFileSync("services/api/src/domain/watchFireMiss.ts", "utf8");
 assert.match(wfm, /distinct883ModelConflict\(item\.model, watch\.model\)/, "detector matcher must apply the distinct-883 guard");
@@ -121,6 +135,18 @@ const idx = fs.readFileSync("services/api/src/index.ts", "utf8");
 assert.match(idx, /const directMatch = itemModel\.includes\(watchModel\);/, "engine directMatch must be directional (unit includes watch)");
 assert.ok(!/itemModel\.includes\(watchModel\) \|\| watchModel\.includes\(itemModel\)/.test(idx), "the bidirectional matcher (the bug) must be gone");
 assert.match(idx, /unitIsDistinctModelFromWatch\(item\.model, watch\.model\)/, "engine matcher must apply the forward distinct-model guard");
+// The forward guard must apply on the FAMILY-LABEL path too (Cory, 7/23): gated on !familyMatch
+// only — NOT on !genericWatchFamily, which let "Low Rider S" (family low_rider_s) skip it and
+// substring-fire on a "Low Rider ST".
+assert.match(
+  idx,
+  /!familyMatch &&\s*\n\s*!watch\.openToOtherTrims &&\s*\n\s*unitIsDistinctModelFromWatch\(item\.model, watch\.model\)/,
+  "engine forward guard must run whenever the unit is not a genuine family member"
+);
+assert.ok(
+  !/!genericWatchFamily &&\s*\n\s*!familyMatch &&\s*\n\s*!watch\.openToOtherTrims/.test(idx),
+  "the !genericWatchFamily gate on the forward guard (the Cory S→ST hole) must stay gone"
+);
 assert.match(idx, /unitIsDistinctModelFromWatch\(watch\.model, item\.model\)/, "engine matcher must apply the REVERSE distinct-model guard (a trim-specific watch must not fire on a base unit)");
 assert.match(idx, /distinct883ModelConflict\(item\.model, watch\.model\)/, "engine matcher must apply the distinct-883-model guard");
 assert.match(idx, /distinctSportsterModelConflict\(item\.model, watch\.model\)/, "engine matcher must apply the modern-Sportster guard");

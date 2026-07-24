@@ -298,6 +298,53 @@ export function buildWatchAvailableReply(args: {
 }
 
 /**
+ * BUNDLED inventory-watch notification (Joe ruling 2026-07-23): when the per-conversation daily
+ * alert cap held back additional same-day matches, the next delivery covers ALL of them in ONE
+ * text instead of a drip of separate alerts (MD +19292685345 got 5 in two days, two minutes
+ * apart). One bike delegates to buildWatchAvailableReply so the single-alert copy — including its
+ * color-honesty disclosure — stays pinned by watch_available_reply:eval. A multi-bike bundle names
+ * each unit with the UNIT's real feed color only (never presented as the color the customer asked
+ * for), so it can never make a false color claim; the per-bike "not the color you asked about"
+ * disclosure is left to the single-alert path to keep the bundle readable. Keeps the still-looking
+ * ask + clean opt-out tail — the watch-opt-out parser (decideWatchOptOutTurn) backs the "take you
+ * off the list" promise either way. Pinned by watch_alert_daily_cap:eval.
+ */
+export function buildWatchAvailableBundleReply(args: {
+  firstName?: string | null;
+  bikes: Array<{ bikeLabel: string; unitColor?: string | null; watchedColor?: string | null }>;
+  availability?: "new" | "in_stock" | "again";
+}): string {
+  const bikes = (args.bikes ?? []).filter(b => b && String(b.bikeLabel ?? "").trim());
+  if (bikes.length <= 1) {
+    return buildWatchAvailableReply({
+      firstName: args.firstName,
+      bikeLabel: bikes[0]?.bikeLabel ?? "",
+      unitColor: bikes[0]?.unitColor ?? null,
+      watchedColor: bikes[0]?.watchedColor ?? null,
+      availability: args.availability
+    });
+  }
+  const opener = args.firstName ? `Hey ${args.firstName}, good news` : "Good news";
+  const count = bikes.length === 2 ? "a couple of bikes" : "a few bikes";
+  const arrival =
+    args.availability === "new"
+      ? "just came in"
+      : args.availability === "again"
+        ? "are available again"
+        : "are in stock now";
+  const labels = bikes.map(b => {
+    const unitColor = String(b.unitColor ?? "").trim();
+    return `a ${b.bikeLabel}${unitColor ? ` in ${unitColor}` : ""}`;
+  });
+  const list = `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+  return (
+    `${opener} — ${count} you were watching for ${arrival}: ${list}. ` +
+    "Are you still looking? If so I can send details or set up a time to come see them — " +
+    "and if you're all set, just let me know and I'll take you off the list."
+  );
+}
+
+/**
  * Sibling-variant scope ask (Joe, 2026-07-04). A same-family sibling trim landed while the
  * customer holds a STRICT base-model watch — the fire guard rightly stays quiet, but the
  * agent asks ONCE whether they want variant alerts too. The answer is read by
