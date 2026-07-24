@@ -300,6 +300,7 @@ import {
   parseVoiceDurableFactsWithLLM,
   parseAccessoryRequestWithLLM,
   parseVehicleFactQuestionWithLLM,
+  isVehicleFactQuestionParserConfidentNone,
   parseVisitDepartmentPurposeWithLLM,
   parseVehicleInfoRequestWithLLM,
   parseDealershipFaqTopicWithLLM,
@@ -8842,6 +8843,22 @@ function resolveVehicleFactQuestionDecision(
       confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0,
       source: "parser"
     };
+  }
+
+  // Parser-first (adf_ref_11422 replay miss): when the typed parser RAN and confidently says
+  // this turn is NOT a vehicle-fact question, believe it — never let the legacy keyword
+  // fallback below hijack the turn ("I need a front tire" contains "tire" and was answered
+  // with the service-RECORDS canned reply instead of parts/service help). Fail direction: a
+  // wrong confident "none" falls through to the semantic-slot department handoff / general
+  // draft pipeline, which still replies (fail-safe). A null or low-confidence parse (parser
+  // outage) skips this guard, so the keyword fallback below stays as the outage fail-safe.
+  if (
+    isVehicleFactQuestionParserConfidentNone(
+      parsed,
+      Number(process.env.LLM_VEHICLE_FACT_CONFIDENCE_MIN ?? 0.74)
+    )
+  ) {
+    return null;
   }
 
   const lower = String(text ?? "").toLowerCase().trim();

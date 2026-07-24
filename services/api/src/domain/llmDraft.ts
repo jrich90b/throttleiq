@@ -11381,6 +11381,9 @@ output: {"question_type":"service_status","explicit_request":true,"requested_fie
     `EXAMPLE H
 inbound: "Any service records?"
 output: {"question_type":"service_records","explicit_request":true,"requested_fields":["service_records"],"confidence":0.97}`,
+    `EXAMPLE H2
+inbound: "I need a new rear tire and probably a battery too."
+output: {"question_type":"none","explicit_request":false,"requested_fields":[],"confidence":0.95}`,
     `EXAMPLE I
 inbound: "Is that still available?"
 output: {"question_type":"availability","explicit_request":true,"requested_fields":["availability"],"confidence":0.97}`,
@@ -11413,7 +11416,7 @@ output: {"question_type":"none","explicit_request":false,"requested_fields":[],"
     "- mileage: asks mileage or miles.",
     "- color: asks color/paint.",
     "- service_status: asks whether it has been serviced, inspected, or ready.",
-    "- service_records: asks for service history/records, tire/battery age, maintenance records.",
+    "- service_records: asks for service history/records, tire/battery age, maintenance records on the unit being discussed.",
     "- availability: asks whether the currently discussed unit is still available/in stock/on hold.",
     "- hold_timing: asks how long a currently-held unit is on hold for, when the hold expires, or when it may free up.",
     "- finance_program_eligibility: asks whether a specific unit or inventory set qualifies for a finance/APR/interest program, rate, or price-capped finance special.",
@@ -11422,6 +11425,7 @@ output: {"question_type":"none","explicit_request":false,"requested_fields":[],"
     "Rules:",
     "- explicit_request=true only when the customer explicitly asks for the fact.",
     "- A short fragment like 'Year ?' or 'Total price ?' is explicit when recent history discusses a unit.",
+    "- A customer saying they NEED a part or service for a bike (new tires, a battery, an install) is stating a parts/service need, not asking for the unit's records — classify none.",
     "- Do not classify appointment times as vehicle facts.",
     "- confidence is 0..1.",
     "",
@@ -11485,6 +11489,21 @@ output: {"question_type":"none","explicit_request":false,"requested_fields":[],"
     requestedFields,
     confidence
   };
+}
+
+// Pure verdict helper: the vehicle-fact parser RAN and CONFIDENTLY read the turn as
+// not-a-vehicle-fact question. Both inbound paths use it so a confident parser "none"
+// suppresses the legacy keyword fallback (comprehension stays parser-first — e.g.
+// "I need a front tire" contains "tire" but is a parts NEED, not a service-records
+// question). A null or low-confidence parse (parser outage) is NOT confident-none, so
+// the keyword fallback still fires — the outage fail-safe is kept.
+export function isVehicleFactQuestionParserConfidentNone(
+  parsed: VehicleFactQuestionParse | null,
+  minConfidence: number
+): boolean {
+  if (!parsed || parsed.questionType !== "none") return false;
+  const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
+  return confidence >= minConfidence;
 }
 
 export async function parseDealershipFaqTopicWithLLM(args: {
