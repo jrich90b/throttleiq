@@ -14,7 +14,7 @@ import OpenAI, { toFile } from "openai";
 import { google } from "googleapis";
 import sharp from "sharp";
 import { orchestrateInbound } from "./domain/orchestrator.js";
-import { buildAgentIntro, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildWatchAvailableReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, hasCustomerReceivedOutbound } from "./domain/agentVoice.js";
+import { buildAgentIntro, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, hasCustomerReceivedOutbound } from "./domain/agentVoice.js";
 import {
   postSaleVehicleIsNew,
   postSaleAccessoryOrEnjoyMessage,
@@ -552,6 +552,12 @@ import { stripLeadingVinCodes, stripLeadingMakeName, normalizeWatchModelsVin } f
 import { trikeClassConflict, isFamilyOnlyModelLabel, referencesFamilyOnlyInText } from "./domain/modelFamily.js";
 import { decideWatchSiblingScopeAsk } from "./domain/watchSiblingScope.js";
 import {
+  conversationWatchAlertBlocked,
+  recordConversationWatchAlert,
+  queuePendingWatchAlert,
+  takeDuePendingWatchAlerts
+} from "./domain/watchAlertDailyCap.js";
+import {
   recommendInventory,
   buildVehicleRecommendationReply,
   buildVehicleRecommendationFollowupReply,
@@ -902,6 +908,7 @@ import {
   type Conversation,
   type InventoryWatch,
   type InventoryWatchPending,
+  type PendingWatchAlert,
   type DialogStateName
 } from "./domain/conversationStore.js";
 import {
@@ -5998,8 +6005,17 @@ function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
   // Limited"/"...ST"/CVO/Ultra/Classic/Special) via the directional include or a
   // catalog-code alias — those are separate models. Generic FAMILY watches
   // (familyMatch) still collect variants. watch.openToOtherTrims relaxes it.
+  // FAMILY-LABEL path fix (Joe ruling 7/23, Cory +17169490089): this guard was also
+  // gated on !genericWatchFamily, so a watch label that maps to a generic family id
+  // ("Low Rider S" → low_rider_s) skipped it entirely — and when the unit was NOT a
+  // family member (familyMatch false, "Low Rider ST" fails the exact "low rider s"
+  // token sequence) the raw substring directMatch ("low rider st".includes("low rider
+  // s")) fired the alert anyway. The guard now applies whenever the unit is not a
+  // genuine family member: a letter-suffix sibling ("ST") carries a distinct-model
+  // token the watch lacks and is blocked. Genuine family umbrella fires (familyMatch)
+  // are untouched. Purely subtractive — worst case a missed fire the watch_fire_miss
+  // detector (group-aware, #269) re-surfaces; never a wrong-model alert.
   if (
-    !genericWatchFamily &&
     !familyMatch &&
     !watch.openToOtherTrims &&
     unitIsDistinctModelFromWatch(item.model, watch.model)
@@ -6108,6 +6124,10 @@ function maybeDraftWatchSiblingScopeAsk(
   candidateItems: any[],
   nowIsoValue: string
 ): boolean {
+  // Per-conversation daily cap (Joe ruling 7/23): the scope ask is still a watch text — never
+  // send it as a SECOND same-day watch message. Hold back (fail-safe); a later arrival or the
+  // hold-release path can re-prompt it on a clean day.
+  if (conversationWatchAlertBlocked(conv, Date.now())) return false;
   for (const watch of watches) {
     if (!watch) continue;
     const lastNotifiedMs = watch.lastNotifiedAt ? new Date(String(watch.lastNotifiedAt)).getTime() : NaN;
@@ -6138,6 +6158,7 @@ function maybeDraftWatchSiblingScopeAsk(
       watch.siblingScopeAskedAt = nowIsoValue;
       watch.siblingScopeAskModel = String(item.model);
       watch.siblingScopeAskStockId = item.stockId ? String(item.stockId) : undefined;
+      recordConversationWatchAlert(conv, nowIsoValue); // counts against the one-watch-text-per-day cap
       conv.updatedAt = nowIsoValue;
       saveConversation(conv);
       recordRouteOutcome("manual", "inventory_watch_sibling_scope_asked", {
@@ -6151,6 +6172,129 @@ function maybeDraftWatchSiblingScopeAsk(
     }
   }
   return false;
+}
+
+// Snapshot a capped-off watch match for next-day bundled delivery (Joe ruling 7/23 —
+// per-conversation daily alert cap; domain/watchAlertDailyCap.ts).
+function buildPendingWatchAlertEntry(
+  watch: InventoryWatch,
+  item: any,
+  availability: "new" | "in_stock" | "again",
+  nowIsoValue: string
+): PendingWatchAlert {
+  const listingUrlRaw = String(item?.url ?? "").trim();
+  return {
+    watchModel: String(watch.model ?? ""),
+    stockId: item?.stockId ? String(item.stockId) : undefined,
+    vin: item?.vin ? String(item.vin) : undefined,
+    year: item?.year ? String(item.year) : watch.year ? String(watch.year) : undefined,
+    make: item?.make ? String(item.make) : watch.make ? String(watch.make) : undefined,
+    model: item?.model ? String(item.model) : undefined,
+    color: item?.color ? String(item.color) : undefined, // UNIT's feed color
+    watchedColor: watch.color ? String(watch.color) : undefined, // color the customer asked about — honesty disclosure at delivery
+    url: listingUrlRaw && /^https?:\/\//i.test(listingUrlRaw) ? listingUrlRaw : undefined,
+    imageUrl:
+      Array.isArray(item?.images) && item.images.length ? String(item.images[0]) : undefined,
+    availability,
+    queuedAt: nowIsoValue
+  };
+}
+
+// Deliver a conversation's capped-off watch alerts as ONE bundled text once the daily-cap window
+// has expired (Joe ruling 7/23: same-day extras queue, "remainder goes next day" — bundled).
+// Every entry is re-verified at delivery time: watch still active, unit still in the CURRENT feed
+// and not hold/sold, and not already messaged for this unit. Anything that fails verification is
+// DROPPED, not sent — fail direction is hold back (the group-aware watch_fire_miss detector is
+// the recovery net); this path can never invent a send for an unavailable unit. Returns true when
+// a text was drafted (the conversation is then inside a fresh cap window).
+function deliverDuePendingWatchAlerts(
+  conv: any,
+  ctx: { feedItems: any[]; holds: any; solds: any; nowIso: string; tz: string }
+): boolean {
+  const due = takeDuePendingWatchAlerts(conv, Date.now());
+  if (!due.length) return false;
+  const feedKeys = new Set(
+    ctx.feedItems.map(i => inventoryKey(i)).filter(Boolean).map(k => String(k).toLowerCase())
+  );
+  const activeWatches = collectInventoryWatches(conv).filter((w: any) => w && w.status !== "paused");
+  const watchFor = (entry: PendingWatchAlert): InventoryWatch | null =>
+    activeWatches.find(
+      (w: any) =>
+        String(w.model ?? "").trim().toLowerCase() === String(entry.watchModel ?? "").trim().toLowerCase()
+    ) ?? null;
+  const deliverable = due.filter(entry => {
+    if (!watchFor(entry)) return false; // watch paused/removed since queueing → drop (e.g. opt-out)
+    const holdKey = normalizeInventoryHoldKey(entry.stockId ?? null, entry.vin ?? null);
+    if (holdKey && ctx.holds?.[holdKey]) return false;
+    const soldKey = normalizeInventorySoldKey(entry.stockId ?? null, entry.vin ?? null);
+    if (soldKey && ctx.solds?.[soldKey]) return false;
+    const feedKey = inventoryKey({
+      stockId: entry.stockId,
+      vin: entry.vin,
+      year: entry.year,
+      model: entry.model,
+      color: entry.color
+    });
+    if (!feedKey || !feedKeys.has(String(feedKey).toLowerCase())) return false; // gone from the feed → drop
+    if (hasPriorInventoryWatchOutboundForItem(conv, { stockId: entry.stockId, vin: entry.vin, url: entry.url })) {
+      return false; // already messaged this unit
+    }
+    return true;
+  });
+  if (!deliverable.length) {
+    // Queue drained, nothing sendable — persist the drain so stale entries don't linger.
+    conv.updatedAt = ctx.nowIso;
+    saveConversation(conv);
+    return false;
+  }
+  const leadFirstName = normalizeDisplayCase(String(conv.lead?.firstName ?? "").split(/\s+/)[0] ?? "");
+  const bikes = deliverable.map(entry => ({
+    bikeLabel: [entry.year, entry.make, entry.model].filter(Boolean).join(" "),
+    unitColor: entry.color ?? null,
+    watchedColor: entry.watchedColor ?? null
+  }));
+  const availabilities = new Set(deliverable.map(e => e.availability));
+  const availability: "new" | "in_stock" | "again" =
+    availabilities.size === 1 ? deliverable[0].availability : "in_stock";
+  const baseReply = buildWatchAvailableBundleReply({
+    firstName: leadFirstName || null,
+    bikes,
+    availability
+  });
+  const urls = deliverable.map(e => e.url).filter((u): u is string => !!u);
+  const reply = urls.length ? `${baseReply}\n${urls.join("\n")}` : baseReply;
+  const to = conv.lead?.phone ?? conv.leadKey;
+  const imageUrl = deliverable.find(e => e.imageUrl)?.imageUrl;
+  appendOutbound(conv, "salesperson", to, reply, "draft_ai", undefined, imageUrl ? [imageUrl] : undefined);
+  for (const entry of deliverable) {
+    const watch = watchFor(entry);
+    if (!watch) continue;
+    watch.lastNotifiedAt = ctx.nowIso;
+    watch.lastNotifiedStockId = entry.stockId ?? entry.vin ?? undefined;
+    watch.lastNotifiedModel = entry.model; // the UNIT's model — feeds watch_fired_wrong_model
+  }
+  recordConversationWatchAlert(conv, ctx.nowIso);
+  setFollowUpMode(conv, "holding_inventory", "inventory_watch_match");
+  setDialogState(conv, "inventory_watch_matched");
+  if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
+    conv.followUpCadence = undefined;
+    startFollowUpCadence(conv, ctx.nowIso, ctx.tz);
+  }
+  if (conv.followUpCadence && conv.followUpCadence.status === "active") {
+    const pauseUntil = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    conv.followUpCadence.pausedUntil = pauseUntil;
+    conv.followUpCadence.pauseReason = "inventory_watch_match";
+    conv.followUpCadence.nextDueAt = pauseUntil;
+  }
+  conv.updatedAt = ctx.nowIso;
+  saveConversation(conv);
+  recordRouteOutcome("manual", "inventory_watch_pending_alerts_delivered", {
+    convId: conv.id,
+    leadKey: conv.leadKey,
+    delivered: deliverable.length,
+    droppedUnsendable: due.length - deliverable.length
+  });
+  return true;
 }
 
 async function processInventoryWatchlist(targetConvId?: string, opts?: { includeInStock?: boolean }) {
@@ -6202,7 +6346,9 @@ async function processInventoryWatchlist(targetConvId?: string, opts?: { include
     }
     const newItems = scanPlan.newItems;
     const candidateItems = (opts?.includeInStock ? items : newItems).filter(i => isWatchCandidateAvailable(i));
-    if (!candidateItems.length) return;
+    // NOTE: no early return on empty candidateItems — the conversation loop still runs so
+    // yesterday's capped-off pending alerts (daily cap, Joe ruling 7/23) get delivered on
+    // ordinary no-new-arrival sweeps. The match work below is skipped when there's nothing new.
     const newItemKeys = new Set(newItems.map(i => inventoryKey(i)).filter(Boolean));
 
     const nowIso = new Date().toISOString();
@@ -6228,8 +6374,15 @@ async function processInventoryWatchlist(targetConvId?: string, opts?: { include
       // A held lead (manual_handoff or paused_indefinite "hold off") is off
       // proactive outreach until they re-engage — never fire a watch alert at them.
       if (isProactiveContactPaused(conv)) continue;
-      let matchedWatch: InventoryWatch | null = null;
-      let matchedItem: any | null = null;
+      // Deliver yesterday's capped-off queue first (ONE bundled text). If it sends, the
+      // conversation is now inside a fresh daily-cap window, so any new matches below queue.
+      deliverDuePendingWatchAlerts(conv, { feedItems: items, holds, solds, nowIso, tz });
+      if (!candidateItems.length) continue; // flush-only sweep — nothing new arrived
+      // Collect matches for ALL watches this sweep (previously: first match wins) so multiple
+      // same-sweep matches BUNDLE into one text (Joe ruling 7/23, MD +19292685345) instead of
+      // dripping out one alert per watch. Each unit is claimed by at most one watch.
+      const matches: Array<{ watch: InventoryWatch; item: any }> = [];
+      const claimedItemKeys = new Set<string>();
       for (const watch of watches) {
         if (!watch || watch.status === "paused") continue;
         if (
@@ -6242,60 +6395,129 @@ async function processInventoryWatchlist(targetConvId?: string, opts?: { include
         // immediately fire against units that were already in stock.
         const match = candidateItems.find(i => {
           if (inventoryWatchGroupAlreadyNotifiedStock(watches, i)) return false;
+          const key = inventoryKey(i);
+          if (key && claimedItemKeys.has(String(key).toLowerCase())) return false;
           return inventoryItemMatchesWatch(i, watch);
         });
         if (!match) continue;
-        matchedWatch = watch;
-        matchedItem = match;
-        break;
+        matches.push({ watch, item: match });
+        const claimedKey = inventoryKey(match);
+        if (claimedKey) claimedItemKeys.add(String(claimedKey).toLowerCase());
       }
-      if (!matchedWatch || !matchedItem) {
+      if (!matches.length) {
         // No full match — but a same-family sibling trim may deserve the one-time
         // "open to variants?" ask (never a cross-family/trike unit, never a re-ask).
         maybeDraftWatchSiblingScopeAsk(conv, watches, candidateItems, nowIso);
         continue;
       }
-
-      const year = matchedItem.year ?? (matchedWatch.year ? String(matchedWatch.year) : undefined);
-      const make = matchedItem.make ?? matchedWatch.make;
-      const model = matchedItem.model ?? matchedWatch.model;
-      const trim = matchedWatch.trim;
-      const name = [year, make, model, trim].filter(Boolean).join(" ");
-      const matchedKey = inventoryKey(matchedItem);
-      const isNewArrival = matchedKey ? newItemKeys.has(matchedKey) : false;
-      const leadFirstName = normalizeDisplayCase(String(conv.lead?.firstName ?? "").split(/\s+/)[0] ?? "");
-      // Color honesty (Joe ruling 7/23, Gregory +17165981862): the unit's color comes from the FEED
-      // only (never the watch's color presented as the unit's), and the customer's asked-about color
-      // rides along so the composer can disclose a same-model different-color arrival instead of
-      // claiming they were "watching for" a color they never asked about.
-      const baseReply = buildWatchAvailableReply({
-        firstName: leadFirstName || null,
-        bikeLabel: name,
-        unitColor: matchedItem.color ? String(matchedItem.color) : null,
-        watchedColor: matchedWatch.color ? String(matchedWatch.color) : null,
-        availability: isNewArrival ? "new" : "in_stock"
-      });
-      const listingUrlRaw = String(matchedItem?.url ?? "").trim();
-      const listingUrl =
-        listingUrlRaw && /^https?:\/\//i.test(listingUrlRaw) ? listingUrlRaw : "";
-      const reply = listingUrl ? `${baseReply}\n${listingUrl}` : baseReply;
-      if (hasPriorInventoryWatchOutboundForItem(conv, matchedItem, reply)) {
-        matchedWatch.lastNotifiedAt = nowIso;
-        matchedWatch.lastNotifiedStockId = matchedItem.stockId ?? matchedItem.vin ?? matchedKey ?? undefined;
-        matchedWatch.lastNotifiedModel = matchedItem.model ? String(matchedItem.model) : undefined; // the UNIT's model (not the watch's) — feeds watch_fired_wrong_model
-        conv.updatedAt = nowIso;
-        saveConversation(conv);
+      // Per-conversation DAILY CAP (Joe ruling 7/23, MD +19292685345): max ONE watch-alert text
+      // per customer per day, across ALL their watches and both fire paths. Inside the window,
+      // matches queue for next-day bundled delivery — held back, never dropped (SIDE-EFFECT
+      // guard; fail direction is hold-back, and the group-aware watch_fire_miss detector is the
+      // recovery net).
+      if (conversationWatchAlertBlocked(conv, Date.now())) {
+        let queued = 0;
+        for (const { watch, item } of matches) {
+          const itemKey = inventoryKey(item);
+          const availability: "new" | "in_stock" = itemKey && newItemKeys.has(itemKey) ? "new" : "in_stock";
+          if (queuePendingWatchAlert(conv, buildPendingWatchAlertEntry(watch, item, availability, nowIso)) === "queued") {
+            queued++;
+          }
+        }
+        if (queued) {
+          conv.updatedAt = nowIso;
+          saveConversation(conv);
+          recordRouteOutcome("manual", "inventory_watch_alert_capped_queued", {
+            convId: conv.id,
+            leadKey: conv.leadKey,
+            queued
+          });
+        }
         continue;
       }
-      const imageUrl =
-        Array.isArray(matchedItem.images) && matchedItem.images.length
-          ? matchedItem.images[0]
-          : undefined;
+
+      // Compose per-match label/reply parts; drop matches whose unit we already messaged
+      // (stamping the watch exactly like the old single-match dedupe branch did). Color honesty
+      // (Gregory +17165981862): the unit color comes from the FEED only, and the customer's
+      // asked-about color rides along so a same-model different-color arrival is disclosed, never
+      // claimed as the color they watched for.
+      const sendable: Array<{
+        watch: InventoryWatch;
+        item: any;
+        bikeLabel: string;
+        unitColor: string | null;
+        watchedColor: string | null;
+        listingUrl: string;
+        singleReply: string;
+        isNewArrival: boolean;
+      }> = [];
+      const leadFirstName = normalizeDisplayCase(String(conv.lead?.firstName ?? "").split(/\s+/)[0] ?? "");
+      for (const { watch: matchedWatch, item: matchedItem } of matches) {
+        const year = matchedItem.year ?? (matchedWatch.year ? String(matchedWatch.year) : undefined);
+        const make = matchedItem.make ?? matchedWatch.make;
+        const model = matchedItem.model ?? matchedWatch.model;
+        const trim = matchedWatch.trim;
+        const name = [year, make, model, trim].filter(Boolean).join(" ");
+        const matchedKey = inventoryKey(matchedItem);
+        const isNewArrival = matchedKey ? newItemKeys.has(matchedKey) : false;
+        const unitColor = matchedItem.color ? String(matchedItem.color) : null;
+        const watchedColor = matchedWatch.color ? String(matchedWatch.color) : null;
+        const singleBase = buildWatchAvailableReply({
+          firstName: leadFirstName || null,
+          bikeLabel: name,
+          unitColor: matchedItem.color ? String(matchedItem.color) : null, // UNIT's FEED color
+          watchedColor: matchedWatch.color ? String(matchedWatch.color) : null, // customer's asked-about color
+          availability: isNewArrival ? "new" : "in_stock"
+        });
+        const listingUrlRaw = String(matchedItem?.url ?? "").trim();
+        const listingUrl = listingUrlRaw && /^https?:\/\//i.test(listingUrlRaw) ? listingUrlRaw : "";
+        const singleReply = listingUrl ? `${singleBase}\n${listingUrl}` : singleBase;
+        if (hasPriorInventoryWatchOutboundForItem(conv, matchedItem, singleReply)) {
+          matchedWatch.lastNotifiedAt = nowIso;
+          matchedWatch.lastNotifiedStockId = matchedItem.stockId ?? matchedItem.vin ?? matchedKey ?? undefined;
+          matchedWatch.lastNotifiedModel = matchedItem.model ? String(matchedItem.model) : undefined; // the UNIT's model (not the watch's) — feeds watch_fired_wrong_model
+          conv.updatedAt = nowIso;
+          saveConversation(conv);
+          continue;
+        }
+        sendable.push({
+          watch: matchedWatch,
+          item: matchedItem,
+          bikeLabel: name,
+          unitColor,
+          watchedColor,
+          listingUrl,
+          singleReply,
+          isNewArrival
+        });
+      }
+      if (!sendable.length) continue;
+      const reply = (() => {
+        if (sendable.length === 1) return sendable[0].singleReply;
+        const bundleBase = buildWatchAvailableBundleReply({
+          firstName: leadFirstName || null,
+          bikes: sendable.map(s => ({ bikeLabel: s.bikeLabel, unitColor: s.unitColor, watchedColor: s.watchedColor })),
+          availability: sendable.every(s => s.isNewArrival) ? "new" : "in_stock"
+        });
+        const urls = sendable.map(s => s.listingUrl).filter(Boolean);
+        return urls.length ? `${bundleBase}\n${urls.join("\n")}` : bundleBase;
+      })();
+      const imageUrl = (() => {
+        for (const s of sendable) {
+          if (Array.isArray(s.item.images) && s.item.images.length) return s.item.images[0];
+        }
+        return undefined;
+      })();
       const to = conv.lead?.phone ?? conv.leadKey;
       appendOutbound(conv, "salesperson", to, reply, "draft_ai", undefined, imageUrl ? [imageUrl] : undefined);
-      matchedWatch.lastNotifiedAt = nowIso;
-      matchedWatch.lastNotifiedStockId = matchedItem.stockId ?? matchedItem.vin ?? undefined;
-      matchedWatch.lastNotifiedModel = matchedItem.model ? String(matchedItem.model) : undefined; // the UNIT's model (not the watch's) — feeds watch_fired_wrong_model
+      for (const s of sendable) {
+        const matchedWatch = s.watch;
+        const matchedItem = s.item;
+        matchedWatch.lastNotifiedAt = nowIso;
+        matchedWatch.lastNotifiedStockId = matchedItem.stockId ?? matchedItem.vin ?? undefined;
+        matchedWatch.lastNotifiedModel = matchedItem.model ? String(matchedItem.model) : undefined; // the UNIT's model (not the watch's) — feeds watch_fired_wrong_model
+      }
+      recordConversationWatchAlert(conv, nowIso); // starts the one-text-per-day window
       setFollowUpMode(conv, "holding_inventory", "inventory_watch_match");
       setDialogState(conv, "inventory_watch_matched");
       if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
@@ -6406,6 +6628,27 @@ async function notifyInventoryWatchersForAvailableItem(
       continue;
     }
 
+    // Per-conversation DAILY CAP (Joe ruling 7/23): this path too counts toward the one
+    // watch-alert text per customer per day. Inside the window the match queues for the next
+    // cron sweep after the window expires (bundled with anything else that queued).
+    if (conversationWatchAlertBlocked(conv, Date.now())) {
+      if (
+        queuePendingWatchAlert(
+          conv,
+          buildPendingWatchAlertEntry(matchedWatch, matchedItem, "again", nowIsoValue)
+        ) === "queued"
+      ) {
+        conv.updatedAt = nowIsoValue;
+        saveConversation(conv);
+        recordRouteOutcome("manual", "inventory_watch_alert_capped_queued", {
+          convId: conv.id,
+          leadKey: conv.leadKey,
+          queued: 1
+        });
+      }
+      continue;
+    }
+
     const year = matchedItem.year ?? (matchedWatch.year ? String(matchedWatch.year) : undefined);
     const make = matchedItem.make ?? matchedWatch.make;
     const model = matchedItem.model ?? matchedWatch.model;
@@ -6439,6 +6682,7 @@ async function notifyInventoryWatchersForAvailableItem(
     appendOutbound(conv, "salesperson", to, reply, "draft_ai", undefined, imageUrl ? [imageUrl] : undefined);
     matchedWatch.lastNotifiedAt = nowIsoValue;
     matchedWatch.lastNotifiedStockId = matchedItem.stockId ?? matchedItem.vin ?? matchedKey ?? undefined;
+    recordConversationWatchAlert(conv, nowIsoValue); // starts the one-text-per-day window
     setFollowUpMode(conv, "holding_inventory", opts?.reason ?? "inventory_watch_match");
     setDialogState(conv, "inventory_watch_matched");
     if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {

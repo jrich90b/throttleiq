@@ -585,6 +585,27 @@ export type InventoryWatch = {
   lastNotifiedModel?: string; // the MODEL of the unit last notified — lets a read-only audit catch a watch that fired on the wrong model (watch_fired_wrong_model) without re-reading the inventory feed
 };
 
+// A watch match that arrived while the per-conversation daily alert cap was in effect
+// (Joe ruling 7/23): held on the conversation and delivered as ONE bundled message once
+// the cap window expires. Snapshot of everything the composer needs so delivery does not
+// depend on the unit still being a "new arrival" in a later sweep.
+export type PendingWatchAlert = {
+  /** The WATCH's model label at queue time — used to find + stamp the watch at delivery. */
+  watchModel: string;
+  /** Unit snapshot for the message + availability recheck at delivery. */
+  stockId?: string;
+  vin?: string;
+  year?: string;
+  make?: string;
+  model?: string;
+  color?: string; // the UNIT's feed color (never presented as the color the customer asked for)
+  watchedColor?: string; // the color the CUSTOMER asked about at watch creation — for the honesty disclosure at delivery
+  url?: string;
+  imageUrl?: string;
+  availability: "new" | "in_stock" | "again";
+  queuedAt: string;
+};
+
 export type InventoryWatchPending = {
   model?: string;
   year?: number;
@@ -838,6 +859,15 @@ export type Conversation = {
   inventoryWatch?: InventoryWatch;
   inventoryWatches?: InventoryWatch[];
   inventoryWatchPending?: InventoryWatchPending;
+  // Conversation-level stamp of the most recent watch-alert TEXT (any watch, either fire path).
+  // Drives the per-CONVERSATION daily alert cap (Joe ruling 7/23, MD +19292685345: 8 watches from
+  // one call → 5 alert texts over 2 days, two within minutes — the 24h cooldown was per-watch
+  // only). See domain/watchAlertDailyCap.ts.
+  lastWatchAlertAt?: string;
+  // Watch matches that landed while the daily cap was in effect — held here and delivered as ONE
+  // bundled message by the next cron sweep after the cap window expires (never dropped silently,
+  // never sent same-day). See domain/watchAlertDailyCap.ts.
+  pendingWatchAlerts?: PendingWatchAlert[];
   pendingIncomingInventory?: PendingIncomingInventory;
   // Units the recommender last suggested (with listing url + color), so a "show me pics/links/colors"
   // follow-up can answer with the REAL links instead of punting (2026-06-24).
