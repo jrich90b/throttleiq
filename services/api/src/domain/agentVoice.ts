@@ -443,3 +443,20 @@ export function stripAgentIntroPhraseForDealer(body: string, dealerName: string)
   const dealerEsc = dealer.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return text.replace(new RegExp(`\\bit[’']s\\s+[^.]{1,80}?\\s+over\\s+at\\s+${dealerEsc}\\.?\\s*`, "ig"), "");
 }
+
+/**
+ * Price-objection reply: acknowledge + offer a cheaper-unit watch (Joe ruling 2026-07-23,
+ * +17166021492 Brian Serena). When a customer objects to a price WE quoted, the answer is
+ * never a sticker re-quote — it's a warm ack plus an offer to keep an eye out for the same
+ * kind of bike at a lower price (mirrors the reply staff actually sent on the evidence
+ * thread). Carries NO dollar figures and NO re-introduction — mid-thread voice only.
+ * Pinned by reply_anchor_live_conversation:eval.
+ */
+export function buildPriceObjectionCheaperWatchReply(modelLabel?: string | null): string {
+  const model = String(modelLabel ?? "").trim();
+  const target = model ? `a ${model}` : "something similar";
+  return (
+    `Totally hear you — I'll keep an eye out for ${target} at a lower price and text you first when one comes in. ` +
+    "Any specific year, color, or mileage you want me to target?"
+  );
+}

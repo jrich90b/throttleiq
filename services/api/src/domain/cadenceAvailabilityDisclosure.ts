@@ -103,3 +103,44 @@ export function customerSourcedInterestColor(args: {
   const inbound = String(args.inboundColor ?? "").trim();
   return inbound || null;
 }
+
+/**
+ * Extend the customer-sourced-color rule to ALL sold/hold disclosure branches (Joe ruling
+ * 2026-07-23, the +17166021492 family; extends the 2026-07-19 William Wittmeyer ruling that
+ * already covers the cadence held-inventory override).
+ *
+ * The lead-unit disclosure branches (buildCadenceLeadUnitAvailabilityOverride and the live
+ * reply-path resolver in index.ts) build their unit label from the hold/sold store's staff- or
+ * feed-entered `label`, which commonly carries a color clause ("2019 Tri Glide Ultra in
+ * Midnight Blue/Barracuda Silver"). Attributing a color the customer never asked about is the
+ * fabricated-attribution class — the disclosure may only name a color the CUSTOMER sourced
+ * (their inbound words or the lead/ADF vehicle field).
+ *
+ * Deterministic formatting of OUR OWN stored label (side-effect/copy hygiene, not customer
+ * comprehension). The label's color clause is recognized structurally (a trailing " in {…}"
+ * clause — the shape our label builders and staff entries use), so no color dictionary is
+ * needed. FAIL DIRECTION: dropping an unverified color never fabricates; when no clause is
+ * detected the label passes through unchanged. Pinned by reply_anchor_live_conversation:eval.
+ */
+export function applyCustomerSourcedColorToUnitLabel(
+  labelRaw: string | null | undefined,
+  customerColorRaw: string | null | undefined
+): string {
+  const label = String(labelRaw ?? "").trim();
+  if (!label) return "";
+  const match = label.match(/^(.*\S)\s+in\s+([A-Za-z][A-Za-z0-9\s\/&.'-]*)$/i);
+  if (!match) return label;
+  const base = match[1].trim();
+  const clause = match[2].trim();
+  if (!base) return label;
+  const customerColor = String(customerColorRaw ?? "").trim();
+  if (customerColor) {
+    const norm = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const clauseNorm = norm(clause);
+    const colorNorm = norm(customerColor);
+    if (colorNorm && (clauseNorm.includes(colorNorm) || colorNorm.includes(clauseNorm))) {
+      return label; // the color IS the customer's own ask — keep it
+    }
+  }
+  return base;
+}

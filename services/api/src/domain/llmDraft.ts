@@ -3479,6 +3479,18 @@ const DIALOG_ACT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   }
 };
 
+const PRICE_QUOTE_OBJECTION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["price_objection", "explicit_question", "still_shopping", "confidence"],
+  properties: {
+    price_objection: { type: "boolean" },
+    explicit_question: { type: "boolean" },
+    still_shopping: { type: "boolean" },
+    confidence: { type: "number" }
+  }
+};
+
 const VEHICLE_INFO_REQUEST_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   type: "object",
   additionalProperties: false,
@@ -6262,6 +6274,112 @@ export async function parseDialogActWithLLM(args: {
     explicitRequest: !!parsed.explicit_request,
     nextAction,
     askFocus,
+    confidence
+  };
+}
+
+export type PriceQuoteObjectionParse = {
+  priceObjection: boolean;
+  explicitQuestion: boolean;
+  stillShopping: boolean;
+  confidence?: number;
+};
+
+/**
+ * Price-quote objection parser (Joe ruling 2026-07-23, +17166021492 Brian Serena).
+ *
+ * After WE quoted a concrete price, is this inbound turn an OBJECTION to that price
+ * ("no buddy that's too much money") rather than a question needing numbers? Joe ruled a
+ * price objection gets acknowledged + offered a cheaper-unit watch — never a sticker
+ * re-quote. The arm decision is pure (routeStateReducer.decidePriceObjectionTurn); this
+ * parser owns the comprehension (parser-first — never keyword/regex on customer text).
+ *
+ * Consulted ONLY when a recent outbound carried a $ quote (deterministic scan of our own
+ * copy), so the extra round-trip is rare. Fail-safe: null / low confidence / explicit
+ * question => the existing pricing path answers as before.
+ */
+export async function parsePriceQuoteObjectionWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+}): Promise<PriceQuoteObjectionParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_PRICE_OBJECTION_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_PRICE_OBJECTION_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_PRICE_OBJECTION_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_PRICE_OBJECTION_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const examples = [
+    'input: "no buddy that\'s too much money. That\'s way too much money for a 2019." output: {"price_objection":true,"explicit_question":false,"still_shopping":true,"confidence":0.94}',
+    'input: "Still a little rich for me. Im looking in the 18 to 20 thousand range. But thanks Gio" output: {"price_objection":true,"explicit_question":false,"still_shopping":true,"confidence":0.92}',
+    'input: "That payment is way higher than I expected" output: {"price_objection":true,"explicit_question":false,"still_shopping":true,"confidence":0.9}',
+    'input: "Yikes. Out of my league. Good luck selling it though" output: {"price_objection":true,"explicit_question":false,"still_shopping":false,"confidence":0.88}',
+    'input: "That seems high — what would the out the door price be?" output: {"price_objection":true,"explicit_question":true,"still_shopping":true,"confidence":0.9}',
+    'input: "Can you do any better on the price?" output: {"price_objection":false,"explicit_question":true,"still_shopping":true,"confidence":0.9}',
+    'input: "What\'s the price on the 2024 Street Glide?" output: {"price_objection":false,"explicit_question":true,"still_shopping":true,"confidence":0.95}',
+    'input: "Sounds fair. When can I come see it?" output: {"price_objection":false,"explicit_question":true,"still_shopping":true,"confidence":0.94}',
+    'input: "ok thank you" output: {"price_objection":false,"explicit_question":false,"still_shopping":true,"confidence":0.9}'
+  ];
+  const prompt = [
+    "You classify a dealership customer's SMS reply AFTER the dealer quoted a concrete price.",
+    "Return only JSON that matches the provided schema.",
+    "",
+    "Guidelines:",
+    "- price_objection=true when the customer pushes back on the quoted price/payment as too high or out of their range.",
+    "- explicit_question=true when the turn ALSO asks a concrete question or requests an action needing a direct answer (OTD price, negotiation ask, scheduling, photos).",
+    "- A pure negotiation ask ('can you do better?') is a question, not a bare objection — explicit_question=true.",
+    "- still_shopping=false ONLY when the customer clearly ends their search with the dealership ('good luck selling it', 'I bought elsewhere'). When unsure, true.",
+    "- confidence is a number from 0 to 1.",
+    "",
+    "Examples:",
+    ...examples,
+    "",
+    `Known lead info: ${JSON.stringify({
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      year: lead?.vehicle?.year ?? null
+    })}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> => {
+    return requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "price_quote_objection_parser",
+      schema: PRICE_QUOTE_OBJECTION_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 120,
+      debugTag: "llm-price-objection-parser",
+      debug
+    });
+  };
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return {
+    priceObjection: !!parsed.price_objection,
+    explicitQuestion: !!parsed.explicit_question,
+    stillShopping: parsed.still_shopping !== false,
     confidence
   };
 }

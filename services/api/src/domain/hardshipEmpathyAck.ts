@@ -43,7 +43,10 @@ export function draftAlreadyAcknowledgesHardship(draft: string): boolean {
     /^(i'?m |we'?re )?(really |so )?(sorry|saddened|heartbroken)\b/.test(t) ||
     /^(i |we )?(really |truly )?hope (you|everything|things|all|she|he|they)\b/.test(t) ||
     /^(glad|happy|relieved) (you'?re|to hear)\b/.test(t) ||
-    /^(wishing you|sending|take care|get well|feel better|praying|thinking of you|stay strong)\b/.test(t)
+    /^(wishing you|sending|take care|get well|feel better|praying|thinking of you|stay strong)\b/.test(t) ||
+    // Ack-led openers ("Totally hear you — …", the price-objection reply shape) already lead
+    // with an acknowledgment beat — prepending "I'm really sorry to hear that." would double-ack.
+    /^(totally|i|we) hear you\b/.test(t)
   );
 }
 

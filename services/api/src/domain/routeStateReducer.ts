@@ -2796,4 +2796,113 @@ export function decideInternationalLeadTurn(
     logCrmNote: !input.alreadyLogged,
     crmNote: `International lead (country code +${dialCode}) — out-of-country number. No reply sent; lead closed.`
   };
+// --- Reply-anchor: which bike does a pricing/MSRP answer talk about? (Joe ruling 2026-07-23) ---
+// Production evidence (+17166021492, Brian Serena): Brian objected to a used 2019 Tri Glide
+// Ultra's $29,995 quote and the pricing arm answered with the 2026 Street Glide Trike MSRP
+// range lifted from his June ADF lead record — a bike nobody was talking about. Joe ruled:
+// MSRP/price answers anchor to the bike under discussion THIS TURN — never the stale ADF
+// lead-record vehicle — falling back to ASKING which bike when nothing resolves.
+//
+// Pure precedence (no text reading here — the caller supplies already-extracted models):
+//   - When the thread's most recently DISCUSSED model contradicts the lead record, the lead
+//     record is stale for pricing: this turn's named model wins, else the thread model.
+//   - When there is no contradiction, the lead record keeps its existing precedence (a
+//     first-touch ADF pricing ask IS about the lead vehicle — that behavior is unchanged).
+//   - With no lead record at all: turn model, else thread model, else ask.
+//
+// FAIL DIRECTION: every input defaults to null and the terminal fallback is "ask" — a missed
+// extraction degrades to asking the customer which bike (a correct, honest reply), never to
+// quoting the wrong unit. This is a pure precedence decision over structured model slots, not
+// customer-text comprehension. Applied inside orchestrateInbound's pricing block, which BOTH
+// /webhooks/twilio and /conversations/:id/regenerate funnel through (two-path parity for free).
+// Pinned by reply_anchor_live_conversation:eval.
+export type PriceAnswerAnchorInput = {
+  turnModel: string | null; // model named in THIS inbound turn (caller nulls it on trade-framed turns)
+  threadModel: string | null; // most recent model discussed in the thread (either direction, pre-turn)
+  leadModel: string | null; // ADF lead-record vehicle model (caller nulls unknown placeholders)
+  threadMatchesLead: boolean; // normalized equality when both are present
+};
+
+export type PriceAnswerAnchorDecision = {
+  source: "turn" | "thread" | "lead_record" | "ask";
+};
+
+export function decidePriceAnswerAnchor(
+  input: PriceAnswerAnchorInput
+): PriceAnswerAnchorDecision {
+  const threadContradictsLead =
+    !!input.threadModel && !!input.leadModel && !input.threadMatchesLead;
+  if (threadContradictsLead) {
+    // The conversation moved on from the lead record — the live discussion owns the answer.
+    if (input.turnModel) return { source: "turn" };
+    return { source: "thread" };
+  }
+  if (input.leadModel) return { source: "lead_record" }; // existing precedence, unchanged
+  if (input.turnModel) return { source: "turn" };
+  if (input.threadModel) return { source: "thread" };
+  return { source: "ask" };
+}
+
+// --- Price-objection turn: ack + cheaper-unit watch offer, never a sticker re-quote ---
+// (Joe ruling 2026-07-23, same +17166021492 evidence: "no buddy that's too much money. That's
+// way too much money for a 2019." was answered with an MSRP range re-quote.) Joe ruled: a price
+// objection gets acknowledged and offered a cheaper-unit watch — never a sticker re-quote.
+//
+// The customer-intent reading is PARSER-FIRST: parsePriceQuoteObjectionWithLLM (llmDraft.ts)
+// classifies the turn; this pure function only decides the arm. The recent-outbound-quote gate
+// is a deterministic scan of OUR OWN sent copy (side-effect eligibility, not comprehension) so
+// the parser is consulted only where a quote exists to object to.
+//
+// FAIL DIRECTION: parser unavailable / low confidence / explicit question => "none" — the turn
+// falls through to the existing pricing path (today's behavior). Removal fails toward answering
+// with numbers, never toward silence or a wrong side effect. Pinned by
+// reply_anchor_live_conversation:eval.
+export type PriceObjectionTurnInput = {
+  pricingRoute: boolean; // the turn routed to the pricing cluster
+  recentOutboundQuotedPrice: boolean; // one of OUR recent sends carried a concrete $ quote
+  parserPriceObjection: boolean; // parser: the turn objects to a quoted price
+  parserExplicitQuestion: boolean; // parser: the turn ALSO asks a concrete question (answer it instead)
+  parserConfidence: number;
+  confidenceMin: number;
+};
+
+export type PriceObjectionTurnDecision = {
+  kind: "cheaper_watch_offer" | "none";
+};
+
+export function decidePriceObjectionTurn(
+  input: PriceObjectionTurnInput
+): PriceObjectionTurnDecision {
+  if (!input.pricingRoute) return { kind: "none" };
+  if (!input.recentOutboundQuotedPrice) return { kind: "none" };
+  if (!input.parserPriceObjection) return { kind: "none" };
+  if (input.parserExplicitQuestion) return { kind: "none" }; // a concrete ask outranks the objection framing
+  if (!(input.parserConfidence >= input.confidenceMin)) return { kind: "none" };
+  return { kind: "cheaper_watch_offer" };
+}
+
+// --- Sold-news staleness cap: no months-old "just sold" announcements (Joe ruling 2026-07-23) ---
+// The proactive cadence overrides frame a sold lead unit as NEWS ("quick update — the {unit} is
+// no longer available" / "…but that bike has sold"). Joe ruled that months-old sale news must not
+// be announced as an update — the customer either already knows or the thread has moved on. This
+// caps only the PROACTIVE announcement framing; the responsive reply-side disclosure (appended
+// when the customer is actively engaging about the unit) is a sell-a-gone-bike safety guard and
+// is deliberately NOT capped.
+//
+// FAIL DIRECTION: an absent/unparseable soldAt returns false — keep announcing (fail toward
+// disclosure, never toward silently selling a gone unit). Reads ONLY structured store state
+// (soldAt), never customer text => deterministic invariant guard per AGENTS.md rule 2. Pinned by
+// reply_anchor_live_conversation:eval.
+export function isStaleSoldAnnouncement(input: {
+  soldAtIso: string | null | undefined;
+  nowMs: number;
+  maxAgeDays?: number | null;
+}): boolean {
+  const iso = String(input.soldAtIso ?? "").trim();
+  if (!iso) return false;
+  const soldMs = new Date(iso).getTime();
+  if (!Number.isFinite(soldMs) || Number.isNaN(soldMs)) return false;
+  const maxDaysRaw = Number(input.maxAgeDays ?? NaN);
+  const maxDays = Number.isFinite(maxDaysRaw) && maxDaysRaw > 0 ? maxDaysRaw : 30;
+  return input.nowMs - soldMs > maxDays * 24 * 60 * 60 * 1000;
 }
