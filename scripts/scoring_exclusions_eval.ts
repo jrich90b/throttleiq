@@ -22,6 +22,7 @@ import {
   isOptOutKeywordInbound,
   isEnthusiasmAckNoAction,
   isQuotedReactionEchoInbound,
+  isReplyToRecentStaffTypedOutbound,
   isShadowReplayMessage,
   isStaffAuthoredOutbound,
   isShortAckNoAction,
@@ -535,6 +536,54 @@ assert.match(
   toneSource,
   /staff_typed_reply_no_agent_draft/,
   "tone quality audit must record the staff-typed skip reason"
+);
+
+// Staff-owned exchange: a customer answering a staff-typed message the agent
+// deliberately stayed out of is designed silence, not a missing response
+// (+17163591526 Bill Indelicato, 2026-07-24 — the gate's only missing response).
+{
+  const staffSend = { at: "2026-07-23T15:28:00.000Z", actorUserName: "Scott Hartrich", body: "you left your registration on the table" };
+  assert.equal(
+    isReplyToRecentStaffTypedOutbound({ precedingOutbound: staffSend, inboundAt: "2026-07-23T15:48:00.000Z" }),
+    true,
+    "a reply 20 minutes after a staff-typed send is a staff-owned turn"
+  );
+  assert.equal(
+    isReplyToRecentStaffTypedOutbound({ precedingOutbound: staffSend, inboundAt: "2026-07-26T15:48:00.000Z" }),
+    false,
+    "a reply 3 days later is a fresh turn the agent still owes — never excused"
+  );
+  assert.equal(
+    isReplyToRecentStaffTypedOutbound({
+      precedingOutbound: { at: "2026-07-23T15:28:00.000Z", body: "agent send, no author marker" },
+      inboundAt: "2026-07-23T15:48:00.000Z"
+    }),
+    false,
+    "no author marker => not provably staff-typed => never skipped (fail-safe)"
+  );
+  assert.equal(
+    isReplyToRecentStaffTypedOutbound({
+      precedingOutbound: { at: "2026-07-23T15:28:00.000Z", actorUserName: "Scott Hartrich", originalDraftBody: "the agent's draft" },
+      inboundAt: "2026-07-23T15:48:00.000Z"
+    }),
+    false,
+    "an EDITED agent draft still carries the agent's work — stays graded"
+  );
+  assert.equal(
+    isReplyToRecentStaffTypedOutbound({ precedingOutbound: null, inboundAt: "2026-07-23T15:48:00.000Z" }),
+    false,
+    "no preceding outbound => nothing to excuse"
+  );
+}
+assert.match(
+  toneSource,
+  /isReplyToRecentStaffTypedOutbound\(\{ precedingOutbound, inboundAt: inboundAtIso \}\)/,
+  "tone quality audit must apply the staff-owned-turn exclusion on the missing-response path"
+);
+assert.match(
+  toneSource,
+  /staff_owned_turn_no_agent_reply/,
+  "tone quality audit must record the staff-owned-turn skip reason"
 );
 
 console.log("PASS scoring exclusions eval");

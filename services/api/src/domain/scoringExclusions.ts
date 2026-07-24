@@ -424,6 +424,45 @@ export function isStaffAuthoredOutbound(msg: {
 }
 
 /**
+ * Staff-owned exchange: the customer's turn ANSWERS a message a staff member typed
+ * themselves, and the agent produced nothing. That silence is the owner-thread
+ * step-back working as designed (the agent stays out of a conversation a human is
+ * actively running), not a dropped turn — so it must not score as `missing_response`.
+ *
+ * Production 2026-07-24 (Bill Indelicato +17163591526, the single missing response
+ * that put the release gate's tone pass rate at 0): Scott hand-typed "you left your
+ * registration and insurance card on the table outside my office" at 15:28; Bill
+ * answered "I'll swing by and pick it up later, biscuits and gravy await!!!" 20
+ * minutes later. Every outbound in that delivery thread was staff-typed. The agent
+ * correctly said nothing, and got charged with a miss.
+ *
+ * Fail-safe by construction, on the same footing as `isStaffAuthoredOutbound`: the
+ * author marker's PRESENCE proves a human typed it (its absence proves nothing and is
+ * never used to skip), the staff message must be the LAST thing before the inbound (no
+ * agent send in between), and the answer must land inside `maxHours` of it. So a stale
+ * staff message from last week can never excuse a genuinely dropped new question.
+ */
+export function isReplyToRecentStaffTypedOutbound(args: {
+  precedingOutbound: {
+    at?: string | null;
+    actorUserId?: string | null;
+    actorUserName?: string | null;
+    originalDraftBody?: string | null;
+  } | null | undefined;
+  inboundAt?: string | null;
+  maxHours?: number;
+}): boolean {
+  const prev = args?.precedingOutbound;
+  if (!prev || !isStaffAuthoredOutbound(prev)) return false;
+  const prevMs = Date.parse(String(prev.at ?? ""));
+  const inboundMs = Date.parse(String(args?.inboundAt ?? ""));
+  if (!Number.isFinite(prevMs) || !Number.isFinite(inboundMs)) return false;
+  const gapHours = (inboundMs - prevMs) / (60 * 60 * 1000);
+  if (gapHours < 0) return false;
+  return gapHours <= (args.maxHours ?? 24);
+}
+
+/**
  * Year-rollover park fingerprint. The fixed-but-must-stay-caught cadence bug
  * (parsePauseUntil / bumpCadenceNextDueAt parking a lead a year out) lands on
  * the FIRST of a month at a round 9-o'clock boundary: 09:00 UTC (`{month}-01T09:00Z`,

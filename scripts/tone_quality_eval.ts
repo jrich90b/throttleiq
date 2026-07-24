@@ -12,6 +12,7 @@ import {
   isNonSalesConversation,
   isOptOutKeywordInbound,
   isQuotedReactionEchoInbound,
+  isReplyToRecentStaffTypedOutbound,
   isShadowReplayMessage,
   isShortAckNoAction,
   isStaffAuthoredOutbound,
@@ -231,6 +232,19 @@ function main() {
       const match = matchInboundReply(messages, i, parsed.responseWindowMin);
 
       if (!match) {
+        // Designed silence, not a dropped turn: the customer was answering a message a
+        // staff member typed themselves, and the agent stepped back (owner-thread
+        // step-back). Bounded to the immediately-preceding staff send inside 24h, so a
+        // genuinely dropped new question still scores as a miss.
+        const precedingOutbound = [...messages.slice(0, i)].reverse().find(m => String(m?.direction) === "out");
+        if (isReplyToRecentStaffTypedOutbound({ precedingOutbound, inboundAt: inboundAtIso })) {
+          skippedTurns += 1;
+          skippedReasonMap.set(
+            "staff_owned_turn_no_agent_reply",
+            (skippedReasonMap.get("staff_owned_turn_no_agent_reply") ?? 0) + 1
+          );
+          continue;
+        }
         rows.push({
           convId,
           leadRef,
