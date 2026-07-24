@@ -230,3 +230,32 @@ export function draftQualityHoldClassOnly(): boolean {
   const raw = String(process.env.DRAFT_QUALITY_HOLD_CLASS_ONLY ?? "1").trim().toLowerCase();
   return raw !== "0" && raw !== "false" && raw !== "no";
 }
+
+// --- Truncated-draft invariant (Joe ruling 7/23; conv +17693591448) ----------
+// A generation that gets cut off mid-sentence must NEVER surface in the outgoing field for staff to
+// send (production: "Mississippi sounds nice — Gulf life has its perks, I" landed as a live draft).
+// This is a DETERMINISTIC INVARIANT GUARD, not comprehension: a reply that ends on a dangling
+// connective / trailing separator is structurally broken regardless of what the customer meant.
+//
+// FAIL DIRECTION: hold back a broken draft, never wrongly flag a complete one. The word list is kept
+// TIGHT to words that essentially never end a real SMS reply (articles + coordinating conjunctions +
+// the lone pronoun "I") so a false positive (which would strand the customer with no draft) is
+// near-impossible; common natural enders ("thank you", "go for it", "yes it is") are left alone.
+const TRUNCATION_DANGLING_ENDERS = new Set([
+  "a", "an", "the", "and", "but", "or", "nor", "i"
+]);
+
+export function isTruncatedDraftBody(body: string | null | undefined): boolean {
+  const t = String(body ?? "").replace(/\s+/g, " ").trim();
+  if (!t) return false;
+  // Terminal punctuation (or a closing quote / bracket / emoji, i.e. any non-letter tail that is not a
+  // mid-clause separator) reads as a complete-enough reply. Check this FIRST.
+  if (/[.!?…)\]"'”’]$/.test(t)) return false;
+  // Ends on a mid-clause separator — a reply never legitimately trails a comma/semicolon/colon or a dash.
+  if (/[,;:]$/.test(t)) return true;
+  if (/[-–—]$/.test(t)) return true;
+  // Ends on a dangling function word with no terminal punctuation → cut off mid-clause.
+  const lastWord = (t.match(/([A-Za-z']+)$/)?.[1] ?? "").toLowerCase();
+  if (lastWord && TRUNCATION_DANGLING_ENDERS.has(lastWord)) return true;
+  return false;
+}

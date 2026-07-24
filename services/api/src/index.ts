@@ -347,7 +347,8 @@ import {
   getCachedSelfHealVerdict,
   scoreContextFidelityWithLLM,
   classifyDraftEditWithLLM,
-  composeHumanThreadNudgeWithLLM
+  composeHumanThreadNudgeWithLLM,
+  parseThumbsDownNoteWithLLM
 } from "./domain/llmDraft.js";
 import {
   decideDraftQualityGate,
@@ -362,6 +363,7 @@ import {
   cadenceQualityJudgeShadowEnabled,
   isCadenceQualityEnforceEnabled,
   cadenceQualityEnforceFloor,
+  isTruncatedDraftBody,
   type CadenceQualityGateDecision
 } from "./domain/draftQualityGate.js";
 import {
@@ -5030,6 +5032,32 @@ async function publishCustomerReplyDraft(args: {
   const invariant = args.evaluateInvariant(args.text, args.invariantHints);
   if (!invariant.allow) {
     return { ok: false, reason: invariant.reason ?? "draft_invariant_blocked" };
+  }
+
+  // Truncated-body invariant (Joe ruling 7/23; conv +17693591448): a generation cut off mid-clause
+  // ("…Gulf life has its perks, I") must never reach the outgoing field. DETERMINISTIC guard, no LLM —
+  // hold with a reason-tagged marker (mirrors the draft-quality held UI) so staff see a "being fixed"
+  // card instead of a broken half-sentence. Fail direction = hold a structurally-broken draft; the
+  // heuristic is tight so a complete reply is never wrongly held. Shared chokepoint = live + regenerate.
+  if (isTruncatedDraftBody(invariant.draftText)) {
+    discardPendingDrafts(args.conv, "draft_truncated_held");
+    delete args.conv.emailDraft;
+    args.conv.draftHeld = {
+      at: new Date().toISOString(),
+      reason: "draft_truncated",
+      channel: args.channel,
+      inboundPreview: String(getLastInboundBody(args.conv) ?? "").slice(0, 240),
+      draftPreview: String(invariant.draftText ?? "").slice(0, 240)
+    } as any;
+    saveConversation(args.conv);
+    recordDecisionTrace({
+      scope: args.routeScope ?? "live",
+      stage: "draft_truncated.held",
+      convId: args.conv.id,
+      leadKey: args.conv.leadKey,
+      detail: { channel: args.channel, draftPreview: String(invariant.draftText ?? "").slice(0, 200) }
+    });
+    return { ok: false, reason: "draft_truncated_held", held: true };
   }
 
   // STEP 2 gate: on a held verdict, store NO draft — clear any existing draft + set the held marker
@@ -38372,16 +38400,44 @@ async function maybeRedraftOnNegativeFeedback(args: {
   const { conv, ratedMsg } = args;
   const ratedIsPendingDraft =
     ratedMsg?.direction === "out" && ratedMsg?.provider === "draft_ai" && ratedMsg?.draftStatus !== "stale";
-  const decision = decideFeedbackRedraftTurn({
+  const gateInput = {
     enabled: feedbackDownRedraftEnabled(),
     rating: "down",
     ratedIsPendingDraft: !!ratedIsPendingDraft,
     reason: args.reason,
     note: args.note
-  });
-  if (decision.kind !== "redraft") return { redrafted: false, reason: "record_only" };
+  };
+  // Cheap gate FIRST (kill switch / up-rating / already-sent) so a record-only thumbs-down never
+  // burns an LLM round-trip on the note parser below.
+  if (decideFeedbackRedraftTurn(gateInput).kind !== "redraft") {
+    return { redrafted: false, reason: "record_only" };
+  }
   const inbound = String(getLastInboundBody(conv) ?? "").trim();
   if (!inbound) return { redrafted: false, reason: "no_inbound" };
+
+  // OBEY-THE-NOTE (Joe ruling 7/23; conv +17693591448): a thumbs-down note is often a direct staff
+  // INSTRUCTION ("Tell the customer to stop in when they are in town"), not a vague "what was wrong"
+  // hint. Classify it parser-first (parseThumbsDownNoteWithLLM). An action_request note becomes the
+  // CONTROLLING directive for the redraft so it does what staff asked instead of re-running the same
+  // rejected offer (production: the redraft re-offered tee shipping twice while ignoring the note).
+  let controllingInstruction: string | null = null;
+  const rawNote = String(args.note ?? "").trim();
+  if (rawNote) {
+    try {
+      const noteParse = await parseThumbsDownNoteWithLLM({
+        note: rawNote,
+        inbound: inbound || null,
+        ratedReply: String(ratedMsg?.body ?? "") || null
+      });
+      if (noteParse && noteParse.noteKind === "action_request") {
+        controllingInstruction = (noteParse.actionSummary || "").trim() || rawNote;
+      }
+    } catch {
+      // Fail-safe: if the note parser is off/errors, fall back to the note-as-steering path.
+    }
+  }
+  const decision = decideFeedbackRedraftTurn({ ...gateInput, controllingInstruction });
+  if (decision.kind !== "redraft") return { redrafted: false, reason: "record_only" };
   try {
     const dealerProfile = await getDealerProfileHot();
     const lead = conv.lead ?? {};
@@ -38405,6 +38461,12 @@ async function maybeRedraftOnNegativeFeedback(args: {
       })) ?? ""
     ).trim();
     if (!redraft) return { redrafted: false, reason: "empty_redraft" };
+    // Truncated-body invariant (Joe ruling 7/23): never publish a redraft that got cut off mid-clause
+    // — leave the down-rated draft in place rather than surface a broken half-sentence for staff to send.
+    if (isTruncatedDraftBody(redraft)) {
+      recordRouteOutcome("manual", "feedback_down_redraft_truncated", { convId: conv.id, leadKey: conv.leadKey });
+      return { redrafted: false, reason: "truncated_redraft" };
+    }
     saveOperatorDraft(conv, { body: redraft, channel: "sms", actor: { userName: "Auto-redraft (thumbs-down)" } });
     recordRouteOutcome("manual", "feedback_down_redraft", {
       convId: conv.id,

@@ -1094,11 +1094,31 @@ export type FeedbackRedraftTurnInput = {
   ratedIsPendingDraft: boolean; // the rated message is a non-stale draft_ai (still editable)
   reason?: string | null;
   note?: string | null;
+  // When the thumbs-down note is a staff INSTRUCTION (parseThumbsDownNoteWithLLM → action_request),
+  // its action becomes the CONTROLLING directive for the redraft — the note tells the reply what to
+  // DO ("tell the customer to stop in when they're in town"), not just what was wrong.
+  controllingInstruction?: string | null;
 };
 
 export type FeedbackRedraftTurnDecision = { kind: "redraft" | "record_only"; steering?: string };
 
-export function buildFeedbackRedraftSteering(reason?: string | null, note?: string | null): string {
+export function buildFeedbackRedraftSteering(
+  reason?: string | null,
+  note?: string | null,
+  controllingInstruction?: string | null
+): string {
+  const instruction = String(controllingInstruction ?? "").replace(/\s+/g, " ").trim();
+  if (instruction) {
+    // A staff instruction OVERRIDES the rejected draft's content — obey it, don't merely "fix" the
+    // old reply (production miss: the note "Tell the customer to stop in when they are in town" was
+    // treated as a vague hint and the redraft re-offered tee shipping twice).
+    return (
+      `A staff reviewer rejected the previous draft and gave a direct instruction you MUST follow: ` +
+      `"${instruction}". Rewrite the reply so it does exactly what that instruction says. Do NOT ` +
+      `repeat the rejected draft's offer or re-propose anything the instruction steers away from. ` +
+      `Keep it on-voice (like texting a friend), and never fabricate a price, availability, stock, or appointment.`
+    );
+  }
   const detail = [reason, note]
     .map(s => String(s ?? "").replace(/\s+/g, " ").trim())
     .filter(Boolean)
@@ -1114,7 +1134,10 @@ export function decideFeedbackRedraftTurn(input: FeedbackRedraftTurnInput): Feed
   if (!input.enabled) return { kind: "record_only" };
   if (String(input.rating ?? "").trim().toLowerCase() !== "down") return { kind: "record_only" };
   if (!input.ratedIsPendingDraft) return { kind: "record_only" }; // can't redraft an already-sent message
-  return { kind: "redraft", steering: buildFeedbackRedraftSteering(input.reason, input.note) };
+  return {
+    kind: "redraft",
+    steering: buildFeedbackRedraftSteering(input.reason, input.note, input.controllingInstruction)
+  };
 }
 
 // --- Feedback diagnosis action (closed-loop Phase 2, 2026-06-24) -------------
