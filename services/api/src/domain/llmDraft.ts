@@ -1836,7 +1836,12 @@ export async function classifyTaskFulfillmentWithLLM(args: {
     'dealer/sms: "Our finance manager will reach out, but to answer your question: you are pre-qualified at 7.29% APR up to 72 months on that model." | task {"task_id":"t11","type":"payments","objective":"Customer asked what financing rate they would qualify for."} -> {"task_id":"t11","fulfilled":true,"confidence":0.9,"evidence":"the rate question was actually answered (7.29% APR / 72 months); the handoff is extra"}',
     // engaged-but-pending-customer: the department responded but it now awaits the customer to book/decide.
     'dealer/sms: "We would be happy to look at it but we are booking into the last week of July right now." then customer: "I understand." | task {"task_id":"t7","type":"service","objective":"Service website text: ...can you take a look at my 2001 Low Rider."} -> {"task_id":"t7","fulfilled":false,"confidence":0.9,"evidence":"offered service and gave a booking timeframe, but nothing is scheduled; awaits the customer to book","engaged_pending_customer":true,"defer_until":"2026-07-27"}',
-    'dealer/sms: "Yes we can order that seat for you, want me to put it on order?" then customer: "let me think about it" | task {"task_id":"t8","type":"parts","objective":"Customer asked about a Saddlemen seat."} -> {"task_id":"t8","fulfilled":false,"confidence":0.85,"evidence":"parts dept offered to order it; customer is deciding, no order placed yet","engaged_pending_customer":true,"defer_until":""}'
+    'dealer/sms: "Yes we can order that seat for you, want me to put it on order?" then customer: "let me think about it" | task {"task_id":"t8","type":"parts","objective":"Customer asked about a Saddlemen seat."} -> {"task_id":"t8","fulfilled":false,"confidence":0.85,"evidence":"parts dept offered to order it; customer is deciding, no order placed yet","engaged_pending_customer":true,"defer_until":""}',
+    // PICTURE-ONLY delivery (Safvan +18728882220, Joe ruling 2026-07-23): a media-only MMS carries no
+    // words, so the closer renders it as a bracketed line. Delivering the pictures IS the objective of
+    // a "send photos" task — it is NOT a promise.
+    'dealer/sms: "I will get some pics for you" then dealer/sms: "[dealer sent 3 photos (picture-only message, no text)]" | task {"task_id":"t12","type":"other","objective":"Manual follow-up: send photos for the unlisted/back-room bike. Customer asked: Can You send The Details And Pictures please"} -> {"task_id":"t12","fulfilled":true,"confidence":0.93,"evidence":"the dealer actually delivered 3 pictures of the bike, which is the objective; the earlier promise was then carried out","engaged_pending_customer":false,"defer_until":""}',
+    'dealer/sms: "[dealer sent 2 photos (picture-only message, no text)]" | task {"task_id":"t13","type":"pricing","objective":"Customer asked for the out-the-door price on the Road Glide."} -> {"task_id":"t13","fulfilled":false,"confidence":0.9,"evidence":"pictures were sent but no price was given; the pricing objective is untouched","engaged_pending_customer":false,"defer_until":""}'
   ];
 
   const today = new Date().toISOString().slice(0, 10);
@@ -1851,6 +1856,7 @@ export async function classifyTaskFulfillmentWithLLM(args: {
     "- fulfilled=true ONLY when the dealer's follow-up actually carries out the objective.",
     "- PROMISING future action ('will do', 'I'll let you know') does NOT fulfill a notify/contact task — the action has not happened yet.",
     "- 'Notify/let-you-know when X is available/arrives/ready' is fulfilled only when the dealer COMMUNICATES X is now available/arrived/ready. Photos or unrelated updates do not fulfill it.",
+    "- A dealer line of the form '[dealer sent N photos (picture-only message, no text)]' means the dealer actually ATTACHED and DELIVERED N pictures to the customer. When the objective is to SEND PHOTOS/PICTURES/PICS of a unit, delivering the pictures IS the accomplishment — fulfilled=true, even with no accompanying words. It does NOT fulfill an objective that needs information the pictures don't carry (a price, an availability announcement, a spec answer) unless that was also communicated.",
     "- A task is fulfilled when the dealer ACCOMPLISHES its OBJECTIVE, regardless of channel. A task's type (\"call\"/follow-up) is the intended METHOD, not a hard requirement: a \"call\" task is fulfilled when its objective is actually carried out — by a reached phone call OR by an SMS/email that delivers the objective and resolves the matter (e.g., the customer's question is answered and they indicate they're satisfied / all set / just curious).",
     "- EXCEPTION — a \"call\" task still requires a reached phone CALL (an SMS/email does NOT fulfill it, and a voicemail/no-answer never does) when the objective INHERENTLY needs a live conversation: a verbal review/confirmation/authorization, collecting payment over the phone, or the customer is call-only / explicitly asked to be called. Default to this exception only when the objective itself signals a call is required; a plain 'call the customer about X' is fulfilled once X is handled by any channel.",
     "- For follow-up tasks, any channel (SMS, email, or a reached call) can fulfill the objective.",
@@ -3048,6 +3054,10 @@ export type FinanceOutcomeFromCallParse = {
   explicitOutcome: boolean;
   confidence?: number;
   reasonText?: string | null;
+  /** For needs_more_info: the itemized things the LENDER is waiting on, straight from the call
+   *  ("recent pay stubs", "proof of residence", "a co-signer"). Drives the business-manager
+   *  checklist task (Joe ruling 2026-07-23). Empty for every other outcome. */
+  requiredItems?: string[];
 };
 
 export type SemanticSlotParse = {
@@ -4475,12 +4485,14 @@ const APPOINTMENT_OUTCOME_FOLLOW_UP_PLAN_JSON_SCHEMA: { [key: string]: unknown }
 const FINANCE_OUTCOME_FROM_CALL_JSON_SCHEMA: { [key: string]: unknown } = {
   type: "object",
   additionalProperties: false,
-  required: ["outcome", "explicit_outcome", "confidence", "reason_text"],
+  required: ["outcome", "explicit_outcome", "confidence", "reason_text", "required_items"],
   properties: {
     outcome: { type: "string", enum: ["approved", "declined", "needs_more_info", "none"] },
     explicit_outcome: { type: "boolean" },
     confidence: { type: "number", minimum: 0, maximum: 1 },
-    reason_text: { type: "string" }
+    reason_text: { type: "string" },
+    // Itemized lender contingencies for needs_more_info; empty array otherwise.
+    required_items: { type: "array", items: { type: "string" } }
   }
 };
 
@@ -12127,12 +12139,14 @@ export async function parseFinanceOutcomeFromCallWithLLM(args: {
   const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
   const lead = args.lead ?? {};
   const examples = [
-    'input: "Summary: Customer is approved pending final signatures." output: {"outcome":"approved","explicit_outcome":true,"confidence":0.96,"reason_text":"approved pending final signatures"}',
-    'input: "Summary: Harley approved him with a cosigner." output: {"outcome":"approved","explicit_outcome":true,"confidence":0.95,"reason_text":"approved with a cosigner"}',
-    'input: "Summary: Could not approve the application." output: {"outcome":"declined","explicit_outcome":true,"confidence":0.97,"reason_text":"could not approve application"}',
-    'input: "Summary: Lender needs proof of income and insurance before moving forward." output: {"outcome":"needs_more_info","explicit_outcome":true,"confidence":0.96,"reason_text":"needs proof of income and insurance"}',
-    'input: "Summary: Needs a co-signer and residence history." output: {"outcome":"needs_more_info","explicit_outcome":true,"confidence":0.95,"reason_text":"needs co-signer and residence history"}',
-    'input: "Summary: Customer asked about rates and said he will think about it." output: {"outcome":"none","explicit_outcome":false,"confidence":0.93,"reason_text":""}'
+    'input: "Summary: Customer is approved pending final signatures." output: {"outcome":"approved","explicit_outcome":true,"confidence":0.96,"reason_text":"approved pending final signatures","required_items":[]}',
+    'input: "Summary: Harley approved him with a cosigner." output: {"outcome":"approved","explicit_outcome":true,"confidence":0.95,"reason_text":"approved with a cosigner","required_items":[]}',
+    'input: "Summary: Could not approve the application." output: {"outcome":"declined","explicit_outcome":true,"confidence":0.97,"reason_text":"could not approve application","required_items":[]}',
+    'input: "Summary: Lender needs proof of income and insurance before moving forward." output: {"outcome":"needs_more_info","explicit_outcome":true,"confidence":0.96,"reason_text":"needs proof of income and insurance","required_items":["Proof of income","Proof of insurance"]}',
+    'input: "Summary: Needs a co-signer and residence history." output: {"outcome":"needs_more_info","explicit_outcome":true,"confidence":0.95,"reason_text":"needs co-signer and residence history","required_items":["A qualified co-signer","Residence history"]}',
+    'input: "Summary: Bank came back asking for two recent pay stubs and a copy of his license before they will finalize." output: {"outcome":"needs_more_info","explicit_outcome":true,"confidence":0.95,"reason_text":"bank needs pay stubs and a license copy","required_items":["Two recent pay stubs","Copy of driver license"]}',
+    'input: "Summary: They need more information before they can decide." output: {"outcome":"needs_more_info","explicit_outcome":true,"confidence":0.88,"reason_text":"lender needs more information","required_items":[]}',
+    'input: "Summary: Customer asked about rates and said he will think about it." output: {"outcome":"none","explicit_outcome":false,"confidence":0.93,"reason_text":"","required_items":[]}'
   ];
   const prompt = [
     "You parse dealership call transcripts/summaries for finance outcome.",
@@ -12149,6 +12163,7 @@ export async function parseFinanceOutcomeFromCallWithLLM(args: {
     "- 'Needs cosigner' or 'waiting on docs' should map to needs_more_info unless explicitly 'not approved/declined'.",
     "- explicit_outcome=true only when clearly stated.",
     "- reason_text should be short phrase from transcript/summary when approved/declined/needs_more_info; else empty string.",
+    "- required_items: ONLY for needs_more_info — one short noun phrase per distinct thing the LENDER is waiting on, taken from what was actually said (e.g. 'Two recent pay stubs', 'Proof of residence', 'A qualified co-signer', 'Proof of insurance'). Never invent an item the call did not name; if the call only says 'they need more info' with no specifics, return an empty array. Return an empty array for approved/declined/none.",
     "",
     "Examples:",
     ...examples,
@@ -12190,11 +12205,21 @@ export async function parseFinanceOutcomeFromCallWithLLM(args: {
       ? Math.max(0, Math.min(1, parsed.confidence))
       : undefined;
 
+  // Itemized lender needs only mean anything for needs_more_info; ignore stray items elsewhere so a
+  // chatty model can't attach a checklist to an approval.
+  const requiredItems =
+    outcome === "needs_more_info" && Array.isArray(parsed.required_items)
+      ? parsed.required_items
+          .map((v: unknown) => String(v ?? "").replace(/\s+/g, " ").trim())
+          .filter((v: string) => v.length > 0 && v.length <= 120)
+      : [];
+
   return {
     outcome,
     explicitOutcome: !!parsed.explicit_outcome,
     confidence,
-    reasonText: cleanOptionalString(parsed.reason_text)
+    reasonText: cleanOptionalString(parsed.reason_text),
+    requiredItems
   };
 }
 
