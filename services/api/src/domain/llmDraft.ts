@@ -2280,6 +2280,10 @@ export type CustomerDispositionParse = {
     | "defer_with_window";
   explicitDisposition: boolean;
   timeframeText?: string | null;
+  // True when the customer wants to sell their bike TO THE DEALERSHIP ("sell it outright",
+  // "you guys buy it") — a live acquisition/appraisal lead, the OPPOSITE of sell_on_own.
+  // Mutually exclusive with disposition === "sell_on_own".
+  sellToDealerInterest?: boolean;
   confidence?: number;
 };
 
@@ -3592,7 +3596,13 @@ const WEB_TEXT_WIDGET_SALES_LEAD_PARSER_JSON_SCHEMA: { [key: string]: unknown } 
 const CUSTOMER_DISPOSITION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   type: "object",
   additionalProperties: false,
-  required: ["disposition", "explicit_disposition", "timeframe_text", "confidence"],
+  required: [
+    "disposition",
+    "explicit_disposition",
+    "timeframe_text",
+    "sell_to_dealer_interest",
+    "confidence"
+  ],
   properties: {
     disposition: {
       type: "string",
@@ -3607,6 +3617,10 @@ const CUSTOMER_DISPOSITION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     },
     explicit_disposition: { type: "boolean" },
     timeframe_text: { type: "string" },
+    // Dealer parlance: "sell outright" = the customer wants to sell their bike TO US for
+    // cash (an acquisition lead), NOT sell it on their own. Deliberately a separate slot
+    // rather than a `disposition` member — it is the opposite of a closeout.
+    sell_to_dealer_interest: { type: "boolean" },
     confidence: { type: "number" }
   }
 };
@@ -6801,82 +6815,95 @@ export async function parseCustomerDispositionWithLLM(args: {
   const examples = [
     `EXAMPLE A
 inbound: "I think I'm going to keep my bike and hold off for now."
-output: {"disposition":"keep_current_bike","explicit_disposition":true,"timeframe_text":"","confidence":0.96}`,
+output: {"disposition":"keep_current_bike","explicit_disposition":true,"timeframe_text":"","sell_to_dealer_interest":false,"confidence":0.96}`,
     `EXAMPLE B
 inbound: "I'm just going to sell it myself."
-output: {"disposition":"sell_on_own","explicit_disposition":true,"timeframe_text":"","confidence":0.97}`,
+output: {"disposition":"sell_on_own","explicit_disposition":true,"timeframe_text":"","sell_to_dealer_interest":false,"confidence":0.97}`,
+    // B2 pins the production miss (+17169831712, 2026-07-23): staff asked "trading the bike in
+    // or you want to sell outright?" and "Sell it outright." was read as sell_on_own @0.98 -
+    // the lead was closed + paused_indefinite instead of routed to a cash appraisal.
+    `EXAMPLE B2
+out: "are you looking into trading the bike in or you want to sell outright?"
+inbound: "Sell it outright."
+output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","sell_to_dealer_interest":true,"confidence":0.95}`,
+    `EXAMPLE B3
+inbound: "I just want to sell it to you guys outright, not trade it in."
+output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","sell_to_dealer_interest":true,"confidence":0.96}`,
+    `EXAMPLE B4
+inbound: "I think I'll just list it on Marketplace and sell it privately."
+output: {"disposition":"sell_on_own","explicit_disposition":true,"timeframe_text":"","sell_to_dealer_interest":false,"confidence":0.96}`,
     `EXAMPLE C
 inbound: "Price is too high right now, maybe after tax return."
-output: {"disposition":"defer_with_window","explicit_disposition":true,"timeframe_text":"after tax return","confidence":0.93}`,
+output: {"disposition":"defer_with_window","explicit_disposition":true,"timeframe_text":"after tax return","sell_to_dealer_interest":false,"confidence":0.93}`,
     `EXAMPLE C2
 inbound: "I can't do it now but I'm thinking maybe next spring."
-output: {"disposition":"defer_with_window","explicit_disposition":true,"timeframe_text":"next spring","confidence":0.94}`,
+output: {"disposition":"defer_with_window","explicit_disposition":true,"timeframe_text":"next spring","sell_to_dealer_interest":false,"confidence":0.94}`,
     `EXAMPLE C3
 inbound: "Alright let me think about it i will get back to you in several days"
-output: {"disposition":"defer_with_window","explicit_disposition":true,"timeframe_text":"in several days","confidence":0.94}`,
+output: {"disposition":"defer_with_window","explicit_disposition":true,"timeframe_text":"in several days","sell_to_dealer_interest":false,"confidence":0.94}`,
     `EXAMPLE C4
 inbound: "Give me a few days to think it over and I will let you know"
-output: {"disposition":"defer_with_window","explicit_disposition":true,"timeframe_text":"a few days","confidence":0.93}`,
+output: {"disposition":"defer_with_window","explicit_disposition":true,"timeframe_text":"a few days","sell_to_dealer_interest":false,"confidence":0.93}`,
     `EXAMPLE C5
 inbound: "Okay. Im waiting on two other dealers to get back to me. I should have a decision soon. Then ill leave a deposit and talk financing or cash price at that point."
-output: {"disposition":"defer_with_window","explicit_disposition":true,"timeframe_text":"soon","confidence":0.9}`,
+output: {"disposition":"defer_with_window","explicit_disposition":true,"timeframe_text":"soon","sell_to_dealer_interest":false,"confidence":0.9}`,
     `EXAMPLE D
 inbound: "I need to talk to my wife first."
-output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","confidence":0.86}`,
+output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","sell_to_dealer_interest":false,"confidence":0.86}`,
     `EXAMPLE E
 inbound: "I have $2,500 down and want to stay under $500/month."
-output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","confidence":0.96}`,
+output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","sell_to_dealer_interest":false,"confidence":0.96}`,
     `EXAMPLE F
 inbound: "Do you have any black Street Glides in stock?"
-output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","confidence":0.96}`,
+output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","sell_to_dealer_interest":false,"confidence":0.96}`,
     `EXAMPLE G
 inbound: "I'm going to keep mine for now, but can you call me next month?"
-output: {"disposition":"keep_current_bike","explicit_disposition":true,"timeframe_text":"next month","confidence":0.92}`,
+output: {"disposition":"keep_current_bike","explicit_disposition":true,"timeframe_text":"next month","sell_to_dealer_interest":false,"confidence":0.92}`,
     `EXAMPLE H
 inbound: "You can hold off. Thanks"
-output: {"disposition":"stepping_back","explicit_disposition":true,"timeframe_text":"","confidence":0.95}`,
+output: {"disposition":"stepping_back","explicit_disposition":true,"timeframe_text":"","sell_to_dealer_interest":false,"confidence":0.95}`,
     `EXAMPLE I
 inbound: "I'll pass man. I just like to ride the new models and check them out. Not a big deal. Thx"
-output: {"disposition":"stepping_back","explicit_disposition":true,"timeframe_text":"","confidence":0.94}`,
+output: {"disposition":"stepping_back","explicit_disposition":true,"timeframe_text":"","sell_to_dealer_interest":false,"confidence":0.94}`,
     `EXAMPLE J
 inbound: "I have to cancel coming to you Tuesday. I'm having service done on the bike and inspection. I need to do a few more things before I can sell. I'll get back to you."
-output: {"disposition":"defer_no_window","explicit_disposition":true,"timeframe_text":"","confidence":0.93}`,
+output: {"disposition":"defer_no_window","explicit_disposition":true,"timeframe_text":"","sell_to_dealer_interest":false,"confidence":0.93}`,
     `EXAMPLE K
 inbound: "Thanks Joe. I'm all set on the bike search for the time being. Appreciate your help. I'll reach out when I'm looking again."
-output: {"disposition":"defer_no_window","explicit_disposition":true,"timeframe_text":"","confidence":0.94}`,
+output: {"disposition":"defer_no_window","explicit_disposition":true,"timeframe_text":"","sell_to_dealer_interest":false,"confidence":0.94}`,
     `EXAMPLE L
 inbound: "I'm not looking right now but I'll get a hold of you when I'm ready."
-output: {"disposition":"defer_no_window","explicit_disposition":true,"timeframe_text":"","confidence":0.93}`,
+output: {"disposition":"defer_no_window","explicit_disposition":true,"timeframe_text":"","sell_to_dealer_interest":false,"confidence":0.93}`,
     `EXAMPLE M
 inbound: "We are out of town, but I think I will wait on deciding whether to get a Harley. Thanks for checking in with me."
-output: {"disposition":"defer_no_window","explicit_disposition":true,"timeframe_text":"","confidence":0.94}`,
+output: {"disposition":"defer_no_window","explicit_disposition":true,"timeframe_text":"","sell_to_dealer_interest":false,"confidence":0.94}`,
     `EXAMPLE N
 inbound: "Ill pass man. I was in sat for a part for my brother's bike but it was pouring. I just like to ride the new models and ck em out. Not a big deal. Thx"
-output: {"disposition":"stepping_back","explicit_disposition":true,"timeframe_text":"","confidence":0.94}`,
+output: {"disposition":"stepping_back","explicit_disposition":true,"timeframe_text":"","sell_to_dealer_interest":false,"confidence":0.94}`,
     `EXAMPLE O
 inbound: "Yes, Scott he bought a 2016 with about 10,000 about a week ago in Ohio. I forgot to tell you thank you I appreciate it."
-output: {"disposition":"stepping_back","explicit_disposition":true,"timeframe_text":"","confidence":0.94}`,
+output: {"disposition":"stepping_back","explicit_disposition":true,"timeframe_text":"","sell_to_dealer_interest":false,"confidence":0.94}`,
     `EXAMPLE P
 inbound: "I ended up buying a 2016 in Ohio. Thank you, I appreciate it."
-output: {"disposition":"stepping_back","explicit_disposition":true,"timeframe_text":"","confidence":0.95}`,
+output: {"disposition":"stepping_back","explicit_disposition":true,"timeframe_text":"","sell_to_dealer_interest":false,"confidence":0.95}`,
     `EXAMPLE Q
 inbound: "Got into a horse driving accident and broke 5 ribs and punctured a lung I'll have to pass at this point"
-output: {"disposition":"stepping_back","explicit_disposition":true,"timeframe_text":"","confidence":0.96}`,
+output: {"disposition":"stepping_back","explicit_disposition":true,"timeframe_text":"","sell_to_dealer_interest":false,"confidence":0.96}`,
     `EXAMPLE R
 inbound: "I am going to take care of the pipes myself"
-output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","confidence":0.95}`,
+output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","sell_to_dealer_interest":false,"confidence":0.95}`,
     `EXAMPLE S
 inbound: "Sounds like it could be a nice bike but a little out of my current price range. Thank you though."
-output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","confidence":0.9}`,
+output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","sell_to_dealer_interest":false,"confidence":0.9}`,
     `EXAMPLE T
 inbound: "Money's just too tight right now, I've got to stop looking for a while."
-output: {"disposition":"defer_no_window","explicit_disposition":true,"timeframe_text":"","confidence":0.92}`,
+output: {"disposition":"defer_no_window","explicit_disposition":true,"timeframe_text":"","sell_to_dealer_interest":false,"confidence":0.92}`,
     `EXAMPLE U
 inbound: "Im still interested but not in the market right now. I do however still like to know when bikes come in! Could o see pictures of that 883 and the price?"
-output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","confidence":0.94}`,
+output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","sell_to_dealer_interest":false,"confidence":0.94}`,
     `EXAMPLE V
 inbound: "Not buying today but definitely keep me posted when something comes in. How many miles on that one?"
-output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","confidence":0.93}`
+output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","sell_to_dealer_interest":false,"confidence":0.93}`
   ];
 
   const prompt = [
@@ -6884,7 +6911,7 @@ output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","
     "Return only JSON that matches the provided schema.",
     "",
     "Disposition rules:",
-    "- sell_on_own: customer says they will sell their bike on their own / themselves. ONLY about selling their own bike - handling parts, accessories, pipes, installs, or service themselves is NOT a disposition (return none; the deal is still active, the customer is just reducing work scope).",
+    "- sell_on_own: customer says they will sell their bike WITHOUT US - 'on my own', 'myself', 'privately', 'list it on Marketplace/Craigslist', 'sell it to a buddy'. ONLY about selling their own bike - handling parts, accessories, pipes, installs, or service themselves is NOT a disposition (return none; the deal is still active, the customer is just reducing work scope).",
     "- keep_current_bike: customer says they are going to keep their current bike.",
     "- stepping_back: customer indicates they are passing or holding off now without specific sell/keep wording.",
     "- defer_no_window: customer defers with no concrete timeframe (e.g., 'not ready', 'maybe later').",
@@ -6897,6 +6924,9 @@ output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","
     "- Price objection, ONE bike: if the customer says a SPECIFIC bike is too expensive / out of their range but is still shopping (e.g. 'a little out of my range, keep me posted', 'I'll wait for something else', 'anything else come in?'), that is a live objection on that unit, NOT a closeout — return none (the lead is still active).",
     "- Budget stop, no continued shopping: if the customer says they generally can't afford anything right now / are stopping the search over money with no continued-shopping signal, treat as defer_no_window unless they give a clear timeframe (then defer_with_window).",
     "- Not-buying-now but still SUBSCRIBED, or with a live ask: if the customer says they are not in the market / not buying right now BUT (a) asks us to keep telling them when bikes come in ('still like to know when bikes come in', 'keep me posted', 'text me when one shows up'), or (b) asks a direct question about a specific unit in the same message (pictures, price, mileage, specs, availability), that is NOT a closeout — return none. The lead is active and is owed an answer to the question they just asked. This is different from a customer who will contact US later with no ask of their own (that is still defer_no_window).",
+    "- SELL OUTRIGHT = SELLING IT TO US (dealer parlance, never a closeout): 'sell it outright', 'sell outright', 'sell it to you guys', 'you guys buy it', 'straight cash offer from you' all mean the customer wants to sell their bike TO THE DEALERSHIP for cash. In dealer parlance 'trade in' and 'sell outright' are BOTH transactions with us - a trade applies the bike's value toward a purchase, an outright sale is us buying it for cash with no purchase attached. This is a LIVE acquisition/appraisal lead, the OPPOSITE of sell_on_own: return disposition='none', explicit_disposition=false, sell_to_dealer_interest=true. NEVER sell_on_own.",
+    "- Answering our own trade-vs-sell question: if a recent 'out:' message asked something like 'are you looking to trade it in or sell it outright?', then a bare reply of 'sell it outright' / 'outright' / 'sell it' is answering THAT question - sell_to_dealer_interest=true, disposition='none'.",
+    "- sell_to_dealer_interest=true and disposition='sell_on_own' are mutually exclusive; never return both. sell_to_dealer_interest is false unless the customer wants US to buy their bike.",
     "- explicit_disposition=true only when disposition is clearly expressed.",
     "- timeframe_text should contain the raw timeframe phrase when disposition is defer_with_window; otherwise empty string.",
     "- If a clear disposition is mixed with another active request, still parse the disposition but preserve any raw timeframe phrase.",
@@ -6941,15 +6971,22 @@ output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","
       : "none";
   const explicitDisposition = !!parsed.explicit_disposition;
   const timeframeText = cleanOptionalString(parsed.timeframe_text);
+  const sellToDealerInterest = !!parsed.sell_to_dealer_interest;
   const confidence =
     typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
       ? Math.max(0, Math.min(1, parsed.confidence))
       : undefined;
 
+  // Invariant (fail-safe): "sell it to the dealer" and "sell it on my own" are opposites.
+  // If the model emits both, drop the closeout half rather than the acquisition half — a
+  // false closeout closes a live lead, a false acquisition only adds a staff task.
+  const conflicted = sellToDealerInterest && disposition === "sell_on_own";
+
   return {
-    disposition,
-    explicitDisposition,
+    disposition: conflicted ? "none" : disposition,
+    explicitDisposition: conflicted ? false : explicitDisposition,
     timeframeText,
+    sellToDealerInterest,
     confidence
   };
 }

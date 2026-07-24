@@ -624,6 +624,7 @@ import {
   decideIndefiniteDeferTurn,
   decideInternationalLeadTurn,
   decideDecideSoonTurn,
+  decideSellToDealerTurn,
   decideNonBuyerSurveyTurn,
   decideDealerLeadSurveyTurn,
   decideFinancePricingTurn,
@@ -25805,7 +25806,10 @@ function hasCustomerDispositionParserHintText(text: string | null | undefined): 
   // The decide-soon alternatives at the tail are a COST PRE-FILTER only (fail-safe: a hint miss
   // just skips the LLM call = today's behavior); comprehension stays with the disposition parser
   // (defer_with_window + structured timeframe slot → decideDecideSoonTurn, Joe ruling 2026-07-23).
-  return /\b(sell (it|my bike|my motorcycle|my ride)|on my own|myself|keep (it|my bike|my motorcycle|my ride)|all set(?: on| with)?(?: the)?(?: bike search|search|shopping|looking)?|hold off|pass for now|i(?:'|’)?ll pass|i(?:'|’)?ll have to pass|i will pass|i will have to pass|have to pass(?: at this point| for now)?|not interested|not looking|no thanks|no thank you|already bought|already purchased|bought elsewhere|purchased elsewhere|found one|got one|not ready|wait on deciding|hold off deciding|get back to you|reach out when|looking again|maybe later|maybe\s+(?:next|this)\s+(?:spring|summer|fall|autumn|winter|season|year|month)|can(?:not|'t)\s+do it now|can(?:not|'t)\s+afford|too (expensive|high)|out of (my )?budget|can't do that right now|not in the budget|(?:decide|decision|deciding|know)\s+(?:very\s+|real\s+|really\s+|pretty\s+)?(?:soon|shortly)|have\s+a\s+decision|decision\s+(?:in|within)\s+a\s+day)\b/i.test(
+  // The "outright" alternative is likewise COST-only, and exists for two-path parity: the live
+  // path calls the parser unconditionally while regen gates on this hint, so without it a turn
+  // like "I'd rather sell outright" would parse live and not on regen (+17169831712).
+  return /\b(sell (it|my bike|my motorcycle|my ride)|sell(?:ing)? (?:it |my bike |my motorcycle |my ride )?outright|on my own|myself|keep (it|my bike|my motorcycle|my ride)|all set(?: on| with)?(?: the)?(?: bike search|search|shopping|looking)?|hold off|pass for now|i(?:'|’)?ll pass|i(?:'|’)?ll have to pass|i will pass|i will have to pass|have to pass(?: at this point| for now)?|not interested|not looking|no thanks|no thank you|already bought|already purchased|bought elsewhere|purchased elsewhere|found one|got one|not ready|wait on deciding|hold off deciding|get back to you|reach out when|looking again|maybe later|maybe\s+(?:next|this)\s+(?:spring|summer|fall|autumn|winter|season|year|month)|can(?:not|'t)\s+do it now|can(?:not|'t)\s+afford|too (expensive|high)|out of (my )?budget|can't do that right now|not in the budget|(?:decide|decision|deciding|know)\s+(?:very\s+|real\s+|really\s+|pretty\s+)?(?:soon|shortly)|have\s+a\s+decision|decision\s+(?:in|within)\s+a\s+day)\b/i.test(
     lower
   ) || hasBoughtElsewhereDispositionSignalText(lower);
 }
@@ -25918,6 +25922,14 @@ function resolveCustomerDispositionDecision(
     isHealthUpdateWithoutScheduleAsk(text) ||
     isLogisticsProgressUpdateText(text)
   ) {
+    return null;
+  }
+  // Invariant guard (fail-safe, shared by live + regen + human-mode): a customer who wants to
+  // sell their bike TO US ("sell it outright") is an acquisition lead, never a sell-on-own
+  // closeout. Guards our OWN typed parser slot, not customer prose — if a future model still
+  // emits the conflicting sell_on_own, we refuse to close the lead on it.
+  // (+17169831712, 2026-07-23 — see decideSellToDealerTurn.)
+  if (parsed?.sellToDealerInterest) {
     return null;
   }
   const parsedAccepted = isDispositionParserAccepted(parsed);
@@ -26122,6 +26134,61 @@ function applyDecideSoonCheckInFromDispositionParse(
     leadKey: conv.leadKey,
     dueInDays: decision.dueInDays,
     timeframeText: parse?.timeframeText ?? null
+  });
+  return true;
+}
+
+/**
+ * Sell-to-dealer (outright cash sale) appraisal (+17169831712, Josh Kiddy, 2026-07-23): staff
+ * asked "trading the bike in or you want to sell outright?" and "Sell it outright." parsed as
+ * sell_on_own @0.98 — the lead was CLOSED, cadence paused_indefinite and watches paused, with
+ * a farewell brush-off. "Sell outright" is dealer parlance for US buying the bike for cash: a
+ * live used-inventory acquisition lead. See decideSellToDealerTurn in routeStateReducer.
+ *
+ * Shared by BOTH paths (/webhooks/twilio + /conversations/:id/regenerate) plus human-mode —
+ * one helper, no mirrored locals. NON-terminal on purpose: it only sets the existing trade
+ * state + drops a staff appraisal task, then lets the turn fall through to the normal draft
+ * pipeline, which already owns the in-person-appraisal wording. It deliberately never stops
+ * cadence, never sets a follow-up mode and never closes the conversation — that suppression is
+ * the bug this fixes. addTodo's class-keyed merge dedups a regen re-run of the same turn.
+ */
+function applySellToDealerAppraisalFromDispositionParse(
+  conv: any,
+  parse: CustomerDispositionParse | null,
+  sourceMessageId: string | undefined,
+  path: "live" | "regen"
+): boolean {
+  const decision = decideSellToDealerTurn({
+    sellToDealerInterest: !!parse?.sellToDealerInterest,
+    disposition: parse?.disposition ?? null,
+    confidence: parse?.confidence ?? null,
+    conversationClosed: conv?.status === "closed",
+    saleRecorded: !!conv?.sale?.soldAt
+  });
+  if (decision.kind !== "sell_to_dealer_appraisal") return false;
+  if (conv?.lead) {
+    conv.lead.sellOption = "cash";
+    conv.lead.sellOptionUpdatedAt = new Date().toISOString();
+  }
+  // Don't stomp an in-flight scheduling or an already-set trade state.
+  if (!isScheduleDialogState(getDialogState(conv)) && !isTradeDialogState(getDialogState(conv))) {
+    setDialogState(conv, "trade_cash");
+  }
+  const name = normalizeDisplayCase(conv?.lead?.firstName) || "Customer";
+  const task = addTodo(
+    conv,
+    "call",
+    `${name} wants to sell their bike to us outright (cash, not a trade) - line up an in-person appraisal (photos, mileage, VIN, payoff).`,
+    sourceMessageId,
+    undefined,
+    undefined,
+    "followup"
+  );
+  if (!task) return false;
+  recordRouteOutcome(path, "sell_to_dealer_appraisal_task", {
+    convId: conv.id,
+    leadKey: conv.leadKey,
+    confidence: parse?.confidence ?? null
   });
   return true;
 }
@@ -56545,6 +56612,13 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       event.providerMessageId,
       "regen"
     );
+    // Sell-to-dealer outright cash sale (+17169831712) — same shared helper as the live path.
+    applySellToDealerAppraisalFromDispositionParse(
+      conv,
+      regenCustomerDispositionParse,
+      event.providerMessageId,
+      "regen"
+    );
   }
   const regenFollowUpDeferralDecision = resolveCustomerFollowUpDeferralDecision(
     event.body ?? "",
@@ -59124,6 +59198,16 @@ if (authToken && signature) {
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
       return res.status(200).type("text/xml").send(twiml);
     }
+    // Sell-to-dealer outright cash sale — the same shared helper the live + regen paths use.
+    // This is the exact turn that produced the bug (+17169831712 was in staff takeover when
+    // the rep asked "trading it in or sell outright?"), so the owner gets the appraisal task
+    // here too; the reply itself stays hands-off in human mode.
+    applySellToDealerAppraisalFromDispositionParse(
+      conv,
+      humanModeDispositionParse,
+      event.providerMessageId,
+      "live"
+    );
     const humanModePurchaseDeliveryLogisticsParse =
       event.provider === "twilio" &&
       hasPurchaseDeliveryLogisticsParserHint(
@@ -60214,6 +60298,14 @@ if (authToken && signature) {
   // typed disposition parse; the turn continues to normal routing/drafting below.
   if (event.provider === "twilio") {
     applyDecideSoonCheckInFromDispositionParse(
+      conv,
+      customerDispositionParse,
+      event.providerMessageId,
+      "live"
+    );
+    // Sell-to-dealer outright cash sale (+17169831712) — non-terminal; the turn continues to
+    // normal routing/drafting so the existing appraisal copy owns the wording.
+    applySellToDealerAppraisalFromDispositionParse(
       conv,
       customerDispositionParse,
       event.providerMessageId,

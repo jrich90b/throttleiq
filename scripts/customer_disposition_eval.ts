@@ -120,6 +120,60 @@ assert.ok(
   `the vague near-term phrase must land in the structured timeframe slot, got "${decideSoon.timeframeText}"`
 );
 
+// 7) THE FIX — "sell outright" is dealer parlance for selling the bike TO US for cash, an
+// acquisition lead, NOT sell_on_own. Production replay (Josh Kiddy +17169831712, 2026-07-23):
+// staff (in takeover) asked "are you looking into trading the bike in or you want to sell
+// outright?" and he answered "Sell it outright." The parser returned sell_on_own @0.98 →
+// customer_sell_on_own → the conversation was CLOSED, cadence paused_indefinite, inventory
+// watches paused, and he got "I hear you. If anything changes down the road, just give me a
+// shout." A customer handing us used inventory was durably parked.
+const sellOutright = await disp("Sell it outright.", [
+  { direction: "in", body: "Just seeing what my bike is worth" },
+  { direction: "out", body: "are you looking into trading the bike in or you want to sell outright?" }
+]);
+assert.ok(
+  !CLOSEOUT_DISPOSITIONS.has(sellOutright.disposition),
+  `selling the bike TO US must NOT close the lead — got ${sellOutright.disposition}`
+);
+assert.equal(
+  sellOutright.disposition,
+  "none",
+  `"sell it outright" should parse as none, got ${sellOutright.disposition}`
+);
+assert.equal(
+  sellOutright.sellToDealerInterest,
+  true,
+  `"sell it outright" must set the sell_to_dealer_interest slot (feeds decideSellToDealerTurn)`
+);
+
+// 7b) GENERALIZATION — no staff anchor, paraphrased (NOT the verbatim few-shot). On current
+// main this parsed sell_on_own @0.95: the most explicit "I'm selling my bike TO YOU" sentence
+// in the language was closing the lead.
+const sellOutrightNoAnchor = await disp(
+  "I'd rather you guys just buy it from me outright instead of trading it in."
+);
+assert.ok(
+  !CLOSEOUT_DISPOSITIONS.has(sellOutrightNoAnchor.disposition),
+  `an unanchored outright-sale offer must NOT close the lead — got ${sellOutrightNoAnchor.disposition}`
+);
+assert.equal(
+  sellOutrightNoAnchor.sellToDealerInterest,
+  true,
+  `an unanchored outright-sale offer must set sell_to_dealer_interest`
+);
+
+// 7c) REGRESSION GUARD — a genuine sell-it-without-us still closes out (protects EXAMPLE B).
+const sellPrivately = await disp("I think I'll just list it on Marketplace and sell it privately.");
+assert.equal(
+  sellPrivately.disposition,
+  "sell_on_own",
+  `selling it privately should stay sell_on_own, got ${sellPrivately.disposition}`
+);
+assert.ok(
+  !sellPrivately.sellToDealerInterest,
+  `selling it privately must NOT set sell_to_dealer_interest`
+);
+
 console.log(
-  "PASS customer disposition eval — price-objection carve-out + alert-keeper live-ask carve-out + decide-soon window (none / defer_no_window / defer_with_window)"
+  "PASS customer disposition eval — price-objection carve-out + alert-keeper live-ask carve-out + decide-soon window + sell-outright-to-dealer carve-out (none / defer_no_window / defer_with_window / sell_on_own)"
 );
