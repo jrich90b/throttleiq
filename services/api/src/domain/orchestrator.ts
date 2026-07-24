@@ -16,6 +16,7 @@ import {
   classifySmallTalkWithLLM,
   parseDealershipFaqTopicWithLLM,
   parseDialogActWithLLM,
+  parsePriceQuoteObjectionWithLLM,
   generateDraftWithLLM,
   selfHealDraftWithLLM,
   summarizeConversationMemoryWithLLM
@@ -40,8 +41,8 @@ import {
 import { findMsrpPricing, getMsrpColorNames } from "./msrpPriceList.js";
 import { getInventoryNote } from "./inventoryNotes.js";
 import { getDealerProfile } from "./dealerProfile.js";
-import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, GENERIC_AGENT_DISPLAY_NAME } from "./agentVoice.js";
-import { decideEventPromoTurn } from "./routeStateReducer.js";
+import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildPriceObjectionCheaperWatchReply, GENERIC_AGENT_DISPLAY_NAME } from "./agentVoice.js";
+import { decideEventPromoTurn, decidePriceAnswerAnchor, decidePriceObjectionTurn } from "./routeStateReducer.js";
 import { buildLongTermTimelineMessage } from "./longTermMessage.js";
 import { matchPartsCatalogLexicon } from "./partsCatalogLexicon.js";
 import {
@@ -1427,6 +1428,50 @@ function resolveModelsFromText(
   return Array.from(new Set(matches));
 }
 
+/**
+ * Thread unit: the most recent model DISCUSSED in this conversation (either direction),
+ * skipping the current turn and trade-framed messages (a trade mention names the customer's
+ * OWN bike, not the unit under discussion). Structured extraction over our own message log
+ * against the known-model catalog — this is the "bike under discussion" anchor Joe ruled
+ * pricing answers must use over the stale ADF lead record (2026-07-23, +17166021492).
+ */
+function resolveRecentDiscussedVehicle(
+  currentTurnBody: string,
+  history: { direction: "in" | "out"; body: string }[] | undefined,
+  models: string[]
+): { model: string; year: string | null } | null {
+  const items = (Array.isArray(history) ? history : []).slice(-12);
+  const current = String(currentTurnBody ?? "").trim();
+  for (let i = items.length - 1; i >= 0; i--) {
+    const body = String(items[i]?.body ?? "").trim();
+    if (!body) continue;
+    // The current inbound may already sit at the tail of history — it is the TURN, not the thread.
+    if (current && (body === current || body.endsWith(current))) continue;
+    if (detectTradeRequest(body)) continue;
+    const model = resolveModelFromText(body, models);
+    if (!model || isUnknownModel(model)) continue;
+    return { model, year: deriveYearFromText(body) };
+  }
+  return null;
+}
+
+/**
+ * Did one of OUR recent sends quote a concrete dollar price? Deterministic scan of the
+ * agent/staff's OWN outbound copy (eligibility gate for the price-objection parser — a
+ * side-effect gate, not customer comprehension; the customer's intent is read by
+ * parsePriceQuoteObjectionWithLLM).
+ */
+function recentOutboundQuotedPrice(
+  history: { direction: "in" | "out"; body: string }[] | undefined
+): boolean {
+  const outs = (Array.isArray(history) ? history : [])
+    .filter(h => h?.direction === "out")
+    .slice(-6);
+  return outs.some(h =>
+    /\$\s?\d{1,3}(?:,\d{3})+(?:\.\d{2})?\b|\$\s?\d{4,}(?:\.\d{2})?\b/.test(String(h?.body ?? ""))
+  );
+}
+
 function resolveMakeFromText(
   text: string | null | undefined,
   makes: string[]
@@ -2157,6 +2202,13 @@ export async function orchestrateInbound(
     dealerProfile?: any;
     agentNameOverride?: string | null;
     needsEmpathy?: boolean | null;
+    // True when the customer has ALREADY received a customer-facing outbound on this thread
+    // (hasCustomerReceivedOutbound over conv.messages — sent providers only, never draft_ai).
+    // Mid-thread, the pricing branches drop their "Hey {name}, it's {agent} over at {dealer}."
+    // re-introduction (Joe ruling 2026-07-23, +17166021492: Brian got a fresh self-intro on
+    // turn 25). Absent/undefined => introduce as before (harmless; silent identity on a true
+    // first touch is the failure this default protects against).
+    customerReceivedOutbound?: boolean | null;
     // Recent same-conversation thumbs-down notes (collectRecentStaffCorrections) — hard
     // constraints for the draft composer so it can't repeat a staff-rejected reply.
     staffCorrections?: string[] | null;
@@ -2165,6 +2217,10 @@ export async function orchestrateInbound(
   await loadSystemPrompt("orchestrator");
 
   let flowDebug: OrchestratorResult["debugFlow"] | null = null;
+  // Set by the price-objection arm: never chase "that's too much money" with a test-ride
+  // nudge in the same breath (Joe ruling 2026-07-23 — the reply is an ack + cheaper-unit
+  // watch offer, nothing else).
+  let priceObjectionTurn = false;
   const finalize = (result: OrchestratorResult): OrchestratorResult => {
     const out: OrchestratorResult = {
       ...result,
@@ -2185,7 +2241,9 @@ export async function orchestrateInbound(
       ["booked", "confirmed"].includes(String(ctx?.appointment?.status ?? "")) ||
       !!ctx?.appointment?.bookedEventId ||
       // Don't nudge a booking in the same breath as acknowledging a personal hardship.
-      !!ctx?.needsEmpathy;
+      !!ctx?.needsEmpathy ||
+      // Don't nudge a booking in the same breath as acknowledging a price objection.
+      priceObjectionTurn;
     if (
       shouldAppendVisitInvite({
         intent: String(out.intent ?? ""),
@@ -3548,29 +3606,116 @@ export async function orchestrateInbound(
       const dealerProfile = await getDealerProfileWithAgentName();
       const agentName = getAgentNameFromProfile(dealerProfile);
       const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+      // Mid-thread (the customer has already received our texts), the pricing branches must not
+      // RE-introduce the agent ("Hey Brian, it's Scott over at American Harley-Davidson." on
+      // turn 25 — Joe ruling 2026-07-23, +17166021492). First touch keeps the full intro.
+      const pricingIntro = (firstName: string): string =>
+        ctx?.customerReceivedOutbound === true ? "" : buildAgentIntro(firstName, agentName, dealerName);
       const financeLine = financeRequest ? buildFinanceAppLine(dealerProfile) : "";
       const leadInquiry = String((leadForPrice as any)?.inquiry ?? "").trim() || null;
       const pricingModelCandidates = getModelCandidates([]);
       const modelFromInboundText = resolveModelFromText(event.body, pricingModelCandidates);
-      const yearForRange =
-        leadForPrice?.vehicle?.year ??
-        deriveYearFromText(leadForPrice?.vehicle?.description ?? null) ??
-        deriveYearFromText(leadInquiry) ??
-        deriveYearFromText(event.body ?? null) ??
-        null;
-      const modelForRange =
+      // --- Reply anchor (Joe ruling 2026-07-23, +17166021492 Brian Serena): price/MSRP answers
+      // anchor to the bike under discussion THIS TURN — never the stale ADF lead-record vehicle.
+      // Brian objected to a used 2019 Tri Glide's quoted price and was answered with 2026 Street
+      // Glide Trike MSRP from his June lead record. Pure precedence lives in
+      // routeStateReducer.decidePriceAnswerAnchor; first-touch ADF pricing (no contradicting
+      // thread discussion) keeps the lead-record anchor unchanged.
+      const turnTradeFramed = detectTradeRequest(event.body);
+      const anchorTurnModel =
+        !turnTradeFramed && modelFromInboundText && !isUnknownModel(modelFromInboundText)
+          ? modelFromInboundText
+          : null;
+      const threadVehicle = resolveRecentDiscussedVehicle(
+        String(event.body ?? ""),
+        history,
+        pricingModelCandidates
+      );
+      const leadRecordModelRaw =
         leadForPrice?.vehicle?.model ??
         deriveModelFromDescription(leadForPrice?.vehicle?.description ?? null) ??
         deriveModelFromDescription(leadInquiry) ??
-        modelFromInboundText ??
         null;
+      const leadRecordModel =
+        leadRecordModelRaw && !isUnknownModel(leadRecordModelRaw) ? leadRecordModelRaw : null;
+      // Same-family containment (not strict equality) so an outbound shorthand ("the Street
+      // Glide" on a Street Glide Trike lead) never falsely contradicts the lead record.
+      const sameModelFamily = (a?: string | null, b?: string | null): boolean => {
+        const ka = normalizeModelMatchText(a);
+        const kb = normalizeModelMatchText(b);
+        return !!ka && !!kb && (ka.includes(kb) || kb.includes(ka));
+      };
+      const priceAnchor = decidePriceAnswerAnchor({
+        turnModel: anchorTurnModel,
+        threadModel: threadVehicle?.model ?? null,
+        leadModel: leadRecordModel,
+        threadMatchesLead: sameModelFamily(threadVehicle?.model, leadRecordModel)
+      });
+      const anchoredAwayFromLead = priceAnchor.source === "turn" || priceAnchor.source === "thread";
+      const leadYearChain = () =>
+        leadForPrice?.vehicle?.year ??
+        deriveYearFromText(leadForPrice?.vehicle?.description ?? null) ??
+        deriveYearFromText(leadInquiry) ??
+        null;
+      const modelForRange = anchoredAwayFromLead
+        ? (priceAnchor.source === "turn" ? anchorTurnModel : threadVehicle?.model ?? null)
+        : leadRecordModelRaw ?? modelFromInboundText ?? null;
+      const yearForRange = anchoredAwayFromLead
+        ? deriveYearFromText(event.body ?? null) ??
+          (sameModelFamily(modelForRange, threadVehicle?.model) ? threadVehicle?.year ?? null : null) ??
+          (sameModelFamily(modelForRange, leadRecordModelRaw) ? leadYearChain() : null)
+        : leadYearChain() ?? deriveYearFromText(event.body ?? null) ?? null;
       const longTermInvite = wantsSoftTimeline
         ? `I know you mentioned a ${longTermTimeframe || "longer-term"} timeline — no rush at all. ` +
           `I’m here when you’re ready. `
         : "";
       const modelUnknown = isUnknownModel(modelForRange);
-      const stockForPrice = leadForPrice?.vehicle?.stockId ?? stockIdFromText ?? null;
-      const vinForPrice = leadForPrice?.vehicle?.vin ?? null;
+      // When anchored away from the lead record, the lead's exact stock#/VIN must not drive
+      // price lookups either — same stale-record disease.
+      const stockForPrice = anchoredAwayFromLead
+        ? stockIdFromText ?? null
+        : leadForPrice?.vehicle?.stockId ?? stockIdFromText ?? null;
+      const vinForPrice = anchoredAwayFromLead ? null : leadForPrice?.vehicle?.vin ?? null;
+
+      // --- Price-objection turn (Joe ruling 2026-07-23): after WE quoted a concrete price, a
+      // bare objection ("that's too much money") gets acknowledged + offered a cheaper-unit
+      // watch — never a sticker re-quote. Parser-first (parsePriceQuoteObjectionWithLLM reads
+      // the customer's intent); pure arm decision in routeStateReducer.decidePriceObjectionTurn.
+      // Fail-safe: parser null / low confidence / concrete question => fall through to the
+      // existing pricing answers (today's behavior).
+      if (useLLM && recentOutboundQuotedPrice(history)) {
+        const objectionParse = await parsePriceQuoteObjectionWithLLM({
+          text: event.body,
+          history,
+          lead: ctx?.lead ?? undefined
+        });
+        const objectionConfidence =
+          typeof objectionParse?.confidence === "number" && Number.isFinite(objectionParse.confidence)
+            ? objectionParse.confidence
+            : 0;
+        const objectionDecision = decidePriceObjectionTurn({
+          pricingRoute: true,
+          recentOutboundQuotedPrice: true,
+          parserPriceObjection: !!objectionParse?.priceObjection,
+          parserExplicitQuestion: !!objectionParse?.explicitQuestion,
+          parserConfidence: objectionConfidence,
+          confidenceMin: Number(process.env.LLM_PRICE_OBJECTION_CONFIDENCE_MIN ?? 0.8)
+        });
+        if (objectionDecision.kind === "cheaper_watch_offer") {
+          priceObjectionTurn = true; // suppresses the proactive visit-invite append in finalize
+          const objectionModelLabel =
+            modelForRange && !isUnknownModel(modelForRange)
+              ? normalizeModelLabel(modelForRange)
+              : null;
+          return finalize({
+            intent: "PRICING",
+            stage: "ENGAGED",
+            shouldRespond: true,
+            draft: buildPriceObjectionCheaperWatchReply(objectionModelLabel),
+            pricingAttempted
+          });
+        }
+      }
       const priceLookup = await findInventoryPrice({
         stockId: stockForPrice,
         vin: vinForPrice,
@@ -3593,9 +3738,17 @@ export async function orchestrateInbound(
       if (!stockForPrice && !vinForPrice && range?.count && range.count > 1) {
         price = null;
       }
-      const hintText = [leadForPrice?.vehicle?.description, event.body].filter(Boolean).join(" ");
-      const trimHint = [leadForPrice?.vehicle?.modelOptions?.join(" "), hintText].filter(Boolean).join(" ");
-      const colorHint = [leadForPrice?.vehicle?.color, hintText].filter(Boolean).join(" ");
+      // Anchored away from the lead record => trim/color hints read the live turn only, never
+      // the stale lead vehicle's description/options/color (same disease, same ruling).
+      const hintText = anchoredAwayFromLead
+        ? String(event.body ?? "")
+        : [leadForPrice?.vehicle?.description, event.body].filter(Boolean).join(" ");
+      const trimHint = anchoredAwayFromLead
+        ? hintText
+        : [leadForPrice?.vehicle?.modelOptions?.join(" "), hintText].filter(Boolean).join(" ");
+      const colorHint = anchoredAwayFromLead
+        ? hintText
+        : [leadForPrice?.vehicle?.color, hintText].filter(Boolean).join(" ");
       const msrpLookup = await findMsrpPricing({
         year: yearForRange,
         model: mapMsrpModelAlias(modelForRange),
@@ -3621,7 +3774,9 @@ export async function orchestrateInbound(
       const downPayment = downInfo?.amount;
       const downPaymentAssumed = downInfo?.assumedThousands ?? false;
       const conditionRaw = [
-        leadForPrice?.vehicle?.condition,
+        // Anchored away from the lead record => the stale lead vehicle's condition must not
+        // color the payment math either; the looked-up item's own condition still counts.
+        anchoredAwayFromLead ? null : leadForPrice?.vehicle?.condition,
         (priceLookup as any)?.item?.condition
       ]
         .filter(Boolean)
@@ -3866,7 +4021,7 @@ export async function orchestrateInbound(
           const disclaimer = "MSRP is before tax, fees, trade-in, and financing.";
           const timelineNote = longTermInvite ? longTermInvite.trim() : "";
           const draft =
-            `${buildAgentIntro(firstName, agentName, dealerName)}Thanks for your interest in the ${yearLabel}${modelLabel}. ` +
+            `${pricingIntro(firstName)}Thanks for your interest in the ${yearLabel}${modelLabel}. ` +
             `${priceLine} ${disclaimer}` +
             (timelineNote ? ` ${timelineNote}` : "") +
             (financeLine ? ` ${financeLine}` : "");
@@ -3908,7 +4063,7 @@ export async function orchestrateInbound(
               : null;
             const timelineNote = longTermInvite ? longTermInvite.trim() : "";
             const draft =
-              `${buildAgentIntro(firstName, agentName, dealerName)}Thanks for your interest in the ${originalLabel}. ` +
+              `${pricingIntro(firstName)}Thanks for your interest in the ${originalLabel}. ` +
               `We don’t have a ${originalLabel} in stock right now, ` +
               `but we do have ${fallbackLabel} units available. ${priceLine} ` +
               `${fallbackNote ? `Right now there's ${fallbackNote} available. ` : ""}` +
@@ -3934,7 +4089,7 @@ export async function orchestrateInbound(
             : "Thanks for the update.";
           const timelineNote = longTermInvite ? longTermInvite.trim() : "";
           const draft =
-            `${buildAgentIntro(firstName, agentName, dealerName)}` +
+            `${pricingIntro(firstName)}` +
             `${openingLine} I’d love to help with pricing. Which ${yearLabel}model are you interested in?` +
             (timelineNote ? ` ${timelineNote}` : "") +
             (financeLine ? ` ${financeLine}` : "");
@@ -3959,7 +4114,7 @@ export async function orchestrateInbound(
             : "Thanks for the message. ";
         const timelineNote = longTermInvite ? longTermInvite.trim() : "";
         const ack =
-          `${buildAgentIntro(firstName, agentName, dealerName)}${thankLine}` +
+          `${pricingIntro(firstName)}${thankLine}` +
           "I’ll have a manager pull the exact pricing and follow up shortly." +
           (timelineNote ? ` ${timelineNote}` : "") +
           (financeLine ? ` ${financeLine}` : "");

@@ -614,6 +614,7 @@ import {
   decidePostSaleOwnershipTurn,
   decideWatchScopeTurn,
   decideLeadUnitAvailabilityDisclosure,
+  isStaleSoldAnnouncement,
   decideReservationHandoffTurn,
   decideEventPromoTurn,
   decideOwnerThreadStepBack,
@@ -770,7 +771,8 @@ import {
 } from "./domain/heldUnitWatchHeal.js";
 import {
   hasDisclosedUnitUnavailabilityWithoutReply,
-  customerSourcedInterestColor
+  customerSourcedInterestColor,
+  applyCustomerSourcedColorToUnitLabel
 } from "./domain/cadenceAvailabilityDisclosure.js";
 import {
   decideCadenceHoldTtlResume,
@@ -12691,8 +12693,20 @@ async function resolveLeadUnitAvailabilityForReply(
     formatModelToken(conv?.lead?.vehicle?.model) ||
     ""
   ).replace(/^the\s+/i, "");
+  // Customer-sourced-color rule extended to ALL sold/hold disclosure branches (Joe ruling
+  // 2026-07-23, +17166021492 family; extends the 2026-07-19 William Wittmeyer ruling). The
+  // hold/sold store label is staff/feed-entered and may carry a color clause the customer
+  // never asked about — strip it unless the customer sourced that color themselves.
+  const interestColorForLabel = customerSourcedInterestColor({
+    leadColor: conv?.lead?.vehicle?.color,
+    inboundColor: extractColorMention(getLastInboundBody(conv))
+  });
+  const storeLabel = applyCustomerSourcedColorToUnitLabel(
+    String((sold as any)?.label ?? (hold as any)?.label ?? "").trim(),
+    interestColorForLabel
+  );
   const unitLabel =
-    String((sold as any)?.label ?? (hold as any)?.label ?? "").trim() ||
+    storeLabel ||
     modelLabel ||
     (stockId ? `stock ${stockId}` : vin ? `VIN ${vin}` : "");
   if (sold) {
@@ -12797,19 +12811,45 @@ async function buildCadenceLeadUnitAvailabilityOverride(args: {
   // the first disclosure carries the follow-through; let the normal cadence run.
   if (hasDisclosedUnitUnavailabilityWithoutReply(conv?.messages)) return null;
 
+  // Sold-news staleness cap (Joe ruling 2026-07-23): a months-old sale is not news — never
+  // open a proactive cadence touch with a stale "quick update — it's no longer available".
+  // Decision is pure (routeStateReducer.isStaleSoldAnnouncement; unknown soldAt => announce).
+  // A live hold still discloses as a hold; with nothing fresh to announce the normal cadence
+  // runs instead. The responsive reply-side disclosure is deliberately NOT capped.
+  const soldNewsMaxAgeDaysRaw = Number(process.env.SOLD_NEWS_MAX_AGE_DAYS ?? NaN);
+  const soldForNews =
+    sold &&
+    !isStaleSoldAnnouncement({
+      soldAtIso: (sold as any)?.soldAt ?? null,
+      nowMs: Date.now(),
+      maxAgeDays: Number.isFinite(soldNewsMaxAgeDaysRaw) ? soldNewsMaxAgeDaysRaw : null
+    })
+      ? sold
+      : null;
+  if (!soldForNews && !hold) return null;
+
   const firstName = normalizeDisplayCase(args.name || "there");
   const modelLabel =
     formatModelLabelForFollowUp(conv?.lead?.vehicle?.year ?? null, conv?.lead?.vehicle?.model ?? null) ||
     formatModelToken(conv?.lead?.vehicle?.model) ||
     "";
   const watchLabel = modelLabel ? `another ${modelLabel}` : "one like it";
+  // Customer-sourced-color rule extended to ALL sold/hold disclosure branches (Joe ruling
+  // 2026-07-23): the store label may carry a feed/staff color the customer never asked about.
+  const interestColorForLabel = customerSourcedInterestColor({
+    leadColor: conv?.lead?.vehicle?.color,
+    inboundColor: extractColorMention(getLastInboundBody(conv))
+  });
+  const storeLabel = applyCustomerSourcedColorToUnitLabel(
+    String(soldForNews?.label ?? hold?.label ?? "").trim(),
+    interestColorForLabel
+  );
   const unitLabel =
-    sold?.label ??
-    hold?.label ??
-    modelLabel ??
+    storeLabel ||
+    modelLabel ||
     (stockId ? `stock ${stockId}` : vin ? `VIN ${vin}` : "");
   const unitText = unitLabel ? `the ${unitLabel}` : "that bike";
-  const statusText = sold
+  const statusText = soldForNews
     ? "is no longer available"
     : hold
       ? "is currently on hold and may no longer be available"
@@ -13755,8 +13795,24 @@ async function buildCadenceHeldInventoryOverride(args: {
   const soldItem = status.sold[0];
   const shouldOverrideHeld =
     !!heldItem && (specificTarget || status.available.length === 0) && cadenceHeldUnitConsistent(heldItem);
+  // Sold-news staleness cap (Joe ruling 2026-07-23): "…but that bike has sold" is NEWS framing —
+  // never announce a months-old sale as an update. Pure decision in
+  // routeStateReducer.isStaleSoldAnnouncement (unknown soldAt => announce, fail toward disclosure).
+  const soldRecordForItem = (() => {
+    const key = normalizeInventorySoldKey(soldItem?.stockId ?? null, soldItem?.vin ?? null);
+    return key ? solds?.[key] ?? null : null;
+  })();
+  const soldNewsMaxAgeDaysRaw = Number(process.env.SOLD_NEWS_MAX_AGE_DAYS ?? NaN);
+  const soldNewsIsStale = isStaleSoldAnnouncement({
+    soldAtIso: (soldRecordForItem as any)?.soldAt ?? (soldItem as any)?.soldAt ?? null,
+    nowMs: Date.now(),
+    maxAgeDays: Number.isFinite(soldNewsMaxAgeDaysRaw) ? soldNewsMaxAgeDaysRaw : null
+  });
   const shouldOverrideSold =
-    !!soldItem && (specificTarget || status.available.length === 0) && cadenceHeldUnitConsistent(soldItem);
+    !!soldItem &&
+    !soldNewsIsStale &&
+    (specificTarget || status.available.length === 0) &&
+    cadenceHeldUnitConsistent(soldItem);
   recordDecisionTrace({
     scope: "regen",
     stage: "cadence.held_inventory_override",
@@ -57406,7 +57462,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     weather: weatherStatus ?? null,
     dealerProfile,
     agentNameOverride: resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile)),
-    needsEmpathy: regenAcceptedAffect?.needsEmpathy ?? null
+    needsEmpathy: regenAcceptedAffect?.needsEmpathy ?? null,
+    customerReceivedOutbound: hasCustomerReceivedOutbound(conv.messages)
   });
 
   if (!result?.draft || result.shouldRespond === false) {
@@ -67183,7 +67240,8 @@ if (authToken && signature) {
     weather: weatherStatus ?? null,
     dealerProfile: weatherProfile,
     agentNameOverride: resolveConversationAgentName(conv, resolveDealerAgentName(weatherProfile)),
-    needsEmpathy: acceptedAffect?.needsEmpathy ?? null
+    needsEmpathy: acceptedAffect?.needsEmpathy ?? null,
+    customerReceivedOutbound: hasCustomerReceivedOutbound(conv.messages)
   });
   logRouteTiming("orchestrator", orchestratorStartedAt, {
     turnPrimaryIntent: routeExecutionIntent
