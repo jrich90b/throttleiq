@@ -94,6 +94,32 @@ assert.equal(
   `a defer with no live ask should stay defer_no_window, got ${deferNoAsk.disposition}`
 );
 
+// 6) THE FIX (Joe ruling 2026-07-23) — a decide-soon turn is a WINDOWED defer with the vague
+// near-term phrase in the structured timeframe slot (feeds decideDecideSoonTurn → dated 2-3 day
+// owner check-in task). Production replay (Dennis Daffron +16303628805, 2026-07-23): hot
+// out-of-state buyer comparing dealers, "I should have a decision soon. Then ill leave a
+// deposit..." — must NEVER read as a no-window defer (that maps toward a closeout) or none.
+const decideSoon = await disp(
+  "Okay.  Im waiting on two other dealers to get back to me.  I should have a decision soon. Then ill leave a deposit and talk financing or cash price at that point.",
+  [
+    { direction: "in", body: "Do you offer shipping to Illinois" },
+    { direction: "out", body: "We can line up shipping. I just would not be able to guarantee delivery timing." }
+  ]
+);
+assert.ok(
+  !CLOSEOUT_DISPOSITIONS.has(decideSoon.disposition),
+  `a decide-soon buyer must NOT close the lead — got ${decideSoon.disposition}`
+);
+assert.equal(
+  decideSoon.disposition,
+  "defer_with_window",
+  `a decide-soon turn should parse as defer_with_window, got ${decideSoon.disposition}`
+);
+assert.ok(
+  /\b(soon|shortly)\b/i.test(String(decideSoon.timeframeText ?? "")),
+  `the vague near-term phrase must land in the structured timeframe slot, got "${decideSoon.timeframeText}"`
+);
+
 console.log(
-  "PASS customer disposition eval — price-objection carve-out + alert-keeper live-ask carve-out (none / defer_no_window / defer_with_window)"
+  "PASS customer disposition eval — price-objection carve-out + alert-keeper live-ask carve-out + decide-soon window (none / defer_no_window / defer_with_window)"
 );

@@ -6671,6 +6671,9 @@ output: {"disposition":"defer_with_window","explicit_disposition":true,"timefram
     `EXAMPLE C4
 inbound: "Give me a few days to think it over and I will let you know"
 output: {"disposition":"defer_with_window","explicit_disposition":true,"timeframe_text":"a few days","confidence":0.93}`,
+    `EXAMPLE C5
+inbound: "Okay. Im waiting on two other dealers to get back to me. I should have a decision soon. Then ill leave a deposit and talk financing or cash price at that point."
+output: {"disposition":"defer_with_window","explicit_disposition":true,"timeframe_text":"soon","confidence":0.9}`,
     `EXAMPLE D
 inbound: "I need to talk to my wife first."
 output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","confidence":0.86}`,
@@ -6739,7 +6742,7 @@ output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","
     "- keep_current_bike: customer says they are going to keep their current bike.",
     "- stepping_back: customer indicates they are passing or holding off now without specific sell/keep wording.",
     "- defer_no_window: customer defers with no concrete timeframe (e.g., 'not ready', 'maybe later').",
-    "- defer_with_window: customer defers and gives a concrete timeframe (e.g., next month/spring).",
+    "- defer_with_window: customer defers and gives a concrete timeframe (e.g., next month/spring). A stated NEAR-TERM window like 'soon' / 'shortly' ('I should have a decision soon', 'I'll decide shortly') also counts as defer_with_window — put the raw phrase (e.g. 'soon') in timeframe_text. This is different from defer_no_window's open-ended 'maybe later / when I'm ready' (no window at all).",
     "- none: no clear disposition intent.",
     "",
     "Important:",

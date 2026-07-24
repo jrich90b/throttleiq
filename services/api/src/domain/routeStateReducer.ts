@@ -2361,6 +2361,66 @@ export function decideIndefiniteDeferTurn(input: IndefiniteDeferTurnInput): Inde
   return { kind: "pause_cadence_default_window", pauseDays: INDEFINITE_DEFER_PAUSE_DAYS };
 }
 
+// Decide-soon owner check-in (Joe ruling 2026-07-23, Dennis Daffron +16303628805): a hot
+// out-of-state buyer said "Okay. Im waiting on two other dealers to get back to me. I should
+// have a decision soon. Then ill leave a deposit and talk financing or cash price at that
+// point." — a live, near-term buying decision that today produces NOTHING dated (the
+// defer_with_window machinery only knows concrete windows like "next month", and "soon" is
+// not concrete, so the turn falls through to the general draft path and the lead is carried
+// only by the generic cadence). Joe ruled: a parser-detected "I'll decide soon/shortly" turn
+// creates a DATED owner check-in task due in 2-3 days so a human circles back while the
+// decision is live.
+//
+// Deterministic bucket: this is a SIDE-EFFECT decision off a TYPED PARSER signal. The
+// customer's intent is read by parseCustomerDispositionWithLLM (defer_with_window + the
+// structured timeframe_text slot); the vague-soon classification below reads that STRUCTURED
+// slot — the parser's own extraction of the customer's timeframe phrase — never the raw
+// customer text. Fail-direction: a false negative keeps today's behavior (no task; cadence
+// still covers the lead — recoverable); a false positive costs one dated owner task (merged
+// by addTodo's class-keyed dedup — bounded, staff-visible, no customer-facing send).
+export type DecideSoonCheckInTurnKind = "owner_check_in_task" | "none";
+
+export type DecideSoonCheckInTurnInput = {
+  parserAccepted: boolean;
+  disposition?: string | null;
+  // The disposition parser's structured timeframe_text slot (the customer's own timeframe
+  // phrase as extracted by the LLM), NOT raw message text.
+  timeframeText?: string | null;
+  conversationClosed?: boolean;
+  saleRecorded?: boolean;
+};
+
+export type DecideSoonCheckInTurnDecision =
+  | { kind: "owner_check_in_task"; dueInDays: number }
+  | { kind: "none" };
+
+// Joe ruled "2-3 day"; 3 keeps the check-in inside the window without crowding day-after texts.
+export const DECIDE_SOON_CHECK_IN_DUE_DAYS = 3;
+
+// Vague near-term window classifier over the parser's structured timeframe slot: "soon",
+// "shortly", "very soon", "in a day or two", "a day or so". Concrete windows ("next month",
+// "in 3 days", "after tax return") are NOT this class — they already drive the existing
+// with-window deferral machinery (customer's own timeframe wins) and stay untouched.
+export function isVagueSoonTimeframeText(raw: string | null | undefined): boolean {
+  const t = String(raw ?? "")
+    .toLowerCase()
+    .replace(/[.!,]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!t) return false;
+  if (/^(?:in\s+)?(?:very\s+|real\s+|really\s+|pretty\s+)?(?:soon|shortly)$/.test(t)) return true;
+  if (/^(?:in\s+)?(?:the\s+next\s+)?(?:a\s+)?day\s+or\s+(?:two|so)$/.test(t)) return true;
+  return false;
+}
+
+export function decideDecideSoonTurn(input: DecideSoonCheckInTurnInput): DecideSoonCheckInTurnDecision {
+  if (!input.parserAccepted) return { kind: "none" };
+  if (String(input.disposition ?? "") !== "defer_with_window") return { kind: "none" };
+  if (input.conversationClosed || input.saleRecorded) return { kind: "none" };
+  if (!isVagueSoonTimeframeText(input.timeframeText)) return { kind: "none" };
+  return { kind: "owner_check_in_task", dueInDays: DECIDE_SOON_CHECK_IN_DUE_DAYS };
+}
+
 // Non-buyer / passenger survey lead (the Elizabeth Klapa class, 2026-06-25). A Dealer Lead
 // App "Passenger" / survey submission whose STRUCTURED purchase-timeframe field says the
 // person is explicitly NOT a buyer ("I am not interested in purchasing at this time") was

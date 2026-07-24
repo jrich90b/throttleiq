@@ -609,6 +609,7 @@ import {
   resolveRideChallengeEventTouch,
   decideInProcessDealTurn,
   decideIndefiniteDeferTurn,
+  decideDecideSoonTurn,
   decideNonBuyerSurveyTurn,
   decideDealerLeadSurveyTurn,
   decideFinancePricingTurn,
@@ -25164,7 +25165,10 @@ function hasCustomerDispositionParserHintText(text: string | null | undefined): 
   ) {
     return false;
   }
-  return /\b(sell (it|my bike|my motorcycle|my ride)|on my own|myself|keep (it|my bike|my motorcycle|my ride)|all set(?: on| with)?(?: the)?(?: bike search|search|shopping|looking)?|hold off|pass for now|i(?:'|’)?ll pass|i(?:'|’)?ll have to pass|i will pass|i will have to pass|have to pass(?: at this point| for now)?|not interested|not looking|no thanks|no thank you|already bought|already purchased|bought elsewhere|purchased elsewhere|found one|got one|not ready|wait on deciding|hold off deciding|get back to you|reach out when|looking again|maybe later|maybe\s+(?:next|this)\s+(?:spring|summer|fall|autumn|winter|season|year|month)|can(?:not|'t)\s+do it now|can(?:not|'t)\s+afford|too (expensive|high)|out of (my )?budget|can't do that right now|not in the budget)\b/i.test(
+  // The decide-soon alternatives at the tail are a COST PRE-FILTER only (fail-safe: a hint miss
+  // just skips the LLM call = today's behavior); comprehension stays with the disposition parser
+  // (defer_with_window + structured timeframe slot → decideDecideSoonTurn, Joe ruling 2026-07-23).
+  return /\b(sell (it|my bike|my motorcycle|my ride)|on my own|myself|keep (it|my bike|my motorcycle|my ride)|all set(?: on| with)?(?: the)?(?: bike search|search|shopping|looking)?|hold off|pass for now|i(?:'|’)?ll pass|i(?:'|’)?ll have to pass|i will pass|i will have to pass|have to pass(?: at this point| for now)?|not interested|not looking|no thanks|no thank you|already bought|already purchased|bought elsewhere|purchased elsewhere|found one|got one|not ready|wait on deciding|hold off deciding|get back to you|reach out when|looking again|maybe later|maybe\s+(?:next|this)\s+(?:spring|summer|fall|autumn|winter|season|year|month)|can(?:not|'t)\s+do it now|can(?:not|'t)\s+afford|too (expensive|high)|out of (my )?budget|can't do that right now|not in the budget|(?:decide|decision|deciding|know)\s+(?:very\s+|real\s+|really\s+|pretty\s+)?(?:soon|shortly)|have\s+a\s+decision|decision\s+(?:in|within)\s+a\s+day)\b/i.test(
     lower
   ) || hasBoughtElsewhereDispositionSignalText(lower);
 }
@@ -25415,6 +25419,52 @@ function buildCustomerFollowUpDeferralReply(conv?: any): string {
   return firstName
     ? `Sure ${firstName} — take your time, no rush at all.`
     : "Sure — take your time, no rush at all.";
+}
+
+/**
+ * Decide-soon owner check-in (Joe ruling 2026-07-23, Dennis Daffron +16303628805): a
+ * parser-detected "I'll decide soon/shortly" turn (customerDisposition defer_with_window
+ * whose STRUCTURED timeframe slot is the vague near-term class — see
+ * decideDecideSoonTurn in routeStateReducer) drops a DATED owner check-in task due in
+ * ~3 days so a human circles back while the decision is live. Shared by BOTH paths
+ * (/webhooks/twilio + /conversations/:id/regenerate) — one helper, no mirrored locals.
+ * Non-terminal: routing/reply for the turn is untouched; addTodo's class-keyed merge
+ * dedups a regen re-run of the same turn. Fail-direction: false negative = today's
+ * behavior (cadence still covers the lead); false positive = one dated staff task.
+ */
+function applyDecideSoonCheckInFromDispositionParse(
+  conv: any,
+  parse: CustomerDispositionParse | null,
+  sourceMessageId: string | undefined,
+  path: "live" | "regen"
+): boolean {
+  const decision = decideDecideSoonTurn({
+    parserAccepted: isDispositionParserAccepted(parse),
+    disposition: parse?.disposition ?? null,
+    timeframeText: parse?.timeframeText ?? null,
+    conversationClosed: conv?.status === "closed",
+    saleRecorded: !!conv?.sale?.soldAt
+  });
+  if (decision.kind !== "owner_check_in_task") return false;
+  const name = normalizeDisplayCase(conv?.lead?.firstName) || "Customer";
+  const dueAt = new Date(Date.now() + decision.dueInDays * 24 * 60 * 60 * 1000);
+  const task = addTodo(
+    conv,
+    "note",
+    `${name} said they should have a decision soon - check in and see where they landed.`,
+    sourceMessageId,
+    undefined,
+    { dueAt: dueAt.toISOString() },
+    "followup"
+  );
+  if (!task) return false;
+  recordRouteOutcome(path, "decide_soon_owner_check_in_task", {
+    convId: conv.id,
+    leadKey: conv.leadKey,
+    dueInDays: decision.dueInDays,
+    timeframeText: parse?.timeframeText ?? null
+  });
+  return true;
 }
 
 function buildFriendlyReachOutClose(hasAppreciation: boolean): string {
@@ -49929,17 +49979,16 @@ app.post("/conversations/:id/send", async (req, res) => {
     console.warn("[scheduler] preferred salesperson resolve failed:", err?.message ?? err);
   }
 
-  let skipManualCadenceAdvanceOnce = false;
-  const applyManualCadenceAdvance = (hadOutbound: boolean) => {
-    if (!hadOutbound) return;
-    if (skipManualCadenceAdvanceOnce) {
-      skipManualCadenceAdvanceOnce = false;
-      return;
-    }
-    if (!conv.followUpCadence || conv.followUpCadence.status !== "active") return;
-    if (conv.followUpCadence.kind === "post_sale") return;
-    advanceFollowUpCadence(conv, schedulerTimezone);
-  };
+  // Staff manual sends PAUSE the cadence but NEVER advance/burn planned ladder steps (Joe
+  // ruling 2026-07-23, Dennis Daffron +16303628805: 10 staff texts on day one each consumed a
+  // ladder step — stepIndex marched 0→9 of 13 — and pushed the next automated touch to Sept 5
+  // on a hot out-of-state buyer). The old applyManualCadenceAdvance hook that fired
+  // advanceFollowUpCadence per manual send is removed; pauseCadenceAfterManualOutbound (the
+  // existing 1-day breather) is the only cadence effect of a manual send. Deterministic
+  // bucket: cadence side-effect policy, no comprehension involved. Fail-direction: the ladder
+  // holds its planned step/timing, so the worst case is a touch the staff conversation made
+  // redundant (bounded by the 24h pause + the no-repeat cadence guards) — never a lead
+  // silently parked months out because staff were actively texting.
   const reconcileManualSmsSendState = async (args: {
     hadOutbound: boolean;
     delivered: boolean;
@@ -49961,7 +50010,6 @@ app.post("/conversations/:id/send", async (req, res) => {
       });
     }
     if (!emojiOnlyManualSms) {
-      applyManualCadenceAdvance(args.hadOutbound);
       pauseCadenceAfterManualOutbound();
       if (manualTakeover && !draftId) {
         recordManualSenderFromActor();
@@ -50097,7 +50145,6 @@ app.post("/conversations/:id/send", async (req, res) => {
       scheduleInviteCount: existingCadence?.scheduleInviteCount ?? 0,
       scheduleMuted: existingCadence?.scheduleMuted ?? false
     };
-    skipManualCadenceAdvanceOnce = true;
     recordRouteOutcome("manual", "manual_outbound_finance_needs_info_followup", {
       convId: conv.id,
       leadKey: conv.leadKey,
@@ -50353,7 +50400,6 @@ app.post("/conversations/:id/send", async (req, res) => {
         timezone: schedulerTimezone
       })
     ) {
-      skipManualCadenceAdvanceOnce = true;
       recordRouteOutcome("manual", "manual_outbound_quote_delivered_followup", {
         convId: conv.id,
         leadKey: conv.leadKey,
@@ -50996,7 +51042,6 @@ app.post("/conversations/:id/send", async (req, res) => {
           channel: "email"
         });
       }
-      applyManualCadenceAdvance(hadOutbound);
       pauseCadenceAfterManualOutbound();
       if (manualTakeover && !draftId) {
         recordManualSenderFromActor();
@@ -55701,6 +55746,16 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     return respondWithSmsRegeneratedDraft(regenReply);
   }
 
+  // Decide-soon owner check-in (Joe ruling 2026-07-23) — same shared helper as the live
+  // path (two-path parity); addTodo's class-keyed merge dedups a regen of the same turn.
+  if (event.provider === "twilio") {
+    applyDecideSoonCheckInFromDispositionParse(
+      conv,
+      regenCustomerDispositionParse,
+      event.providerMessageId,
+      "regen"
+    );
+  }
   const regenFollowUpDeferralDecision = resolveCustomerFollowUpDeferralDecision(
     event.body ?? "",
     regenCustomerDispositionParse
@@ -59338,6 +59393,16 @@ if (authToken && signature) {
     return publishLiveTwilioReply(reply);
   }
 
+  // Decide-soon owner check-in (Joe ruling 2026-07-23) — non-terminal side effect off the
+  // typed disposition parse; the turn continues to normal routing/drafting below.
+  if (event.provider === "twilio") {
+    applyDecideSoonCheckInFromDispositionParse(
+      conv,
+      customerDispositionParse,
+      event.providerMessageId,
+      "live"
+    );
+  }
   const followUpDeferralDecision = resolveCustomerFollowUpDeferralDecision(
     semanticInboundText,
     customerDispositionParse
