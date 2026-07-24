@@ -1,5 +1,41 @@
 [
   {
+    "id": "staff_availability_named_rep_saturday_from_event_context",
+    "text": "Will stone be there?",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Join us Sat, July 18, 12-5PM at American Harley-Davidson for our 250 Years of Freedom party - live music, food, and more. Reply STOP to opt out."
+      }
+    ],
+    "expected": {
+      "action": "staff_availability_question",
+      "should_reply": true,
+      "should_book": false,
+      "day_contains": "saturday"
+    }
+  },
+  {
+    "id": "staff_availability_named_rep_working_tomorrow",
+    "text": "Is Mike working tomorrow?",
+    "expected": {
+      "action": "staff_availability_question",
+      "should_reply": true,
+      "should_book": false,
+      "day_contains": "tomorrow"
+    }
+  },
+  {
+    "id": "staff_availability_you_be_in_sunday",
+    "text": "will you be in on Sunday?",
+    "expected": {
+      "action": "staff_availability_question",
+      "should_reply": true,
+      "should_book": false,
+      "day_contains": "sunday"
+    }
+  },
+  {
     "id": "answers_dealer_time_question_books_saturday_930",
     "text": "I will try to be in there by 9:30",
     "history": [

@@ -2185,6 +2185,7 @@ export type CustomerAckAction =
   | "accept_tentative_appointment"
   | "ask_for_available_times"
   | "appointment_status_question"
+  | "staff_availability_question"
   | "customer_will_provide_time"
   | "provide_arrival_window"
   | "immediate_arrival_request"
@@ -2208,6 +2209,10 @@ export type CustomerAckActionParse = {
   // Parser-read (never regex): the customer is PHYSICALLY at the dealership right now
   // ("I'm here", "just pulled in", "who do I ask for?") vs. asking to come over.
   onSite?: boolean;
+  // For `staff_availability_question` ("Will Stone be there Saturday?"): the salesperson the
+  // customer named, comprehended from the turn (may be empty when they say "will you be there?").
+  // Structured extraction — the handler resolves it against the dealer's salespeople roster.
+  staffName?: string | null;
   confidence?: number;
 };
 
@@ -3284,6 +3289,7 @@ const CUSTOMER_ACK_ACTION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     "reference",
     "normalized_text",
     "on_site",
+    "staff_name",
     "confidence"
   ],
   properties: {
@@ -3294,6 +3300,7 @@ const CUSTOMER_ACK_ACTION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
         "accept_tentative_appointment",
         "ask_for_available_times",
         "appointment_status_question",
+        "staff_availability_question",
         "customer_will_provide_time",
         "provide_arrival_window",
         "immediate_arrival_request",
@@ -3322,6 +3329,7 @@ const CUSTOMER_ACK_ACTION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     },
     normalized_text: { type: "string" },
     on_site: { type: "boolean" },
+    staff_name: { type: "string" },
     confidence: { type: "number" }
   }
 };
@@ -5244,6 +5252,9 @@ export async function parseCustomerAckActionWithLLM(args: {
     'input: "Customer: Can I come at 12 1230" history: "out: I have Fri 3:00 PM, Fri 5:00 PM, or Sat 11:30 AM — do any of those work?" output: {"action":"ask_for_available_times","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"friday","time_text":"12:30","time_window":"exact"},"reference":"last_outbound","normalized_text":"friday 12:30","confidence":0.9}',
     'input: "Customer: Hey is my appointment today Dalton Magill ?" appointment_status: "confirmed" output: {"action":"appointment_status_question","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"today","time_text":"","time_window":"unknown"},"reference":"last_appointment","normalized_text":"customer asks whether appointment is today","confidence":0.96}',
     'input: "Customer: Are we still on for today?" appointment_status: "confirmed" output: {"action":"appointment_status_question","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"today","time_text":"","time_window":"unknown"},"reference":"last_appointment","normalized_text":"customer asks whether existing appointment is still on today","confidence":0.95}',
+    'input: "Customer: Will stone be there?" history: "out: Join us Sat, July 18, 12–5PM at American Harley-Davidson for our 250 Years of Freedom party" output: {"action":"staff_availability_question","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"saturday","time_text":"","time_window":"unknown"},"reference":"last_outbound","normalized_text":"customer asks whether Stone will be at the store on Saturday","staff_name":"stone","confidence":0.95}',
+    'input: "Customer: Is Mike working tomorrow?" output: {"action":"staff_availability_question","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"tomorrow","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"customer asks whether Mike is working tomorrow","staff_name":"mike","confidence":0.95}',
+    'input: "Customer: will you be in on Sunday?" output: {"action":"staff_availability_question","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"sunday","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"customer asks whether the rep will be in on Sunday","staff_name":"","confidence":0.92}',
     'input: "Customer: Should I bring the bike and cash with me to my appointment Monday?" appointment_status: "confirmed" output: {"action":"none","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"monday","time_text":"","time_window":"unknown"},"reference":"last_appointment","normalized_text":"customer asks what to bring to the appointment (trade bike and cash down)","confidence":0.95}',
     'input: "Customer: Thursday looks like the next nice day, let me find a ride and I’ll give you a time frame" history: "out: What day/time works for you to come in and pick it up?" output: {"action":"customer_will_provide_time","explicit_action":true,"should_reply":false,"should_book":false,"requested":{"day":"thursday","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"thursday, customer will give time frame","confidence":0.96}',
     'input: "Customer: Let me do some figuring out and will let you know soon" history: "out: What day/time works for you to come in and pick it up?" output: {"action":"customer_will_provide_time","explicit_action":true,"should_reply":false,"should_book":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"customer will let us know soon","confidence":0.95}',
@@ -5278,6 +5289,7 @@ export async function parseCustomerAckActionWithLLM(args: {
     "- accept_tentative_appointment: customer acknowledges a loose 'can work / should work / if that works' proposal, but the dealer still needs permission to lock it in.",
     "- ask_for_available_times: customer asks the dealer what time works or gives a day/window and wants available options.",
     "- appointment_status_question: customer asks whether an existing appointment is today, still on, confirmed, what time it is, or who it is with.",
+    "- staff_availability_question: customer asks whether a SALESPERSON/staff member will be PRESENT or WORKING on a given day/time (\"Will Stone be there Saturday?\", \"Is Mike working tomorrow?\", \"Will you be in on Sunday?\", \"is Jenna gonna be around this weekend?\"). This is about the PERSON being in, NOT about whether the customer's own appointment stands. Put the day in requested.day and the named staff member in staff_name (empty when they say \"you\").",
     "- customer_will_provide_time: customer says they need to figure out timing, find a ride, or will let the dealer know a timeframe later. Do not ask for the time again.",
     "- provide_arrival_window: customer says they are on the way, leaving, driving, or gives a casual ETA.",
     "- immediate_arrival_request: customer says they can come now/right now/immediately, asks if they can head over now, OR says they are ALREADY here/at the shop (\"I'm here\", \"just pulled in\", \"who do I ask for?\"). Do not treat this as a booked or confirmed appointment.",
@@ -5294,6 +5306,7 @@ export async function parseCustomerAckActionWithLLM(args: {
     "- If the customer asks what time works, do not ask them for a time again; set ask_for_available_times.",
     "- If the customer asks whether an existing appointment is today/still on/confirmed, set appointment_status_question, not ask_for_available_times.",
     "- appointment_status_question is ONLY about whether/when the appointment stands. A question about what to BRING or how to PREPARE for it (\"should I bring the bike and cash?\", \"do I need my title/license?\") is a substantive question — set none so it gets a real answer, even though it mentions the appointment.",
+    "- A question about whether a NAMED person / \"you\" will be at the store on a day (\"Will Stone be there?\", \"is Mike in Saturday?\") is staff_availability_question, NOT appointment_status_question — the customer is asking about the STAFF MEMBER's presence, not their own booking. Carry the day into requested.day and the person into staff_name.",
     "- For appointment_status_question, should_book=false. The parser never confirms a new booking.",
     "- If the customer says they can come now/right now, set immediate_arrival_request, should_book=false, and do not say a time is noted.",
     "- provide_arrival_window is only a same-day, en-route ETA (\"on my way\", \"be there by 5:30\"). A future-day VISIT COMMITMENT that confirms attending on a day or at an event (\"I'll be there Saturday for the show\", \"see you Saturday\") is NOT provide_arrival_window; set none so the schedule-status handler confirms the committed day.",
@@ -5344,6 +5357,7 @@ export async function parseCustomerAckActionWithLLM(args: {
     rawAction === "accept_tentative_appointment" ||
     rawAction === "ask_for_available_times" ||
     rawAction === "appointment_status_question" ||
+    rawAction === "staff_availability_question" ||
     rawAction === "customer_will_provide_time" ||
     rawAction === "provide_arrival_window" ||
     rawAction === "immediate_arrival_request" ||
@@ -5379,6 +5393,7 @@ export async function parseCustomerAckActionWithLLM(args: {
     reference,
     normalizedText: cleanOptionalString(parsed.normalized_text) ?? null,
     onSite: !!parsed.on_site,
+    staffName: cleanOptionalString(parsed.staff_name) ?? null,
     confidence
   };
 }

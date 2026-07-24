@@ -276,6 +276,7 @@ export type SchedulingTurnKind =
   | "accept_tentative"
   | "ask_available_times"
   | "appointment_status_question"
+  | "staff_availability_question"
   | "arrival_window"
   | "immediate_arrival"
   | "purchase_delivery"
@@ -400,6 +401,10 @@ export function decideSchedulingTurn(input: SchedulingTurnInput): SchedulingTurn
         return { kind: "ask_available_times", visitCommitment };
       case "appointment_status_question":
         return { kind: "appointment_status_question", visitCommitment };
+      case "staff_availability_question":
+        // "Will Stone be there Saturday?" — answer it directly (PRESUME AVAILABLE, read the
+        // rep's calendar); the handler owns the calendar IO + reply. Joe ruling 2026-07-23.
+        return { kind: "staff_availability_question", visitCommitment };
       case "provide_arrival_window":
         // Visit commitment preempts the vague arrival-window ack (the Todd rule). A DAY-ONLY
         // commitment counts (Peter Meredith): "see you Monday" must never draw the arrival-window
@@ -583,6 +588,63 @@ export function decideSchedulingDeferralFollowUpTask(
   if (input.offeredAlternatives) return { createTask: false }; // we gave the customer times to pick
   if (!input.deferred) return { createTask: false }; // not a deferral turn
   return { createTask: true }; // deferred, not booked, no alternatives => owner must follow up
+}
+
+// ── Staff-availability question ("Will Stone be there Saturday?") ───────────────────────────
+// Joe ruling (2026-07-23, Davey +17164255036): a customer asking whether a rep will be at the
+// store on a given day gets answered DIRECTLY, policy PRESUME AVAILABLE — "the salesman should
+// be available all times unless there is a scheduling block saying something like day off." The
+// handler reads the rep's Google Calendar for the asked day; this PURE decision turns that IO
+// result into one of three arms. Extracted (like decideCustomerAckConfirmBooking) so the
+// fail-direction is unit-testable without booting the server or hitting Google Calendar.
+//
+// FAIL DIRECTION (hard): we NEVER guess a NO. A flip to "day_off" requires an EXPLICIT day-off
+// block on the calendar. If the rep can't be resolved OR the calendar can't be read/parsed, we
+// fall to "check_with" (a named "let me check with <rep>" + a task on the rep) — a safe handoff,
+// never a fabricated absence and never a fabricated confirm.
+export type StaffAvailabilityAnswerInput = {
+  repResolved: boolean; // we mapped the asked-about rep to a roster entry with a calendar
+  calendarReadable: boolean; // the calendar read for the asked day succeeded (no throw)
+  dayOffBlock: boolean; // an explicit day-off/vacation/PTO block covers the asked day
+};
+export type StaffAvailabilityAnswerKind = "present" | "day_off" | "check_with";
+export type StaffAvailabilityAnswerDecision = { kind: StaffAvailabilityAnswerKind };
+
+export function decideStaffAvailabilityAnswer(
+  input: StaffAvailabilityAnswerInput
+): StaffAvailabilityAnswerDecision {
+  // Can't resolve who / can't read the calendar → never guess; hand to the rep.
+  if (!input.repResolved) return { kind: "check_with" };
+  if (!input.calendarReadable) return { kind: "check_with" };
+  // Only an EXPLICIT day-off block flips PRESUME-AVAILABLE to not-in.
+  if (input.dayOffBlock) return { kind: "day_off" };
+  // Default: the rep is presumed working.
+  return { kind: "present" };
+}
+
+// Day-off block detection over Google Calendar event SUMMARIES for the asked day. This is
+// structured extraction of our OWN calendar data (AGENTS.md allows deterministic here), NOT
+// comprehension of free-form customer language. A day-off block reads like "Day off", "OFF",
+// "Vacation", "PTO", "OOO"/"out of office", "not in". Ordinary busy events (a booked test ride,
+// a meeting) are NOT day-off blocks — presence still holds around them.
+// FAIL DIRECTION: err toward NOT matching (→ present). We only assert not-in on an unambiguous
+// day-off phrase, so a missed match keeps the safe "yes, presumed in" answer.
+export function summaryIndicatesStaffDayOff(summary: string | null | undefined): boolean {
+  const s = String(summary ?? "").toLowerCase();
+  if (!s.trim()) return false;
+  if (/\bday\s*off\b/.test(s)) return true;
+  if (/\bout\s*of\s*office\b/.test(s) || /\bo\.?o\.?o\.?\b/.test(s)) return true;
+  if (/\bvacation\b/.test(s) || /\bpto\b/.test(s) || /\bp\.?t\.?o\.?\b/.test(s)) return true;
+  if (/\bpersonal\s+day\b/.test(s) || /\bsick\b/.test(s) || /\bfurlough\b/.test(s)) return true;
+  if (/\bnot\s+(?:in|working|here)\b/.test(s)) return true;
+  // A bare "off" token ("Stone - OFF", "OFF today"), guarded so it doesn't match "office",
+  // "offer", "off-site sales event", etc. — only a standalone word.
+  if (/(?:^|[^a-z])off(?:$|[^a-z])/.test(s) && !/off[\s-]*site/.test(s)) return true;
+  return false;
+}
+
+export function staffDayOffFromSummaries(summaries: Array<string | null | undefined>): boolean {
+  return summaries.some(summaryIndicatesStaffDayOff);
 }
 
 // The tentative-time-window arm ("probably about 11 o'clock on Monday", "maybe Saturday around 3")

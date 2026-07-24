@@ -35,6 +35,8 @@ export {
   decideCustomerAckConfirmBooking,
   decideManualConfirmPendingAppointment,
   decideSchedulingDeferralFollowUpTask,
+  decideStaffAvailabilityAnswer,
+  staffDayOffFromSummaries,
   tentativeWindowNeedsOwnerFollowUp,
   isStaleBookedAppointmentDay,
   isSettledPastAppointment,

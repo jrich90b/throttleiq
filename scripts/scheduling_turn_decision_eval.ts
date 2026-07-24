@@ -50,6 +50,13 @@ const rows: Row[] = [
   { id: "ack_accept_tentative", input: { ...base, customerAckActionAccepted: true, customerAckAction: "accept_tentative_appointment" }, kind: "accept_tentative" },
   { id: "ack_ask_times", input: { ...base, customerAckActionAccepted: true, customerAckAction: "ask_for_available_times" }, kind: "ask_available_times" },
   { id: "ack_status_q", input: { ...base, customerAckActionAccepted: true, customerAckAction: "appointment_status_question" }, kind: "appointment_status_question" },
+  // "Will Stone be there Saturday?" — a STAFF-presence question, not an appointment-status
+  // question. Own arm so it gets the calendar-backed direct answer (Joe ruling 2026-07-23,
+  // Davey +17164255036 got a vague "I'll have the team confirm your appointment status").
+  { id: "ack_staff_availability_q", input: { ...base, customerAckActionAccepted: true, customerAckAction: "staff_availability_question" }, kind: "staff_availability_question" },
+  // It stays its own arm even in a live schedule-offer context (never collapses into the
+  // appointment-status or arrival-window arms).
+  { id: "ack_staff_availability_q_no_schedule_ctx", input: { ...base, customerAckActionAccepted: true, customerAckAction: "staff_availability_question", scheduleDialogState: false, scheduleOfferContext: false }, kind: "staff_availability_question" },
   { id: "ack_arrival_window", input: { ...base, customerAckActionAccepted: true, customerAckAction: "provide_arrival_window" }, kind: "arrival_window" },
   { id: "ack_immediate", input: { ...base, customerAckActionAccepted: true, customerAckAction: "immediate_arrival_request" }, kind: "immediate_arrival" },
   { id: "ack_purchase_delivery", input: { ...base, customerAckActionAccepted: true, customerAckAction: "purchase_delivery_update" }, kind: "purchase_delivery" },
