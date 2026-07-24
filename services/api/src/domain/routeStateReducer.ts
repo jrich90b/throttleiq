@@ -2506,6 +2506,51 @@ export function decideDecideSoonTurn(input: DecideSoonCheckInTurnInput): DecideS
   return { kind: "owner_check_in_task", dueInDays: DECIDE_SOON_CHECK_IN_DUE_DAYS };
 }
 
+// Sell-to-dealer (outright cash sale) turn — the Josh Kiddy class (+17169831712, 2026-07-23).
+// Staff asked "are you looking into trading the bike in or you want to sell outright?" and the
+// customer answered "Sell it outright." In dealer parlance BOTH options are transactions with
+// US (a trade applies the bike's value toward a purchase; an outright sale is us buying it for
+// cash), but the disposition parser read it as sell_on_own @0.98 -> customer_sell_on_own ->
+// conversation CLOSED, cadence paused_indefinite, inventory watches paused, and a farewell
+// brush-off draft. A customer handing us used inventory was durably parked.
+//
+// Deterministic bucket: a SIDE-EFFECT decision off a TYPED PARSER slot. The customer's intent
+// is read by parseCustomerDispositionWithLLM (the structured sell_to_dealer_interest slot);
+// this reducer reads that STRUCTURED slot, never raw customer text.
+//
+// Fail-direction (AGENTS.md migrate-vs-keep): the behavior being corrected fails toward a
+// wrong silent answer + a lead-suppressing side effect (fail-UNSAFE). A false negative here
+// keeps today's post-fix behavior (the turn simply falls through to the normal draft pipeline
+// — recoverable); a false positive costs one staff appraisal task plus a trade_cash dialog
+// state (bounded, staff-visible, no customer-facing send). Deliberately NON-terminal: the turn
+// must continue to normal routing/drafting so the existing appraisal copy owns the wording.
+export type SellToDealerTurnKind = "sell_to_dealer_appraisal" | "none";
+
+export type SellToDealerTurnInput = {
+  // The disposition parser's structured sell_to_dealer_interest slot, NOT raw message text.
+  sellToDealerInterest: boolean;
+  // Conflict guard: sell_to_dealer_interest and sell_on_own are mutually exclusive.
+  disposition?: string | null;
+  confidence?: number | null;
+  conversationClosed?: boolean;
+  saleRecorded?: boolean;
+};
+
+export type SellToDealerTurnDecision = { kind: "sell_to_dealer_appraisal" } | { kind: "none" };
+
+// Mirrors IN_PROCESS_DEAL_CONFIDENCE_FLOOR: a task-creating side effect wants a confident read.
+export const SELL_TO_DEALER_CONFIDENCE_FLOOR = 0.8;
+
+export function decideSellToDealerTurn(input: SellToDealerTurnInput): SellToDealerTurnDecision {
+  if (!input.sellToDealerInterest) return { kind: "none" };
+  // Never fire on a conflicting parse — sell_on_own is the opposite intent.
+  if (String(input.disposition ?? "") === "sell_on_own") return { kind: "none" };
+  if (input.conversationClosed || input.saleRecorded) return { kind: "none" };
+  const confidence = typeof input.confidence === "number" ? input.confidence : 0;
+  if (!(confidence >= SELL_TO_DEALER_CONFIDENCE_FLOOR)) return { kind: "none" };
+  return { kind: "sell_to_dealer_appraisal" };
+}
+
 // Non-buyer / passenger survey lead (the Elizabeth Klapa class, 2026-06-25). A Dealer Lead
 // App "Passenger" / survey submission whose STRUCTURED purchase-timeframe field says the
 // person is explicitly NOT a buyer ("I am not interested in purchasing at this time") was

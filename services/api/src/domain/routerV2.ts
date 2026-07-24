@@ -14,6 +14,7 @@ export {
   decideInProcessDealTurn,
   decideIndefiniteDeferTurn,
   decideDecideSoonTurn,
+  decideSellToDealerTurn,
   decideNonBuyerSurveyTurn,
   decideDealerLeadSurveyTurn,
   decideFinancePricingTurn,
