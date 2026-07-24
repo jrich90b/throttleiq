@@ -13,6 +13,7 @@ export {
   resolveRideChallengeEventTouch,
   decideInProcessDealTurn,
   decideIndefiniteDeferTurn,
+  decideDecideSoonTurn,
   decideNonBuyerSurveyTurn,
   decideDealerLeadSurveyTurn,
   decideFinancePricingTurn,
