@@ -6223,16 +6223,19 @@ async function processInventoryWatchlist(targetConvId?: string, opts?: { include
       const make = matchedItem.make ?? matchedWatch.make;
       const model = matchedItem.model ?? matchedWatch.model;
       const trim = matchedWatch.trim;
-      const color = matchedItem.color ?? matchedWatch.color;
       const name = [year, make, model, trim].filter(Boolean).join(" ");
-      const colorText = color ? ` in ${color}` : "";
       const matchedKey = inventoryKey(matchedItem);
       const isNewArrival = matchedKey ? newItemKeys.has(matchedKey) : false;
       const leadFirstName = normalizeDisplayCase(String(conv.lead?.firstName ?? "").split(/\s+/)[0] ?? "");
+      // Color honesty (Joe ruling 7/23, Gregory +17165981862): the unit's color comes from the FEED
+      // only (never the watch's color presented as the unit's), and the customer's asked-about color
+      // rides along so the composer can disclose a same-model different-color arrival instead of
+      // claiming they were "watching for" a color they never asked about.
       const baseReply = buildWatchAvailableReply({
         firstName: leadFirstName || null,
         bikeLabel: name,
-        colorText,
+        unitColor: matchedItem.color ? String(matchedItem.color) : null,
+        watchedColor: matchedWatch.color ? String(matchedWatch.color) : null,
         availability: isNewArrival ? "new" : "in_stock"
       });
       const listingUrlRaw = String(matchedItem?.url ?? "").trim();
@@ -6370,14 +6373,15 @@ async function notifyInventoryWatchersForAvailableItem(
     const make = matchedItem.make ?? matchedWatch.make;
     const model = matchedItem.model ?? matchedWatch.model;
     const trim = matchedWatch.trim;
-    const color = matchedItem.color ?? matchedWatch.color;
     const name = [year, make, model, trim].filter(Boolean).join(" ");
-    const colorText = color ? ` in ${color}` : "";
     const leadFirstName = normalizeDisplayCase(String(conv.lead?.firstName ?? "").split(/\s+/)[0] ?? "");
+    // Color honesty (Joe ruling 7/23): unit color from the FEED only + the customer's asked-about
+    // color for the composer's difference disclosure — same contract as the cron fire path above.
     const baseReply = buildWatchAvailableReply({
       firstName: leadFirstName || null,
       bikeLabel: name,
-      colorText,
+      unitColor: matchedItem.color ? String(matchedItem.color) : null,
+      watchedColor: matchedWatch.color ? String(matchedWatch.color) : null,
       availability: "again"
     });
     const listingUrlRaw = String(matchedItem?.url ?? "").trim();

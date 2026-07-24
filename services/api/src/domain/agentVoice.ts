@@ -225,27 +225,76 @@ export function buildDemoRideEventSoftInvite(
 }
 
 /**
+ * Deterministic color-compatibility check between the arriving UNIT's feed color and the color
+ * the CUSTOMER asked for at watch creation (parser-captured, customer-sourced — see the
+ * watch-field hygiene rules). This compares two STRUCTURED fields we already hold (inventory-feed
+ * color vs the watch's captured color) — structured-field comparison / invariant guard, NOT
+ * customer-intent comprehension, so a normalized string compare is the sanctioned tool here.
+ * Containment either way counts as compatible ("Black" asked, "Vivid Black" arrived), so the
+ * "different color" disclosure only fires when the colors genuinely differ. Fail direction: a
+ * false "different" produces an extra honest disclosure line (harmless); the guard never lets a
+ * mismatched unit masquerade as the asked-about color.
+ */
+function watchColorsCompatible(unitColor: string, watchedColor: string): boolean {
+  const norm = (s: string) =>
+    String(s ?? "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+  const unit = norm(unitColor);
+  const watched = norm(watchedColor);
+  if (!unit || !watched) return false;
+  return unit === watched || unit.includes(watched) || watched.includes(unit);
+}
+
+/**
  * Inventory-watch "your bike is in stock" notification (the watch-fire reply). Beyond announcing the unit,
  * it (1) ASKS whether they're still looking, and (2) offers a clean opt-out — "if you're all set I'll take
  * you off the list." A "no / all set / found one" reply is read by the watch-opt-out parser
  * (decideWatchOptOutTurn) which PAUSES the watch, so the customer can remove themselves and we stop pinging
  * a lead who has moved on (Joe, 2026-06-26). Pinned by watch_available_reply:eval.
+ *
+ * COLOR HONESTY (Joe ruling, 2026-07-23 — Gregory +17165981862): a same-model different-color
+ * arrival still fires, but the text must be honest about color. The composer owns the phrasing:
+ * - unit color ≠ the color the customer asked about → announce the unit AND disclose the
+ *   difference ("this one's Teal Thunder, not the Dark Billiard Gray you asked about").
+ * - the customer never gave a color (model-only watch) → the unit's color is stated as the
+ *   UNIT's color ("this one's Teal Thunder"), never inside the "you were watching for" claim —
+ *   Gregory's watch was model-only and the old template claimed he was watching for Teal Thunder.
+ * - colors compatible → the old "in <color> you were watching for" phrasing (the claim is true).
+ * - unit color unknown → no color claim at all (never present the WATCH's color as the unit's).
+ * NEVER claim the customer was watching for a color he didn't ask for.
  */
 export function buildWatchAvailableReply(args: {
   firstName?: string | null;
   bikeLabel: string; // e.g. "2025 Harley-Davidson Breakout"
-  colorText?: string | null; // e.g. " in Billiard Gray" (already prefixed) or empty
+  unitColor?: string | null; // the arriving UNIT's color, from the inventory feed ONLY
+  watchedColor?: string | null; // the color the CUSTOMER asked for at watch creation (parser-captured)
   availability?: "new" | "in_stock" | "again";
 }): string {
   const opener = args.firstName ? `Hey ${args.firstName}, good news` : "Good news";
-  const bike = `${args.bikeLabel}${args.colorText ?? ""}`;
+  const unitColor = String(args.unitColor ?? "").trim();
+  const watchedColor = String(args.watchedColor ?? "").trim();
   const arrival =
     args.availability === "new" ? "just came in" : args.availability === "again" ? "is available again" : "is in stock now";
-  return (
-    `${opener} — a ${bike} you were watching for ${arrival}. ` +
+  const tail =
     "Are you still looking? If so I can send details or set up a time to come see it — " +
-    "and if you're all set, just let me know and I'll take you off the list."
-  );
+    "and if you're all set, just let me know and I'll take you off the list.";
+  if (unitColor && watchedColor && !watchColorsCompatible(unitColor, watchedColor)) {
+    // Same model, different color — fire, but disclose the difference honestly.
+    return (
+      `${opener} — a ${args.bikeLabel} you were watching for ${arrival}. ` +
+      `One thing: this one's ${unitColor}, not the ${watchedColor} you asked about — still worth a look if you're open on color. ` +
+      tail
+    );
+  }
+  if (unitColor && !watchedColor) {
+    // Model-only watch — state the color as the UNIT's, never as what they watched for.
+    return `${opener} — a ${args.bikeLabel} you were watching for ${arrival} — this one's ${unitColor}. ${tail}`;
+  }
+  // Compatible color (claim is true) — or no unit color to speak of (no color claim at all).
+  const bike = unitColor ? `${args.bikeLabel} in ${unitColor}` : args.bikeLabel;
+  return `${opener} — a ${bike} you were watching for ${arrival}. ${tail}`;
 }
 
 /**
