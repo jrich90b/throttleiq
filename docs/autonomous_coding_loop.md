@@ -152,6 +152,37 @@ Tiers: `corpus_replay_regression`/`corpus_replay_error` → Tier 2 escalate;
 0 5 * * * /bin/bash -lc "cd /home/ubuntu/leadrider-api/americanharley && set -a; . /home/ubuntu/leadrider-runtime/americanharley/api.env; set +a; LLM_ENABLED=1 DATA_DIR=/home/ubuntu/leadrider-runtime/americanharley/data REPORT_ROOT=/home/ubuntu/leadrider-runtime/americanharley/reports npm run corpus_replay:nightly >> /home/ubuntu/leadrider-runtime/americanharley/reports/corpus_replay_cron.log 2>&1"
 ```
 
+### Auto-reproduce sweep — behavioral confirmation before a work order lands (Joe, 2026-07-24)
+`anomaly_loop_detect` already drops findings via three suppression passes, but all three are
+date/commit-name GUESSES — none re-runs the conversation to confirm the miss still reproduces on
+the DEPLOYED code, so a human still hand-triaged next.json each run (re-replaying candidate turns
+to separate live misses from already-fixed ghosts). This sweep moves that triage into the routine.
+Between the open-critic (8:52) and DETECT (8:55), `reproduce_confirm_sweep.ts` reads the prior
+work order, picks the top-N eligible + pinned findings (`corpus_replay_judge_fail` /
+`human_correction_material` only — dims where a last-turn replay is a meaningful reproduce),
+snapshots the store locally, re-replays each pinned turn against the deployed dist
+(`inbound_shadow_replay --last-turn-only --conv …`) for `REPRODUCE_CONFIRM_SAMPLES` (default 2)
+independent passes, and judges each new draft with the SAME intent-handled judge the flywheel uses
+(`realJudge` → `scoreTurn` → `adjustScore`). It writes `reports/reproduce_confirm/latest.json` =
+`{ generatedAt, commit: <HEAD>, confirmed[] }`, listing ONLY findings whose every sample found the
+pinned turn, matched its messageId, and PASSED. DETECT's 4th suppression pass drops exactly those
+keys under a freshness + **commit-binding** guard (`parseReproduceConfirmPayload`: a deploy between
+the sweep and DETECT invalidates every verdict → suppress nothing). Fail-safe, one direction only —
+surface: any replay/judge error, a still-reproducing turn, a messageId mismatch (the conversation
+moved on), a moved commit, or a stale file KEEPS the finding. Bounded (`REPRODUCE_CONFIRM_MAX`,
+default 8) with a judge cache; needs `OPENAI_API_KEY` + the deployed dist (no `tsc` on the box).
+Pinned by `reproduce_confirm_suppression:eval` (pure — the deterministic selection/gate/partition/
+parse fail-safe; the LLM judge is exercised only in the live sweep, like `intent_handled:eval`).
+
+```
+# 8:53 AM ET — auto-reproduce sweep: re-replay top-N eligible findings, confirm still-reproducing (needs OPENAI_API_KEY + dist)
+53 8 * * * /bin/bash -lc "cd /home/ubuntu/leadrider-api/americanharley && set -a; . /home/ubuntu/leadrider-runtime/americanharley/api.env; set +a; LLM_ENABLED=1 DATA_DIR=/home/ubuntu/leadrider-runtime/americanharley/data REPORT_ROOT=/home/ubuntu/leadrider-runtime/americanharley/reports npm run reproduce_confirm_sweep >> /home/ubuntu/leadrider-runtime/americanharley/reports/reproduce_confirm_cron.log 2>&1"
+```
+
+Ordering note: DETECT consumes whatever `latest.json` is fresh + commit-matched — same-run timing
+is not required, because per-conv API boots (~5–15s each) can overrun the 2-minute gap and the
+commit-binding guard makes deferred (next-run) consumption safe.
+
 ### Anomaly-loop DETECT → CLASSIFY cron (Phase 3, LIVE on americanharley 2026-06-25)
 Five minutes after the feed refreshes, classify it into a tier-tagged WORK ORDER (`reports/anomaly_loop/
 next.json`) via `classifyOutcomeAnomaly` (the tier contract as code). It also MERGES the Net 3

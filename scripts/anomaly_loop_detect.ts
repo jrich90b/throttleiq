@@ -202,6 +202,49 @@ let suppressedShippedEcho: Array<{ convId: string; dimension: string; reason: st
   }
 }
 
+// 4th pass — AUTO-REPRODUCE confirmation (Joe, 2026-07-24: "run the triage in the routines so we
+// don't have to burn down the report"). The three passes above are date/commit-name GUESSES; this
+// one is behavioral. A bounded box sweep (scripts/reproduce_confirm_sweep.ts) re-replays the top-N
+// eligible findings' pinned turns against the DEPLOYED dist, judges the new draft with the same
+// intent-handled judge the flywheel uses, and writes reports/reproduce_confirm/latest.json listing
+// findings that PASSED (no longer reproduce). We drop exactly those keys. Runs LAST so it only
+// spends re-run signal on findings that survived the three cheap heuristics.
+// Fail-safe + commit-bound: a stale sweep, a moved deploy commit, a malformed file, or any error →
+// suppress NOTHING (parseReproduceConfirmPayload → null / the catch keeps every finding). We only
+// ever drop a finding a clean multi-sample re-replay PROVED no longer reproduces.
+let suppressedByReproduce: Array<{ convId: string; dimension: string; verdict?: string | null }> = [];
+try {
+  const { parseReproduceConfirmPayload, partitionByReproduceConfirm } = await import(
+    "../services/api/src/domain/reproduceConfirm.ts"
+  );
+  const confirmPath = path.join(reportRoot, "reproduce_confirm", "latest.json");
+  if (fs.existsSync(confirmPath)) {
+    let deployedCommit: string | null = null;
+    try {
+      deployedCommit = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    } catch {
+      deployedCommit = null; // no repo → parse returns null → suppress nothing
+    }
+    const parsed = parseReproduceConfirmPayload(JSON.parse(fs.readFileSync(confirmPath, "utf8")), { deployedCommit });
+    if (parsed && parsed.keys.size) {
+      const part = partitionByReproduceConfirm(anomalies, { confirmedStaleKeys: parsed.keys, verdictByKey: parsed.verdictByKey });
+      if (part.suppressed.length) {
+        anomalies.length = 0;
+        anomalies.push(...part.kept);
+        suppressedByReproduce = part.suppressed.map(s => ({
+          convId: String((s.anomaly as any).convId ?? ""),
+          dimension: String((s.anomaly as any).dimension ?? ""),
+          verdict: s.verdict ?? null
+        }));
+        console.log(`Suppressed ${part.suppressed.length} finding(s) confirmed stale by re-replay — the pinned turn no longer reproduces on the deployed code:`);
+        for (const s of part.suppressed.slice(0, 20)) console.log(`   - ${s.key}${s.verdict ? ` (${s.verdict})` : ""}`);
+      }
+    }
+  }
+} catch {
+  /* malformed sweep file / any error → keep every finding (fail toward surfacing, never toward hiding) */
+}
+
 // Persistence: an anomaly seen in the PRIOR run too (same convId+dimension). Used to flag a `healed`
 // dimension that the reconcile tick never actually clears (a heal gap) rather than a one-tick transient.
 const keyOf = (a: any) => `${a?.convId ?? ""}::${a?.dimension ?? ""}`;
@@ -273,6 +316,8 @@ const payload = {
   suppressedByOpenPr,
   suppressedShippedEchoCount: suppressedShippedEcho.length,
   suppressedShippedEcho,
+  suppressedByReproduceCount: suppressedByReproduce.length,
+  suppressedByReproduce,
   workOrderCount: workOrders.length,
   byTier,
   byAction,
