@@ -629,6 +629,8 @@ import {
   decideCustomerAckConfirmBooking,
   decideManualConfirmPendingAppointment,
   decideSchedulingDeferralFollowUpTask,
+  decideStaffAvailabilityAnswer,
+  staffDayOffFromSummaries,
   tentativeWindowNeedsOwnerFollowUp,
   isStaleBookedAppointmentDay,
   isSettledPastAppointment,
@@ -9972,6 +9974,157 @@ async function buildAppointmentStatusQuestionReply(args: {
     return "I see a confirmed appointment on this thread, but I don’t have the time in this view. I’ll have the team confirm it.";
   }
   return "I’ll have the team confirm your appointment status and follow up shortly.";
+}
+
+// Staff-availability question ("Will Stone be there Saturday?") — Joe ruling 2026-07-23
+// (Davey +17164255036). Policy: PRESUME AVAILABLE. Read the asked-about rep's Google Calendar
+// for the asked day; DEFAULT answer is "yes, <rep> will be here <day>". Only an explicit day-off
+// block flips it to not-in (then offer another day / a colleague). If the rep can't be resolved
+// or the calendar can't be read, fall back to a named "let me check with <rep>" + a task on the
+// rep — NEVER guess a no, never invent an absence. On a confirm, also drop an FYI verify task on
+// the rep (Joe's own note was "check the calendar to make sure Stone is working").
+//
+// Shared by BOTH /webhooks/twilio (live) and /conversations/:id/regenerate (regen draft) so the
+// answer + side effects stay in sync. The parser (customer-ack action `staff_availability_question`
+// + staff_name) reads WHO/WHEN — comprehension-first. The calendar read + day-off detection is
+// structured extraction of our own data (decideStaffAvailabilityAnswer + staffDayOffFromSummaries),
+// deterministic per AGENTS.md.
+function firstNameOf(raw: string | null | undefined): string {
+  return normalizeDisplayCase(String(raw ?? "").trim().split(/\s+/).filter(Boolean)[0] ?? "");
+}
+
+function staffAvailabilityDayPhrase(
+  dayText: string | null | undefined,
+  resolvedDayOfWeek: string | null | undefined
+): string {
+  const t = String(dayText ?? "").trim().toLowerCase();
+  if (t === "today") return "today";
+  if (t === "tomorrow") return "tomorrow";
+  const wd = normalizeDisplayCase(String(resolvedDayOfWeek ?? "").trim());
+  if (wd) return `on ${wd}`;
+  return "that day";
+}
+
+async function buildStaffAvailabilityReply(args: {
+  conv: any;
+  parsed: CustomerAckActionParse | null;
+  text: string | null | undefined;
+  providerMessageId?: string | null;
+}): Promise<string> {
+  const conv = args.conv;
+  const cfg = await getSchedulerConfigHot().catch(() => null);
+  const tz = cfg?.timezone || "America/New_York";
+
+  // Who is the customer asking about? Prefer the rep they NAMED (parser staff_name); otherwise
+  // fall back to the thread's rep (booked salesperson / lead owner). resolveSalespersonByName
+  // maps a first name to the roster entry (+ calendarId) via fuzzy first-name match.
+  const namedRep = String(args.parsed?.staffName ?? "").trim();
+  let rep = namedRep && cfg ? resolveSalespersonByName(cfg, namedRep) : null;
+  if (!rep && cfg) {
+    const fallbackName = appointmentStatusStaffName(conv, cfg);
+    if (fallbackName) rep = resolveSalespersonByName(cfg, fallbackName);
+  }
+  const repDisplay = firstNameOf(rep?.name) || normalizeDisplayCase(namedRep) || "";
+  const repResolved = !!rep?.calendarId;
+
+  // Which day? The parser normalizes the day (from the turn or its context); resolve it to a
+  // concrete calendar day so we read the right slice of the rep's calendar.
+  const daySource =
+    String(args.parsed?.requested?.day ?? "").trim() ||
+    String(args.parsed?.normalizedText ?? "").trim() ||
+    String(args.text ?? "").trim();
+  const resolvedDate = daySource ? parseRequestedDateOnly(daySource.toLowerCase(), tz) : null;
+  const dayPhrase = staffAvailabilityDayPhrase(args.parsed?.requested?.day, resolvedDate?.dayOfWeek);
+
+  // Read the rep's calendar for the asked day. Any failure (not connected, throw, no day
+  // resolved) leaves calendarReadable=false → the pure decision routes to a safe check-with.
+  let calendarReadable = false;
+  let dayOffBlock = false;
+  if (rep?.calendarId && resolvedDate) {
+    try {
+      const cal = await getAuthedCalendarClient();
+      const dayStart = localPartsToUtcDate(tz, {
+        year: resolvedDate.year,
+        month: resolvedDate.month,
+        day: resolvedDate.day,
+        hour24: 0,
+        minute: 0
+      });
+      const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+      const events = (await listEvents(
+        cal,
+        rep.calendarId,
+        dayStart.toISOString(),
+        dayEnd.toISOString(),
+        tz
+      )) as Array<{ summary?: string | null }>;
+      calendarReadable = true;
+      dayOffBlock = staffDayOffFromSummaries(events.map(e => e?.summary));
+    } catch (e: any) {
+      console.log("[staff-availability] calendar read failed:", e?.message ?? e);
+      calendarReadable = false;
+    }
+  }
+
+  const decision = decideStaffAvailabilityAnswer({ repResolved, calendarReadable, dayOffBlock });
+  const repOwner = rep ? { id: rep.id, name: rep.name } : conv?.leadOwner;
+  const repLabelForTask = rep?.name || namedRep || "the rep";
+
+  // Task dedupe: repeated regenerate of the same turn must not stack tasks.
+  const convId = String(conv?.id ?? "").trim();
+  const hasOpenTask = (marker: RegExp) =>
+    !!convId &&
+    listOpenTodos().some(
+      t => t.convId === convId && String(t.status ?? "open") === "open" && marker.test(String(t.summary ?? ""))
+    );
+
+  if (decision.kind === "day_off") {
+    if (!hasOpenTask(/Staff availability:/i)) {
+      addTodo(
+        conv,
+        "other",
+        `Staff availability: told the customer ${repLabelForTask} is off ${dayPhrase} — offer another day or a colleague.`,
+        args.providerMessageId ?? undefined,
+        repOwner
+      );
+    }
+    // Named, honest not-in + a way forward (another day, or a colleague). Never gendered.
+    if (!repDisplay) {
+      return "That rep is off then, but someone from the team will be here for you. Want me to find a day they're in?";
+    }
+    return dayPhrase === "that day"
+      ? `${repDisplay} is off then, but someone from the team will be here for you. Want me to find a day ${repDisplay} is in?`
+      : `${repDisplay} is off ${dayPhrase}, but someone from the team will be here for you. Want me to find a day ${repDisplay} is in?`;
+  }
+
+  if (decision.kind === "check_with") {
+    if (!hasOpenTask(/Staff availability:/i)) {
+      addTodo(
+        conv,
+        "call",
+        `Staff availability: customer asked if ${repLabelForTask} will be in ${dayPhrase} — check and reply.`,
+        args.providerMessageId ?? undefined,
+        repOwner
+      );
+    }
+    return repDisplay
+      ? `Let me double-check with ${repDisplay} and I'll get right back to you.`
+      : "Let me check with the team and I'll get right back to you.";
+  }
+
+  // present — PRESUME AVAILABLE confirmed by the calendar read. Drop an FYI verify task on the rep.
+  if (!hasOpenTask(/Staff availability:/i)) {
+    addTodo(
+      conv,
+      "note",
+      `Staff availability: told the customer ${repLabelForTask} will be here ${dayPhrase} — heads up / confirm you're working.`,
+      args.providerMessageId ?? undefined,
+      repOwner
+    );
+  }
+  return repDisplay
+    ? `Yes — ${repDisplay} will be here ${dayPhrase}! Swing by and ask for ${repDisplay}.`
+    : `Yes — someone from the team will be here ${dayPhrase}. Swing by anytime.`;
 }
 
 // A customer who is ALREADY on site ("Hey I'm here who do I ask for?") must not hear "before
@@ -52266,6 +52419,27 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         turnFinanceIntent: false
       });
     }
+    if (action === "staff_availability_question") {
+      // Parity with the live path: answer the staff-availability question directly (PRESUME
+      // AVAILABLE), reading the rep's calendar via the shared builder. Joe ruling 2026-07-23.
+      const reply = await buildStaffAvailabilityReply({
+        conv,
+        parsed: regenCustomerAckActionParse,
+        text: event.body,
+        providerMessageId: (inbound as any)?.providerMessageId ?? event.providerMessageId
+      });
+      recordRouteOutcome("regen", "customer_ack_staff_availability_question", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        confidence: regenCustomerAckActionParse?.confidence ?? null,
+        staffName: regenCustomerAckActionParse?.staffName ?? null
+      });
+      return respondWithSmsRegeneratedDraft(reply, undefined, {
+        turnSchedulingIntent: false,
+        turnAvailabilityIntent: false,
+        turnFinanceIntent: false
+      });
+    }
     if (action === "immediate_arrival_request") {
       addTodo(
         conv,
@@ -57997,6 +58171,7 @@ if (authToken && signature) {
     inboundReplyActionParse?.action === "pending_incoming_inventory_acknowledgement" ||
     inboundReplyActionParse?.action === "customer_shared_vehicle_photo" ||
     customerAckActionParse?.action === "appointment_status_question" ||
+    customerAckActionParse?.action === "staff_availability_question" ||
     customerAckActionParse?.action === "immediate_arrival_request" ||
     purchaseDeliveryOperationalNoResponseBlocker;
   const customerAckNoResponse =
@@ -62461,6 +62636,7 @@ if (authToken && signature) {
       sched.kind === "accept_tentative" ||
       sched.kind === "ask_available_times" ||
       sched.kind === "appointment_status_question" ||
+      sched.kind === "staff_availability_question" ||
       sched.kind === "arrival_window" ||
       sched.kind === "immediate_arrival" ||
       sched.kind === "purchase_delivery")
@@ -62551,6 +62727,23 @@ if (authToken && signature) {
         leadKey: conv.leadKey,
         confidence: customerAckActionParse?.confidence ?? null,
         hasBookedEvent: !!String(conv.appointment?.bookedEventId ?? "").trim()
+      });
+      return publishLiveTwilioReply(reply, { turnSchedulingIntent: false });
+    }
+    if (action === "staff_availability_question") {
+      // "Will Stone be there Saturday?" — answer it directly, PRESUME AVAILABLE (Joe ruling
+      // 2026-07-23). The shared builder reads the rep's calendar and drops the task on the rep.
+      const reply = await buildStaffAvailabilityReply({
+        conv,
+        parsed: customerAckActionParse,
+        text: event.body,
+        providerMessageId: event.providerMessageId
+      });
+      recordRouteOutcome("live", "customer_ack_staff_availability_question", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        confidence: customerAckActionParse?.confidence ?? null,
+        staffName: customerAckActionParse?.staffName ?? null
       });
       return publishLiveTwilioReply(reply, { turnSchedulingIntent: false });
     }
