@@ -9,6 +9,8 @@ import {
   buildAgentGreeting,
   buildAgentIntro,
   buildAgentIntroPhrase,
+  firstNameCollidesWithAgentName,
+  greetingFirstName,
   hasCustomerReceivedOutbound,
   shouldIntroduceOnAdfTouch,
   stripLeadingAgentGreeting
@@ -65,6 +67,21 @@ assert.equal(
   "Hey Alexandra, it's the team over at American Harley-Davidson. ",
   "a generic agent name does not collide with the customer's real name"
 );
+
+// ── The shared collision helpers (also used by the sendgrid inline ADF/email intros so both lanes
+//    stay in lock-step). firstNameCollidesWithAgentName: exact first-token, case-insensitive.
+assert.equal(firstNameCollidesWithAgentName("Alexandra", "Alexandra"), true);
+assert.equal(firstNameCollidesWithAgentName("alexandra", "ALEXANDRA"), true, "case-insensitive");
+assert.equal(firstNameCollidesWithAgentName("Alexandra Meinhold", "Alexandra"), true, "first token only");
+assert.equal(firstNameCollidesWithAgentName("Nicholas", "Alexandra"), false, "different names never collide");
+assert.equal(firstNameCollidesWithAgentName("", "Alexandra"), false, "blank customer name → no collision");
+assert.equal(firstNameCollidesWithAgentName("Alexandra", ""), false, "blank agent name → no collision");
+assert.equal(firstNameCollidesWithAgentName("Alexander", "Alexandra"), false, "substring is not a collision");
+// greetingFirstName: the name to greet with, or "" on a collision (drives the inline "Hi {name} —" sites).
+assert.equal(greetingFirstName("Nicholas", "Alexandra"), "Nicholas", "non-collision → the name");
+assert.equal(greetingFirstName("Alexandra", "Alexandra"), "", "collision → blank (name-less greeting)");
+assert.equal(greetingFirstName("  Alexandra  ", "Alexandra"), "", "collision after trim");
+assert.equal(greetingFirstName("", "Alexandra"), "", "blank stays blank");
 
 // Stripper removes BOTH the old and new leading greeting forms before re-prefixing.
 assert.equal(stripLeadingAgentGreeting("Hi Nicholas — thanks for reaching out."), "thanks for reaching out.");
@@ -163,4 +180,26 @@ assert.ok(
   "the old hand-rolled hasPriorOutbound scan must be replaced by the shared helper"
 );
 
-console.log("PASS agent voice intro eval (+ ADF first-received intro gate + r2r/finance both-path guard)");
+// ── Email/ADF lane name-collision guard (open-critic +17162636134, 2026-07-22). Every sendgrid
+//    inline first-touch intro that greets by name AND names the agent must route the greeting name
+//    through greetingFirstName(...) so a customer who shares the agent's persona name never gets
+//    "Hi Alexandra — This is Alexandra at …". The raw shapes (a bare ${firstName}/${firstNameGreeting}
+//    greeting immediately paired with a "This is ${agentName}/${salespersonName}" self-intro) must be gone.
+const FORBIDDEN_RAW_INTROS: Array<[RegExp, string]> = [
+  [/`Hi \$\{firstName\} — This is \$\{agentName\}/, "EagleRider intro must gate the greeting name (greetingFirstName)"],
+  [/`Hi \$\{firstName\} — this is \$\{salespersonName\}/, "walk-in intro must gate the greeting name vs salespersonName"],
+  [/const greeting = firstName \? `Hi \$\{firstName\} — `/, "Room58/pricing/meta-promo greeting must gate firstName via greetingFirstName"],
+  [/const emailGreeting = firstName \? `Hi \$\{firstName\},`/, "meta-promo email greeting must gate firstName via greetingFirstName"],
+  [/`Hi \$\{firstNameGreeting\} — thanks for booking/, "test-ride booking confirm must gate the greeting name via greetingFirstName"]
+];
+for (const [re, msg] of FORBIDDEN_RAW_INTROS) {
+  assert.ok(!re.test(sendgrid), `email-lane collision regression: ${msg}`);
+}
+// Coverage: the guard is applied at every intro site we migrated (8), not silently dropped.
+const greetingHelperUses = (sendgrid.match(/greetingFirstName\(/g) ?? []).length;
+assert.ok(
+  greetingHelperUses >= 8,
+  `expected >=8 greetingFirstName(...) sites in sendgridInbound.ts, found ${greetingHelperUses}`
+);
+
+console.log("PASS agent voice intro eval (+ ADF first-received intro gate + r2r/finance both-path guard + email-lane name-collision guard)");

@@ -51,7 +51,7 @@ import {
   markOpenTodosResolvedByCommunication
 } from "../domain/conversationStore.js";
 import type { InventoryWatch } from "../domain/conversationStore.js";
-import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, shouldIntroduceOnAdfTouch, stripAgentIntroPhraseForDealer, stripLeadingAgentGreeting, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName } from "../domain/agentVoice.js";
+import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, shouldIntroduceOnAdfTouch, stripAgentIntroPhraseForDealer, stripLeadingAgentGreeting, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, greetingFirstName } from "../domain/agentVoice.js";
 import { buildAdfResubmissionAck, detectAdfFormResubmission } from "../domain/adfResubmission.js";
 import { isHtmlClientNoticeOnly } from "../domain/inboundMailActionability.js";
 import { buildTradeAdfAck } from "../domain/tradeAdfReply.js";
@@ -1615,7 +1615,6 @@ function buildDealerLeadAppPostRideReply(args: {
   inventoryStatus: "in_stock" | "on_hold" | "sold" | "not_found" | "unknown";
 }): string {
   const firstName = normalizeDisplayCase(args.conv?.lead?.firstName);
-  const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
   const dealerName = String(args.dealerName ?? "").trim() || "American Harley-Davidson";
   const senderFull =
     String(args.conv?.leadOwner?.name ?? "").trim() ||
@@ -1629,6 +1628,10 @@ function buildDealerLeadAppPostRideReply(args: {
     senderFull === GENERIC_AGENT_DISPLAY_NAME
       ? GENERIC_AGENT_DISPLAY_NAME
       : normalizeDisplayCase(senderFull.split(/\s+/).filter(Boolean)[0] ?? senderFull) || GENERIC_AGENT_DISPLAY_NAME;
+  // Drop the greeting name when the customer shares the sender's first name ("Hi Giovanni — this is
+  // Giovanni …"). Greeting is derived AFTER senderFirst so the guard can see it.
+  const greetName = greetingFirstName(firstName, senderFirst);
+  const greeting = greetName ? `Hi ${greetName} — ` : "Hi — ";
   const dealerLeadAppText = [
     args.conv?.lead?.comment,
     args.conv?.latestLead?.comment,
@@ -6595,7 +6598,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       "the bike";
     const rideLabel = modelLabel === "the bike" ? modelLabel : `the ${modelLabel}`;
     const ack =
-      `Hi ${firstName} — This is ${agentName} at ${dealerName}. ` +
+      `Hi ${greetingFirstName(firstName, agentName) || "there"} — This is ${agentName} at ${dealerName}. ` +
       `Hope you had a great ride on ${rideLabel}. ` +
       "If the rental got you thinking about one of your own, stop in anytime and we’d be happy to show you what’s available.";
     setFollowUpMode(conv, "paused_indefinite", "eagle_rider_rental_followup");
@@ -7636,7 +7639,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const addendum = buildWalkInAddendum();
     const includeDefaultWalkInThanks = !walkInTailHasOwnAcknowledgement(tail);
     const ack =
-      `Hi ${firstName} — this is ${salespersonName} at ${dealerName}. ` +
+      `Hi ${greetingFirstName(firstName, salespersonName)} — this is ${salespersonName} at ${dealerName}. ` +
       (includeDefaultWalkInThanks ? "Thanks for stopping in, it was nice chatting with you. " : "") +
       tail +
       (addendum ? ` ${addendum}` : "");
@@ -7921,7 +7924,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
     const agentName = resolveDealerAgentName(profile);
     const firstName = normalizeDisplayCase(conv.lead?.firstName);
-    const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
+    const greetName = greetingFirstName(firstName, agentName);
+    const greeting = greetName ? `Hi ${greetName} — ` : "Hi — ";
     let ack = `${greeting}Thanks — I got your inquiry. This is ${agentName} at ${dealerName}. I’ll make sure the team follows up soon.`;
     ack = await applyInitialAdfPrefix(ack);
     ack = withInitialPhoto(ack);
@@ -7967,7 +7971,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     );
     const yearLabel = conv.lead?.vehicle?.year ? `${conv.lead?.vehicle?.year} ` : "";
     const bikeLabel = modelLabel ? `${yearLabel}${modelLabel}`.trim() : "that bike";
-    const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
+    const greetName = greetingFirstName(firstName, agentName);
+    const greeting = greetName ? `Hi ${greetName} — ` : "Hi — ";
     let ack =
       `${greeting}This is ${agentName} at ${dealerName}. ` +
       `Thanks for asking about pricing on the ${bikeLabel}. ` +
@@ -8122,7 +8127,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
     const agentName = resolveDealerAgentName(profile);
     const firstName = normalizeDisplayCase(conv.lead?.firstName);
-    const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
+    const greetName = greetingFirstName(firstName, agentName);
+    const greeting = greetName ? `Hi ${greetName} — ` : "Hi — ";
     let ack =
       `${greeting}Thanks — I got your H‑D Meta promo offer request. ` +
       `This is ${agentName} at ${dealerName}. ` +
@@ -8157,7 +8163,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         "New H-D Meta promo lead — 0-3 month buyer. Call to qualify and pin the model/budget."
       );
     }
-    const emailGreeting = firstName ? `Hi ${firstName},` : "Hi,";
+    const emailGreetName = greetingFirstName(firstName, agentName);
+    const emailGreeting = emailGreetName ? `Hi ${emailGreetName},` : "Hi,";
     const offersLine = await resolveInitialOffersLine();
     const emailLines = [
       emailGreeting,
@@ -8612,8 +8619,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
           const firstNameGreeting = conv.lead?.firstName ?? "";
           const rawModel = conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "";
           const model = /full line/i.test(rawModel) ? "" : rawModel;
-          const greeting = firstNameGreeting
-            ? `Hi ${firstNameGreeting} — thanks for booking a test ride${model ? ` on the ${model}` : ""}. `
+          const greetTestRideName = greetingFirstName(firstNameGreeting, agentName);
+          const greeting = greetTestRideName
+            ? `Hi ${greetTestRideName} — thanks for booking a test ride${model ? ` on the ${model}` : ""}. `
             : `Thanks for booking a test ride${model ? ` on the ${model}` : ""}. `;
           const intro = `This is ${agentName} at ${dealerName}. `;
           const confirmText =
