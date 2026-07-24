@@ -141,4 +141,55 @@ const evt = (body: string, mediaUrls?: string[]) =>
   eq(conv.status, "closed", "sold outranks hold — a completed deal stays closed");
 }
 
+// --- 3) Clean-decline closeouts archive on the SAME terms (Joe ruling 2026-07-22). ---
+// Mark Palmer (+17168304817) said "No thanks" on 7/21; the thread closed but a stray ack could
+// still drag it back into the working inbox. A decline archives; a REAL customer SMS still reopens.
+const { isDeclineCloseoutReason } = store as any;
+for (const reason of [
+  "not_interested",
+  "customer_stepping_back",
+  "customer_keep_current_bike",
+  "customer_sell_on_own",
+  "CUSTOMER_STEPPING_BACK" // case-insensitive
+]) {
+  eq(isDeclineCloseoutReason(reason), true, `"${reason}" is a clean-decline closeout reason`);
+}
+for (const reason of ["sold", "opt_out", "wrong_number", "unit_hold", "", null, undefined, "other"]) {
+  eq(isDeclineCloseoutReason(reason), false, `"${reason}" must NOT count as a decline closeout`);
+}
+for (const reason of ["not_interested", "customer_stepping_back", "customer_keep_current_bike", "customer_sell_on_own"]) {
+  // decline + bare ack => stays archived out of the inbox
+  {
+    const conv = mkArchived(`d-ack-${reason}`);
+    conv.closedReason = reason;
+    appendInbound(conv, evt("👍"));
+    eq(conv.status, "closed", `a bare ack leaves a ${reason} decline archived`);
+    eq(conv.closedReason, reason, `${reason} closedReason preserved`);
+    eq(conv.messages.length, 1, "the ack is still recorded");
+  }
+  // decline + REAL customer SMS => reopens (the preserved rule Joe called out)
+  {
+    const conv = mkArchived(`d-real-${reason}`);
+    conv.closedReason = reason;
+    appendInbound(conv, evt("Changed my mind — is that Street Glide still there?"));
+    eq(conv.status, "open", `a real customer SMS reopens a ${reason} decline`);
+    eq(conv.closedReason, undefined, "closedReason cleared on reopen");
+  }
+}
+// decline + media-bearing ack => reopens (media is content; fail-safe toward reopening)
+{
+  const conv = mkArchived("d-media");
+  conv.closedReason = "not_interested";
+  appendInbound(conv, evt("ok", ["https://example.test/pic.jpg"]));
+  eq(conv.status, "open", "an attachment reopens a declined thread even with an ack caption");
+}
+// SOLD still outranks a decline reason — a completed deal never reopens.
+{
+  const conv = mkArchived("d-sold");
+  conv.closedReason = "not_interested";
+  conv.sale = { soldAt: "2026-06-25T19:36:33.253Z" };
+  appendInbound(conv, evt("Quick question about the paperwork"));
+  eq(conv.status, "closed", "sold outranks a decline reason");
+}
+
 console.log(`PASS archived-ack no-reopen eval (${n} assertions)`);

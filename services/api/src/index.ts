@@ -547,6 +547,7 @@ import {
   humanThreadNudgeMaxCount,
   humanThreadNudgeSpacingDays
 } from "./domain/humanThreadNudge.js";
+import { referencesPastDatedEvent } from "./domain/pastEventGuard.js";
 import { stripLeadingVinCodes, stripLeadingMakeName, normalizeWatchModelsVin } from "./domain/watchModelVinCodes.js";
 import { trikeClassConflict, isFamilyOnlyModelLabel, referencesFamilyOnlyInText } from "./domain/modelFamily.js";
 import { decideWatchSiblingScopeAsk } from "./domain/watchSiblingScope.js";
@@ -613,6 +614,7 @@ import {
   resolveRideChallengeEventTouch,
   decideInProcessDealTurn,
   decideIndefiniteDeferTurn,
+  decideInternationalLeadTurn,
   decideDecideSoonTurn,
   decideNonBuyerSurveyTurn,
   decideDealerLeadSurveyTurn,
@@ -25637,6 +25639,28 @@ function resolveCustomerDispositionDecision(
   return parseCustomerDispositionFallback(text);
 }
 
+/**
+ * International (out-of-country) lead: log + close, still no reply (Joe ruling 2026-07-22).
+ * The ONE shared applier both /webhooks/twilio and /conversations/:id/regenerate call, so the
+ * side effect can never drift between the paths. Idempotent via conv.internationalLead.
+ */
+function applyInternationalLeadCloseout(
+  conv: any,
+  decision: { dialCode: string; closeReason: string; crmNote: string; logCrmNote: boolean }
+) {
+  discardPendingDrafts(conv, "international_lead");
+  delete conv.emailDraft;
+  stopFollowUpCadence(conv, decision.closeReason);
+  closeConversation(conv, decision.closeReason);
+  stopRelatedCadences(conv, decision.closeReason, { close: true });
+  if (!decision.logCrmNote) return; // already noted — re-closing is enough on later texts
+  conv.internationalLead = { detectedAt: new Date().toISOString(), dialCode: decision.dialCode };
+  // CRM note via the EXISTING serialized TLP logger — it no-ops when the lead has no TLP leadRef
+  // (most cold international texts won't), in which case conv.internationalLead + the closedReason
+  // are LeadRider's own record of why this thread is closed and unanswered.
+  queueTlpLogForConversation(conv, { noteHeader: decision.crmNote });
+}
+
 function applyCustomerDispositionCloseout(conv: any, decision: CustomerDispositionDecision) {
   stopFollowUpCadence(conv, decision.reason);
   setFollowUpMode(conv, "paused_indefinite", decision.reason);
@@ -30691,6 +30715,25 @@ async function processDueFollowUpsUnlocked() {
         }))
       });
       if (!nudgeText) continue;
+      // PAST-DATED-EVENT GUARD (Joe ruling 2026-07-22): a bump continues the thread's last
+      // exchange, so if that anchor was an invite to something already behind us the bump
+      // re-issues it — Don Soto (+17167134185) got "circling back on the Taste of Country
+      // pre-party invite… still planning to come by Saturday?" five weeks after the June 20th
+      // party. The bump itself carried no date, only the blast it continued did, so BOTH the
+      // composed text and the anchor messages are checked. Shared pure helper (same one the
+      // cadence lanes call — no mirrored locals). Fail direction: silence.
+      if (
+        referencesPastDatedEvent(
+          [nudgeText, ...delivered.slice(-8).map((m: any) => String(m?.body ?? ""))],
+          { nowMs: now.getTime() }
+        )
+      ) {
+        recordRouteOutcome("manual", "human_thread_nudge_past_event_suppressed", {
+          convId: conv.id,
+          leadKey: conv.leadKey
+        });
+        continue;
+      }
       const nudgeTo = normalizePhone(conv.lead?.phone ?? conv.leadKey ?? "");
       if (!nudgeTo.startsWith("+")) continue;
       const nudgeMessage = ensureInitialSmsOptOutFooter(conv, nudgeText, {
@@ -32367,6 +32410,20 @@ async function processDueFollowUpsUnlocked() {
           commitInterestUnitPriceDropFire(conv, interestPriceDrop);
         }
       }
+    }
+    // PAST-DATED-EVENT GUARD (Joe ruling 2026-07-22): no proactive touch may invite a customer to
+    // an event whose date has already passed. Cadence copy is composed fresh from current state,
+    // so unlike the human-thread nudge only the OUTGOING message is checked (checking the whole
+    // thread anchor here would mute every lead who ever discussed an old date). A touch that
+    // names a day already behind us is dropped and the cadence advances — same shape as the
+    // value-gate suppress above. Shared pure helper; fail direction: silence.
+    if (referencesPastDatedEvent([message], { nowMs: now.getTime(), timeZone: cfg.timezone })) {
+      console.log("[followup][past-event-guard] touch named a date already behind us — staying quiet", {
+        convId: conv.id,
+        stepIndex: cadence.stepIndex
+      });
+      advanceFollowUpCadence(conv, cfg.timezone);
+      continue;
     }
     const systemMode = effectiveMode(conv);
     const forceAutoSendPostSaleCadence = isPostSale;
@@ -50103,7 +50160,7 @@ function hasOpenTlpLeadNotFoundQuestion(convId: string, leadRef: string): boolea
 // internal question (buildTlpLogFailureQuestion) so the crm_update_error detector surfaces them.
 async function logTlpForConversation(
   conv: any,
-  opts: { explicitLeadRef?: string | null; draftId?: string | null } = {}
+  opts: { explicitLeadRef?: string | null; draftId?: string | null; noteHeader?: string | null } = {}
 ): Promise<void> {
   const leadRefs = resolveTlpContactLeadRefs(conv, {
     explicitLeadRef: opts.explicitLeadRef ?? undefined,
@@ -50123,9 +50180,13 @@ async function logTlpForConversation(
       console.log("📝 TLP skip: no new messages", { leadRef, convId: conv.id });
       continue;
     }
+    // An optional header line is prepended so a caller can say WHY it logged (e.g. the
+    // "International lead" note, Joe ruling 2026-07-22) without a second CRM round-trip.
+    const noteHeader = String(opts.noteHeader ?? "").trim();
+    const noteWithHeader = noteHeader ? `${noteHeader}\n${note}` : note;
     try {
       console.log("📝 TLP log start", { leadRef, convId: conv.id });
-      await tlpLogCustomerContact({ leadRef, phone: conv.lead?.phone ?? conv.leadKey, note });
+      await tlpLogCustomerContact({ leadRef, phone: conv.lead?.phone ?? conv.leadKey, note: noteWithHeader });
       if (lastAt) setCrmLastLoggedAt(conv, lastAt, leadRef);
       console.log("✅ TLP log success", { leadRef, convId: conv.id });
     } catch (err: any) {
@@ -50152,7 +50213,7 @@ async function logTlpForConversation(
 let tlpLogChain: Promise<void> = Promise.resolve();
 function queueTlpLogForConversation(
   conv: any,
-  opts: { explicitLeadRef?: string | null; draftId?: string | null } = {}
+  opts: { explicitLeadRef?: string | null; draftId?: string | null; noteHeader?: string | null } = {}
 ): void {
   tlpLogChain = tlpLogChain
     .catch(() => undefined)
@@ -51770,6 +51831,22 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       ...(draft ? { draft } : {})
     });
   };
+  // International (out-of-country) lead — regen mirror of the live /webhooks/twilio gate
+  // (route-parity law, Joe ruling 2026-07-22). Same centralized decision, same shared applier:
+  // staff hitting Regenerate on an overseas number gets no draft, and the log + close lands here
+  // too so the two paths can never leave the conversation in different states.
+  {
+    const internationalDecision = decideInternationalLeadTurn({
+      provider: event.provider,
+      channel: "sms",
+      fromPhone: event.from,
+      alreadyLogged: !!conv.internationalLead
+    });
+    if (internationalDecision) {
+      applyInternationalLeadCloseout(conv, internationalDecision);
+      return respondRegenerateSkipped(internationalDecision.routeOutcome);
+    }
+  }
   // NON-DESTRUCTIVE REGENERATE: when orchestrate's fresh draft trips an invariant guard (e.g. the AI
   // would butt into a manual_handoff deal with an inventory prompt), it means the AI could NOT produce
   // a draft better than what's already there. Do NOT wipe the existing pending draft, and do NOT
@@ -53544,7 +53621,15 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       });
     }
   }
-  const cadenceRegeneratedDraft = await buildCadenceRegeneratedDraft(conv, dealerProfile, lastDraft);
+  // Regen mirror of the live tick's past-dated-event guard (route-parity law, Joe ruling
+  // 2026-07-22): the SAME shared helper, applied inline to the regenerated cadence body. A redraft
+  // that names a day already behind us is dropped rather than offered to staff.
+  const cadenceRegeneratedDraftRaw = await buildCadenceRegeneratedDraft(conv, dealerProfile, lastDraft);
+  const cadenceRegeneratedDraft =
+    cadenceRegeneratedDraftRaw &&
+    referencesPastDatedEvent([cadenceRegeneratedDraftRaw.body], { timeZone: regenTz })
+      ? null
+      : cadenceRegeneratedDraftRaw;
   const cadenceLastSentAtMs = new Date(String(conv?.followUpCadence?.lastSentAt ?? "")).getTime();
   const lastDraftAtMs = new Date(String(lastDraft?.at ?? "")).getTime();
   const selectedInboundAtMs = new Date(String(inbound?.at ?? "")).getTime();
@@ -57830,6 +57915,31 @@ if (authToken && signature) {
     });
   }
   pauseRelatedCadencesOnInbound(conv, event);
+  // International (out-of-country) lead — Joe ruling 2026-07-22: keep the silence, but log an
+  // "international lead" CRM note and CLOSE the thread instead of leaving it open with nobody on
+  // it. Centralized pure decision (decideInternationalLeadTurn) + one shared applier, both also
+  // used by /conversations/:id/regenerate. Deterministic structured signal (E.164 country code);
+  // fail direction = domestic, so an unreadable number is handled normally.
+  {
+    const internationalDecision = decideInternationalLeadTurn({
+      provider: event.provider,
+      channel: "sms",
+      fromPhone: event.from,
+      alreadyLogged: !!conv.internationalLead
+    });
+    if (internationalDecision) {
+      applyInternationalLeadCloseout(conv, internationalDecision);
+      saveConversation(conv);
+      await flushConversationStore();
+      recordRouteOutcome("live", internationalDecision.routeOutcome, {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        dialCode: internationalDecision.dialCode
+      });
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+  }
   if (
     event.provider === "twilio" &&
     (isQuotedReactionInboundText(event.body ?? "") || isEmojiOnlyText(event.body ?? ""))
