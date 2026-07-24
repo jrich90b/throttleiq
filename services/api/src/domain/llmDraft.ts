@@ -6863,7 +6863,18 @@ inbound: "Can you get me numbers on the orange ST with 2k down?"
 output: {"deal_in_progress":false,"signal":"none","confidence":0.95}`,
     `EXAMPLE G (a visit commitment is scheduling, not deal logistics)
 inbound: "I'll be there Saturday morning to look at it"
-output: {"deal_in_progress":false,"signal":"none","confidence":0.94}`
+output: {"deal_in_progress":false,"signal":"none","confidence":0.94}`,
+    `EXAMPLE H (production replay: speccing accessories + asking the running total on an agreed deal)
+history has: "out: The Road Glide 3 does not come with the Highway pegs, but the ones that come with the Street Glide 3 Limited will fit. Would you want me to add it to the list?"
+inbound: "O man you make my laugh. Yes please for it. And I'll need a total cost."
+output: {"deal_in_progress":true,"signal":"accessory_install","confidence":0.92}`,
+    `EXAMPLE I (production replay: a bare time proposal answering the rep's finalize/take-delivery text IS delivery logistics, not test-ride scheduling)
+history has: "out: Just wanted to touch base and see what your plan was to finalize and take delivery of your 2025 Low Rider ST. Let me know your thoughts."
+inbound: "Is Wednesday around noon fine?"
+output: {"deal_in_progress":true,"signal":"delivery","confidence":0.9}`,
+    `EXAMPLE J (an out-the-door PRICE ask while still shopping is a pricing inquiry — NOT deal progress)
+inbound: "What would the out the door price be on the orange ST?"
+output: {"deal_in_progress":false,"signal":"none","confidence":0.95}`
   ];
   const prompt = [
     "You read ONE inbound SMS from a motorcycle-dealership customer and decide whether it is",
