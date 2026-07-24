@@ -10,7 +10,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 
-import { isParserSoftVisitCommitment } from "../services/api/src/domain/softVisitSignal.ts";
+import {
+  hasConditionalVisitCommitmentHintText,
+  isParserConditionalVisitCommitment,
+  isParserSoftVisitCommitment
+} from "../services/api/src/domain/softVisitSignal.ts";
 
 // 1) Behavioral — the parser-derived signal.
 const todd: any = {
@@ -83,6 +87,80 @@ for (const [p, label] of fails) {
   assert.equal(isParserSoftVisitCommitment(p), false, `must be false: ${label}`);
 }
 
+// 1b) CONDITIONAL (day-less) visit commitments (Michael Siejka +17169906333, 2026-06-25:
+// "Beautiful thank you so much, currently cleaning the carbs on my bike but once she's back
+// on the road i'll be in."). The appointment-timing parser reads intent:none + NO day +
+// a commitment normalizedText; the day-anchored signal can't fire, so the turn used to fall
+// through to the generic orchestrator (corpus replay judge: photo-appreciation improvisation
+// instead of a visit ack). Both observed normalizedText shapes from the production parse are
+// pinned (the parser paraphrases some runs and stays verbatim on others).
+const conditionalCommits: Array<[string, string]> = [
+  ["will come in once bike is back on the road", "Michael's turn (paraphrased parse)"],
+  ["once she's back on the road i'll be in", "Michael's turn (verbatim parse)"],
+  ["will stop by when the loan comes through", "loan-conditioned stop-by"],
+  ["coming in as soon as work slows down", "work-conditioned come-in"]
+];
+for (const [nt, label] of conditionalCommits) {
+  assert.equal(
+    isParserConditionalVisitCommitment({
+      intent: "none",
+      explicitRequest: false,
+      requested: { day: "", timeText: "", timeWindow: "unknown" },
+      normalizedText: nt
+    }),
+    true,
+    `conditional day-less commitment => true: ${label}`
+  );
+}
+const conditionalFails: Array<[any, string]> = [
+  // A day-anchored commitment belongs to isParserSoftVisitCommitment, never this signal.
+  [{ intent: "none", explicitRequest: false, requested: { day: "saturday" }, normalizedText: "will come in once the check clears saturday" }, "day present => day-anchored signal owns it"],
+  // A contact deferral is NOT a visit ("I'll be in touch when I decide").
+  [{ intent: "none", explicitRequest: false, requested: { day: "" }, normalizedText: "will be in touch when they decide" }, "be-in-touch deferral is not a visit"],
+  // No conditional marker => too vague to claim (today's behavior stands).
+  [{ intent: "none", explicitRequest: false, requested: { day: "" }, normalizedText: "i'll commit and visit" }, "no conditional marker"],
+  // No visit verb => a plain first-person deferral keeps its own handling.
+  [{ intent: "none", explicitRequest: false, requested: { day: "" }, normalizedText: "will let us know when he is ready" }, "no visit verb"],
+  [{ intent: "tentative_time_window", explicitRequest: false, requested: { day: "" }, normalizedText: "might come in when the rain stops" }, "tentative has its own arm"],
+  [{ intent: "none", explicitRequest: true, requested: { day: "" }, normalizedText: "wants to come in once approved" }, "explicit request is actionable"],
+  [null, "null"],
+  [undefined, "undefined"]
+];
+for (const [p, label] of conditionalFails) {
+  assert.equal(isParserConditionalVisitCommitment(p), false, `conditional must be false: ${label}`);
+}
+// 1c) The HINT gate must consult the parser on the raw production turn — the
+// appointment-timing parser is hint-gated in both paths and Michael's turn matched NONE of
+// the pre-existing hint tokens ("be in" is not "be there"), so without this the signal
+// above is unreachable in production.
+assert.equal(
+  hasConditionalVisitCommitmentHintText(
+    "Beautiful thank you so much,currently cleaning the carbs on my bike but once she's back on the road i'll be in."
+  ),
+  true,
+  "hint gate must fire on Michael's raw production turn"
+);
+assert.equal(
+  hasConditionalVisitCommitmentHintText("I'll come by as soon as the loan clears"),
+  true,
+  "hint gate fires on loan-conditioned come-by"
+);
+for (const [t, label] of [
+  ["I'll be in touch when I decide", "be-in-touch deferral"],
+  ["Thanks so much!", "plain thanks (no commitment shape)"],
+  ["I'll be in tomorrow at 3", "day/time commitment (no conditional marker; the existing day/time hint tokens own it)"],
+  ["when does the service department open?", "hours question with 'when' but no visit commitment"]
+] as Array<[string, string]>) {
+  assert.equal(hasConditionalVisitCommitmentHintText(t), false, `hint must be false: ${label}`);
+}
+
+// The be-in-touch exclusion must not have narrowed the day-anchored signal's "be in" verb.
+assert.equal(
+  isParserSoftVisitCommitment({ intent: "none", explicitRequest: false, requested: { day: "monday" }, normalizedText: "will be in monday" }),
+  true,
+  "day-anchored 'be in {day}' still fires after the be-in-touch exclusion"
+);
+
 // 2) Both-path wiring (route parity) + warm visit-ack — source guards.
 const idx = fs.readFileSync(path.resolve("services/api/src/index.ts"), "utf8");
 // live: parser signal OR'd into the soft-visit gate.
@@ -93,7 +171,7 @@ assert.ok(
 // regen: a REACHABLE soft-visit branch on the parser signal (NOT nested in the kind-gated
 // tentative block, which intent:none never enters).
 assert.ok(
-  /event\.provider === "twilio" && isParserSoftVisitCommitment\(regenAppointmentTimingParse\)/.test(idx),
+  /event\.provider === "twilio" &&\s*\(isParserSoftVisitCommitment\(regenAppointmentTimingParse\)/.test(idx),
   "regen path must have a reachable soft-visit branch on the parser signal (parity)"
 );
 // warm visit-ack builder exists and BOTH paths build it.
@@ -106,6 +184,31 @@ assert.ok(
   /pureSoftVisit\b[\s\S]{0,400}!pricingOrPaymentsIntent[\s\S]{0,400}!callbackRequestedOverride/.test(idx),
   "live warm-ack must be gated on a pure soft visit (no competing intent dropped)"
 );
+
+// 2b) CONDITIONAL day-less commitment wiring (Michael Siejka +17169906333) — both paths.
+// live: the conditional signal is consumed, watch-guarded (a "when one comes in I'll come
+// by" turn keeps its inventory-watch routing), and OR'd into the soft-visit arm.
+assert.ok(
+  /conditionalSoftVisitCommitment\s*=[\s\S]{0,400}semanticWatchAction !== "set_watch"[\s\S]{0,200}isParserConditionalVisitCommitment\(appointmentTimingParse\)/.test(idx),
+  "live path must consume the conditional signal behind the watch guard"
+);
+assert.ok(
+  /softVisitIntent = softVisitCommitment \|\| conditionalSoftVisitCommitment/.test(idx),
+  "live soft-visit arm must include the conditional commitment"
+);
+// regen: a reachable conditional branch on the same parser signal (parity), watch-guarded.
+assert.ok(
+  /regenSemanticWatchAction !== "set_watch"[\s\S]{0,200}isParserConditionalVisitCommitment\(regenAppointmentTimingParse\)/.test(idx),
+  "regen path must have a watch-guarded conditional-commitment branch (parity)"
+);
+// BOTH hint gates must consult the parser on the conditional-commitment shape (without
+// this the parser never runs on Michael's turn and the whole signal is unreachable).
+const hintGateUses = (idx.match(/hasConditionalVisitCommitmentHintText\(event\.body \?\? ""\)/g) || []).length;
+assert.ok(hintGateUses >= 2, `both live + regen appointment-timing hint gates must include the conditional hint (found ${hintGateUses})`);
+// the no-rush patience ack builder exists and BOTH paths build it.
+assert.ok(/function buildConditionalVisitCommitmentAck\(/.test(idx), "conditional visit-ack builder must exist");
+const conditionalAckUses = (idx.match(/buildConditionalVisitCommitmentAck\(normalizeDisplayCase\(conv\.lead\?\.firstName\)\)/g) || []).length;
+assert.ok(conditionalAckUses >= 2, `both live + regen must build the conditional no-rush ack (found ${conditionalAckUses})`);
 
 // 3) Soft-appointment side effects (Joe ruling 2026-07-19) — source guards, both paths.
 // The dated staff task + booked-same-day reflection live in shared helpers so the live and
