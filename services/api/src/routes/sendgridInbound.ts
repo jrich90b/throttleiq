@@ -53,6 +53,7 @@ import {
 import type { InventoryWatch } from "../domain/conversationStore.js";
 import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, shouldIntroduceOnAdfTouch, stripAgentIntroPhraseForDealer, stripLeadingAgentGreeting, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, greetingFirstName } from "../domain/agentVoice.js";
 import { buildAdfResubmissionAck, detectAdfFormResubmission } from "../domain/adfResubmission.js";
+import { buildMarketplaceRelayFirstTouchReply, buildMarketplaceRelayTaskSummary } from "../domain/marketplaceRelay.js";
 import { isHtmlClientNoticeOnly } from "../domain/inboundMailActionability.js";
 import { buildTradeAdfAck } from "../domain/tradeAdfReply.js";
 import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn, shouldCloseEventPromoLeadOnIntake, resolveRideChallengeEventTouch, decideIncomingInventoryPurpose } from "../domain/routeStateReducer.js";
@@ -5607,11 +5608,41 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   if (relayOnlyMarketplaceLead) {
     if (conv.followUp?.reason !== "marketplace_relay") {
+      // Joe ruling 2026-07-24: a marketplace relay lead can ONLY be answered manually in the
+      // Facebook Marketplace inbox (full FB automation is OUT — personal-account ToS/ban risk).
+      // So instead of a generic, low-signal handoff (15 relay leads since 7/11 got ZERO human
+      // contact), hand the LEAD OWNER a task with a warm, ready-to-paste first reply attached so
+      // a rep copies it into Facebook and sends in ~10 seconds. The reply is REFERENCE copy the
+      // rep pastes into Facebook — NOT a LeadRider-sendable draft (the publish gate below still
+      // suppresses any draft_ai for relay leads; marketplace_relay_no_draft:eval pins that).
+      const relayProfile = await getDealerProfile();
+      const relayAgentName = resolveDealerAgentName(relayProfile);
+      const relayDealerName = String(relayProfile?.dealerName ?? "").trim() || "American Harley-Davidson";
+      const relayFirstName =
+        String(lead.firstName ?? "").trim() ||
+        String(conv.lead?.name ?? "").trim().split(/\s+/)[0] ||
+        null;
+      const relayVehicleLabel =
+        String(lead.vehicleDescription ?? "").trim() ||
+        [lead.year, make, model].filter(Boolean).join(" ").trim() ||
+        null;
+      const relayReply = buildMarketplaceRelayFirstTouchReply({
+        firstName: relayFirstName,
+        agentName: relayAgentName,
+        dealerName: relayDealerName,
+        vehicleLabel: relayVehicleLabel
+      });
+      // Owner defaults to conv.leadOwner inside addTodo; passed explicitly here so the ruling's
+      // "owned by the lead owner" intent is legible. If the lead is unassigned the task still
+      // lands in the needs-owner queue (ownerId undefined) rather than nowhere — never dropped.
       addTodo(
         conv,
         "other",
-        "Marketplace relay lead: reply in the marketplace inbox (no direct SMS/email channel on this lead).",
-        event.providerMessageId
+        buildMarketplaceRelayTaskSummary(relayReply),
+        event.providerMessageId,
+        conv.leadOwner?.id || conv.leadOwner?.name
+          ? { id: conv.leadOwner?.id, name: conv.leadOwner?.name }
+          : undefined
       );
     }
     setFollowUpMode(conv, "manual_handoff", "marketplace_relay");
