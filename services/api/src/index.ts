@@ -773,7 +773,11 @@ import {
   toAuthorityModels,
   type AuthorityModel
 } from "./domain/turnUnderstandingAuthority.js";
-import { isParserSoftVisitCommitment } from "./domain/softVisitSignal.js";
+import {
+  hasConditionalVisitCommitmentHintText,
+  isParserConditionalVisitCommitment,
+  isParserSoftVisitCommitment
+} from "./domain/softVisitSignal.js";
 import { collectRecentStaffCorrections } from "./domain/feedbackSteering.js";
 
 import {
@@ -9649,6 +9653,17 @@ function buildSoftVisitCommitmentAck(conv: any, firstName: string): string | nul
   const name = String(firstName ?? "").trim();
   const lead = name ? `Awesome, ${name} — ` : "Awesome — ";
   return `${lead}see you ${label}! Want me to have anything specific ready for you when you stop in?`;
+}
+
+// Warm no-rush ack for a CONDITIONAL (day-less) visit commitment ("once she's back on the
+// road i'll be in" — Michael Siejka +17169906333, 2026-06-25). There is no day to confirm
+// and no time to check, so the right reply is patience + an open door, never a scheduling
+// push or an improvised orchestrator draft. Deterministic templated stage (same family as
+// buildSoftVisitCommitmentAck), Agent-Voice-Charter tone, no denylisted phrases.
+function buildConditionalVisitCommitmentAck(firstName: string): string {
+  const name = String(firstName ?? "").trim();
+  const lead = name ? `Sounds good, ${name} — ` : "Sounds good — ";
+  return `${lead}no rush at all, we'll be here whenever you're ready. Holler if you need anything in the meantime!`;
 }
 
 /**
@@ -53540,6 +53555,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     (!!conv.scheduler?.lastSuggestedSlots?.length ||
       String(conv.appointment?.status ?? "none").toLowerCase() !== "none" ||
       hasAppointmentWeatherTimingHintText(event.body ?? "") ||
+      // Conditional day-less commitment shape — parity with the live hint gate
+      // (Michael Siejka +17169906333, fail-safe hint widening).
+      hasConditionalVisitCommitmentHintText(event.body ?? "") ||
       /\b(on my way|leav(?:e|ing)|driv(?:e|ing)|headed|be there|there by|around|between|morning|afternoon|evening|what time works|let me know what time|same time|later this month|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(
         regenTextLower
       ));
@@ -54859,7 +54877,17 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     // with live: warm visit-ack + soft-visit cadence window. Placed after all higher-priority
     // regen intent branches have returned, so a compound turn (pricing/availability/etc.) is
     // never dropped here — only a pure soft commitment reaches this point.
-    if (event.provider === "twilio" && isParserSoftVisitCommitment(regenAppointmentTimingParse)) {
+    if (
+      event.provider === "twilio" &&
+      (isParserSoftVisitCommitment(regenAppointmentTimingParse) ||
+        // CONDITIONAL day-less commitment ("once she's back on the road i'll be in" —
+        // Michael Siejka +17169906333) — parity with the live conditional soft-visit arm.
+        // Watch-guarded like live: a watch-conditioned turn keeps its watch routing (this
+        // branch already sits after the regen watch/higher-priority arms have returned).
+        (!conv.inventoryWatchPending &&
+          regenSemanticWatchAction !== "set_watch" &&
+          isParserConditionalVisitCommitment(regenAppointmentTimingParse)))
+    ) {
       const cfg = await getSchedulerConfigHot();
       const appliedWindow = await applySoftVisitCadenceWindow(
         conv,
@@ -54873,10 +54901,16 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       const ack = appliedWindow
         ? buildBookedSameDayAllSetReply(conv, softVisitWindowLabel(conv)) ??
           buildSoftVisitCommitmentAck(conv, normalizeDisplayCase(conv.lead?.firstName))
-        : null;
+        : isParserConditionalVisitCommitment(regenAppointmentTimingParse)
+          ? buildConditionalVisitCommitmentAck(normalizeDisplayCase(conv.lead?.firstName))
+          : null;
       if (ack) {
         addSoftVisitStaffTask(conv, softVisitWindowLabel(conv), event.providerMessageId);
-        recordRouteOutcome("regen", "soft_visit_commitment_ack", { convId: conv.id, leadKey: conv.leadKey });
+        recordRouteOutcome(
+          "regen",
+          appliedWindow ? "soft_visit_commitment_ack" : "soft_visit_conditional_commitment_ack",
+          { convId: conv.id, leadKey: conv.leadKey }
+        );
         if (channel === "email") return respondWithEmailRegeneratedDraft(ack);
         return respondWithSmsRegeneratedDraft(ack, undefined, { turnSchedulingIntent: true });
       }
@@ -61417,6 +61451,9 @@ if (authToken && signature) {
     (!!conv.scheduler?.lastSuggestedSlots?.length ||
       String(conv.appointment?.status ?? "none").toLowerCase() !== "none" ||
       hasAppointmentWeatherTimingHintText(event.body ?? "") ||
+      // Conditional day-less commitment shape ("once she's back on the road i'll be in" —
+      // Michael Siejka +17169906333): fail-safe hint widening so the parser gets consulted.
+      hasConditionalVisitCommitmentHintText(event.body ?? "") ||
       /\b(on my way|leav(?:e|ing)|driv(?:e|ing)|headed|be there|there by|around|between|morning|afternoon|evening|what time works|let me know what time|same time|later this month|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(
         textLower
       ));
@@ -62793,7 +62830,19 @@ if (authToken && signature) {
   // (Todd Herian Ref 11438). Over-firing only DELAYS a follow-up (fail-safe).
   const softVisitCommitment =
     schedulingSignalsBase.softVisit === true || isParserSoftVisitCommitment(appointmentTimingParse);
-  if (softVisitCommitment) {
+  // CONDITIONAL (day-less) visit commitment ("once she's back on the road i'll be in" —
+  // Michael Siejka +17169906333, 2026-06-25): the appointment-timing parser comprehends the
+  // turn (intent:none, no day, commitment in normalizedText) but the day-anchored signal
+  // can't fire, so the turn used to fall through to the generic orchestrator (judged draft:
+  // photo-appreciation improvisation). Watch-guarded: a watch-conditioned "when one comes in
+  // I'll come by" belongs to the inventory-watch arm, never a patience ack that drops the watch.
+  const conditionalSoftVisitCommitment =
+    !softVisitCommitment &&
+    !watchHandledEarly &&
+    !conv.inventoryWatchPending &&
+    semanticWatchAction !== "set_watch" &&
+    isParserConditionalVisitCommitment(appointmentTimingParse);
+  if (softVisitCommitment || conditionalSoftVisitCommitment) {
     schedulingSignals.explicit = false;
     schedulingSignals.hasDayTime = false;
     schedulingSignals.hasDayOnlyAvailability = false;
@@ -62805,7 +62854,7 @@ if (authToken && signature) {
     schedulingSignals.hasDayOnlyAvailability = false;
     schedulingSignals.hasDayOnlyRequest = false;
   }
-  const softVisitIntent = softVisitCommitment;
+  const softVisitIntent = softVisitCommitment || conditionalSoftVisitCommitment;
   if (event.provider === "twilio" && softVisitIntent) {
     const cfg = await getSchedulerConfigHot();
     const appliedWindow = await applySoftVisitCadenceWindow(conv, event.body ?? "", cfg.timezone);
@@ -62821,9 +62870,10 @@ if (authToken && signature) {
     // Warm visit-ack for a PURE soft commitment (no competing pricing/availability/callback/
     // booking/explicit-schedule intent — those route to their own arms and must not be dropped).
     // Replaces the generic orchestrator draft ("You're welcome. I'll check that time...") that
-    // staff had to override (Todd Herian Ref 11438).
+    // staff had to override (Todd Herian Ref 11438). A conditional day-less commitment gets the
+    // no-rush patience ack instead (there is no day to confirm and no time to check).
     const pureSoftVisit =
-      appliedWindow &&
+      (appliedWindow || conditionalSoftVisitCommitment) &&
       !pricingOrPaymentsIntent &&
       !effectiveTestRideIntent &&
       !bookingIntentAccepted &&
@@ -62834,12 +62884,17 @@ if (authToken && signature) {
     if (pureSoftVisit) {
       // Booked-same-day wins: "see you Monday" over an existing Monday booking gets "you're
       // all set for {booked time}", never a fresh prep/time ask (Joe ruling 2026-07-19).
-      const softVisitAck =
-        buildBookedSameDayAllSetReply(conv, softVisitWindowLabel(conv)) ??
-        buildSoftVisitCommitmentAck(conv, normalizeDisplayCase(conv.lead?.firstName));
+      const softVisitAck = appliedWindow
+        ? buildBookedSameDayAllSetReply(conv, softVisitWindowLabel(conv)) ??
+          buildSoftVisitCommitmentAck(conv, normalizeDisplayCase(conv.lead?.firstName))
+        : buildConditionalVisitCommitmentAck(normalizeDisplayCase(conv.lead?.firstName));
       if (softVisitAck) {
         addSoftVisitStaffTask(conv, softVisitWindowLabel(conv), event.providerMessageId);
-        recordRouteOutcome("live", "soft_visit_commitment_ack", { convId: conv.id, leadKey: conv.leadKey });
+        recordRouteOutcome(
+          "live",
+          appliedWindow ? "soft_visit_commitment_ack" : "soft_visit_conditional_commitment_ack",
+          { convId: conv.id, leadKey: conv.leadKey }
+        );
         return publishLiveTwilioReply(softVisitAck, { turnSchedulingIntent: true });
       }
     }
