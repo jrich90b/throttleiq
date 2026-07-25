@@ -50,6 +50,7 @@ export {
   pendingRescheduleCarriesTurnIntent,
   decideVehicleChoiceConfidenceTurn,
   decideVehicleRecommendationTurn,
+  decideEquipmentClarifyTurn,
   shouldBowOutRecommenderForNamedModel,
   decideVehicleMediaRequestTurn,
   decideInventoryUnitClarificationTurn,

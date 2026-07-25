@@ -1032,6 +1032,56 @@ export function decideVehicleRecommendationTurn(
   return { kind: "recommend" };
 }
 
+// --- Under-specified equipment ask → CLARIFY up to a style/type (Joe, 2026-07-25) --------------
+//
+// A PURE equipment ask with NO bike type — "something with bags and a windshield" — names equipment
+// but no model, no family, and no segment/style. #292/#294 mint watches only when there IS a
+// model/family/segment to anchor the fire test, and the Phase B equipment SEARCH would otherwise
+// run vision over the WHOLE lot to answer it. Joe's ruling: don't drop it and don't build a
+// watch-the-whole-inventory modality — CLARIFY up to a segment. Ask what STYLE/type they want (and
+// new vs used); the customer's answer ("a cruiser") turns the NEXT turn into a normal segment +
+// equipment request that #292/#294 + Phase B already handle.
+//
+// This owns ONLY the precedence decision from the parser's already-extracted slots (never regex over
+// intent): the Phase B requested_equipment features + the glossary include_segments, plus whether a
+// concrete model/family was referenced this turn. The reply (and the route wiring in BOTH paths)
+// stay in index.ts's shared resolveVehicleRecommendationReply.
+//
+// FAIL DIRECTION = `none` (untouched): flag off, no equipment named, OR any bike type present
+// (segment/model/family) → we do NOT clarify. A request that already HAS a style ("a cruiser with
+// bags") proceeds to the equipment search unchanged; a request with NO equipment is untouched. We
+// clarify ONLY when equipment is named with zero bike type — the genuinely under-specified case.
+export type EquipmentClarifyTurnKind = "clarify" | "none";
+
+export type EquipmentClarifyTurnInput = {
+  // The equipment-vision canary is on (INVENTORY_EQUIPMENT_VISION_ENABLED). Flag off → never clarify.
+  visionEnabled: boolean;
+  // Parser (requested_equipment) named at least one equipment feature this turn.
+  hasEquipmentFeatures: boolean;
+  // Parser (include_segments) resolved a style/type — a cruiser, bagger/touring, sport, etc.
+  hasSegment: boolean;
+  // A concrete model was referenced this turn (e.g. "Road King with bags").
+  hasModel: boolean;
+  // A model family was referenced this turn (e.g. "a Softail with bags").
+  hasFamily: boolean;
+};
+
+export type EquipmentClarifyTurnDecision = {
+  kind: EquipmentClarifyTurnKind;
+};
+
+export function decideEquipmentClarifyTurn(
+  input: EquipmentClarifyTurnInput
+): EquipmentClarifyTurnDecision {
+  if (!input.visionEnabled) return { kind: "none" }; // canary off → today's behavior, no change
+  if (!input.hasEquipmentFeatures) return { kind: "none" }; // no equipment named → untouched
+  // Any bike type/style/model/family present → NOT under-specified. The equipment ask is anchored, so
+  // #292/#294 (watches) and the Phase B equipment search proceed unchanged.
+  if (input.hasSegment || input.hasModel || input.hasFamily) return { kind: "none" };
+  // Equipment named with ZERO bike type → clarify UP to a segment (ask style + new/used).
+  return { kind: "clarify" };
+}
+
 // When the customer NAMES a model on a turn where no model is yet in play for pricing, should the
 // recommender bow out to the finance/pricing flow? Naming a model is normally "price THIS bike"
 // (finance owns it). EXCEPTION: when the customer has given a budget profile (a monthly cap and/or a
