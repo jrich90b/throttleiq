@@ -222,6 +222,20 @@ export function buildVehicleRecommendationFollowupReply(firstName?: string | nul
   return `${opener} Let me pull a few that fit what you're after and text them right over.`;
 }
 
+/**
+ * Under-specified equipment ask (Joe, 2026-07-25): the customer named equipment ("something with
+ * bags and a windshield") but no bike type at all — no model, no family, no style/segment. Rather
+ * than drop it or run a whole-lot vision search, ask what STYLE they're after (and new vs used) so
+ * the next turn becomes a normal segment + equipment request. Voice charter (texting a friend): one
+ * short, warm clarifying question, no AI-tells, no em-dash overuse. NEVER asserts any inventory
+ * (nothing to fabricate — we're asking, not answering).
+ */
+export function buildEquipmentClarifyReply(firstName?: string | null): string {
+  const name = String(firstName ?? "").trim();
+  const opener = name ? `Sure thing, ${name}!` : "Sure thing!";
+  return `${opener} Any particular style you're after, like a cruiser or a bagger? And are you thinking new or used?`;
+}
+
 export function buildVehicleRecommendationTodoSummary(firstName?: string | null): string {
   const who = String(firstName ?? "").trim() || "Customer";
   return `${who} asked for bike suggestions by budget/style but we had no priced match to send. Pull a few options that fit and follow up.`;

@@ -563,9 +563,12 @@ import { watchLabelIsBareFamilyUmbrella } from "./domain/watchFamilyScope.js";
 import { buildCreditLeadEmailDraft } from "./domain/creditLeadEmail.js";
 import {
   recommendInventory,
+  classifyHarleySegment,
+  type HarleySegment,
   selectEligibleInventory,
   buildVehicleRecommendationReply,
   buildEquipmentRecommendationReply,
+  buildEquipmentClarifyReply,
   buildVehicleRecommendationFollowupReply,
   buildVehicleRecommendationTodoSummary,
   toRecommendedUnits,
@@ -670,6 +673,7 @@ import {
   pendingRescheduleCarriesTurnIntent,
   decideVehicleChoiceConfidenceTurn,
   decideVehicleRecommendationTurn,
+  decideEquipmentClarifyTurn,
   shouldBowOutRecommenderForNamedModel,
   decideVehicleMediaRequestTurn,
   decideInventoryUnitClarificationTurn,
@@ -2554,6 +2558,31 @@ async function resolveVehicleRecommendationReply(
   // budget/style recommender below runs unchanged. An equipment ask never leaks into that generic
   // path (the helper always returns its own reply), so we never list random bikes as "with bags".
   const equipmentQuery = parse?.requestedEquipment ?? {};
+  const equipmentIncludeSegments = parse?.includeSegments ?? [];
+  // Under-specified equipment ask → CLARIFY up to a style (Joe, 2026-07-25). Centralized decision
+  // (decideEquipmentClarifyTurn) reads the parser's already-extracted slots — requested_equipment
+  // features + include_segments (glossary style layer) + whether a concrete model was named this
+  // turn — NEVER a regex over intent. When the customer named equipment but NO bike type at all
+  // ("something with bags and a windshield"), ask what style/type they want (and new vs used)
+  // instead of dropping it or running a whole-lot equipment vision search. This sits inside the
+  // SHARED resolver, so live (/webhooks/twilio) + regen (/conversations/:id/regenerate) behave
+  // identically. Flag off → decision is `none` (no change). We do NOT mint a watch here (creation
+  // lives in deriveContextNoteWatches, which defers pure-equipment asks) and do NOT run the search.
+  const clarifyDecision = decideEquipmentClarifyTurn({
+    visionEnabled: inventoryEquipmentVisionEnabled(),
+    hasEquipmentFeatures: equipmentQueryHasFeatures(equipmentQuery),
+    hasSegment: equipmentIncludeSegments.length > 0,
+    hasModel: !!findMentionedModel(askText.toLowerCase()),
+    hasFamily: false
+  });
+  if (clarifyDecision.kind === "clarify") {
+    recordRouteOutcome(scope, "equipment_clarify", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      equipment: describeEquipmentQuery(equipmentQuery)
+    });
+    return buildEquipmentClarifyReply(firstName);
+  }
   if (inventoryEquipmentVisionEnabled() && equipmentQueryHasFeatures(equipmentQuery)) {
     return resolveEquipmentRecommendationReply({
       conv,
@@ -6124,7 +6153,142 @@ function canonicalizeWatchModelLabel(model: string | null | undefined): string {
   return cleaned || raw;
 }
 
+// ---------------------------------------------------------------------------
+// SEGMENT watches (stacked on the #292 equipment-watch canary). A segment watch's model-half is not a
+// concrete model but membership in a broad code GROUP the glossary resolves ("cruiser","touring",…). The
+// segment set narrows the lot; the shared non-model criteria (year/condition/price/color/make) still apply,
+// and #292's watchEquipmentFireGate composes the equipment half on top. A segment is a NARROW — a unit the
+// glossary can't place in the group ("unknown"), or one in a different group, NEVER fires the watch.
+// ---------------------------------------------------------------------------
+// A concrete segment target excludes "unknown" (that is the glossary's "can't place it" sentinel, never
+// a watchable group). Matches the InventoryWatch.segments field union.
+type SegmentWatchTarget = Exclude<HarleySegment, "unknown">;
+const SEGMENT_WATCH_KEYS: ReadonlySet<SegmentWatchTarget> = new Set<SegmentWatchTarget>([
+  "cruiser",
+  "touring",
+  "sport",
+  "adventure",
+  "trike"
+]);
+
+// The valid, deduped segment targets on a watch (empty for an ordinary model/family watch).
+function watchSegmentTargets(watch: InventoryWatch): SegmentWatchTarget[] {
+  const raw = (watch as any)?.segments;
+  if (!Array.isArray(raw)) return [];
+  const out: SegmentWatchTarget[] = [];
+  for (const s of raw) {
+    if (SEGMENT_WATCH_KEYS.has(s as SegmentWatchTarget) && !out.includes(s as SegmentWatchTarget)) {
+      out.push(s as SegmentWatchTarget);
+    }
+  }
+  return out;
+}
+
+// A watch is a SEGMENT watch when it carries at least one valid segment target. Independent of the
+// synthetic `model` label, so detection never depends on the label text.
+function watchIsSegmentWatch(watch: InventoryWatch): boolean {
+  return watchSegmentTargets(watch).length > 0;
+}
+
+// Human-readable synthetic model label for a segment watch (e.g. "Cruiser + Touring (segment)"). Stored
+// in `watch.model` PURELY for copy/merge-dedup/pending-alert bookkeeping — never model-token matched. The
+// label encodes the sorted segment set so two identical-set segment watches collapse in the merge and two
+// different-set ones stay distinct.
+function formatSegmentWatchLabel(segments: HarleySegment[]): string {
+  const titled = segments
+    .slice()
+    .sort()
+    .map(s => s.charAt(0).toUpperCase() + s.slice(1));
+  return `${titled.join(" + ")} (segment)`;
+}
+
+// The year/condition/price/color/make criteria the live matcher applies AFTER the model half. Extracted
+// verbatim from inventoryItemMatchesWatch (behavior-preserving) so the SEGMENT matcher can reuse the exact
+// same governance instead of drifting a second copy. Model-token/trim checks that only make sense for a
+// concrete-model watch stay here too — a segment watch simply carries no trim, so they no-op.
+function inventoryItemPassesNonModelCriteria(item: any, watch: InventoryWatch): boolean {
+  const itemModel = normalizeModelName(String(item?.model ?? ""));
+  if (watch.trim) {
+    const trimToken = normalizeModelName(String(watch.trim));
+    if (trimToken && !itemModel.includes(trimToken)) return false;
+  }
+  if (watch.make) {
+    const itemMake = normalizeModelName(String(item.make ?? ""));
+    const watchMake = normalizeModelName(String(watch.make));
+    if (!itemMake || (!itemMake.includes(watchMake) && !watchMake.includes(itemMake))) return false;
+  }
+  const watchCondition = normalizeWatchCondition(watch.condition);
+  if (watchCondition) {
+    const itemCondition = normalizeWatchCondition(item.condition) ?? inferInventoryItemCondition(item);
+    if (!itemCondition || itemCondition !== watchCondition) return false;
+  }
+  if (watch.year && String(item.year) !== String(watch.year)) return false;
+  if (watch.yearMin && watch.yearMax) {
+    const y = Number(item.year ?? 0);
+    if (!Number.isFinite(y) || y < watch.yearMin || y > watch.yearMax) return false;
+  }
+  if (watch.color) {
+    const watchColorRaw = String(watch.color ?? "");
+    const itemColorRaw = String(item.color ?? "");
+    const leadTrim = watch.trim ? extractTrimToken(String(watch.trim)) : extractTrimToken(watchColorRaw);
+    const keepTrim = !!watch.trim || /\b(trim|finish)\b/i.test(watchColorRaw);
+    const itemColor = normalizeColorBase(itemColorRaw, keepTrim);
+    const watchColor = normalizeColorBase(watchColorRaw, keepTrim);
+    const directIncludes = !!itemColor && !!watchColor && itemColor.includes(watchColor);
+    const normalizedMatch =
+      colorMatchesExact(itemColorRaw, watchColorRaw, leadTrim) ||
+      colorMatchesAlias(itemColorRaw, watchColorRaw, leadTrim);
+    if (!directIncludes && !normalizedMatch) return false;
+  }
+  const itemPrice = Number(item?.price ?? NaN);
+  const minPrice = Number(watch.minPrice ?? NaN);
+  const maxPrice = Number(watch.maxPrice ?? NaN);
+  const hasMinPrice = Number.isFinite(minPrice) && minPrice > 0;
+  const hasMaxPrice = Number.isFinite(maxPrice) && maxPrice > 0;
+  if (hasMinPrice || hasMaxPrice) {
+    if (!Number.isFinite(itemPrice) || itemPrice <= 0) return false;
+    if (hasMinPrice && itemPrice < minPrice) return false;
+    if (hasMaxPrice && itemPrice > maxPrice) return false;
+  }
+  const monthlyBudget = Number(watch.monthlyBudget ?? NaN);
+  if (Number.isFinite(monthlyBudget) && monthlyBudget > 0) {
+    const termMonthsRaw = Number(watch.termMonths ?? NaN);
+    const termMonths = Number.isFinite(termMonthsRaw) && termMonthsRaw > 0 ? termMonthsRaw : 72;
+    const downPaymentRaw = Number(watch.downPayment ?? NaN);
+    const downPayment = Number.isFinite(downPaymentRaw) && downPaymentRaw > 0 ? downPaymentRaw : 0;
+    const estimatedMonthly = estimateInventoryItemMonthlyPayment(item, {
+      termMonths,
+      taxRate: 0.08,
+      downPayment
+    });
+    if (estimatedMonthly == null || estimatedMonthly > monthlyBudget) return false;
+  }
+  return true;
+}
+
+// The SEGMENT matcher (pure). The model half is group MEMBERSHIP; the rest is the shared criteria. Fail
+// direction: an "unknown"-segment unit (glossary can't place it) or an out-of-group unit does NOT fire —
+// a segment never fires on a bike outside the group.
+function inventoryItemMatchesSegmentWatch(item: any, watch: InventoryWatch): boolean {
+  const segments = watchSegmentTargets(watch);
+  if (!segments.length) return false;
+  if (!item?.model) return false;
+  const seg = classifyHarleySegment(item.model);
+  if (seg === "unknown" || !segments.includes(seg)) return false; // NARROW — never fire outside the group
+  return inventoryItemPassesNonModelCriteria(item, watch);
+}
+
 function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
+  // SEGMENT watch (canary): route to the segment matcher — its model half is group membership, not a
+  // concrete-model token match, so it must NEVER fall through to the model-matching logic below (that
+  // would try to substring-match the synthetic label). Flag-gated: with INVENTORY_EQUIPMENT_VISION_ENABLED
+  // off a segment watch is INERT (returns false, never fires) — the segment-membership modality is new
+  // firing surface kept inside the same canary as the equipment half. A model/family watch (no `segments`)
+  // skips this branch entirely and the logic below is 100% UNCHANGED — regression-pinned.
+  if (watchIsSegmentWatch(watch)) {
+    if (!inventoryEquipmentVisionEnabled()) return false;
+    return inventoryItemMatchesSegmentWatch(item, watch);
+  }
   if (!item?.model || !watch?.model) return false;
   const itemModel = normalizeModelName(String(item.model));
   const watchModel = normalizeModelName(String(watch.model));
@@ -6229,62 +6393,8 @@ function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
     return false;
   }
   if (!directMatch && !familyMatch && !catalogCodeMatch) return false;
-  if (watch.trim) {
-    const trimToken = normalizeModelName(String(watch.trim));
-    if (trimToken && !itemModel.includes(trimToken)) return false;
-  }
-  if (watch.make) {
-    const itemMake = normalizeModelName(String(item.make ?? ""));
-    const watchMake = normalizeModelName(String(watch.make));
-    if (!itemMake || (!itemMake.includes(watchMake) && !watchMake.includes(itemMake))) return false;
-  }
-  const watchCondition = normalizeWatchCondition(watch.condition);
-  if (watchCondition) {
-    const itemCondition = normalizeWatchCondition(item.condition) ?? inferInventoryItemCondition(item);
-    if (!itemCondition || itemCondition !== watchCondition) return false;
-  }
-  if (watch.year && String(item.year) !== String(watch.year)) return false;
-  if (watch.yearMin && watch.yearMax) {
-    const y = Number(item.year ?? 0);
-    if (!Number.isFinite(y) || y < watch.yearMin || y > watch.yearMax) return false;
-  }
-  if (watch.color) {
-    const watchColorRaw = String(watch.color ?? "");
-    const itemColorRaw = String(item.color ?? "");
-    const leadTrim = watch.trim ? extractTrimToken(String(watch.trim)) : extractTrimToken(watchColorRaw);
-    const keepTrim = !!watch.trim || /\b(trim|finish)\b/i.test(watchColorRaw);
-    const itemColor = normalizeColorBase(itemColorRaw, keepTrim);
-    const watchColor = normalizeColorBase(watchColorRaw, keepTrim);
-    const directIncludes = !!itemColor && !!watchColor && itemColor.includes(watchColor);
-    const normalizedMatch =
-      colorMatchesExact(itemColorRaw, watchColorRaw, leadTrim) ||
-      colorMatchesAlias(itemColorRaw, watchColorRaw, leadTrim);
-    if (!directIncludes && !normalizedMatch) return false;
-  }
-  const itemPrice = Number(item?.price ?? NaN);
-  const minPrice = Number(watch.minPrice ?? NaN);
-  const maxPrice = Number(watch.maxPrice ?? NaN);
-  const hasMinPrice = Number.isFinite(minPrice) && minPrice > 0;
-  const hasMaxPrice = Number.isFinite(maxPrice) && maxPrice > 0;
-  if (hasMinPrice || hasMaxPrice) {
-    if (!Number.isFinite(itemPrice) || itemPrice <= 0) return false;
-    if (hasMinPrice && itemPrice < minPrice) return false;
-    if (hasMaxPrice && itemPrice > maxPrice) return false;
-  }
-  const monthlyBudget = Number(watch.monthlyBudget ?? NaN);
-  if (Number.isFinite(monthlyBudget) && monthlyBudget > 0) {
-    const termMonthsRaw = Number(watch.termMonths ?? NaN);
-    const termMonths = Number.isFinite(termMonthsRaw) && termMonthsRaw > 0 ? termMonthsRaw : 72;
-    const downPaymentRaw = Number(watch.downPayment ?? NaN);
-    const downPayment = Number.isFinite(downPaymentRaw) && downPaymentRaw > 0 ? downPaymentRaw : 0;
-    const estimatedMonthly = estimateInventoryItemMonthlyPayment(item, {
-      termMonths,
-      taxRate: 0.08,
-      downPayment
-    });
-    if (estimatedMonthly == null || estimatedMonthly > monthlyBudget) return false;
-  }
-  return true;
+  // Year/condition/price/color/make criteria — shared with the segment matcher (extracted verbatim).
+  return inventoryItemPassesNonModelCriteria(item, watch);
 }
 
 function inventoryWatchGroupAlreadyNotifiedStock(watches: InventoryWatch[], item: any): boolean {
@@ -6320,6 +6430,11 @@ function convHasActiveEquipmentWatch(conv: any): boolean {
 // means the watch stays a plain model watch) — never a comprehension decision.
 const EQUIPMENT_WATCH_HINT_RE =
   /\b(bags?|saddle\s?bags?|windshield|wind\s?shield|shield|fairing|batwing|shark\s?nose|backrest|sissy\s?bar|tour[\s-]?pak|tour\s?pack|trunk|forward\s?controls?|ape\s?hangers?|floorboards?|crash\s?bars?|highway\s?bars?|engine\s?guards?)\b/i;
+
+// Cheap hint: the note names a broad STYLE SEGMENT (not a concrete model), so it's worth spending one
+// recommendation parse to resolve include_segments for a SEGMENT watch. Purely a cost pre-filter — the
+// parser (glossary segment layer) makes the real call; a miss just means no segment watch is created.
+const SEGMENT_WATCH_HINT_RE = /\b(cruisers?|touring|sport|sporty|adventure|adv|trikes?|baggers?)\b/i;
 
 // Sibling-variant scope ask (Joe, 2026-07-04). When the fire pass found NO full match for this
 // conversation, check whether a candidate unit is a same-FAMILY sibling trim of a strict watch —
@@ -24803,28 +24918,92 @@ async function deriveContextNoteWatches(
     }
   }
 
-  // Equipment-bearing watch (canary, INVENTORY_EQUIPMENT_VISION_ENABLED off by default). When the note
-  // ALSO names physical equipment ("...a Road King with a backrest", "a used Softail with bags"), attach
-  // the Phase B requested_equipment parse so the fire engine ANDs it with the model/family/condition
-  // criteria already on the watch. Reuses the exact Phase B parser (parseVehicleRecommendationRequest —
-  // its requestedEquipment slot + windshield≠fairing parse-level rule); no new comprehension surface.
-  // A model-only watch is untouched (no equipment key → the fire gate is a no-op). NOTE (scope): a watch
-  // must anchor on a model/family here (modelSet), so a SEGMENT-only ("a cruiser with bags") or
-  // equipment-only ("bags and a windshield") ask produces no watch — that model-less modality is a
-  // documented follow-up. Fail-safe: a parse miss just leaves a plain model watch, never a wrong fire.
-  if (inventoryEquipmentVisionEnabled() && watches.length && EQUIPMENT_WATCH_HINT_RE.test(note)) {
-    const eqParse = await safeLlmParse("equipment_watch_parser", () =>
-      parseVehicleRecommendationRequestWithLLM({ text: note, history: buildHistory(conv, 6) })
-    );
-    const eq = eqParse?.requestedEquipment ?? {};
-    if (equipmentQueryHasFeatures(eq)) {
-      for (const w of watches) w.requestedEquipment = eq;
-      recordRouteOutcome("live", "equipment_watch_created", {
-        convId: conv?.id,
-        leadKey: conv?.leadKey,
-        equipment: describeEquipmentQuery(eq as any),
-        watches: watches.length
-      });
+  // Equipment + SEGMENT watches (canary, INVENTORY_EQUIPMENT_VISION_ENABLED off by default). ONE
+  // recommendation parse (parseVehicleRecommendationRequest — the SAME Phase B parser) serves both:
+  //  (a) MODEL/FAMILY watch + equipment (#292, UNCHANGED): the note also names physical equipment
+  //      ("...a Road King with a backrest", "a used Softail with bags") → attach requested_equipment so
+  //      the fire engine ANDs it with the model/family/condition criteria already on the watch.
+  //  (b) SEGMENT watch (stacked — Joe's literal "let me know when a cruiser with bags and a windshield
+  //      comes in"): the note names a broad STYLE GROUP but NO concrete model → build a watch that fires
+  //      on any arriving unit whose model is IN the segment's code group (classifyHarleySegment), ANDed
+  //      with the equipment gate. Reuses the parser's include_segments (the glossary segment layer) +
+  //      requested_equipment; NO regex over customer intent, windshield≠fairing rides along at parse+fire.
+  // Precedence: a concrete MODEL watch anchored the ask → we DON'T also mint a segment watch (the model
+  // watch is more specific). Fail-safe: a parse miss just leaves whatever model watches we had, never a
+  // wrong fire. Still a documented gap: a PURE equipment-only ask ("bags and a windshield", no segment or
+  // model) yields no watch — that model-less/segment-less modality stays a separate follow-up.
+  if (inventoryEquipmentVisionEnabled()) {
+    const wantsWatchIntent = parserRequestedWatch || watchSegments.length > 0;
+    const noteNamesEquipment = EQUIPMENT_WATCH_HINT_RE.test(note);
+    const noteNamesSegment = SEGMENT_WATCH_HINT_RE.test(note);
+    const needParse =
+      (watches.length && noteNamesEquipment) ||
+      (!watches.length && wantsWatchIntent && (noteNamesSegment || noteNamesEquipment));
+    if (needParse) {
+      const recParse = await safeLlmParse("equipment_watch_parser", () =>
+        parseVehicleRecommendationRequestWithLLM({ text: note, history: buildHistory(conv, 6) })
+      );
+      const eq = recParse?.requestedEquipment ?? {};
+      // (a) MODEL/FAMILY watches → attach equipment (#292 behavior, unchanged).
+      if (watches.length && equipmentQueryHasFeatures(eq)) {
+        for (const w of watches) w.requestedEquipment = eq;
+        recordRouteOutcome("live", "equipment_watch_created", {
+          convId: conv?.id,
+          leadKey: conv?.leadKey,
+          equipment: describeEquipmentQuery(eq as any),
+          watches: watches.length
+        });
+      }
+      // (b) SEGMENT watch — only when NO concrete model watch anchored the ask.
+      if (!watches.length && wantsWatchIntent) {
+        const segments = watchSegmentTargets({ segments: recParse?.includeSegments } as InventoryWatch);
+        if (segments.length) {
+          const segSource = watchSegments.length ? watchSegments.join(" ") : note;
+          const segYearRange = extractYearRange(segSource) ?? semanticYearRange;
+          const segSingleYear =
+            extractYearSingle(segSource) ??
+            (Number.isFinite(semanticYear) && semanticYear > 1900 ? semanticYear : null);
+          const segTextBudget = extractWatchBudgetPreference(segSource);
+          const segBudget = hasAnyWatchBudgetPreference(segTextBudget)
+            ? segTextBudget
+            : mergeWatchBudgetPreference(segTextBudget, semanticBudget);
+          const segCondition =
+            normalizeWatchCondition(segSource) ??
+            semanticCondition ??
+            normalizeWatchCondition(conv?.lead?.vehicle?.condition);
+          const segColor = sanitizeColorPhrase(extractColorMention(segSource)) ?? semanticColor;
+          const segWatch: InventoryWatch = {
+            // Synthetic label for copy/merge/bookkeeping — NEVER model-token matched (the fire engine
+            // routes segment watches to the segment matcher via watchIsSegmentWatch).
+            model: formatSegmentWatchLabel(segments),
+            segments,
+            year: segSingleYear ?? undefined,
+            yearMin: segYearRange?.min,
+            yearMax: segYearRange?.max,
+            make: "Harley-Davidson", // segments are HD taxonomy; never key off a trade vehicle's make
+            condition: segCondition ?? undefined,
+            color: segColor ?? undefined,
+            minPrice: segBudget.minPrice,
+            maxPrice: segBudget.maxPrice,
+            monthlyBudget: segBudget.monthlyBudget,
+            termMonths: segBudget.termMonths,
+            downPayment: segBudget.downPayment,
+            exactness: "model_only",
+            status: "active",
+            createdAt: now,
+            note: "context_note_segment_watch"
+          };
+          if (equipmentQueryHasFeatures(eq)) segWatch.requestedEquipment = eq;
+          watches.push(segWatch);
+          recordRouteOutcome("live", "segment_watch_created", {
+            convId: conv?.id,
+            leadKey: conv?.leadKey,
+            segments: segments.join("+"),
+            equipment: equipmentQueryHasFeatures(eq) ? describeEquipmentQuery(eq as any) : "",
+            watches: watches.length
+          });
+        }
+      }
     }
   }
 
