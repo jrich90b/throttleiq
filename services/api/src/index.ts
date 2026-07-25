@@ -580,8 +580,12 @@ import {
   equipmentCacheKey,
   loadEquipmentCache,
   saveEquipmentCache,
+  profileArrivedUnitsForEquipment,
+  watchEquipmentFireGate,
   type EquipmentCandidate,
-  type EquipmentProfile
+  type EquipmentProfile,
+  type EquipmentCacheFile,
+  type EquipmentQuery
 } from "./domain/inventoryEquipmentVision.js";
 import { buildFinanceAppInviteLine } from "./domain/financeAppInvite.js";
 import { buildRecommendedUnitsPaymentEstimateReply, buildRecommendationWithEstimateReply } from "./domain/paymentEstimate.js";
@@ -6287,6 +6291,36 @@ function inventoryWatchGroupAlreadyNotifiedStock(watches: InventoryWatch[], item
   return inventoryWatchGroupMatchesLastNotifiedStock(watches, item);
 }
 
+// Equipment watches (canary). The SYNC caller-side gate applied AFTER inventoryItemMatchesWatch in
+// BOTH fire paths (cron sweep + hold-release). Reads the pre-loaded equipment cache only (no vision
+// here — profile-on-arrival populated it). Returns true (no-op) when the flag is off OR the watch
+// carries no requestedEquipment, so a model-only watch fires EXACTLY as today. When the watch DOES
+// carry equipment, the unit fires only when its cached profile ASSERTS every requested feature
+// (fail-safe: unprofiled / below-threshold → no fire). Model criteria are matched separately and are
+// unchanged; this only ever SUBTRACTS a fire, never adds one.
+function watchPassesEquipmentGate(item: any, watch: InventoryWatch, cache: EquipmentCacheFile | null): boolean {
+  if (!inventoryEquipmentVisionEnabled()) return true; // flag off → equipment ignored (plain model watch)
+  const requested = (watch as any)?.requestedEquipment as EquipmentQuery | undefined;
+  if (!equipmentQueryHasFeatures(requested)) return true; // model-only watch → unchanged
+  const key = equipmentCacheKey(item);
+  const profile = (key && cache?.profiles?.[key]) || null;
+  return watchEquipmentFireGate(profile, requested);
+}
+
+// Does any watch on this conversation carry an ACTIVE equipment filter? Used to gate profile-on-arrival
+// so vision cost is only spent when a customer is actually waiting on an equipment-bearing watch.
+function convHasActiveEquipmentWatch(conv: any): boolean {
+  return collectInventoryWatches(conv).some(
+    (w: any) => w && w.status !== "paused" && equipmentQueryHasFeatures((w as any)?.requestedEquipment)
+  );
+}
+
+// Cheap hint: the note names a physical FEATURE we can shop by, so it's worth spending one Phase B
+// equipment parse to attach requestedEquipment to a watch. Purely a cost pre-filter (a miss just
+// means the watch stays a plain model watch) — never a comprehension decision.
+const EQUIPMENT_WATCH_HINT_RE =
+  /\b(bags?|saddle\s?bags?|windshield|wind\s?shield|shield|fairing|batwing|shark\s?nose|backrest|sissy\s?bar|tour[\s-]?pak|tour\s?pack|trunk|forward\s?controls?|ape\s?hangers?|floorboards?|crash\s?bars?|highway\s?bars?|engine\s?guards?)\b/i;
+
 // Sibling-variant scope ask (Joe, 2026-07-04). When the fire pass found NO full match for this
 // conversation, check whether a candidate unit is a same-FAMILY sibling trim of a strict watch —
 // exactly the case the distinct-trim fire guard (PR #129) stays quiet on. If so, draft the
@@ -6547,6 +6581,26 @@ async function processInventoryWatchlist(targetConvId?: string, opts?: { include
     const nowIso = new Date().toISOString();
     const targetConv = targetConvId ? getConversation(targetConvId) : null;
     const convs = targetConvId ? (targetConv ? [targetConv] : []) : getAllConversations();
+    // Equipment WATCHES (canary, INVENTORY_EQUIPMENT_VISION_ENABLED off by default). Load the cached
+    // equipment profiles once for this sweep; the per-watch gate below reads them (no vision in the
+    // match loop). Flag off, or no watch carries requestedEquipment → the gate is a pure no-op and
+    // every model-only watch fires exactly as before.
+    let equipmentCache: EquipmentCacheFile | null = null;
+    if (inventoryEquipmentVisionEnabled()) {
+      equipmentCache = await loadEquipmentCache();
+      // PROFILE-ON-ARRIVAL: equipment-profile NEWLY-arrived units (bounded to new stockIds + per-run
+      // capped) so an equipment watch has a real profile to fire against THIS sweep — but only when a
+      // customer is actually waiting on one (cost guard). Never the whole lot (that is a follow-up).
+      const anyEquipmentWatcher = convs.some(convHasActiveEquipmentWatch);
+      if (anyEquipmentWatcher && newItems.length) {
+        const arrivals = newItems.filter(i => isWatchCandidateAvailable(i));
+        const stats = await profileArrivedUnitsForEquipment(arrivals, equipmentCache);
+        if (stats.visionRuns > 0) {
+          await saveEquipmentCache(equipmentCache);
+          console.log("[inventory-watch] equipment profile-on-arrival", stats);
+        }
+      }
+    }
     for (const conv of convs) {
       const watches =
         conv.inventoryWatches?.length
@@ -6590,7 +6644,10 @@ async function processInventoryWatchlist(targetConvId?: string, opts?: { include
           if (inventoryWatchGroupAlreadyNotifiedStock(watches, i)) return false;
           const key = inventoryKey(i);
           if (key && claimedItemKeys.has(String(key).toLowerCase())) return false;
-          return inventoryItemMatchesWatch(i, watch);
+          if (!inventoryItemMatchesWatch(i, watch)) return false;
+          // Equipment watches: the unit must ALSO assert the requested equipment (fail-safe — an
+          // unprofiled/below-threshold unit does not fire). No-op for a model-only watch or flag off.
+          return watchPassesEquipmentGate(i, watch, equipmentCache);
         });
         if (!match) continue;
         matches.push({ watch, item: match });
@@ -6781,6 +6838,21 @@ async function notifyInventoryWatchersForAvailableItem(
   const matchedKey = inventoryKey(matchedItem);
   let notified = 0;
 
+  // Equipment WATCHES (canary): the hold-release path fires on ONE specific released unit. Profile it
+  // on-demand (single unit → one vision call at most; hold-release is rare) so an equipment watch has a
+  // real profile to gate against, then the sync gate below reads the cache. Flag off → skipped entirely.
+  // Fail-safe: a vision failure leaves the unit unprofiled → no equipment watch fires on it.
+  let equipmentCache: EquipmentCacheFile | null = null;
+  if (inventoryEquipmentVisionEnabled()) {
+    equipmentCache = await loadEquipmentCache();
+    try {
+      const res = await getUnitEquipmentProfile(matchedItem, { cache: equipmentCache });
+      if (res.ranVision) await saveEquipmentCache(equipmentCache);
+    } catch (e: any) {
+      console.warn("[inventory-watch] hold-release equipment profiling failed:", e?.message ?? e);
+    }
+  }
+
   for (const conv of getAllConversations()) {
     if (opts?.excludeConvId && conv.id === opts.excludeConvId) continue;
     if (conv.status === "closed") continue;
@@ -6812,7 +6884,10 @@ async function notifyInventoryWatchersForAvailableItem(
         const lastAtMs = new Date(String(watch.lastNotifiedAt ?? "")).getTime();
         if (Number.isFinite(lastAtMs) && Date.now() - lastAtMs < 24 * 60 * 60 * 1000) return false;
       }
-      return inventoryItemMatchesWatch(matchedItem, watch);
+      if (!inventoryItemMatchesWatch(matchedItem, watch)) return false;
+      // Equipment watches: the released unit must ALSO assert the requested equipment (fail-safe).
+      // No-op for a model-only watch or with the flag off.
+      return watchPassesEquipmentGate(matchedItem, watch, equipmentCache);
     });
     if (!matchedWatch) {
       // No full match for the released unit — same one-time sibling-scope ask as the cron
@@ -24725,6 +24800,31 @@ async function deriveContextNoteWatches(
       else if (watch.year && (watch.color || watch.trim)) watch.exactness = "exact";
       else if (watch.year) watch.exactness = "year_model";
       watches.push(watch);
+    }
+  }
+
+  // Equipment-bearing watch (canary, INVENTORY_EQUIPMENT_VISION_ENABLED off by default). When the note
+  // ALSO names physical equipment ("...a Road King with a backrest", "a used Softail with bags"), attach
+  // the Phase B requested_equipment parse so the fire engine ANDs it with the model/family/condition
+  // criteria already on the watch. Reuses the exact Phase B parser (parseVehicleRecommendationRequest —
+  // its requestedEquipment slot + windshield≠fairing parse-level rule); no new comprehension surface.
+  // A model-only watch is untouched (no equipment key → the fire gate is a no-op). NOTE (scope): a watch
+  // must anchor on a model/family here (modelSet), so a SEGMENT-only ("a cruiser with bags") or
+  // equipment-only ("bags and a windshield") ask produces no watch — that model-less modality is a
+  // documented follow-up. Fail-safe: a parse miss just leaves a plain model watch, never a wrong fire.
+  if (inventoryEquipmentVisionEnabled() && watches.length && EQUIPMENT_WATCH_HINT_RE.test(note)) {
+    const eqParse = await safeLlmParse("equipment_watch_parser", () =>
+      parseVehicleRecommendationRequestWithLLM({ text: note, history: buildHistory(conv, 6) })
+    );
+    const eq = eqParse?.requestedEquipment ?? {};
+    if (equipmentQueryHasFeatures(eq)) {
+      for (const w of watches) w.requestedEquipment = eq;
+      recordRouteOutcome("live", "equipment_watch_created", {
+        convId: conv?.id,
+        leadKey: conv?.leadKey,
+        equipment: describeEquipmentQuery(eq as any),
+        watches: watches.length
+      });
     }
   }
 

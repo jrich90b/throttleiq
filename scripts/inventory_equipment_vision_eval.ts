@@ -37,9 +37,13 @@ import {
   partitionInventoryByEquipment,
   describeEquipmentQuery,
   equipmentQueryHasFeatures,
-  type EquipmentProfile
+  // Equipment WATCHES + profile-on-arrival (this PR).
+  watchEquipmentFireGate,
+  profileArrivedUnitsForEquipment,
+  type EquipmentProfile,
+  type EquipmentCacheFile
 } from "../services/api/src/domain/inventoryEquipmentVision.ts";
-import { buildEquipmentRecommendationReply, selectEligibleInventory } from "../services/api/src/domain/inventoryRecommender.ts";
+import { buildEquipmentRecommendationReply, selectEligibleInventory, classifyHarleySegment } from "../services/api/src/domain/inventoryRecommender.ts";
 import { normalizeRequestedEquipment } from "../services/api/src/domain/llmDraft.ts";
 import type { VehicleEquipmentDescription } from "../services/api/src/domain/llmDraft.ts";
 import { checkMessage } from "./voice_charter_audit.ts";
@@ -473,6 +477,141 @@ function softailWithShieldFor(model: string): EquipmentProfile {
   assert.ok(
     /"requested_equipment":\{"bags":true,"windshield":true\}/.test(llmSrc),
     "a bags+windshield few-shot pins the parse (windshield set, fairing NOT)"
+  );
+}
+
+// ===========================================================================
+// EQUIPMENT WATCHES + PROFILE-ON-ARRIVAL (this PR). The equipment filter is an
+// ADDITIONAL fire criterion that COMPOSES (ANDs) with the model/segment/year/
+// condition criteria the watch already carries. All deterministic (no LLM/IO).
+// ===========================================================================
+
+// --- (j) the watch FIRE gate. ASSERTED equipment fires; a fairing bike is excluded from a
+//         windshield ask; a shaky/unprofiled unit does NOT fire (fail-safe); and — the critical
+//         regression — a MODEL-ONLY watch (no requestedEquipment) is a NO-OP and fires exactly as today. ---
+{
+  const wsQuery = { bags: true, windshield: true };
+
+  // A genuine bags+windshield bagger (no fairing) → the equipment watch FIRES.
+  assert.equal(watchEquipmentFireGate(softailWithShield, wsQuery), true, "asserted bags+windshield unit fires the equipment watch");
+
+  // windshield≠fairing: an arriving fairing bike does NOT fire a bags+windshield equipment watch.
+  assert.equal(watchEquipmentFireGate(streetGlide, wsQuery), false, "a fairing bike does NOT fire a bags+windshield watch (windshield≠fairing)");
+
+  // FAIL-SAFE: a below-threshold read is not asserted → no fire (never a false 'your bike came in').
+  assert.equal(watchEquipmentFireGate(shakyShield, { windshield: true }), false, "a shaky/below-threshold read does NOT fire (fail-safe)");
+
+  // FAIL-SAFE: an UNPROFILED arrival (no cached profile yet) does NOT fire an equipment watch.
+  assert.equal(watchEquipmentFireGate(null, wsQuery), false, "an unprofiled arrival does NOT fire an equipment watch (fail-safe)");
+  assert.equal(watchEquipmentFireGate(undefined, { bags: true }), false, "a missing profile does NOT fire (fail-safe)");
+
+  // MODEL-ONLY WATCH UNCHANGED (regression pin): no requestedEquipment → the gate is a pure no-op,
+  // so the unit fires on the model criteria alone exactly as a plain watch does today — REGARDLESS of
+  // whatever the unit's equipment profile looks like (or whether it even has one).
+  assert.equal(watchEquipmentFireGate(streetGlide, undefined), true, "model-only watch (no equipment) fires unchanged — even on a fairing bike");
+  assert.equal(watchEquipmentFireGate(null, undefined), true, "model-only watch fires unchanged even with no profile at all");
+  assert.equal(watchEquipmentFireGate(softailWithShield, {}), true, "an empty equipment query is a no-op (model-only behavior)");
+
+  // Partial asserted: a bags-only ask on the bagger fires; a bags-only ask on a confidently-no-bags unit does not.
+  assert.equal(watchEquipmentFireGate(softailWithShield, { bags: true }), true, "bags-only ask fires on a unit with asserted bags");
+}
+
+// --- (k) COMPOSE: a compound "cruiser with bags and a windshield" narrows by SEGMENT first
+//         (selectEligibleInventory), THEN filters by equipment — and the fairing bike is excluded at
+//         BOTH layers. Pins that equipment is an additional filter, never an equipment-only modality. ---
+{
+  // Segment classification underpins the narrow: Street Glide is TOURING, not a cruiser.
+  assert.equal(classifyHarleySegment("Fat Boy"), "cruiser", "Fat Boy classifies as a cruiser");
+  assert.equal(classifyHarleySegment("Street Bob"), "cruiser", "Street Bob classifies as a cruiser");
+  assert.equal(classifyHarleySegment("Street Glide"), "touring", "Street Glide classifies as touring (fairing bagger)");
+
+  const feed = [
+    { model: "Fat Boy", year: "2021", price: 18995, condition: "used" },
+    { model: "Street Bob", year: "2020", price: 13995, condition: "used" },
+    { model: "Street Glide", year: "2022", price: 24995, condition: "used" } // touring — dropped by the cruiser narrow
+  ] as any[];
+
+  // LAYER 1 — SEGMENT NARROW: only cruisers survive (the touring Street Glide is dropped).
+  const narrowed = selectEligibleInventory(feed, { includeSegments: ["cruiser"] });
+  assert.deepEqual(narrowed.map(u => u.model).sort(), ["Fat Boy", "Street Bob"], "segment narrows to cruisers only (fairing bagger dropped)");
+
+  // LAYER 2 — EQUIPMENT FILTER over the narrowed pool: Fat Boy asserts bags+windshield, Street Bob unprofiled.
+  const fatBoyProfile = softailWithShieldFor("Fat Boy"); // bags+windshield asserted, no fairing
+  const parts = partitionInventoryByEquipment(
+    narrowed.map(u => ({ item: u, profile: u.model === "Fat Boy" ? fatBoyProfile : null })),
+    { bags: true, windshield: true }
+  );
+  assert.deepEqual(parts.asserted.map(u => u.model), ["Fat Boy"], "compose: cruiser + asserted bags+windshield surfaces the Fat Boy");
+  assert.deepEqual(parts.uncertain.map(u => u.model), ["Street Bob"], "compose: an unprofiled cruiser is uncertain (confirm), never dropped");
+  assert.equal(parts.excluded.length, 0, "compose: nothing wrongly excluded in the narrowed cruiser pool");
+
+  // And a fairing bike that (hypothetically) reached the equipment layer is still excluded there too.
+  const withFairing = partitionInventoryByEquipment([{ item: { model: "Street Glide" }, profile: streetGlide }], { bags: true, windshield: true });
+  assert.deepEqual(withFairing.excluded.map((u: any) => u.model), ["Street Glide"], "a fairing bike is excluded at the equipment layer as well (belt + suspenders)");
+}
+
+// --- (l) PROFILE-ON-ARRIVAL only touches NEW stockIds and is bounded. With a fully-populated cache
+//         it runs ZERO vision (cache hits are free); a photoless unit is skipped. (The new-vision path
+//         needs an LLM, so it is exercised live, not here — we pin the no-vision governance.) ---
+{
+  const arrival = { stockId: "ARR-1", vin: null, model: "Road King", year: "2021", condition: "used", images: ["ph1.jpg", "ph2.jpg"] } as any;
+  const noPhotos = { stockId: "ARR-2", vin: null, model: "Softail Slim", year: "2020", condition: "used", images: [] as string[] } as any;
+
+  // Pre-populate the cache for the photographed arrival → it is already profiled (a "new stockId" only
+  // runs vision on a genuine cache MISS).
+  const cache: EquipmentCacheFile = {
+    version: 1,
+    profiles: { [equipmentCacheKey(arrival)]: softailWithShieldFor("Road King") }
+  };
+  const stats = await profileArrivedUnitsForEquipment([arrival, noPhotos], cache, { runCap: 8 });
+  assert.equal(stats.visionRuns, 0, "profile-on-arrival runs NO vision when the arrival is already cached (touches new stockIds only)");
+  assert.equal(stats.cacheHits, 1, "the already-profiled arrival is a free cache hit");
+  assert.equal(stats.skippedNoPhotos, 1, "a photoless unit is skipped (nothing to profile)");
+  assert.equal(stats.capped, false, "under the run cap → not capped");
+
+  // A zero run-cap makes an uncached arrival immediately 'capped' WITHOUT running vision (hard cost bound).
+  const emptyCache: EquipmentCacheFile = { version: 1, profiles: {} };
+  const capped = await profileArrivedUnitsForEquipment([arrival], emptyCache, { runCap: 0 });
+  assert.equal(capped.visionRuns, 0, "runCap 0 → no vision runs (bounded)");
+  assert.equal(capped.capped, true, "runCap 0 → the uncached arrival is reported capped, not silently profiled");
+}
+
+// --- (m) WATCH wiring SOURCE GUARDS: the equipment gate is applied in BOTH fire paths (cron sweep +
+//         hold-release) after inventoryItemMatchesWatch; profile-on-arrival is flag-gated; creation
+//         attaches requestedEquipment via the shared builder; the type carries the optional field. ---
+{
+  const repoRoot = path.resolve(new URL("..", import.meta.url).pathname);
+  const indexSrc = await fsp.readFile(path.join(repoRoot, "services/api/src/index.ts"), "utf8");
+  const storeSrc = await fsp.readFile(path.join(repoRoot, "services/api/src/domain/conversationStore.ts"), "utf8");
+
+  // The InventoryWatch type carries the OPTIONAL equipment filter.
+  assert.ok(/requestedEquipment\?:/.test(storeSrc), "InventoryWatch has the optional requestedEquipment field");
+
+  // The sync gate is DEFINED and applied in BOTH fire paths (>=3 refs: def + cron + hold-release).
+  const gateRefs = (indexSrc.match(/watchPassesEquipmentGate\(/g) ?? []).length;
+  assert.ok(gateRefs >= 3, "watchPassesEquipmentGate is defined and applied in BOTH fire paths (cron + hold-release)");
+
+  // The gate is ANDed AFTER the base model match, never a replacement.
+  assert.ok(
+    /if \(!inventoryItemMatchesWatch\(i, watch\)\) return false;[\s\S]{0,260}watchPassesEquipmentGate\(i, watch, equipmentCache\)/.test(indexSrc),
+    "cron: equipment gate runs AFTER inventoryItemMatchesWatch (ANDed, not a replacement)"
+  );
+  assert.ok(
+    /if \(!inventoryItemMatchesWatch\(matchedItem, watch\)\) return false;[\s\S]{0,260}watchPassesEquipmentGate\(matchedItem, watch, equipmentCache\)/.test(indexSrc),
+    "hold-release: equipment gate runs AFTER inventoryItemMatchesWatch (ANDed, not a replacement)"
+  );
+
+  // Profile-on-arrival is flag-gated and bounded to arrivals (not a whole-lot job).
+  assert.ok(
+    /inventoryEquipmentVisionEnabled\(\)[\s\S]{0,600}profileArrivedUnitsForEquipment\(/.test(indexSrc),
+    "profile-on-arrival is invoked behind the flag in the arrival sweep"
+  );
+
+  // Creation attaches requestedEquipment via the shared deriveContextNoteWatches builder (both paths).
+  assert.ok(/w\.requestedEquipment = eq/.test(indexSrc), "watch creation attaches the parsed requestedEquipment to the watch");
+  assert.ok(
+    /inventoryEquipmentVisionEnabled\(\) && watches\.length && EQUIPMENT_WATCH_HINT_RE\.test\(note\)/.test(indexSrc),
+    "equipment-watch creation is flag-gated + hint-gated (cost pre-filter)"
   );
 }
 

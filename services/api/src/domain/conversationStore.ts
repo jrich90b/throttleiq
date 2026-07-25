@@ -583,6 +583,26 @@ export type InventoryWatch = {
   lastNotifiedAt?: string;
   lastNotifiedStockId?: string;
   lastNotifiedModel?: string; // the MODEL of the unit last notified — lets a read-only audit catch a watch that fired on the wrong model (watch_fired_wrong_model) without re-reading the inventory feed
+  // OPTIONAL "shop by equipment" filter (Phase B → watches, canary). When present, an arriving unit
+  // fires this watch ONLY when it ALSO clears the model/family/year/condition/price criteria above
+  // (inventoryItemMatchesWatch, UNCHANGED) AND its cached EquipmentProfile ASSERTS every requested
+  // feature (inventoryEquipmentVision.matchesEquipmentQuery / classifyUnitForEquipmentQuery). Keys
+  // mirror RequestedEquipmentQuery / EquipmentFeatureKey (only the true keys appear). ABSENT/empty →
+  // the watch behaves EXACTLY as a model-only watch does today (the gate is a no-op). FAIL-SAFE: an
+  // unprofiled or below-assertion-threshold unit does NOT fire an equipment watch (never a false
+  // "your bike came in"). windshield≠fairing holds in the matcher. Behind INVENTORY_EQUIPMENT_VISION_ENABLED
+  // (flag off → the field is ignored and the watch fires as a plain model watch).
+  requestedEquipment?: {
+    bags?: boolean;
+    windshield?: boolean;
+    fairing?: boolean;
+    backrestSissybar?: boolean;
+    tourpak?: boolean;
+    forwardControls?: boolean;
+    apeHangers?: boolean;
+    floorboards?: boolean;
+    crashBars?: boolean;
+  };
 };
 
 // A watch match that arrived while the per-conversation daily alert cap was in effect
