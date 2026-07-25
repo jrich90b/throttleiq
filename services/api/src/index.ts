@@ -39357,6 +39357,39 @@ async function maybeRedraftOnNegativeFeedback(args: {
     reason: args.reason,
     note: args.note
   };
+  // FAIL-SAFE (Joe ruling 2026-07-25, +17164785613): a thumbs-down on a HELD/STALE draft ("being
+  // fixed") cannot redraft — the rated draft is already stale (a new inbound, a hold, or a manual
+  // send superseded it), so the gate below returns record_only and the reject would VANISH SILENTLY.
+  // Staff saw "the AI's draft is being fixed" but no fix and no task ever came. When the 👎 lands on a
+  // stale draft_ai on a still-open thread, raise the SAME "needs a human reply" task the held-draft
+  // backstop uses (shared marker → deduped against it and itself) so the reject always yields staff
+  // action. Not for already-SENT messages (a 👎 there is "report this message", handled elsewhere).
+  if (
+    feedbackDownRedraftEnabled() &&
+    ratedMsg?.provider === "draft_ai" &&
+    ratedMsg?.draftStatus === "stale" &&
+    conv.status !== "closed"
+  ) {
+    const already = listOpenTodos().some(
+      t => t.convId === conv.id && String(t.summary ?? "").includes(HELD_DRAFT_BACKSTOP_TODO_MARKER)
+    );
+    if (!already) {
+      const who = normalizeDisplayCase(conv.lead?.firstName) || conv.lead?.name || "this lead";
+      const todo = addTodo(
+        conv,
+        "note",
+        `${HELD_DRAFT_BACKSTOP_TODO_MARKER} Reply to ${who} needs a human — the AI draft was thumbed-down while held for review, so it never sent and couldn't auto-redraft. Please review and reply.`,
+        undefined,
+        conv.leadOwner,
+        undefined,
+        "followup"
+      );
+      if (todo) {
+        saveConversation(conv);
+        recordRouteOutcome("manual", "thumbs_down_held_draft_escalated", { convId: conv.id });
+      }
+    }
+  }
   // Cheap gate FIRST (kill switch / up-rating / already-sent) so a record-only thumbs-down never
   // burns an LLM round-trip on the note parser below.
   if (decideFeedbackRedraftTurn(gateInput).kind !== "redraft") {

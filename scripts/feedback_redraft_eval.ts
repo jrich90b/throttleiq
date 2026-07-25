@@ -117,7 +117,7 @@ assert.match(
 );
 const helperStart = api.indexOf("async function maybeRedraftOnNegativeFeedback");
 assert.ok(helperStart > 0, "the redraft helper must exist");
-const helper = api.slice(helperStart, helperStart + 4200);
+const helper = api.slice(helperStart, helperStart + 5400);
 assert.match(helper, /decideFeedbackRedraftTurn\(/, "redraft must route through the pure gate");
 assert.match(helper, /feedbackDownRedraftEnabled\(\)/, "redraft must be behind the kill switch");
 assert.match(helper, /provider === "draft_ai" && ratedMsg\?\.draftStatus !== "stale"/, "only a still-pending draft redrafts");
@@ -127,6 +127,19 @@ assert.match(helper, /parseThumbsDownNoteWithLLM\(/, "an action-request note is 
 assert.match(helper, /controllingInstruction/, "an action-request note becomes the controlling redraft instruction");
 assert.match(helper, /isTruncatedDraftBody\(redraft\)/, "a truncated redraft is never published");
 assert.match(helper, /saveOperatorDraft\(/, "redraft publishes as a reviewable draft (never sends)");
+// Fail-safe (Joe 2026-07-25, +17164785613): a thumbs-down on a HELD/STALE draft can't redraft and must
+// NOT vanish silently — it raises the held-draft-backstop "needs a human reply" task (shared marker →
+// deduped) so a rejected "being fixed" draft always yields staff action.
+assert.match(
+  helper,
+  /ratedMsg\?\.provider === "draft_ai" &&\s*\n\s*ratedMsg\?\.draftStatus === "stale"/,
+  "a thumbs-down on a stale/held draft is detected as the silent-vanish case"
+);
+assert.match(
+  helper,
+  /HELD_DRAFT_BACKSTOP_TODO_MARKER[\s\S]{0,300}needs a human/,
+  "…and raises the shared held-draft-backstop task instead of returning record_only silently"
+);
 // The main draft chokepoint holds a truncated draft too (covers the ORIGINAL draft, not just redrafts).
 assert.match(
   api,
