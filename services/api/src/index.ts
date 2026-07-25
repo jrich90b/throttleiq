@@ -169,6 +169,7 @@ import {
   reconcileFirstSeen,
   loadInventoryFirstSeen,
   saveInventoryFirstSeen,
+  unitFirstSeenWithinDays,
   type InventoryFirstSeenMap
 } from "./domain/inventoryFirstSeen.js";
 import { hasPriorInventoryWatchOutboundForItem } from "./domain/inventoryWatchDedup.js";
@@ -6520,7 +6521,24 @@ async function processInventoryWatchlist(targetConvId?: string, opts?: { include
       return;
     }
     const newItems = scanPlan.newItems;
-    const candidateItems = (opts?.includeInStock ? items : newItems).filter(i => isWatchCandidateAvailable(i));
+    // In-stock review freshness bound (Joe ruling 2026-07-25): the at-creation in-stock pass may
+    // only draft for units we KNOW arrived within WATCH_IN_STOCK_ALERT_MAX_AGE_DAYS (default 45) —
+    // a bike sitting on the floor for months must not read as "just came in." Baseline / unknown-age
+    // units are excluded (fail toward NOT alerting on possibly-stale stock). The ordinary new-arrival
+    // cron is unaffected (it already works off newItems only).
+    const inStockMaxAgeDays = Number(process.env.WATCH_IN_STOCK_ALERT_MAX_AGE_DAYS ?? 45);
+    const firstSeenForFreshness = opts?.includeInStock
+      ? await loadInventoryFirstSeen(INVENTORY_FIRST_SEEN_PATH)
+      : null;
+    const freshnessNowMs = Date.now();
+    const candidateItems = (opts?.includeInStock ? items : newItems)
+      .filter(i => isWatchCandidateAvailable(i))
+      .filter(i => {
+        if (!opts?.includeInStock) return true;
+        const key = inventoryKey(i);
+        const entry = key ? firstSeenForFreshness?.entries?.[key] : undefined;
+        return unitFirstSeenWithinDays(entry, inStockMaxAgeDays, freshnessNowMs);
+      });
     // NOTE: no early return on empty candidateItems — the conversation loop still runs so
     // yesterday's capped-off pending alerts (daily cap, Joe ruling 7/23) get delivered on
     // ordinary no-new-arrival sweeps. The match work below is skipped when there's nothing new.
@@ -29881,7 +29899,11 @@ async function buildInventoryWatchFromAcknowledgementIntent(args: {
   return watch;
 }
 
-function applyInventoryWatchConfirmation(conv: Conversation, watchRaw: InventoryWatch) {
+function applyInventoryWatchConfirmation(
+  conv: Conversation,
+  watchRaw: InventoryWatch,
+  opts?: { scope?: "live" | "regen" }
+) {
   // Field hygiene runs HERE, at the shared choke point, because it must land AFTER the callers'
   // `pref.watch.trim = leadVehicle.trim` copies — that copy is one of the ways a model word
   // ("Special") or an ADF form fragment reaches the trim/color slot (Joe ruling 2026-07-22 #3,
@@ -29893,6 +29915,19 @@ function applyInventoryWatchConfirmation(conv: Conversation, watchRaw: Inventory
   setDialogState(conv, "inventory_watch_active");
   setFollowUpMode(conv, "holding_inventory", "inventory_watch");
   stopFollowUpCadence(conv, "inventory_watch");
+  // A bike matching this BRAND-NEW watch may already be on the floor. The ordinary cron only fires
+  // on NEW arrivals, so a watcher whose model is already in stock is never notified (watch_fire_miss
+  // backlog: +17166887637 wanted a Street Glide, stock T37-26 was already on the lot, never pinged).
+  // Mirror the post-broaden trigger: run the per-conversation in-stock review, which DRAFTS ONLY
+  // (suggest mode — staff approve) and reuses every guard (daily cap, opt-out, holds, proactive
+  // pause, relevance, the #245 family-umbrella matcher). LIVE-ONLY — regenerate must never fan out
+  // notifications (same rule as the broaden pass). Behind a default-OFF flag pending Joe's review of
+  // the stale-inventory freshness bound (a model on the lot for months should not read as "just in").
+  if (opts?.scope === "live" && process.env.WATCH_IN_STOCK_ALERT_ON_CREATE === "1") {
+    void processInventoryWatchlist(conv.id, { includeInStock: true }).catch(e =>
+      console.warn("[watch-create] in-stock review pass failed:", e?.message ?? e)
+    );
+  }
 }
 
 function customerNameForPendingIncomingInventory(conv: Conversation): string {
@@ -59638,7 +59673,7 @@ if (authToken && signature) {
         humanModeText
       );
       if (confirmedWatch) {
-        applyInventoryWatchConfirmation(conv, confirmedWatch);
+        applyInventoryWatchConfirmation(conv, confirmedWatch, { scope: "live" });
         recordRouteOutcome("live", "human_mode_staff_watch_offer_confirmed", {
           convId: conv.id,
           leadKey: conv.leadKey,
@@ -59973,7 +60008,7 @@ if (authToken && signature) {
             if (!pref.watch.condition && leadVehicle.condition) {
               pref.watch.condition = normalizeWatchCondition(leadVehicle.condition);
             }
-            applyInventoryWatchConfirmation(conv, pref.watch);
+            applyInventoryWatchConfirmation(conv, pref.watch, { scope: "live" });
             recordRouteOutcome("live", "human_mode_inventory_watch_set", {
               convId: conv.id,
               leadKey: conv.leadKey,
@@ -62372,7 +62407,7 @@ if (authToken && signature) {
         if (!pref.watch.condition && leadVehicle.condition) {
           pref.watch.condition = normalizeWatchCondition(leadVehicle.condition);
         }
-        applyInventoryWatchConfirmation(conv, pref.watch);
+        applyInventoryWatchConfirmation(conv, pref.watch, { scope: "live" });
         watchHandledEarly = true;
         if (!earlyWatchAsSideEffectOnly) {
           const reply = buildInventoryWatchConfirmation(pref.watch);
@@ -65677,7 +65712,7 @@ if (authToken && signature) {
         if (!pref.watch.condition && leadVehicle.condition) {
           pref.watch.condition = normalizeWatchCondition(leadVehicle.condition);
         }
-        applyInventoryWatchConfirmation(conv, pref.watch);
+        applyInventoryWatchConfirmation(conv, pref.watch, { scope: "live" });
         const reply = buildInventoryWatchConfirmation(pref.watch);
         if (!watchAsSideEffectOnly) {
           return publishLiveTwilioReply(reply);
@@ -66463,7 +66498,7 @@ if (authToken && signature) {
         if (!pref.watch.condition && leadVehicle.condition) {
           pref.watch.condition = normalizeWatchCondition(leadVehicle.condition);
         }
-        applyInventoryWatchConfirmation(conv, pref.watch);
+        applyInventoryWatchConfirmation(conv, pref.watch, { scope: "live" });
         const reply = buildInventoryWatchConfirmation(pref.watch);
         if (!watchAsSideEffectOnly) {
           return publishLiveTwilioReply(reply);
