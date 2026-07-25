@@ -5750,7 +5750,14 @@ export async function parseManualOutboundPromiseWithLLM(args: {
     // SPECIFIC known incoming unit with a stated ETA — carry that timeframe as due_text so the
     // task comes due when the promise does, not on the default tomorrow.
     'EXAMPLE G text: "I\'ll give you a call when that trade with the backrest comes in — probably next week."',
-    'EXAMPLE G output: {"promise_present":true,"kind":"check_and_get_back","action":"call when the trade with the backrest arrives","due_text":"next week","confidence":0.9}'
+    'EXAMPLE G output: {"promise_present":true,"kind":"check_and_get_back","action":"call when the trade with the backrest arrives","due_text":"next week","confidence":0.9}',
+    // Conditional OFFER, not a promise (Mark Walsh +17736151296, operator-reported: an offer of a
+    // walkaround/photos "if that would help, just let me know" wrongly armed a manual-outbound
+    // promise task). The dealer only commits once the customer TAKES UP the offer — "I'm happy to
+    // help ...", "you can book here", "if X would help, just let me know" are availability offers,
+    // not follow-through the staff owes. No customer ask = no promise.
+    'EXAMPLE H text: "I\'m happy to help with pricing, options, and availability. If you want to stop in you can book an appointment below. If a walkaround or extra photos would help, just let me know."',
+    'EXAMPLE H output: {"promise_present":false,"kind":"none","action":"","due_text":"","confidence":0.9}'
   ];
   const prompt = [
     "A dealership STAFF member typed this outbound message to a customer. Decide whether the STAFF",
@@ -5759,6 +5766,9 @@ export async function parseManualOutboundPromiseWithLLM(args: {
     "Guidelines:",
     "- promise_present: true only for a real dealership commitment (\"I'll send/check/prepare ...\").",
     "  Pleasantries, answers, and questions are not promises.",
+    "  A CONDITIONAL OFFER is NOT a promise: \"if a walkaround/photos would help, just let me know\",",
+    "  \"I'm happy to help with ...\", \"you can book an appointment here\" only offer availability —",
+    "  the dealership owes nothing until the customer takes the offer up, so promise_present:false.",
     "- kind: send_info (numbers/photos/details), check_and_get_back (find out then reply),",
     "  prepare_something (physical prep), other (any other concrete promise),",
     "  inventory_notify (\"I'll let you know when one comes in\"), appointment (scheduling talk),",

@@ -178,6 +178,22 @@ for (const t of HINT_NO) check(`hint_no:${t.slice(0, 34)}`, !hasManualPromiseHin
     console.error("the manual-promise parser must keep the event-conditioned-timeframe few-shot (EXAMPLE G)");
     failures += 1;
   }
+  // Conditional OFFER ≠ promise (Mark Walsh +17736151296, operator-reported): an offer of a
+  // walkaround/photos "if that would help, just let me know" wrongly armed a promise task. The
+  // hint is intentionally loose (high recall) — "let me" + "check out" fire it — so precision
+  // must live in the parser. Pin the negative few-shot + the conditional-offer guideline so the
+  // parser keeps reading pure offers as promise_present:false.
+  if (!/EXAMPLE H/.test(llm) || !/CONDITIONAL OFFER is NOT a promise/.test(llm)) {
+    console.error("the manual-promise parser must keep the conditional-offer negative few-shot (EXAMPLE H)");
+    failures += 1;
+  }
+}
+
+// A parse where the corrected parser read a pure offer as no-promise must yield no task
+// (decision-side guard for the Mark Walsh case, independent of the LLM).
+{
+  const d = decideManualOutboundPromise(base({ parse: parse({ promisePresent: false, kind: "none", action: "" }) }));
+  check("conditional_offer_no_task", d.kind === "none", JSON.stringify(d));
 }
 
 if (failures) {
