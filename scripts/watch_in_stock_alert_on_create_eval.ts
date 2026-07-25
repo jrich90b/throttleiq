@@ -18,8 +18,41 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { unitFirstSeenWithinDays } from "../services/api/src/domain/inventoryFirstSeen.ts";
 
 const src = fs.readFileSync(path.join(process.cwd(), "services/api/src/index.ts"), "utf8");
+
+// --- freshness bound (Joe 2026-07-25): only a KNOWN-recent arrival counts ---
+const NOW = Date.UTC(2026, 6, 25, 12, 0, 0);
+const daysAgo = (d: number) => new Date(NOW - d * 86_400_000).toISOString();
+assert.equal(
+  unitFirstSeenWithinDays({ machineId: "a", firstSeenAt: daysAgo(10) } as any, 45, NOW),
+  true,
+  "a unit first seen 10 days ago is within a 45-day window"
+);
+assert.equal(
+  unitFirstSeenWithinDays({ machineId: "a", firstSeenAt: daysAgo(90) } as any, 45, NOW),
+  false,
+  "a unit on the lot 90 days is stale — excluded"
+);
+assert.equal(
+  unitFirstSeenWithinDays({ machineId: "a", firstSeenAt: new Date(0).toISOString(), baseline: true } as any, 45, NOW),
+  false,
+  "a BASELINE (present-since-tracking-start, unknown age) unit is excluded — fail toward not alerting on stale stock"
+);
+assert.equal(unitFirstSeenWithinDays(undefined, 45, NOW), false, "an untracked unit is excluded");
+
+// --- the in-stock pass must apply the freshness bound to its candidate set ---
+assert.match(
+  src,
+  /const inStockMaxAgeDays = Number\(process\.env\.WATCH_IN_STOCK_ALERT_MAX_AGE_DAYS \?\? 45\)/,
+  "the in-stock review must read a configurable freshness window (default 45 days)"
+);
+assert.match(
+  src,
+  /if \(!opts\?\.includeInStock\) return true;[\s\S]{0,220}unitFirstSeenWithinDays\(entry, inStockMaxAgeDays, freshnessNowMs\)/,
+  "in-stock candidates must be filtered by the first-seen freshness bound; the ordinary cron is untouched"
+);
 
 // --- the choke point fires the in-stock review only on scope:"live" AND the default-off flag ---
 const fnStart = src.indexOf("function applyInventoryWatchConfirmation(");

@@ -169,6 +169,7 @@ import {
   reconcileFirstSeen,
   loadInventoryFirstSeen,
   saveInventoryFirstSeen,
+  unitFirstSeenWithinDays,
   type InventoryFirstSeenMap
 } from "./domain/inventoryFirstSeen.js";
 import { hasPriorInventoryWatchOutboundForItem } from "./domain/inventoryWatchDedup.js";
@@ -6520,7 +6521,24 @@ async function processInventoryWatchlist(targetConvId?: string, opts?: { include
       return;
     }
     const newItems = scanPlan.newItems;
-    const candidateItems = (opts?.includeInStock ? items : newItems).filter(i => isWatchCandidateAvailable(i));
+    // In-stock review freshness bound (Joe ruling 2026-07-25): the at-creation in-stock pass may
+    // only draft for units we KNOW arrived within WATCH_IN_STOCK_ALERT_MAX_AGE_DAYS (default 45) —
+    // a bike sitting on the floor for months must not read as "just came in." Baseline / unknown-age
+    // units are excluded (fail toward NOT alerting on possibly-stale stock). The ordinary new-arrival
+    // cron is unaffected (it already works off newItems only).
+    const inStockMaxAgeDays = Number(process.env.WATCH_IN_STOCK_ALERT_MAX_AGE_DAYS ?? 45);
+    const firstSeenForFreshness = opts?.includeInStock
+      ? await loadInventoryFirstSeen(INVENTORY_FIRST_SEEN_PATH)
+      : null;
+    const freshnessNowMs = Date.now();
+    const candidateItems = (opts?.includeInStock ? items : newItems)
+      .filter(i => isWatchCandidateAvailable(i))
+      .filter(i => {
+        if (!opts?.includeInStock) return true;
+        const key = inventoryKey(i);
+        const entry = key ? firstSeenForFreshness?.entries?.[key] : undefined;
+        return unitFirstSeenWithinDays(entry, inStockMaxAgeDays, freshnessNowMs);
+      });
     // NOTE: no early return on empty candidateItems — the conversation loop still runs so
     // yesterday's capped-off pending alerts (daily cap, Joe ruling 7/23) get delivered on
     // ordinary no-new-arrival sweeps. The match work below is skipped when there's nothing new.

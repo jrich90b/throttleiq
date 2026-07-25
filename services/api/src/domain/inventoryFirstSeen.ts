@@ -111,6 +111,24 @@ export function unitArrivedAfter(
   return seen > created;
 }
 
+/**
+ * Did this unit first appear within the last `days` days? Used to bound the at-creation in-stock
+ * watch alert (Joe ruling 2026-07-25) so a bike sitting on the floor for months never reads as
+ * "just came in." FALSE for baseline / unknown-age / undated units — fail toward NOT alerting on
+ * possibly-stale stock.
+ */
+export function unitFirstSeenWithinDays(
+  entry: FirstSeenEntry | undefined,
+  days: number,
+  nowMs: number
+): boolean {
+  if (!entry || entry.baseline) return false;
+  if (!Number.isFinite(days) || days <= 0) return false;
+  const seen = Date.parse(entry.firstSeenAt);
+  if (!Number.isFinite(seen)) return false;
+  return nowMs - seen <= days * 24 * 60 * 60 * 1000;
+}
+
 export async function loadInventoryFirstSeen(filePath: string): Promise<InventoryFirstSeenMap | null> {
   try {
     const raw = await fs.readFile(filePath, "utf8");

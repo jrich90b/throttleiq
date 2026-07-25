@@ -15,7 +15,7 @@ const idx = fs.readFileSync("services/api/src/index.ts", "utf8");
 
 // Opt-in mode on the engine; the regular cron call (no opts) is unchanged.
 assert.match(idx, /async function processInventoryWatchlist\(targetConvId\?: string, opts\?: \{ includeInStock\?: boolean \}\)/, "engine takes an includeInStock opt");
-assert.match(idx, /\(opts\?\.includeInStock \? items : newItems\)\.filter\(i => isWatchCandidateAvailable\(i\)\)/, "includeInStock broadens candidates to ALL available in-stock; default = new-arrivals only (cron unchanged)");
+assert.match(idx, /\(opts\?\.includeInStock \? items : newItems\)\s*\.filter\(i => isWatchCandidateAvailable\(i\)\)/, "includeInStock broadens candidates to in-stock (then a freshness bound, added 2026-07-25); default = new-arrivals only (cron unchanged)");
 assert.match(idx, /!opts\?\.includeInStock && !scanPlan\.allowNotifications/, "the new-arrival bulk guard is bypassed ONLY for a deliberate review pass");
 assert.match(idx, /void processInventoryWatchlist\(\);/, "the regular cron still calls the engine with NO opts (unchanged behavior)");
 
