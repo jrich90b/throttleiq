@@ -195,6 +195,147 @@ export function findNearestInboundImageUrls(
 
 const VISION_CONFIDENCE_MIN = Number(process.env.VEHICLE_IMAGE_VISION_CONFIDENCE_MIN ?? 0.7);
 
+// --- VIN-plate photo handling (flag-gated, DARK by default). ---------------
+// A customer photographs the VIN / data plate on their bike — almost always a HOT trade-in
+// signal (or confirming a unit). Today vision returns is_motorcycle=false and the image drops
+// into the generic "document/unclear" neutral ack. Behind this flag we RECOGNIZE the plate,
+// route by thread context (trade → appraiser; else → general handoff), capture the read VIN on
+// the conversation, and seed a STAFF task with an UNCONFIRMED decode hint. Governance (hard):
+// NEVER assert the VIN, a decoded model, or any value to the customer — fail toward "got it,
+// passing it to the team." Flag OFF → the VIN branch is skipped and a VIN plate falls through
+// to today's exact non-motorcycle document behavior.
+export function isVinPhotoHandlingEnabled(): boolean {
+  return String(process.env.VIN_PHOTO_HANDLING_ENABLED ?? "0").trim() === "1";
+}
+
+// Confidence floor for reading the VIN digits back onto the staff record + decoding. Below it we
+// still recognize the plate + drop a staff todo, but capture NO digits and NO decode (fail-safe).
+const VIN_PLATE_CONFIDENCE_MIN = Number(process.env.VIN_PLATE_VISION_CONFIDENCE_MIN ?? 0.7);
+
+// A VIN string is only trustworthy at 17 chars (full VIN). Anything shorter is a partial read →
+// treat as low-confidence (recognize only), never captured as authoritative.
+function isCompleteVin(vin: string): boolean {
+  return /^[A-HJ-NPR-Z0-9]{17}$/i.test(String(vin ?? "").trim());
+}
+
+export type VinPlateVisionRead = {
+  vin?: string | null;
+  vinConfidence?: number | null;
+  vinDecodeHint?: string | null;
+};
+
+// A VIN read is "confident" only when the plate read cleared the confidence floor AND the VIN is
+// a full 17 chars. Drives whether we read digits back onto the staff record / attach a decode.
+export function isConfidentVinRead(read: VinPlateVisionRead | null | undefined): boolean {
+  if (!read) return false;
+  const vin = String(read.vin ?? "").trim();
+  const conf = Number(read.vinConfidence ?? 0);
+  return isCompleteVin(vin) && conf >= VIN_PLATE_CONFIDENCE_MIN;
+}
+
+// Overrides the bike-match agent context after a VIN-plate photo: the next turn is a staff
+// handoff (appraiser / pull-up-the-unit), NOT an inventory match — never re-pitch stock.
+export const CUSTOMER_PHOTO_SHARE_VIN_AGENT_CONTEXT =
+  "Customer texted a photo of their VIN/data plate (a trade-in or unit-lookup signal, not a bike to match against inventory). A human has the VIN + any decode hint on a staff task. Do NOT match it against bike inventory, do NOT read the VIN or a decoded model back to the customer, and do NOT quote any trade value. Keep it warm and let the team follow up.";
+
+/**
+ * Recognize-ack reply for a VIN/data-plate photo. Warm, gets it to a human fast, and NEVER reads
+ * the VIN digits back or names a decoded model/value (governance: trades valued in person; never
+ * assert a decode). Trade context routes to the appraiser; everything else to a general handoff.
+ */
+export function buildVinPlatePhotoShareReply(args: {
+  firstName?: string | null;
+  tradeContext: boolean;
+}): string {
+  const name = String(args.firstName ?? "").trim();
+  const opener = name ? `Thanks for sending that over, ${name}!` : "Thanks for sending that over!";
+  if (args.tradeContext) {
+    return `${opener} I'll get your VIN over to our appraiser and follow up with numbers.`;
+  }
+  return `${opener} Let me get your VIN to the team to pull it up, and someone will follow up shortly.`;
+}
+
+/**
+ * STAFF task summary for a VIN-plate photo. Staff-facing (internal), so the read VIN digits + an
+ * UNCONFIRMED decode hint may appear here — mirrors the tradeUnitVisionHint "Vision (unconfirmed)"
+ * pattern. On a low-confidence / partial read we capture NO digits and NO decode: recognize only.
+ */
+export function buildVinPlatePhotoShareTodoSummary(args: {
+  firstName?: string | null;
+  tradeContext: boolean;
+  read: VinPlateVisionRead | null;
+}): string {
+  const who = String(args.firstName ?? "").trim() || "Customer";
+  const tail = args.tradeContext
+    ? "Open the thread, confirm the unit, and get them to the appraiser for a firm number."
+    : "Open the thread, pull up the unit, and follow up.";
+  if (!isConfidentVinRead(args.read)) {
+    return `${who} sent a photo of their VIN/data plate${
+      args.tradeContext ? " (trade-in)" : ""
+    }, but it couldn't be read with confidence. Read the plate directly in the thread, then follow up.`;
+  }
+  const vin = String(args.read?.vin ?? "").trim().toUpperCase();
+  const decode = String(args.read?.vinDecodeHint ?? "").trim();
+  const decodeLine = decode ? ` VIN suggests a ${decode} — verify.` : "";
+  return `${who} sent a photo of their VIN/data plate${
+    args.tradeContext ? " (trade-in)" : ""
+  }. VIN read: ${vin}.${decodeLine} ${tail}`;
+}
+
+// Durable record of a VIN captured from a customer's data-plate photo. On a low-confidence /
+// partial read the digits + decode are deliberately BLANK (read:false) — we never persist an
+// untrusted VIN the staff might act on (fail toward "got it, passing it to the team").
+export type VinPlateCapture = {
+  vin: string;
+  confidence: number;
+  decodeHint: string;
+  context: "trade" | "general";
+  capturedAt: string;
+  read: boolean;
+};
+
+export function captureVinPlateOnConversation(
+  conv: { vinPlateCapture?: VinPlateCapture } | null | undefined,
+  args: { read: VinPlateVisionRead | null; tradeContext: boolean }
+): VinPlateCapture {
+  const confident = isConfidentVinRead(args.read);
+  const capture: VinPlateCapture = {
+    vin: confident ? String(args.read?.vin ?? "").trim().toUpperCase() : "",
+    confidence: Number(args.read?.vinConfidence ?? 0),
+    decodeHint: confident ? String(args.read?.vinDecodeHint ?? "").trim() : "",
+    context: args.tradeContext ? "trade" : "general",
+    capturedAt: new Date().toISOString(),
+    read: confident
+  };
+  if (conv && typeof conv === "object") conv.vinPlateCapture = capture;
+  return capture;
+}
+
+/**
+ * Shared VIN-plate result: recognize-ack reply + context-routed staff todo + VIN captured on the
+ * conversation. Called from BOTH the trade branch and the general (non-trade) branch of
+ * buildPhotoShareReplyWithVision, so trade→appraiser and everything-else→general handoff share
+ * one implementation (no divergence). Never customer-facing digits/decode/value.
+ */
+function buildVinPlatePhotoShareResult(args: {
+  conv: { vinPlateCapture?: VinPlateCapture } | null | undefined;
+  firstName?: string | null;
+  read: VinPlateVisionRead | null;
+  tradeContext: boolean;
+}): { reply: string; identifiedFamily: string | null; todoSummary: string; kind: "vin_plate" } {
+  captureVinPlateOnConversation(args.conv, { read: args.read, tradeContext: args.tradeContext });
+  return {
+    reply: buildVinPlatePhotoShareReply({ firstName: args.firstName, tradeContext: args.tradeContext }),
+    identifiedFamily: null,
+    todoSummary: buildVinPlatePhotoShareTodoSummary({
+      firstName: args.firstName,
+      tradeContext: args.tradeContext,
+      read: args.read
+    }),
+    kind: "vin_plate"
+  };
+}
+
 export type PhotoShareInventoryMatch = {
   year?: string | null;
   model?: string | null;
@@ -323,7 +464,7 @@ async function buildTradePhotoShareResult(args: {
   firstName?: string | null;
   anchorAtIso?: string | null;
   dataDir: string;
-}): Promise<{ reply: string; identifiedFamily: string | null; todoSummary: string }> {
+}): Promise<{ reply: string; identifiedFamily: string | null; todoSummary: string; kind?: "vin_plate" }> {
   let visionHint = "";
   try {
     const urls = findNearestInboundImageUrls(args.conv as any, args.anchorAtIso ?? null);
@@ -338,6 +479,17 @@ async function buildTradePhotoShareResult(args: {
           mimeType: mime,
           contextText: "Customer is showing a unit they want to trade in."
         });
+        // VIN/data-plate photo inside a trade thread: recognize the plate + route to the
+        // appraiser with the captured VIN, instead of a "non-motorcycle item" hint that would
+        // read as a trailer/car. Flag-gated; off → the plate keeps the plain trade-hint path.
+        if (isVinPhotoHandlingEnabled() && description && description.isVinPlate === true) {
+          return buildVinPlatePhotoShareResult({
+            conv: args.conv as any,
+            firstName: args.firstName,
+            read: description,
+            tradeContext: true
+          });
+        }
         if (description) visionHint = tradeUnitVisionHint(description);
       }
     }
@@ -362,7 +514,7 @@ export async function buildPhotoShareReplyWithVision(args: {
   reply: string;
   identifiedFamily: string | null;
   todoSummary: string;
-  kind?: "bike_match" | "part" | "non_motorcycle";
+  kind?: "bike_match" | "part" | "non_motorcycle" | "vin_plate";
 }> {
   // Trade-in photo: the customer is showing us their unit to appraise, not a bike they like to
   // match against our stock. Divert to the trade frame + appraisal handoff (covers all photo-share
@@ -393,6 +545,19 @@ export async function buildPhotoShareReplyWithVision(args: {
       mimeType: mime,
       contextText: args.contextText
     });
+    // VIN / data-plate photo (flag-gated) — recognize the plate + route to a staff handoff with
+    // the captured VIN, instead of the generic "document/unclear" neutral ack that drops a hot
+    // trade-in signal. Checked FIRST: a VIN plate is is_motorcycle=false AND is_motorcycle_part=
+    // false, so without this it would fall into the non-motorcycle document branch below. Flag
+    // OFF → skipped entirely → today's exact document-ack behavior.
+    if (isVinPhotoHandlingEnabled() && description && description.isVinPlate === true) {
+      return buildVinPlatePhotoShareResult({
+        conv: args.conv as any,
+        firstName: args.firstName,
+        read: description,
+        tradeContext: false
+      });
+    }
     // Vision SUCCESSFULLY recognized the image is not a motorcycle (a fish, a pet, a meme,
     // a screenshot) — divert to a clarification instead of the "match it against stock"
     // reply. Fail-safe: only fires on an explicit is_motorcycle=false; a vision error/null

@@ -28,7 +28,12 @@ const {
   buildTradePhotoShareTodoSummary,
   resolveUploadLocalPath,
   shouldUseVisionIdentification,
-  visionFamilyCandidates
+  visionFamilyCandidates,
+  isVinPhotoHandlingEnabled,
+  isConfidentVinRead,
+  buildVinPlatePhotoShareReply,
+  buildVinPlatePhotoShareTodoSummary,
+  captureVinPlateOnConversation
 } = await import("../services/api/src/domain/customerPhotoShare.ts");
 
 // Detector: production fixture and neighbors.
@@ -374,5 +379,136 @@ for (const guard of [
 ]) {
   assert.match(apiSource, guard, `a trade-in photo must not set the inventory dialog/agent context (${guard})`);
 }
+
+// --- VIN-plate photo handling (flag-gated: recognize + route, never assert). -------------------
+// A customer photographs the VIN/data plate on their bike — a hot trade-in signal that today
+// drops into the generic "document/unclear" neutral ack. Behind VIN_PHOTO_HANDLING_ENABLED we
+// recognize the plate, route by thread context, capture the VIN, and seed a STAFF hint — while
+// NEVER asserting the VIN, a decoded model, or a value to the customer.
+
+// (e) Flag governance: default OFF; only "1" turns it on. Off => today's behavior.
+const savedVinFlag = process.env.VIN_PHOTO_HANDLING_ENABLED;
+delete process.env.VIN_PHOTO_HANDLING_ENABLED;
+assert.equal(isVinPhotoHandlingEnabled(), false, "VIN photo handling defaults OFF (dark)");
+process.env.VIN_PHOTO_HANDLING_ENABLED = "0";
+assert.equal(isVinPhotoHandlingEnabled(), false, "explicit 0 stays OFF");
+process.env.VIN_PHOTO_HANDLING_ENABLED = "1";
+assert.equal(isVinPhotoHandlingEnabled(), true, "1 turns it ON");
+if (savedVinFlag === undefined) delete process.env.VIN_PHOTO_HANDLING_ENABLED;
+else process.env.VIN_PHOTO_HANDLING_ENABLED = savedVinFlag;
+
+// Confidence gate: a full 17-char VIN above the floor is confident; a partial/blank/low read is not.
+const CONFIDENT_VIN = { vin: "1HD1KB4197Y612345", vinConfidence: 0.9, vinDecodeHint: "2007 Street Glide" };
+assert.equal(isConfidentVinRead(CONFIDENT_VIN), true, "a full VIN read above the floor is confident");
+assert.equal(isConfidentVinRead({ vin: "", vinConfidence: 0.2 }), false, "a blurry/blank read is not confident");
+assert.equal(
+  isConfidentVinRead({ vin: "1HD1KB41", vinConfidence: 0.95 }),
+  false,
+  "a partial (non-17-char) VIN is never confident, even at high vision confidence"
+);
+assert.equal(isConfidentVinRead(null), false);
+
+// (a) High-confidence VIN plate, TRADE context: warm recognize-ack -> appraiser; NO customer-facing
+//     VIN/model/value; the STAFF todo carries the VIN + the unconfirmed decode hint.
+const vinTradeReply = buildVinPlatePhotoShareReply({ firstName: "Jorge", tradeContext: true });
+assert.match(vinTradeReply, /Thanks for sending that over, Jorge!/);
+assert.match(vinTradeReply, /appraiser/i, "trade VIN reply routes to the appraiser");
+assert.match(vinTradeReply, /VIN/, "the reply recognizes it as their VIN");
+// General (non-trade) context recognize-ack.
+const vinGeneralReply = buildVinPlatePhotoShareReply({ firstName: null, tradeContext: false });
+assert.match(vinGeneralReply, /Thanks for sending that over!/);
+assert.match(vinGeneralReply, /pull it up|follow up/i, "general VIN reply routes to a human handoff");
+// (f) Governance + charter: the CUSTOMER reply NEVER reads the VIN digits back, names a decoded
+//     model, quotes a value, or pivots to an inventory match — and passes the voice-charter guard.
+for (const reply of [vinTradeReply, vinGeneralReply]) {
+  const violations = checkMessage(reply, { firstOutbound: false, smsLike: true, staffHasSent: false });
+  assert.deepEqual(violations, [], `VIN reply must be charter-clean: "${reply}" -> ${JSON.stringify(violations)}`);
+  assert.ok(!/1HD1KB4197Y612345/i.test(reply), "reply must never read the VIN digits back to the customer");
+  assert.ok(!/street glide|road glide|\bmodel\b/i.test(reply), "reply must never assert a decoded model");
+  for (const banned of [/match it against/i, /in stock/i, /coming in/i, /what we'?ve got/i, /\$\d/]) {
+    assert.ok(!banned.test(reply), `VIN reply must not pivot to inventory/price (${banned})`);
+  }
+}
+
+// Staff todo (INTERNAL): high-confidence read carries the VIN string + "VIN suggests ... — verify".
+const vinTodoConfident = buildVinPlatePhotoShareTodoSummary({
+  firstName: "Jorge",
+  tradeContext: true,
+  read: CONFIDENT_VIN
+});
+assert.match(vinTodoConfident, /VIN read: 1HD1KB4197Y612345/, "staff todo captures the read VIN");
+assert.match(vinTodoConfident, /VIN suggests a 2007 Street Glide — verify/, "decode is an unconfirmed staff hint");
+assert.match(vinTodoConfident, /appraiser/i, "trade VIN todo routes to appraisal");
+// (b) Low-confidence read: recognize ONLY — the todo names NO VIN digits and NO decode.
+const vinTodoLow = buildVinPlatePhotoShareTodoSummary({
+  firstName: "Jorge",
+  tradeContext: true,
+  read: { vin: "", vinConfidence: 0.2, vinDecodeHint: "" }
+});
+assert.match(vinTodoLow, /couldn't be read with confidence/i, "low-confidence todo says the plate wasn't read");
+assert.ok(!/VIN read:/.test(vinTodoLow), "low-confidence todo must not assert any VIN digits");
+assert.ok(!/suggests a/i.test(vinTodoLow), "low-confidence todo must not decode");
+// A partial (non-17-char) read at high vision confidence is still treated as low: no digits/decode.
+const vinTodoPartial = buildVinPlatePhotoShareTodoSummary({
+  firstName: "Jorge",
+  tradeContext: false,
+  read: { vin: "1HD1KB41", vinConfidence: 0.95, vinDecodeHint: "2007 Street Glide" }
+});
+assert.ok(!/VIN read:/.test(vinTodoPartial), "a partial VIN is never read back onto the staff record");
+assert.ok(!/suggests a/i.test(vinTodoPartial), "a partial VIN is never decoded");
+
+// VIN capture on the conversation: high confidence persists the VIN + decode (read:true); a low /
+// partial read persists the record but with BLANK digits/decode (read:false) — never an untrusted VIN.
+const convHigh: any = {};
+const capHigh = captureVinPlateOnConversation(convHigh, { read: CONFIDENT_VIN, tradeContext: true });
+assert.equal(capHigh.vin, "1HD1KB4197Y612345", "high-confidence VIN captured on the conversation");
+assert.equal(capHigh.decodeHint, "2007 Street Glide");
+assert.equal(capHigh.read, true);
+assert.equal(capHigh.context, "trade");
+assert.equal(convHigh.vinPlateCapture.vin, "1HD1KB4197Y612345", "capture is written onto the conversation");
+const convLow: any = {};
+const capLow = captureVinPlateOnConversation(convLow, {
+  read: { vin: "1HD1KB41", vinConfidence: 0.95, vinDecodeHint: "2007 Street Glide" },
+  tradeContext: false
+});
+assert.equal(capLow.vin, "", "a partial/low-confidence VIN is NOT persisted as authoritative");
+assert.equal(capLow.decodeHint, "", "no decode persisted on a low-confidence read");
+assert.equal(capLow.read, false);
+assert.equal(convLow.vinPlateCapture.read, false, "the capture record still exists, flagged unread");
+
+// Source guards — buildPhotoShareReplyWithVision routing:
+//  - the VIN branch is FLAG-GATED and checked BEFORE the generic non-motorcycle branch;
+//  - it fires on an explicit description.isVinPlate === true and returns kind:"vin_plate".
+assert.match(
+  photoShareSource,
+  /isVinPhotoHandlingEnabled\(\) && description && description\.isVinPlate === true[\s\S]{0,200}buildVinPlatePhotoShareResult/,
+  "the non-trade VIN branch must be flag-gated and return the VIN result"
+);
+assert.ok(
+  photoShareSource.indexOf("description.isVinPlate === true") <
+    photoShareSource.indexOf("description.isMotorcyclePart === true"),
+  "the VIN branch must be checked before the part/non-motorcycle branches"
+);
+// The trade branch also recognizes a VIN plate (flag-gated) rather than the "non-motorcycle item" hint.
+assert.match(
+  photoShareSource,
+  /isVinPhotoHandlingEnabled\(\) && description && description\.isVinPlate === true[\s\S]{0,240}tradeContext: true/,
+  "a VIN plate inside a trade thread must route to the VIN result (trade context)"
+);
+// Vision schema/prompt carries the VIN classification (parser-first, strict JSON).
+assert.match(llmSource, /is_vin_plate/, "vision schema must include the is_vin_plate classification");
+assert.match(llmSource, /"vin"/, "vision schema must include the read vin string");
+assert.match(llmSource, /vin_confidence/, "vision schema must include a per-field VIN confidence");
+// Caller parity: all three convergence points re-point the agent context for a VIN plate (both paths).
+assert.ok(
+  (apiSource.match(/photoShare\.kind === "vin_plate"[\s\S]{0,320}CUSTOMER_PHOTO_SHARE_VIN_AGENT_CONTEXT/g) ?? []).length >= 3,
+  "all three photo-share convergence points must re-point the context for a VIN-plate photo"
+);
+// The VIN agent context must never invite an inventory match or a customer-facing decode/value.
+assert.match(
+  photoShareSource,
+  /CUSTOMER_PHOTO_SHARE_VIN_AGENT_CONTEXT[\s\S]{0,400}Do NOT match it against bike inventory/,
+  "the VIN agent context must steer the next turn off inventory framing"
+);
 
 console.log("PASS customer photo share eval");

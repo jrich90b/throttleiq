@@ -863,6 +863,19 @@ export type Conversation = {
    *  lead (Joe ruling 2026-07-22). Durable so the side effect is once-per-conversation and so
    *  the console/CRM record says WHY the thread is closed and unanswered. */
   internationalLead?: { detectedAt: string; dialCode: string };
+  /** Set when a customer shares a photo of their VIN/data plate and VIN-plate photo handling is
+   *  enabled (domain/customerPhotoShare.ts). Durable so staff see the VIN string the customer
+   *  sent; on a low-confidence/partial read `vin`/`decodeHint` stay blank and `read` is false
+   *  (we never persist an untrusted VIN). The decode hint is a staff-only, unconfirmed hint —
+   *  never asserted to the customer. */
+  vinPlateCapture?: {
+    vin: string;
+    confidence: number;
+    decodeHint: string;
+    context: "trade" | "general";
+    capturedAt: string;
+    read: boolean;
+  };
   scheduler?: SchedulerMemory;
   followUpCadence?: FollowUpCadence;
   /** Set once when a stale manual-handoff lead is surfaced as a staff follow-up todo, so it is never re-nudged. */

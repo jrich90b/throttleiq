@@ -47,6 +47,7 @@ import {
   buildPhotoShareReplyWithVision,
   CUSTOMER_PHOTO_SHARE_AGENT_CONTEXT,
   CUSTOMER_PHOTO_SHARE_PART_AGENT_CONTEXT,
+  CUSTOMER_PHOTO_SHARE_VIN_AGENT_CONTEXT,
   detectCustomerVehiclePhotoShareText,
   isSalesPhotoShareConversation,
   isTradePhotoShareConversation
@@ -11462,6 +11463,11 @@ async function maybeHandleInventoryStatusParserRoute(args: {
       if (photoShare.kind === "part") {
         // A part photo isn't a bike to match — re-point the next turn to parts/service.
         setAgentContext(args.conv, { text: CUSTOMER_PHOTO_SHARE_PART_AGENT_CONTEXT, mode: "persistent" });
+      }
+      if (photoShare.kind === "vin_plate") {
+        // A VIN/data-plate photo is a staff handoff (appraiser / unit lookup), not a bike match —
+        // re-point the next turn away from inventory framing (VIN + decode live on a staff task).
+        setAgentContext(args.conv, { text: CUSTOMER_PHOTO_SHARE_VIN_AGENT_CONTEXT, mode: "persistent" });
       }
       const reply = photoShare.reply;
       recordRouteOutcome(args.scope, "customer_shared_vehicle_photo", {
@@ -55826,6 +55832,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       // A part photo isn't a bike to match — re-point the next turn to parts/service.
       setAgentContext(conv, { text: CUSTOMER_PHOTO_SHARE_PART_AGENT_CONTEXT, mode: "persistent" });
     }
+    if (photoShare.kind === "vin_plate") {
+      // A VIN/data-plate photo is a staff handoff (appraiser / unit lookup), not a bike match —
+      // re-point the next turn away from inventory framing (VIN + decode live on a staff task).
+      setAgentContext(conv, { text: CUSTOMER_PHOTO_SHARE_VIN_AGENT_CONTEXT, mode: "persistent" });
+    }
     const reply = photoShare.reply;
     recordRouteOutcome("regen", "customer_shared_vehicle_photo", {
       convId: conv.id,
@@ -59505,6 +59516,11 @@ if (authToken && signature) {
     if (photoShare.kind === "part") {
       // A part photo isn't a bike to match — re-point the next turn to parts/service.
       setAgentContext(conv, { text: CUSTOMER_PHOTO_SHARE_PART_AGENT_CONTEXT, mode: "persistent" });
+    }
+    if (photoShare.kind === "vin_plate") {
+      // A VIN/data-plate photo is a staff handoff (appraiser / unit lookup), not a bike match —
+      // re-point the next turn away from inventory framing (VIN + decode live on a staff task).
+      setAgentContext(conv, { text: CUSTOMER_PHOTO_SHARE_VIN_AGENT_CONTEXT, mode: "persistent" });
     }
     const reply = photoShare.reply;
     recordRouteOutcome("live", "customer_shared_vehicle_photo", {
