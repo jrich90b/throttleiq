@@ -351,6 +351,97 @@ export function matchesEquipmentQuery(profile: EquipmentProfile, query: Equipmen
   return true;
 }
 
+// True when a query names at least one feature to shop by.
+export function equipmentQueryHasFeatures(query: EquipmentQuery | null | undefined): boolean {
+  if (!query) return false;
+  return EQUIPMENT_FEATURE_KEYS.some(k => query[k] === true);
+}
+
+// ---------------------------------------------------------------------------
+// Phase B — per-unit fail-safe classification for an equipment SEARCH. Governance
+// (AGENTS.md never-fabricate, applied to equipment): we present a unit as "has X"
+// ONLY when its cached profile ASSERTS every requested feature. Anything less than
+// a confident assertion fails toward "looks like / let me confirm", never a false
+// yes — and we never silently drop a possible match on a shaky/missing read.
+//
+//  - "asserted": profile present AND every requested feature is asserted true (and,
+//    per Joe's windshield≠fairing ruling, no asserted fairing when a windshield was
+//    requested). Safe to present.
+//  - "excluded": profile present AND we are CONFIDENT the unit does NOT qualify — a
+//    requested feature is confidently ABSENT (vision saw it absent at/above the
+//    assertion floor), OR a windshield was requested and the unit's fairing is
+//    asserted (a fairing bike is not a windshield match, Joe's ruling). Never shown.
+//  - "uncertain": everything else — no profile yet, or a requested feature read
+//    below the confidence floor. We may surface it ONLY with "looks like / let me
+//    confirm" copy, never as a definite yes. Fail-safe: a bad photo angle that hides
+//    a bag lands here, not in "excluded".
+// ---------------------------------------------------------------------------
+export type EquipmentMatchClass = "asserted" | "uncertain" | "excluded";
+
+function confidentlyAbsent(feat: EquipmentFeatureProfile | undefined): boolean {
+  return !!feat && !feat.detected && feat.confidence >= EQUIPMENT_ASSERTION_CONFIDENCE_MIN;
+}
+
+export function classifyUnitForEquipmentQuery(
+  profile: EquipmentProfile | null | undefined,
+  query: EquipmentQuery
+): EquipmentMatchClass {
+  // No profile → unknown. Don't assert, don't exclude a possible match (fail toward confirm).
+  if (!profile) return "uncertain";
+  let anyUncertain = false;
+  for (const key of EQUIPMENT_FEATURE_KEYS) {
+    if (query[key] !== true) continue;
+    // Joe's ruling: a windshield ask on a unit whose fairing is asserted is a confident NON-match.
+    if (key === "windshield" && profile.features.fairing.asserted) return "excluded";
+    const feat = profile.features[key];
+    if (feat?.asserted) continue; // confidently present
+    if (confidentlyAbsent(feat)) return "excluded"; // confidently absent → not a match
+    anyUncertain = true; // present-but-shaky or unseen → let me confirm
+  }
+  return anyUncertain ? "uncertain" : "asserted";
+}
+
+// Partition a set of candidate units (each paired with its resolved profile-or-null) into the three
+// buckets for the reply. Pure; the caller resolves profiles (cache/on-demand) and owns the reply copy.
+export type EquipmentCandidate<T> = { item: T; profile: EquipmentProfile | null };
+
+export function partitionInventoryByEquipment<T>(
+  candidates: EquipmentCandidate<T>[],
+  query: EquipmentQuery
+): { asserted: T[]; uncertain: T[]; excluded: T[] } {
+  const asserted: T[] = [];
+  const uncertain: T[] = [];
+  const excluded: T[] = [];
+  for (const c of candidates ?? []) {
+    const cls = classifyUnitForEquipmentQuery(c.profile, query);
+    if (cls === "asserted") asserted.push(c.item);
+    else if (cls === "excluded") excluded.push(c.item);
+    else uncertain.push(c.item);
+  }
+  return { asserted, uncertain, excluded };
+}
+
+// Human phrase for a query ("bags and a windshield"), for the reply copy. Order follows the taxonomy.
+const EQUIPMENT_FEATURE_LABELS: Record<EquipmentFeatureKey, string> = {
+  bags: "bags",
+  windshield: "a windshield",
+  fairing: "a fairing",
+  backrestSissybar: "a backrest",
+  tourpak: "a tour-pak",
+  forwardControls: "forward controls",
+  apeHangers: "ape hangers",
+  floorboards: "floorboards",
+  crashBars: "crash bars"
+};
+
+export function describeEquipmentQuery(query: EquipmentQuery): string {
+  const parts = EQUIPMENT_FEATURE_KEYS.filter(k => query[k] === true).map(k => EQUIPMENT_FEATURE_LABELS[k]);
+  if (!parts.length) return "";
+  if (parts.length === 1) return parts[0];
+  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
+  return `${parts.slice(0, -1).join(", ")}, and ${parts[parts.length - 1]}`;
+}
+
 // ---------------------------------------------------------------------------
 // Per-unit cache — keyed by stockId + a hash of the image-URL SET, so vision
 // re-runs ONLY when a unit's photos change (the cost control, spec §6).

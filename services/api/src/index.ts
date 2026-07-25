@@ -560,12 +560,26 @@ import {
 } from "./domain/watchAlertDailyCap.js";
 import {
   recommendInventory,
+  selectEligibleInventory,
   buildVehicleRecommendationReply,
+  buildEquipmentRecommendationReply,
   buildVehicleRecommendationFollowupReply,
   buildVehicleRecommendationTodoSummary,
   toRecommendedUnits,
   buildRecommendedUnitsMediaReply
 } from "./domain/inventoryRecommender.js";
+import {
+  inventoryEquipmentVisionEnabled,
+  equipmentQueryHasFeatures,
+  describeEquipmentQuery,
+  partitionInventoryByEquipment,
+  getUnitEquipmentProfile,
+  equipmentCacheKey,
+  loadEquipmentCache,
+  saveEquipmentCache,
+  type EquipmentCandidate,
+  type EquipmentProfile
+} from "./domain/inventoryEquipmentVision.js";
 import { buildFinanceAppInviteLine } from "./domain/financeAppInvite.js";
 import { buildRecommendedUnitsPaymentEstimateReply, buildRecommendationWithEstimateReply } from "./domain/paymentEstimate.js";
 import {
@@ -2373,6 +2387,97 @@ function vehicleRecommendationParserHint(text: string): boolean {
   return VEHICLE_RECOMMENDATION_HINT_RE.test(t);
 }
 
+// Phase B — resolve an EQUIPMENT search into a fail-safe reply (canary, behind
+// INVENTORY_EQUIPMENT_VISION_ENABLED). Called ONLY from the shared recommendation resolver, so both
+// the live and regenerate paths share it (route-parity for free). Steps: take the eligible pool
+// (priced + condition/segment filtered), resolve each candidate's equipment profile from the per-unit
+// cache (running vision on-demand for a small capped number of cache-misses, gated by the same flag),
+// partition into asserted / uncertain / excluded, and answer:
+//   - asserted units  → present them as real matches ("here are a few with bags and a windshield").
+//   - only uncertain  → hedge ("these look like they've got X, let me confirm before you come out").
+//   - nothing to show → commit to follow up + owner todo (never list random bikes as if they match).
+// GOVERNANCE (never-fabricate): we assert a feature ONLY when the profile asserted it; excluded units
+// (confidently lacking a feature, or a fairing bike on a windshield ask — Joe's ruling) are never shown.
+async function resolveEquipmentRecommendationReply(args: {
+  conv: Conversation;
+  firstName: string | null | undefined;
+  query: import("./domain/llmDraft.js").RequestedEquipmentQuery;
+  condition: "new" | "used" | "both" | null;
+  excludeSegments: ("cruiser" | "touring" | "sport" | "adventure" | "trike")[];
+  includeSegments: ("cruiser" | "touring" | "sport" | "adventure" | "trike")[];
+  providerMessageId: string | null | undefined;
+  scope: "live" | "regen";
+}): Promise<string> {
+  const { conv, firstName, query, scope } = args;
+  const equipmentPhrase = describeEquipmentQuery(query);
+  // How many priced eligible units we even consider (cheapest-first — budget shoppers), and the hard
+  // cap on NEW on-demand vision runs this turn (cache hits are free and unbounded). Both env-tunable.
+  const poolCap = Math.max(1, Number(process.env.INVENTORY_EQUIPMENT_POOL_CAP ?? 24));
+  const onDemandVisionCap = Math.max(0, Number(process.env.INVENTORY_EQUIPMENT_ONDEMAND_VISION_CAP ?? 8));
+
+  let eligible: InventoryFeedItem[] = [];
+  try {
+    const items = await getInventoryFeed();
+    eligible = selectEligibleInventory(items, {
+      condition: args.condition,
+      excludeSegments: args.excludeSegments,
+      includeSegments: args.includeSegments
+    }).slice(0, poolCap);
+  } catch {
+    eligible = [];
+  }
+
+  const cache = await loadEquipmentCache();
+  let visionRuns = 0;
+  let ranAnyVision = false;
+  const candidates: EquipmentCandidate<InventoryFeedItem>[] = [];
+  for (const item of eligible) {
+    // Cache hit is free; a miss runs vision only while under the per-turn cap, else profile stays
+    // null (→ "uncertain", the fail-safe: we confirm rather than assert or wrongly exclude).
+    const key = equipmentCacheKey(item);
+    const hasCached = !!(key && cache.profiles?.[key]);
+    let profile: EquipmentProfile | null = null;
+    if (hasCached) {
+      const res = await getUnitEquipmentProfile(item, { cache });
+      profile = res.profile;
+    } else if (visionRuns < onDemandVisionCap) {
+      const res = await getUnitEquipmentProfile(item, { cache });
+      if (res.ranVision) {
+        visionRuns++;
+        ranAnyVision = true;
+      }
+      profile = res.profile;
+    }
+    candidates.push({ item, profile });
+  }
+  if (ranAnyVision) await saveEquipmentCache(cache);
+
+  const { asserted, uncertain, excluded } = partitionInventoryByEquipment(candidates, query);
+  recordRouteOutcome(scope, "equipment_recommendation", {
+    convId: conv.id,
+    leadKey: conv.leadKey,
+    equipment: equipmentPhrase,
+    eligible: eligible.length,
+    asserted: asserted.length,
+    uncertain: uncertain.length,
+    excluded: excluded.length,
+    visionRuns
+  });
+
+  const reply = buildEquipmentRecommendationReply({ firstName, equipmentPhrase, asserted, uncertain });
+  if (!reply) {
+    // Nothing confident or plausible to present → commit to follow up (never loop "which bike?",
+    // never list bikes that don't have the equipment). Owner pulls real matches.
+    addTodo(conv, "call", buildVehicleRecommendationTodoSummary(firstName), args.providerMessageId ?? undefined);
+    return buildVehicleRecommendationFollowupReply(firstName);
+  }
+  // Persist the presented units (asserted first) so a "show me pics/links" follow-up answers with the
+  // REAL listing URLs (same behavior as the budget/style recommender).
+  conv.recommendedUnits = toRecommendedUnits([...asserted, ...uncertain]);
+  conv.recommendedUnitsAt = new Date().toISOString();
+  return reply;
+}
+
 // Shared by BOTH the live and regenerate paths (route-parity law). When the customer asks us to
 // SUGGEST bikes (no specific model in play) — "give me some options", "~$200/mo", "not cruisers" —
 // answer with real inventory instead of looping "which bike are you looking at?" (s R Gurajala
@@ -2434,6 +2539,26 @@ async function resolveVehicleRecommendationReply(
   });
   if (decision.kind !== "recommend") return null;
   const firstName = normalizeDisplayCase(conv.lead?.firstName);
+  // Phase B — SHOP BY EQUIPMENT (canary, behind INVENTORY_EQUIPMENT_VISION_ENABLED, default OFF).
+  // When the customer asked to shop by real equipment ("something with bags and a windshield"),
+  // filter the eligible pool by each unit's CACHED equipment profile and answer fail-safe. This runs
+  // inside the SHARED recommendation resolver, so live (/webhooks/twilio) and regenerate
+  // (/conversations/:id/regenerate) get identical behavior. Flag off → skipped entirely; the normal
+  // budget/style recommender below runs unchanged. An equipment ask never leaks into that generic
+  // path (the helper always returns its own reply), so we never list random bikes as "with bags".
+  const equipmentQuery = parse?.requestedEquipment ?? {};
+  if (inventoryEquipmentVisionEnabled() && equipmentQueryHasFeatures(equipmentQuery)) {
+    return resolveEquipmentRecommendationReply({
+      conv,
+      firstName,
+      query: equipmentQuery,
+      condition: parse?.condition ?? null,
+      excludeSegments: parse?.excludeSegments ?? [],
+      includeSegments: parse?.includeSegments ?? [],
+      providerMessageId,
+      scope
+    });
+  }
   let matches: InventoryFeedItem[] = [];
   try {
     const items = await getInventoryFeed();

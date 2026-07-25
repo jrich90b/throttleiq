@@ -73,10 +73,13 @@ export type RecommendationPrefs = {
  *   - requires a usable price (we present price + offer to run numbers)
  *   - ranked by price ASC (budget shoppers want the affordable end), one unit per model for variety
  */
-export function recommendInventory(
+// The eligible pool BEFORE the one-per-model cap: every priced unit that passes the
+// condition/segment filters, ranked by price ASC. Phase B's equipment filter needs the per-UNIT pool
+// (two Street Bobs, one with bags and one without, must both be reachable), so it partitions this list
+// by cached equipment profile rather than the deduped recommendInventory output.
+export function selectEligibleInventory(
   items: InventoryFeedItem[],
-  prefs: RecommendationPrefs,
-  limit = 3
+  prefs: RecommendationPrefs
 ): InventoryFeedItem[] {
   const include = new Set((prefs.includeSegments ?? []).filter(Boolean));
   const exclude = new Set((prefs.excludeSegments ?? []).filter(Boolean));
@@ -94,6 +97,15 @@ export function recommendInventory(
   });
 
   eligible.sort((a, b) => Number(a.price) - Number(b.price));
+  return eligible;
+}
+
+export function recommendInventory(
+  items: InventoryFeedItem[],
+  prefs: RecommendationPrefs,
+  limit = 3
+): InventoryFeedItem[] {
+  const eligible = selectEligibleInventory(items, prefs);
 
   const out: InventoryFeedItem[] = [];
   const seenModels = new Set<string>();
@@ -144,6 +156,59 @@ export function buildVehicleRecommendationReply(args: {
   const lines = args.matches.map(m => `• ${unitLabel(m)}`).join("\n");
   const tail = args.omitNumbersCta ? "" : "\nWant me to run exact monthly numbers on any of these?";
   return `${opener} ${intro}\n${lines}${tail}`;
+}
+
+/**
+ * Phase B — fail-safe reply for an EQUIPMENT search ("something with bags and a windshield").
+ * Governance (AGENTS.md never-fabricate, applied to equipment): units whose cached profile ASSERTS
+ * every requested feature are presented as real matches ("here are a few with bags and a windshield").
+ * Units we're only UNCERTAIN about (no profile yet, or a below-threshold read) are surfaced ONLY with
+ * hedged "these look like they've got X, let me confirm before you come out" copy — never a false yes.
+ * We never claim a specific unit HAS a feature its profile didn't assert. Returns null when there's
+ * nothing to present (no asserted and no uncertain units) so the caller falls through to its no-match
+ * follow-up. `equipmentPhrase` comes from describeEquipmentQuery (e.g. "bags and a windshield").
+ */
+export function buildEquipmentRecommendationReply(args: {
+  firstName?: string | null;
+  equipmentPhrase: string;
+  asserted: InventoryFeedItem[];
+  uncertain: InventoryFeedItem[];
+  limit?: number;
+}): string | null {
+  const phrase = String(args.equipmentPhrase ?? "").trim();
+  if (!phrase) return null;
+  const limit = args.limit ?? 3;
+  const name = String(args.firstName ?? "").trim();
+  const opener = name ? `Sure thing, ${name}.` : "Sure thing.";
+
+  const dedupeByModel = (items: InventoryFeedItem[]): InventoryFeedItem[] => {
+    const out: InventoryFeedItem[] = [];
+    const seen = new Set<string>();
+    for (const it of items) {
+      const key = String(it?.model ?? "").trim().toLowerCase();
+      if (key && seen.has(key)) continue;
+      if (key) seen.add(key);
+      out.push(it);
+      if (out.length >= limit) break;
+    }
+    return out;
+  };
+
+  const assertedPicks = dedupeByModel(args.asserted ?? []);
+  if (assertedPicks.length) {
+    const lines = assertedPicks.map(m => `• ${unitLabel(m)}`).join("\n");
+    // A confident, factual presentation: these units' profiles asserted the requested features.
+    return `${opener} Here are a few with ${phrase}:\n${lines}\nWant me to run numbers on any of these?`;
+  }
+
+  const uncertainPicks = dedupeByModel(args.uncertain ?? []);
+  if (uncertainPicks.length) {
+    const lines = uncertainPicks.map(m => `• ${unitLabel(m)}`).join("\n");
+    // Uncertain: HEDGE. Never assert the feature; offer to confirm before they drive out.
+    return `${opener} A couple of these look like they've got ${phrase}, but let me confirm before you come out:\n${lines}\nWant me to double-check and run numbers on any?`;
+  }
+
+  return null;
 }
 
 /**
