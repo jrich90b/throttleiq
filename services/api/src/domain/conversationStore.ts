@@ -603,6 +603,19 @@ export type InventoryWatch = {
     floorboards?: boolean;
     crashBars?: boolean;
   };
+  // OPTIONAL "watch a whole SEGMENT" target (stacked on the equipment-watch canary — Joe's literal
+  // "let me know when a cruiser with bags and a windshield comes in" case). #292 only watched a concrete
+  // MODEL/FAMILY; a SEGMENT ("cruiser","touring","sport","adventure","trike") is a broad code GROUP the
+  // glossary resolves, so it NARROWS rather than naming one bike. When present, the model-half fire test
+  // is SEGMENT MEMBERSHIP (classifyHarleySegment(unit.model) ∈ segments) instead of a model-token match —
+  // ANDed as usual with year/condition/price AND, when set, the requestedEquipment gate above. The `model`
+  // field on a segment watch carries a synthetic human label (formatSegmentWatchLabel) purely for
+  // copy/merge/bookkeeping — it is NEVER model-token-matched (inventoryItemMatchesWatch routes segment
+  // watches to the segment matcher at the top). ABSENT → an ordinary model/family watch, behavior 100%
+  // UNCHANGED. Gated behind INVENTORY_EQUIPMENT_VISION_ENABLED (flag off → a segment watch is inert, never
+  // fires — the segment-membership modality is new firing surface kept inside the same canary). A segment
+  // is a NARROW: a bike outside the group never fires it.
+  segments?: ("cruiser" | "touring" | "sport" | "adventure" | "trike")[];
 };
 
 // A watch match that arrived while the per-conversation daily alert cap was in effect

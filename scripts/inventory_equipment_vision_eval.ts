@@ -609,9 +609,169 @@ function softailWithShieldFor(model: string): EquipmentProfile {
 
   // Creation attaches requestedEquipment via the shared deriveContextNoteWatches builder (both paths).
   assert.ok(/w\.requestedEquipment = eq/.test(indexSrc), "watch creation attaches the parsed requestedEquipment to the watch");
+  // Equipment-watch creation stays flag-gated + hint-gated (the combined equipment+segment block).
   assert.ok(
-    /inventoryEquipmentVisionEnabled\(\) && watches\.length && EQUIPMENT_WATCH_HINT_RE\.test\(note\)/.test(indexSrc),
-    "equipment-watch creation is flag-gated + hint-gated (cost pre-filter)"
+    /if \(inventoryEquipmentVisionEnabled\(\)\) \{[\s\S]{0,400}const noteNamesEquipment = EQUIPMENT_WATCH_HINT_RE\.test\(note\);/.test(indexSrc),
+    "creation is flag-gated and the equipment path is still hint-gated on EQUIPMENT_WATCH_HINT_RE (cost pre-filter)"
+  );
+  assert.ok(
+    /const needParse =\s*\(watches\.length && noteNamesEquipment\)/.test(indexSrc),
+    "the equipment attach still requires an anchored model watch + the equipment hint"
+  );
+}
+
+// ===========================================================================
+// SEGMENT-LEVEL equipment watches (THIS stacked PR). Joe's literal case: "let me know when a cruiser
+// with bags and a windshield comes in." A SEGMENT is a broad code GROUP the glossary resolves — it
+// NARROWS the lot rather than naming one bike. The model half of the fire test becomes SEGMENT
+// MEMBERSHIP (classifyHarleySegment(unit.model) ∈ watch.segments); #292's watchEquipmentFireGate
+// composes the equipment half unchanged. All deterministic (no LLM/IO).
+// ===========================================================================
+
+// A faithful, deterministic re-creation of the segment watch's fire DECISION using the exported
+// primitives — the model half (segment membership) ANDed with #292's equipment gate. Mirrors the
+// composition index.ts performs (inventoryItemMatchesSegmentWatch → inventoryItemPassesNonModelCriteria,
+// then watchPassesEquipmentGate). Lets us pin the governance without exporting the server internals.
+function segmentWatchFires(args: {
+  segments: ("cruiser" | "touring" | "sport" | "adventure" | "trike")[];
+  unitModel: string;
+  requestedEquipment?: Record<string, boolean>;
+  profile?: EquipmentProfile | null;
+}): boolean {
+  const seg = classifyHarleySegment(args.unitModel);
+  // NARROW: an "unknown"-segment unit, or one outside the watched group, never fires.
+  if (seg === "unknown" || !args.segments.includes(seg as any)) return false;
+  // Equipment half: #292's gate (no-op when no equipment requested; fail-safe on unprofiled/below-thr).
+  return watchEquipmentFireGate(args.profile ?? null, args.requestedEquipment ?? undefined);
+}
+
+// --- (n) SEGMENT MEMBERSHIP: a cruiser watch fires on a cruiser-group arrival, NOT on a touring one. ---
+{
+  // Bare segment watch (no equipment): a cruiser watch fires on any cruiser-group unit.
+  assert.equal(
+    segmentWatchFires({ segments: ["cruiser"], unitModel: "Fat Boy" }),
+    true,
+    "cruiser watch fires on a cruiser-group arrival (Fat Boy)"
+  );
+  assert.equal(
+    segmentWatchFires({ segments: ["cruiser"], unitModel: "Street Bob" }),
+    true,
+    "cruiser watch fires on another cruiser-group arrival (Street Bob)"
+  );
+  // NARROW: a touring-group arrival does NOT fire a cruiser watch.
+  assert.equal(
+    segmentWatchFires({ segments: ["cruiser"], unitModel: "Street Glide" }),
+    false,
+    "cruiser watch does NOT fire on a touring-group arrival (Street Glide) — a segment never fires outside its group"
+  );
+  assert.equal(
+    segmentWatchFires({ segments: ["cruiser"], unitModel: "Road King" }),
+    false,
+    "cruiser watch does NOT fire on a touring Road King"
+  );
+  // A multi-segment watch (cruiser OR touring) fires on either group but still not on sport.
+  assert.equal(segmentWatchFires({ segments: ["cruiser", "touring"], unitModel: "Road King" }), true, "cruiser+touring watch fires on a touring unit");
+  assert.equal(segmentWatchFires({ segments: ["cruiser", "touring"], unitModel: "Iron 883" }), false, "cruiser+touring watch does NOT fire on a sport unit");
+  // A model the glossary can't place ("unknown") never fires (fail-safe narrow).
+  assert.equal(segmentWatchFires({ segments: ["cruiser"], unitModel: "Zephyr 9000" }), false, "an unknown-segment unit never fires a segment watch");
+}
+
+// --- (o) COMPOUND: "cruiser with bags and a windshield" fires ONLY on a cruiser WITH asserted
+//         bags+windshield, and excludes fairing bikes at BOTH the segment and equipment layers. ---
+{
+  const wsQuery = { bags: true, windshield: true };
+  const cruiserBagged = softailWithShieldFor("Fat Boy"); // cruiser, bags+windshield asserted, no fairing
+
+  // Fires: a cruiser whose profile asserts bags+windshield.
+  assert.equal(
+    segmentWatchFires({ segments: ["cruiser"], unitModel: "Fat Boy", requestedEquipment: wsQuery, profile: cruiserBagged }),
+    true,
+    "compound cruiser+bags+windshield FIRES on a cruiser with asserted bags+windshield"
+  );
+  // Excluded at the SEGMENT layer: a Street Glide is touring → out of the cruiser group (never reaches equipment).
+  assert.equal(
+    segmentWatchFires({ segments: ["cruiser"], unitModel: "Street Glide", requestedEquipment: wsQuery, profile: streetGlide }),
+    false,
+    "a fairing touring bike is excluded at the SEGMENT layer (not a cruiser)"
+  );
+  // Excluded at the EQUIPMENT layer: a cruiser whose FRONT reads as a fairing fails windshield≠fairing.
+  const cruiserWithFairing = buildEquipmentProfile({
+    item: { stockId: "CF-1", vin: null, model: "Fat Boy", year: "2021", condition: "used", images: ["x.jpg"] },
+    desc: desc({ bags: feat(true, 0.95), fairing: feat(true, 0.95), windshield: feat(false, 0.9) }),
+    imageHash: "cf",
+    imageCount: 1
+  });
+  assert.equal(
+    segmentWatchFires({ segments: ["cruiser"], unitModel: "Fat Boy", requestedEquipment: wsQuery, profile: cruiserWithFairing }),
+    false,
+    "a cruiser reading a FAIRING is excluded at the equipment layer (windshield≠fairing)"
+  );
+  // FAIL-SAFE: an unprofiled cruiser arrival does NOT fire the equipment-bearing segment watch.
+  assert.equal(
+    segmentWatchFires({ segments: ["cruiser"], unitModel: "Fat Boy", requestedEquipment: wsQuery, profile: null }),
+    false,
+    "an UNPROFILED cruiser arrival does NOT fire an equipment-bearing segment watch (fail-safe)"
+  );
+  // A BARE segment watch (no equipment) still fires on an unprofiled cruiser — the equipment gate is a no-op.
+  assert.equal(
+    segmentWatchFires({ segments: ["cruiser"], unitModel: "Fat Boy", profile: null }),
+    true,
+    "a bare (no-equipment) cruiser watch fires on a cruiser even with no equipment profile"
+  );
+}
+
+// --- (p) WIRING SOURCE GUARDS: segment watches route through the SAME fire entry (so the daily cap +
+//         dedup + opt-out that wrap it still apply), are flag-gated + NARROW, reuse the shared criteria,
+//         leave MODEL/FAMILY watches untouched, and are minted by the shared creation builder. ---
+{
+  const repoRoot = path.resolve(new URL("..", import.meta.url).pathname);
+  const indexSrc = await fsp.readFile(path.join(repoRoot, "services/api/src/index.ts"), "utf8");
+  const storeSrc = await fsp.readFile(path.join(repoRoot, "services/api/src/domain/conversationStore.ts"), "utf8");
+
+  // The InventoryWatch type carries the OPTIONAL segment target.
+  assert.ok(/segments\?:\s*\("cruiser"/.test(storeSrc), "InventoryWatch has the optional segments target field");
+
+  // The segment branch sits at the TOP of inventoryItemMatchesWatch (the SINGLE fire entry both paths
+  // call) — so segment watches ride the SAME match loop, and the per-conversation DAILY CAP,
+  // stockId dedup, opt-out and pause guards that wrap that loop apply unchanged. No separate send path.
+  assert.ok(
+    /function inventoryItemMatchesWatch\(item: any, watch: InventoryWatch\): boolean \{[\s\S]{0,900}?if \(watchIsSegmentWatch\(watch\)\) \{/.test(indexSrc),
+    "segment watches route through inventoryItemMatchesWatch (the shared fire entry — daily cap/dedup/opt-out still wrap it)"
+  );
+
+  // FLAG-GATED: with the equipment-vision canary flag OFF a segment watch is INERT (returns false).
+  assert.ok(
+    /if \(watchIsSegmentWatch\(watch\)\) \{\s*if \(!inventoryEquipmentVisionEnabled\(\)\) return false;\s*return inventoryItemMatchesSegmentWatch\(item, watch\);/.test(indexSrc),
+    "flag OFF → a segment watch is inert (never fires); flag ON → routed to the segment matcher"
+  );
+
+  // NARROW: the segment matcher fires only on IN-GROUP membership (classifyHarleySegment), never outside.
+  assert.ok(
+    /function inventoryItemMatchesSegmentWatch[\s\S]{0,400}classifyHarleySegment\(item\.model\)[\s\S]{0,200}if \(seg === "unknown" \|\| !segments\.includes\(seg\)\) return false;/.test(indexSrc),
+    "segment matcher requires in-group membership (unknown / out-of-group → no fire — NARROW)"
+  );
+
+  // Reuses the EXACT shared non-model criteria (year/condition/price/color) — no drift from model watches.
+  assert.ok(
+    /function inventoryItemMatchesSegmentWatch[\s\S]{0,400}return inventoryItemPassesNonModelCriteria\(item, watch\);/.test(indexSrc),
+    "segment matcher reuses inventoryItemPassesNonModelCriteria (shared with model watches — no second copy)"
+  );
+  assert.ok(
+    /if \(!directMatch && !familyMatch && !catalogCodeMatch\) return false;\s*\/\/[\s\S]{0,120}return inventoryItemPassesNonModelCriteria\(item, watch\);/.test(indexSrc),
+    "model/family watches run the SAME extracted criteria after their (unchanged) model match — regression-safe"
+  );
+
+  // Creation mints a SEGMENT watch (flag+hint gated), reusing the parser's include_segments.
+  assert.ok(/note: "context_note_segment_watch"/.test(indexSrc), "creation mints a segment watch record");
+  assert.ok(/recParse\?\.includeSegments/.test(indexSrc), "the segment watch reuses the parser's include_segments (glossary layer — no regex over intent)");
+  assert.ok(
+    /const noteNamesSegment = SEGMENT_WATCH_HINT_RE\.test\(note\);/.test(indexSrc),
+    "segment-watch creation is hint-gated (cost pre-filter) on SEGMENT_WATCH_HINT_RE"
+  );
+  // Precedence: a segment watch is only minted when NO concrete model watch already anchored the ask.
+  assert.ok(
+    /if \(!watches\.length && wantsWatchIntent\) \{[\s\S]{0,1500}formatSegmentWatchLabel\(segments\)/.test(indexSrc),
+    "a segment watch is minted only when no concrete model watch anchored the ask (model watch wins)"
   );
 }
 
