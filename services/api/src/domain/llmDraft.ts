@@ -13336,6 +13336,249 @@ export async function describeVehicleImageWithLLM(args: {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Inventory equipment vision — Phase A (DARK, 2026-07-25).
+// "Shop the used lot by how the bikes are actually equipped": read a unit's
+// inventory photos and detect the equipment customers shop by (bags, windshield,
+// fairing, backrest, tour-pak, forward controls, ape hangers, floorboards, crash
+// bars). The feed carries photos but NO equipment field, so — for a used bike
+// with aftermarket adds — the pictures are the only source of truth.
+//
+// Sibling of describeVehicleImageWithLLM: same client / model plumbing / usage
+// accounting, strict structured output (parser-first law). Per-feature confidence
+// so the governance layer (inventoryEquipmentVision.ts) can fail toward "looks
+// like / let me confirm" below threshold and never assert a false yes.
+//
+// JOE'S RULING (windshield ≠ fairing) is spelled out in the prompt and reference
+// examples: a windshield is a SEPARATE clear shield on brackets; a fairing is
+// FIXED bodywork (batwing fork-mount / sharknose frame-mount). They are DISTINCT
+// — a fairing bike is NOT a windshield match.
+// ---------------------------------------------------------------------------
+
+export type EquipmentFeatureRead = {
+  present: boolean;
+  confidence: number;
+};
+
+export type VehicleEquipmentDescription = {
+  isMotorcycle: boolean;
+  bags: EquipmentFeatureRead & { bagType: "hard" | "leather" | "soft" | "unknown" };
+  windshield: EquipmentFeatureRead;
+  fairing: EquipmentFeatureRead & { fairingType: "batwing" | "sharknose" | "unknown" };
+  backrestSissybar: EquipmentFeatureRead;
+  tourpak: EquipmentFeatureRead;
+  forwardControls: EquipmentFeatureRead;
+  apeHangers: EquipmentFeatureRead;
+  floorboards: EquipmentFeatureRead;
+  crashBars: EquipmentFeatureRead;
+  overallConfidence: number;
+  notes: string;
+};
+
+const EQUIPMENT_FEATURE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["present", "confidence"],
+  properties: {
+    present: { type: "boolean" },
+    confidence: { type: "number" }
+  }
+} as const;
+
+/**
+ * Vision equipment read for ONE inventory unit's photos. Accepts the feed image
+ * URLs directly (public http(s) URLs the Responses API can fetch) — no download
+ * needed. Confidence is PER FEATURE. Returns null when vision is disabled or
+ * fails (the caller treats a null the same as "nothing asserted" — fail-safe).
+ */
+export async function describeUnitEquipmentWithLLM(args: {
+  imageUrls: string[];
+  modelText?: string | null;
+  contextText?: string | null;
+}): Promise<VehicleEquipmentDescription | null> {
+  const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+  if (process.env.LLM_INVENTORY_EQUIPMENT_VISION_ENABLED === "0") return null;
+  const model =
+    process.env.OPENAI_INVENTORY_EQUIPMENT_VISION_MODEL ||
+    process.env.OPENAI_VEHICLE_IMAGE_VISION_MODEL ||
+    process.env.OPENAI_MODEL ||
+    "gpt-5-mini";
+  const maxImages = Math.max(1, Number(process.env.INVENTORY_EQUIPMENT_VISION_MAX_IMAGES ?? 4));
+  const urls = (Array.isArray(args.imageUrls) ? args.imageUrls : [])
+    .map(u => String(u ?? "").trim())
+    .filter(u => /^https?:\/\//i.test(u))
+    .slice(0, maxImages);
+  if (!urls.length) return null;
+
+  const schema: { [key: string]: unknown } = {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "is_motorcycle",
+      "has_bags",
+      "bag_type",
+      "has_windshield",
+      "has_fairing",
+      "fairing_type",
+      "has_backrest_sissybar",
+      "has_tourpak",
+      "has_forward_controls",
+      "has_ape_hangers",
+      "has_floorboards",
+      "has_crash_bars",
+      "overall_confidence",
+      "notes"
+    ],
+    properties: {
+      is_motorcycle: { type: "boolean" },
+      has_bags: EQUIPMENT_FEATURE_SCHEMA,
+      bag_type: { type: "string", enum: ["hard", "leather", "soft", "unknown"] },
+      has_windshield: EQUIPMENT_FEATURE_SCHEMA,
+      has_fairing: EQUIPMENT_FEATURE_SCHEMA,
+      fairing_type: { type: "string", enum: ["batwing", "sharknose", "unknown"] },
+      has_backrest_sissybar: EQUIPMENT_FEATURE_SCHEMA,
+      has_tourpak: EQUIPMENT_FEATURE_SCHEMA,
+      has_forward_controls: EQUIPMENT_FEATURE_SCHEMA,
+      has_ape_hangers: EQUIPMENT_FEATURE_SCHEMA,
+      has_floorboards: EQUIPMENT_FEATURE_SCHEMA,
+      has_crash_bars: EQUIPMENT_FEATURE_SCHEMA,
+      overall_confidence: { type: "number" },
+      notes: { type: "string" }
+    }
+  };
+
+  const prompt = [
+    "You are inspecting the inventory photos of ONE motorcycle at a Harley-Davidson dealership.",
+    "Report which equipment/accessories are visibly present on THIS bike. Return only JSON matching the schema.",
+    "All the photos are of the SAME bike from different angles — combine what you can see across them.",
+    "",
+    "For every feature, set present=true ONLY if you can actually SEE it in a photo, and give a confidence 0..1",
+    "for THAT feature (how sure you are from the angles you have). If no photo shows the relevant area, set",
+    "present=false with a LOW confidence — never guess a yes from the model name. A bad/obscured angle that",
+    "hides a feature must read present=false (someone will confirm the real bike before a customer drives out).",
+    "",
+    "Feature definitions:",
+    "- has_bags: saddlebags mounted on the sides over the rear wheel. bag_type: 'hard' (rigid painted/plastic",
+    "  hard cases), 'leather' (leather/faux-leather slant bags with studs/conchos/fringe), 'soft' (soft",
+    "  textile throw-over bags), or 'unknown' if bags are present but you can't tell the type.",
+    "- has_windshield: a SEPARATE CLEAR SHIELD mounted on brackets/hardware above the headlight or on the",
+    "  handlebars/forks — you can SEE THROUGH it and it looks detachable (Road King, Switchback, or an",
+    "  aftermarket shield bolted onto a bare Softail/Sportster/Dyna). THIS IS NOT A FAIRING.",
+    "- has_fairing: a LARGE piece of FIXED painted BODYWORK that encloses the headlight AND the gauges/",
+    "  instruments (not a see-through shield, not a small screen). fairing_type:",
+    "  'batwing' = the big fork-mounted TOURING fairing shaped like a bat's wings, enclosing the headlight and",
+    "  a dash of gauges, turning WITH the handlebars (Street Glide, Electra Glide, Ultra Limited);",
+    "  'sharknose' = a larger frame-mounted fairing that stays fixed while the bars turn (Road Glide, with its",
+    "  distinctive dual headlights); 'unknown' if a large fairing is present but you can't tell which.",
+    "  IMPORTANT — do NOT set has_fairing for: a clear windshield (that's has_windshield), a small dark",
+    "  quarter/bikini/'speed screen' fork fairing that only shrouds the headlight (e.g. Low Rider S), a simple",
+    "  headlight nacelle/cowl, or a lower engine/leg fairing. A SMALL front fairing → has_fairing=false.",
+    "  A small clear wind deflector on top of a big fairing does NOT make has_windshield true — that front is a",
+    "  fairing.",
+    "  MUTUAL EXCLUSIVITY: a bike's FRONT is EITHER a clear windshield OR a fixed fairing — never both. Do NOT",
+    "  set has_windshield=true AND has_fairing=true for the same bike. If you see a clear see-through shield,",
+    "  it's a windshield (fairing=false); if you see big enclosing bodywork, it's a fairing (windshield=false).",
+    "- has_backrest_sissybar: an upright passenger backrest / sissy bar behind the seat.",
+    "- has_tourpak: a large lockable top trunk/case mounted behind the passenger seat (a 'Tour-Pak').",
+    "- has_forward_controls: foot pegs/controls mounted FORWARD (toward the front) rather than mid-mount.",
+    "- has_ape_hangers: tall handlebars that rise up so the rider's hands are at/above shoulder height.",
+    "- has_floorboards: flat floorboards for the rider's feet instead of small foot pegs.",
+    "- has_crash_bars: tubular engine/highway guard bars wrapping around the front of the engine.",
+    "",
+    "WINDSHIELD vs FAIRING — the distinction matters most; reference cases:",
+    "- A Road King with a tall clear detachable shield on chrome brackets over the round headlight:",
+    "  has_windshield=true, has_fairing=false.",
+    "- A Street Glide: the front is a painted batwing fairing that turns with the bars, NOT a clear shield:",
+    "  has_windshield=false, has_fairing=true, fairing_type='batwing'.",
+    "- A Road Glide: a fixed frame-mounted sharknose fairing with dual headlights:",
+    "  has_windshield=false, has_fairing=true, fairing_type='sharknose'.",
+    "- A bare Softail Slim with an aftermarket clear quick-detach windshield bolted on:",
+    "  has_windshield=true, has_fairing=false.",
+    "- A Heritage Classic (or other Softail cruiser) with a round headlight and a clear detachable windshield:",
+    "  has_windshield=true, has_fairing=false. The windshield is NOT a batwing — do not set has_fairing.",
+    "- A Low Rider S with a small dark fork-mounted quarter/'speed screen' fairing shrouding just the headlight:",
+    "  has_fairing=false (it is a SMALL sport fairing, not a large touring batwing) and has_windshield=false.",
+    "",
+    "- is_motorcycle: true if the photos show a motorcycle at all; false for a non-bike photo (then set every",
+    "  feature present=false, confidence 0).",
+    "- overall_confidence 0..1: how good the photo set is overall for judging equipment (angles/lighting/clarity).",
+    "- notes: <=15 words on anything ambiguous (e.g. 'only left-side shots, right saddlebag not visible').",
+    args.modelText ? `Listing model (context only, DO NOT infer equipment from it): ${String(args.modelText).slice(0, 80)}` : "",
+    args.contextText ? String(args.contextText).slice(0, 200) : ""
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  try {
+    const resp = await client.responses.parse({
+      model,
+      input: [
+        {
+          role: "user",
+          content: [
+            { type: "input_text", text: prompt },
+            ...urls.map(url => ({ type: "input_image", image_url: url, detail: "auto" }))
+          ]
+        }
+      ] as any,
+      ...optionalReasoning(model),
+      max_output_tokens: 600,
+      text: {
+        format: {
+          type: "json_schema",
+          name: "vehicle_equipment_description",
+          schema,
+          strict: true
+        }
+      }
+    });
+    recordOpenAIUsage(resp, {
+      feature: "llm_parser",
+      operation: "vehicle_equipment_description",
+      requestKind: "responses.parse",
+      model,
+      metadata: { debugTag: "inventory-equipment-vision", imageCount: urls.length }
+    });
+    const parsed = (resp as any)?.output_parsed ?? safeParseJson(resp.output_text?.trim() ?? "");
+    if (!parsed || typeof parsed !== "object") return null;
+    const clamp01 = (v: unknown): number => {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return 0;
+      return Math.max(0, Math.min(1, n));
+    };
+    const readFeature = (raw: any): EquipmentFeatureRead => ({
+      present: !!raw?.present,
+      confidence: clamp01(raw?.confidence)
+    });
+    const bagType = ["hard", "leather", "soft"].includes(String(parsed.bag_type))
+      ? (String(parsed.bag_type) as "hard" | "leather" | "soft")
+      : "unknown";
+    const fairingType = ["batwing", "sharknose"].includes(String(parsed.fairing_type))
+      ? (String(parsed.fairing_type) as "batwing" | "sharknose")
+      : "unknown";
+    return {
+      isMotorcycle: !!parsed.is_motorcycle,
+      bags: { ...readFeature(parsed.has_bags), bagType },
+      windshield: readFeature(parsed.has_windshield),
+      fairing: { ...readFeature(parsed.has_fairing), fairingType },
+      backrestSissybar: readFeature(parsed.has_backrest_sissybar),
+      tourpak: readFeature(parsed.has_tourpak),
+      forwardControls: readFeature(parsed.has_forward_controls),
+      apeHangers: readFeature(parsed.has_ape_hangers),
+      floorboards: readFeature(parsed.has_floorboards),
+      crashBars: readFeature(parsed.has_crash_bars),
+      overallConfidence: clamp01(parsed.overall_confidence),
+      notes: String(parsed.notes ?? "").trim()
+    };
+  } catch (error) {
+    console.warn("[inventory-equipment-vision] describe failed", {
+      message: error instanceof Error ? error.message : String(error)
+    });
+    return null;
+  }
+}
+
 export async function parseInventoryStatusWithLLM(args: {
   text: string;
   history?: { direction: "in" | "out"; body: string }[];
