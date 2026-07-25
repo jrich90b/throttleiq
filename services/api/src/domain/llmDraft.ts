@@ -649,6 +649,7 @@ export async function matchNationalOfferToLeadWithLLM(args: {
     "HARD RULES:",
     "- NEVER match a vague or model-less vehicle (e.g. just 'Harley-Davidson' or '2025 Harley-Davidson' with no model). If the model isn't clearly named, applies=false.",
     "- NEVER stretch a family-specific offer onto a different family (a Touring offer does not fit a Sportster/Softail, etc.).",
+    "- When an offer names SPECIFIC MODELS (e.g. 'Low Rider S/ST', '2026 Street Glide', 'Fat Boy'), it applies ONLY to those exact models — NOT to other models in the SAME family. A '$1,000 Customer Cash on Low Rider S/ST' does NOT apply to a Breakout, Fat Boy, or any other Softail. Only a broad/category offer ('select Softail models', 'all Touring') covers a whole family.",
     "- National promotional financing/cash offers are for NEW motorcycles unless the offer EXPLICITLY says used/pre-owned. If the lead's bike is used or its condition is unknown, only an offer that explicitly covers used bikes can apply — everything else is applies=false.",
     "- If a real match exists, write ONE short SMS that sounds like a real salesperson texting a customer they know — NOT a marketing blast and NOT a bot:",
     "  * casual and specific, contractions, at most one sentence of offer + one short question;",
@@ -666,6 +667,10 @@ export async function matchNationalOfferToLeadWithLLM(args: {
     'bike "2019 Iron 883" (condition used) with a "6.64% APR on used motorcycles for Riding Academy graduates" offer -> {"applies":true,"offerTitle":"Rider Training Graduate Used APR","why":"the offer explicitly covers used motorcycles","message":"If you did the Riding Academy, that Iron 883 qualifies for the grad rate — 6.64% on used bikes right now. Want me to check your dates?"}',
     'bike "2025 Harley-Davidson" (no model named), any offers -> {"applies":false,"offerTitle":"","why":"model not named; never match a vague vehicle","message":""}',
     'bike "2022 Sportster S" when offers are all Touring/Low Rider -> {"applies":false,"offerTitle":"","why":"no offer applies to a Sportster","message":""}',
+    // Same-FAMILY, different-MODEL over-stretch (Joe ruling 2026-07-25, +15854890786): a $1,000 credit
+    // scoped to "Low Rider S/ST" was applied to a 2026 Breakout — both Softail, but the offer names
+    // specific models the Breakout is not one of. A model-specific offer covers ONLY its named models.
+    'bike "2026 Breakout" (condition new) with a "$1,000 Customer Cash on 2025-2026 Low Rider S/ST" offer -> {"applies":false,"offerTitle":"","why":"the offer names specific models (Low Rider S/ST); a Breakout is a different Softail model, not covered","message":""}',
     "",
     `Lead's bike of interest: ${vehicle}`,
     `Lead's bike condition: ${condition}${condition === "unknown" ? " (treat as NOT new — only explicitly-used offers can apply)" : ""}`,

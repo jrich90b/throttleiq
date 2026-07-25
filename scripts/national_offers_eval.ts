@@ -149,6 +149,11 @@ eq("funnel_filters_by_rider_eligibility_before_llm", /filterOffersForRiderEligib
 eq("funnel_rider_eligibility_defaults_not_evident", /opts\?\.riderEligibility \?\? "not_evident"/.test(mod), true);
 eq("matcher_receives_condition", /matchNationalOfferToLeadWithLLM\(\{[\s\S]{0,200}?condition/.test(mod), true);
 eq("prompt_hard_rule_new_bike_scope", /NEW motorcycles unless the offer EXPLICITLY says used\/pre-owned/.test(llm), true);
+// Model-specific offer scope (Joe 2026-07-25, +15854890786): a model-named offer covers ONLY its
+// named models, not the whole family — the Breakout / Low Rider S/ST miss. Pin the HARD RULE + the
+// exact negative few-shot so the matcher keeps refusing the same-family over-stretch.
+eq("prompt_hard_rule_model_specific_scope", /When an offer names SPECIFIC MODELS[\s\S]{0,200}NOT to other models in the SAME family/.test(llm), true);
+eq("prompt_fewshot_breakout_not_low_rider_offer", /"2026 Breakout"[\s\S]{0,120}Low Rider S\/ST[\s\S]{0,120}"applies":false/.test(llm), true);
 const indexSrc = fs.readFileSync(path.join(process.cwd(), "services/api/src/index.ts"), "utf8");
 eq(
   "both_paths_pass_vehicle_condition",
