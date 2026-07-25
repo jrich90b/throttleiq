@@ -13325,6 +13325,20 @@ export type VehicleImageDescription = {
   // A close-up of a motorcycle PART or accessory (exhaust, seat, wheel, a part in a box,
   // a part-number label, a broken component) — NOT a whole bike. Routes to parts/service.
   isMotorcyclePart: boolean;
+  // A close-up of the VIN / data plate / frame stamping on a motorcycle (the metal plate or
+  // etched frame boss carrying the 17-char VIN, often with year/model codes). Distinct from a
+  // whole bike, a part, and a generic paper document. A hot trade-in signal — routes to the
+  // recognize-ack + staff handoff (customerPhotoShare.ts), NEVER a customer-facing decode.
+  isVinPlate: boolean;
+  // The VIN string read off the plate (best-effort OCR; may be empty/partial). Governance:
+  // NEVER surfaced to the customer — only captured on the conversation + on a staff todo.
+  vin: string;
+  // Confidence 0..1 that `vin` was read correctly. Below the routing threshold the reply
+  // recognizes the plate but does NOT read the digits back or decode (fail-safe).
+  vinConfidence: number;
+  // Best-effort "<year> <model family>" the plate suggests (unconfirmed staff hint only, e.g.
+  // "2018 Road Glide"). Empty when unsure. NEVER asserted to the customer as fact.
+  vinDecodeHint: string;
   make: string;
   modelFamily: string;
   color: string;
@@ -13360,6 +13374,10 @@ export async function describeVehicleImageWithLLM(args: {
     required: [
       "is_motorcycle",
       "is_motorcycle_part",
+      "is_vin_plate",
+      "vin",
+      "vin_confidence",
+      "vin_decode_hint",
       "make",
       "model_family",
       "color",
@@ -13370,6 +13388,10 @@ export async function describeVehicleImageWithLLM(args: {
     properties: {
       is_motorcycle: { type: "boolean" },
       is_motorcycle_part: { type: "boolean" },
+      is_vin_plate: { type: "boolean" },
+      vin: { type: "string" },
+      vin_confidence: { type: "number" },
+      vin_decode_hint: { type: "string" },
       make: { type: "string" },
       model_family: { type: "string" },
       color: { type: "string" },
@@ -13386,13 +13408,19 @@ export async function describeVehicleImageWithLLM(args: {
     "- color is the visible paint description (e.g. \"red over black two-tone\").",
     "- distinctive_features: short comma list (e.g. \"Tour-Pak, ape hangers, passenger backrest\").",
     "- confidence reflects the model_family identification only, 0 to 1. If you cannot tell the family, use a low confidence and an empty model_family.",
-    "- is_motorcycle=true ONLY for a WHOLE motorcycle. is_motorcycle=false for paperwork, screenshots, people, a fish/pet/scenery, OR a close-up of a single part/accessory.",
+    "- is_motorcycle=true ONLY for a WHOLE motorcycle. is_motorcycle=false for paperwork, screenshots, people, a fish/pet/scenery, a VIN/data plate, OR a close-up of a single part/accessory.",
     "- is_motorcycle_part=true when the photo is a close-up of a motorcycle PART or accessory (exhaust, seat, wheel, handlebars, mirror, saddlebag, a part in a box, a part-number label, a broken component) rather than a whole bike. For a whole bike: is_motorcycle=true, is_motorcycle_part=false. For a non-vehicle photo: both false.",
+    "- is_vin_plate=true ONLY when the photo is a close-up of the VIN / DATA PLATE / frame stamping that carries a Vehicle Identification Number — a metal riveted plate, an etched sticker, or a stamped frame boss showing a 17-character VIN (often with year/model/engine codes). This is DISTINCT from: a whole bike (is_motorcycle), a part/accessory (is_motorcycle_part), and a GENERIC paper document like a title, registration, insurance card, bill of sale, or a phone screenshot (all of those are is_vin_plate=false). When is_vin_plate=true, set is_motorcycle=false and is_motorcycle_part=false.",
+    "- vin: the 17-character VIN read off the plate, uppercased, no spaces or dashes. Empty string if you cannot read it or the photo is not a VIN plate. Do NOT invent or complete digits you cannot clearly see.",
+    "- vin_confidence: 0 to 1, how confident you are that `vin` is read correctly and complete. Use a LOW value if the plate is blurry, glare-obscured, angled, or partially cropped, or if you had to guess any character. 0 when not a VIN plate.",
+    "- vin_decode_hint: ONLY if is_vin_plate=true AND you are confident — a best-effort \"<year> <model family>\" the plate/VIN suggests (e.g. \"2018 Road Glide\"), for a human to VERIFY. Empty string when unsure. This is an internal hint, never shown to the customer.",
     "- social_reply: ONLY when BOTH is_motorcycle and is_motorcycle_part are false AND the photo is friendly personal chatter (a fish someone caught, a pet, a kid, scenery, a meal) — a brief, warm, casual one-liner a friendly salesperson would text back, like \"Haha, nice catch!\" or \"Aw, cute pup!\". Under 12 words, no sales pitch, no question, no inventory, no mention of bikes. Leave social_reply EMPTY for a motorcycle photo, a part photo, documents/screenshots, or anything sensitive/unclear.",
     "",
-    'EXAMPLE whole tourer: {"is_motorcycle":true,"is_motorcycle_part":false,"make":"Harley-Davidson","model_family":"Ultra Limited","color":"red over black two-tone","distinctive_features":"Tour-Pak, passenger backrest, lower fairings","confidence":0.85,"social_reply":""}',
-    'EXAMPLE a chrome exhaust on a workbench: {"is_motorcycle":false,"is_motorcycle_part":true,"make":"","model_family":"","color":"chrome","distinctive_features":"slip-on exhaust","confidence":0,"social_reply":""}',
-    'EXAMPLE a fish someone caught: {"is_motorcycle":false,"is_motorcycle_part":false,"make":"","model_family":"","color":"","distinctive_features":"","confidence":0,"social_reply":"Haha, nice catch!"}',
+    'EXAMPLE whole tourer: {"is_motorcycle":true,"is_motorcycle_part":false,"is_vin_plate":false,"vin":"","vin_confidence":0,"vin_decode_hint":"","make":"Harley-Davidson","model_family":"Ultra Limited","color":"red over black two-tone","distinctive_features":"Tour-Pak, passenger backrest, lower fairings","confidence":0.85,"social_reply":""}',
+    'EXAMPLE a chrome exhaust on a workbench: {"is_motorcycle":false,"is_motorcycle_part":true,"is_vin_plate":false,"vin":"","vin_confidence":0,"vin_decode_hint":"","make":"","model_family":"","color":"chrome","distinctive_features":"slip-on exhaust","confidence":0,"social_reply":""}',
+    'EXAMPLE a clear VIN plate riveted to the frame neck: {"is_motorcycle":false,"is_motorcycle_part":false,"is_vin_plate":true,"vin":"1HD1KB4197Y612345","vin_confidence":0.9,"vin_decode_hint":"2007 Street Glide","make":"Harley-Davidson","model_family":"","color":"","distinctive_features":"riveted VIN plate","confidence":0,"social_reply":""}',
+    'EXAMPLE a blurry, glare-washed VIN sticker: {"is_motorcycle":false,"is_motorcycle_part":false,"is_vin_plate":true,"vin":"","vin_confidence":0.2,"vin_decode_hint":"","make":"","model_family":"","color":"","distinctive_features":"VIN sticker (unreadable)","confidence":0,"social_reply":""}',
+    'EXAMPLE a fish someone caught: {"is_motorcycle":false,"is_motorcycle_part":false,"is_vin_plate":false,"vin":"","vin_confidence":0,"vin_decode_hint":"","make":"","model_family":"","color":"","distinctive_features":"","confidence":0,"social_reply":"Haha, nice catch!"}',
     args.contextText ? `Customer message context: ${String(args.contextText).slice(0, 200)}` : ""
   ]
     .filter(Boolean)
@@ -13434,6 +13462,10 @@ export async function describeVehicleImageWithLLM(args: {
     return {
       isMotorcycle: !!parsed.is_motorcycle,
       isMotorcyclePart: !!parsed.is_motorcycle_part,
+      isVinPlate: !!parsed.is_vin_plate,
+      vin: String(parsed.vin ?? "").trim().toUpperCase().replace(/[^A-Z0-9]/g, ""),
+      vinConfidence: Number(parsed.vin_confidence ?? 0),
+      vinDecodeHint: String(parsed.vin_decode_hint ?? "").trim(),
       make: String(parsed.make ?? "").trim(),
       modelFamily: String(parsed.model_family ?? "").trim(),
       color: String(parsed.color ?? "").trim(),
