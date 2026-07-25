@@ -559,6 +559,7 @@ import {
   takeDuePendingWatchAlerts
 } from "./domain/watchAlertDailyCap.js";
 import { watchLabelIsBareFamilyUmbrella } from "./domain/watchFamilyScope.js";
+import { buildCreditLeadEmailDraft } from "./domain/creditLeadEmail.js";
 import {
   recommendInventory,
   selectEligibleInventory,
@@ -56479,7 +56480,19 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     stopFollowUpCadence(conv, "manual_handoff");
     stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
     if (channel === "email") {
-      return respondWithEmailRegeneratedDraft(reply);
+      // Credit-app / prequal email = booking-link email format (Joe ruling 2026-07-25), the
+      // regen twin of the live path. The plain `reply` is the SMS handoff copy; the email lane
+      // gets the dedicated body + booking link so both paths stay in parity.
+      return respondWithEmailRegeneratedDraft(
+        buildCreditLeadEmailDraft({
+          firstName,
+          fullName: conv.lead?.name,
+          dealerName,
+          agentName,
+          bookingUrl: buildBookingUrlForLead(dealerProfile?.bookingUrl, conv),
+          isPrequal: latestInboundIsPrequalAdf
+        })
+      );
     }
     return respondWithSmsRegeneratedDraft(reply);
   }

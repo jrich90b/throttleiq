@@ -144,6 +144,7 @@ import {
   buildInitialInventoryEmailSegment,
   buildInitialUnavailableInventorySmsReply
 } from "../domain/initialAdfEmailDraft.js";
+import { buildCreditLeadEmailDraft } from "../domain/creditLeadEmail.js";
 import {
   buildPendingIncomingInventoryFromConversation,
   buildPendingIncomingInventoryInitialAdfReply,
@@ -6917,6 +6918,24 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       applyCreditLeadClassification();
     }
     queueInitialDraftForPreferredContact(ack);
+    // Credit-app / prequal leads ALSO get an email draft with a booking link (Joe ruling
+    // 2026-07-25). The SMS ack above skipped the email lane entirely (this block returns before
+    // the product-lead email path). Suppress when there's no email address or the lead is
+    // phone-only — same call-only-silence principle the SMS dispatcher uses. Draft only (suggest
+    // mode); the finance handoff todo/cadence treatment above is unchanged.
+    if (conv.lead?.email && !prefersPhoneOnly) {
+      const creditProfile = await getDealerProfile();
+      publishAdfEmailDraft(
+        buildCreditLeadEmailDraft({
+          firstName,
+          fullName: conv.lead?.name,
+          dealerName: creditProfile?.dealerName,
+          agentName: creditProfile?.agentName,
+          bookingUrl: buildBookingUrlForLead(creditProfile?.bookingUrl, conv),
+          isPrequal: isPrequalLead
+        })
+      );
+    }
     maybeAddInitialCallTodo();
     saveConversation(conv);
     await flushConversationStore();
