@@ -43,7 +43,8 @@ import {
   type EquipmentProfile,
   type EquipmentCacheFile
 } from "../services/api/src/domain/inventoryEquipmentVision.ts";
-import { buildEquipmentRecommendationReply, selectEligibleInventory, classifyHarleySegment } from "../services/api/src/domain/inventoryRecommender.ts";
+import { buildEquipmentRecommendationReply, buildEquipmentClarifyReply, selectEligibleInventory, classifyHarleySegment } from "../services/api/src/domain/inventoryRecommender.ts";
+import { decideEquipmentClarifyTurn } from "../services/api/src/domain/routeStateReducer.ts";
 import { normalizeRequestedEquipment } from "../services/api/src/domain/llmDraft.ts";
 import type { VehicleEquipmentDescription } from "../services/api/src/domain/llmDraft.ts";
 import { checkMessage } from "./voice_charter_audit.ts";
@@ -773,6 +774,115 @@ function segmentWatchFires(args: {
     /if \(!watches\.length && wantsWatchIntent\) \{[\s\S]{0,1500}formatSegmentWatchLabel\(segments\)/.test(indexSrc),
     "a segment watch is minted only when no concrete model watch anchored the ask (model watch wins)"
   );
+}
+
+// ===========================================================================
+// UNDER-SPECIFIED EQUIPMENT ASK → CLARIFY (Joe, 2026-07-25). A PURE equipment ask with NO bike type
+// ("something with bags and a windshield" — no model, family, or segment) should CLARIFY up to a
+// style/type (ask cruiser vs bagger + new/used), NOT drop it, NOT mint a whole-inventory watch, and
+// NOT run a whole-lot equipment vision search. The decision is a PURE reducer over parser slots
+// (requested_equipment features + include_segments + named-model), NEVER a regex over intent. It
+// sits inside the SHARED resolveVehicleRecommendationReply so live + regen behave identically.
+// ===========================================================================
+
+// --- (q) the CLARIFY decision fires ONLY when equipment is named with ZERO bike type. ---
+{
+  const on = { visionEnabled: true };
+
+  // (a) equipment + NO bike type → CLARIFY (the under-specified case).
+  assert.equal(
+    decideEquipmentClarifyTurn({ ...on, hasEquipmentFeatures: true, hasSegment: false, hasModel: false, hasFamily: false }).kind,
+    "clarify",
+    "equipment named with no model/family/segment → clarify up to a style"
+  );
+
+  // (b) equipment + a SEGMENT ("a cruiser with bags") → NOT clarified; the anchored ask proceeds.
+  assert.equal(
+    decideEquipmentClarifyTurn({ ...on, hasEquipmentFeatures: true, hasSegment: true, hasModel: false, hasFamily: false }).kind,
+    "none",
+    "equipment + a style/segment ('a cruiser with bags') proceeds — never clarified (regression)"
+  );
+
+  // Governance: equipment + a MODEL or a FAMILY is also anchored → not clarified (proceeds to search/#292).
+  assert.equal(
+    decideEquipmentClarifyTurn({ ...on, hasEquipmentFeatures: true, hasSegment: false, hasModel: true, hasFamily: false }).kind,
+    "none",
+    "equipment + a named model ('a Road King with bags') proceeds — never clarified"
+  );
+  assert.equal(
+    decideEquipmentClarifyTurn({ ...on, hasEquipmentFeatures: true, hasSegment: false, hasModel: false, hasFamily: true }).kind,
+    "none",
+    "equipment + a family ('a Softail with bags') proceeds — never clarified"
+  );
+
+  // (c) a bike type with NO equipment → untouched (the plain budget/style recommender owns it).
+  assert.equal(
+    decideEquipmentClarifyTurn({ ...on, hasEquipmentFeatures: false, hasSegment: true, hasModel: false, hasFamily: false }).kind,
+    "none",
+    "a bike type with no equipment is untouched by the clarify gate"
+  );
+  assert.equal(
+    decideEquipmentClarifyTurn({ ...on, hasEquipmentFeatures: false, hasSegment: false, hasModel: false, hasFamily: false }).kind,
+    "none",
+    "no equipment and no type → nothing to clarify"
+  );
+
+  // (d) FLAG OFF → the clarify NEVER fires, even in the exact under-specified shape (today's behavior).
+  assert.equal(
+    decideEquipmentClarifyTurn({ visionEnabled: false, hasEquipmentFeatures: true, hasSegment: false, hasModel: false, hasFamily: false }).kind,
+    "none",
+    "flag off → clarify never fires (canary-gated, no change to current behavior)"
+  );
+}
+
+// --- (r) the CLARIFY reply copy: asks for style + condition, charter-clean, fabricates nothing. ---
+{
+  const reply = buildEquipmentClarifyReply("Jordan");
+  assert.ok(/style/i.test(reply), "clarify asks what STYLE/type of bike (narrows up to a segment)");
+  assert.ok(/cruiser|bagger/i.test(reply), "clarify offers concrete plain-English style examples");
+  assert.ok(/new or used|new vs used|new or pre-?owned/i.test(reply), "clarify also asks new vs used (turns it into a segment+condition request)");
+  assert.ok(/\?/.test(reply), "clarify is phrased as a question (it asks, it does not answer)");
+  // Never asserts a specific unit / equipment as present (nothing to fabricate — we're asking).
+  assert.ok(
+    !/here are|in stock|\bhas bags\b|\bhas a windshield\b|\bcomes with\b/i.test(reply),
+    "clarify never lists inventory or asserts equipment (no fabrication)"
+  );
+  // Voice charter (texting a friend): no banned AI-tells, em-dash cap, no dropped verbs.
+  for (const name of ["Jordan", null]) {
+    const r = buildEquipmentClarifyReply(name);
+    const violations = checkMessage(r, { firstOutbound: false, smsLike: true, staffHasSent: false });
+    assert.deepEqual(violations, [], `clarify reply must be charter-clean: "${r}"`);
+  }
+}
+
+// --- (s) WIRING SOURCE GUARDS: the clarify is centralized (decideEquipmentClarifyTurn), applied in
+//         the SHARED resolver BEFORE the equipment search (so no whole-lot vision runs), and reads
+//         parser slots (requested_equipment + include_segments), not a regex over intent. ---
+{
+  const repoRoot = path.resolve(new URL("..", import.meta.url).pathname);
+  const indexSrc = await fsp.readFile(path.join(repoRoot, "services/api/src/index.ts"), "utf8");
+
+  // The decision is the centralized reducer, computed inside the shared recommendation resolver.
+  assert.ok(/decideEquipmentClarifyTurn\(/.test(indexSrc), "index.ts computes the centralized clarify decision");
+  // It runs BEFORE resolveEquipmentRecommendationReply (the whole-lot equipment search) — an
+  // under-specified ask returns the clarify and never reaches the search.
+  assert.ok(
+    /if \(clarifyDecision\.kind === "clarify"\) \{[\s\S]{0,260}return buildEquipmentClarifyReply\(firstName\);\s*\}\s*if \(inventoryEquipmentVisionEnabled\(\) && equipmentQueryHasFeatures\(equipmentQuery\)\) \{/.test(indexSrc),
+    "the clarify returns BEFORE the equipment search branch (no whole-lot vision on an under-specified ask)"
+  );
+  // Parser-first: the decision inputs come from the parse slots, not a regex over the customer's words.
+  assert.ok(
+    /hasEquipmentFeatures: equipmentQueryHasFeatures\(equipmentQuery\)/.test(indexSrc),
+    "clarify detection reads the requested_equipment parse slot (parser-first, no regex over intent)"
+  );
+  assert.ok(
+    /hasSegment: equipmentIncludeSegments\.length > 0/.test(indexSrc),
+    "clarify detection reads the include_segments parse slot for the bike-type signal"
+  );
+  // Both-paths: the clarify lives in resolveVehicleRecommendationReply, the SINGLE shared entry both
+  // /webhooks/twilio and /conversations/:id/regenerate call (no hand-mirrored regen local).
+  const sharedCalls = (indexSrc.match(/resolveVehicleRecommendationReply\(/g) ?? []).length;
+  assert.ok(sharedCalls >= 3, "the clarify rides the shared resolver called from BOTH live and regen (>=3 refs)");
 }
 
 console.log("inventory_equipment_vision:eval PASS");

@@ -568,6 +568,7 @@ import {
   selectEligibleInventory,
   buildVehicleRecommendationReply,
   buildEquipmentRecommendationReply,
+  buildEquipmentClarifyReply,
   buildVehicleRecommendationFollowupReply,
   buildVehicleRecommendationTodoSummary,
   toRecommendedUnits,
@@ -672,6 +673,7 @@ import {
   pendingRescheduleCarriesTurnIntent,
   decideVehicleChoiceConfidenceTurn,
   decideVehicleRecommendationTurn,
+  decideEquipmentClarifyTurn,
   shouldBowOutRecommenderForNamedModel,
   decideVehicleMediaRequestTurn,
   decideInventoryUnitClarificationTurn,
@@ -2556,6 +2558,31 @@ async function resolveVehicleRecommendationReply(
   // budget/style recommender below runs unchanged. An equipment ask never leaks into that generic
   // path (the helper always returns its own reply), so we never list random bikes as "with bags".
   const equipmentQuery = parse?.requestedEquipment ?? {};
+  const equipmentIncludeSegments = parse?.includeSegments ?? [];
+  // Under-specified equipment ask → CLARIFY up to a style (Joe, 2026-07-25). Centralized decision
+  // (decideEquipmentClarifyTurn) reads the parser's already-extracted slots — requested_equipment
+  // features + include_segments (glossary style layer) + whether a concrete model was named this
+  // turn — NEVER a regex over intent. When the customer named equipment but NO bike type at all
+  // ("something with bags and a windshield"), ask what style/type they want (and new vs used)
+  // instead of dropping it or running a whole-lot equipment vision search. This sits inside the
+  // SHARED resolver, so live (/webhooks/twilio) + regen (/conversations/:id/regenerate) behave
+  // identically. Flag off → decision is `none` (no change). We do NOT mint a watch here (creation
+  // lives in deriveContextNoteWatches, which defers pure-equipment asks) and do NOT run the search.
+  const clarifyDecision = decideEquipmentClarifyTurn({
+    visionEnabled: inventoryEquipmentVisionEnabled(),
+    hasEquipmentFeatures: equipmentQueryHasFeatures(equipmentQuery),
+    hasSegment: equipmentIncludeSegments.length > 0,
+    hasModel: !!findMentionedModel(askText.toLowerCase()),
+    hasFamily: false
+  });
+  if (clarifyDecision.kind === "clarify") {
+    recordRouteOutcome(scope, "equipment_clarify", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      equipment: describeEquipmentQuery(equipmentQuery)
+    });
+    return buildEquipmentClarifyReply(firstName);
+  }
   if (inventoryEquipmentVisionEnabled() && equipmentQueryHasFeatures(equipmentQuery)) {
     return resolveEquipmentRecommendationReply({
       conv,
