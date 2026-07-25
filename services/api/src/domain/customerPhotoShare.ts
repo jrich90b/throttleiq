@@ -336,6 +336,243 @@ function buildVinPlatePhotoShareResult(args: {
   };
 }
 
+// --- Document-photo intake (flag-gated, DARK by default). ------------------
+// Generalizes the VIN-plate pattern above into a document CLASSIFIER + ROUTER. A customer texts a
+// photo of a document — a title, a lien release, an insurance card/binder, a driver's license, or a
+// COMPETING dealer's quote. Today they all fall into the generic "document/unclear" neutral ack.
+// Behind this flag we RECOGNIZE the type (vision's document_type) and route to the right staff with
+// a warm recognize-ack + a staff task. Governance (hard compliance line): for the PII/legal types
+// (title/lien_release/insurance_card/insurance_binder/drivers_license) we recognize the TYPE and
+// route ONLY — the customer reply and every stored field name the TYPE, NEVER the private contents
+// (no names/DOB/addresses/account or policy numbers/VIN/license #). competitor_quote is NOT PII →
+// the price + bike are surfaced to the salesperson as a STAFF hint, but we NEVER auto-counter or
+// quote a price to the customer. Fail-safe: an unrouted type (other/none) or flag OFF → today's
+// exact neutral document ack. Never assert a document type or its contents to the customer.
+export function isDocumentPhotoIntakeEnabled(): boolean {
+  return String(process.env.DOCUMENT_PHOTO_INTAKE_ENABLED ?? "0").trim() === "1";
+}
+
+// The document types we recognize + route. "other"/"none" are deliberately excluded — they fall
+// through to today's neutral document ack (fail-safe).
+export type DocumentPhotoType =
+  | "title"
+  | "lien_release"
+  | "insurance_card"
+  | "insurance_binder"
+  | "drivers_license"
+  | "competitor_quote";
+
+// Friendly, customer-safe label for each type — names the TYPE only (never any contents). Used in
+// both the customer reply and the staff task.
+const DOCUMENT_PHOTO_LABELS: Record<DocumentPhotoType, string> = {
+  title: "title",
+  lien_release: "lien release",
+  insurance_card: "insurance card",
+  insurance_binder: "insurance binder",
+  drivers_license: "license",
+  competitor_quote: "quote"
+};
+
+type DocumentPhotoRoute = {
+  // Carries PII/legal contents → recognize the TYPE + route only; NEVER read/repeat/store contents.
+  pii: boolean;
+  // Customer-facing clause (appended after the warm opener). Names the TYPE only, no contents, no price.
+  replyClause: string;
+  // Staff-task routing sentence: who handles it + what to do.
+  staffRoute: string;
+  // Persistent agent-context override for the NEXT turn (steers off inventory framing).
+  agentContext: string;
+};
+
+const DOCUMENT_PHOTO_ROUTES: Record<DocumentPhotoType, DocumentPhotoRoute> = {
+  title: {
+    pii: true,
+    replyClause: "I'll get your title to the team to finish up, and someone will follow up shortly.",
+    staffRoute:
+      "Get their title to the salesperson/F&I handling the deal to finish the paperwork.",
+    agentContext:
+      "Customer texted a photo of a vehicle TITLE (transaction paperwork). A human handles the document — it's attached in the thread and routed to the salesperson/F&I on a staff task. Do NOT read, repeat, or record any personal details from it, do NOT match it against bike inventory, and keep the reply warm while the team follows up."
+  },
+  lien_release: {
+    pii: true,
+    replyClause:
+      "I'll get your lien release to the team handling your trade so we can keep things moving, and someone will follow up shortly.",
+    staffRoute: "Get their lien release to the person handling the trade so the deal can move.",
+    agentContext:
+      "Customer texted a photo of a LIEN RELEASE / payoff letter (trade paperwork). A human handles the document — attached in the thread, routed to the person handling the trade on a staff task. Do NOT read, repeat, or record any personal or account details from it, do NOT match it against bike inventory, and keep the reply warm while the team follows up."
+  },
+  insurance_card: {
+    pii: true,
+    replyClause:
+      "I'll get your insurance card to the team to wrap up delivery, and someone will follow up shortly.",
+    staffRoute: "Get their insurance card to the salesperson closing delivery.",
+    agentContext:
+      "Customer texted a photo of an INSURANCE CARD (proof of coverage for delivery). A human handles the document — attached in the thread, routed to the salesperson closing delivery on a staff task. Do NOT read, repeat, or record any policy number, name, or other detail from it, do NOT match it against bike inventory, and keep the reply warm while the team follows up."
+  },
+  insurance_binder: {
+    pii: true,
+    replyClause:
+      "I'll get your insurance binder to the team to wrap up delivery, and someone will follow up shortly.",
+    staffRoute: "Get their insurance binder to the salesperson closing delivery.",
+    agentContext:
+      "Customer texted a photo of an INSURANCE BINDER / policy declaration (proof of coverage for delivery). A human handles the document — attached in the thread, routed to the salesperson closing delivery on a staff task. Do NOT read, repeat, or record any policy number, name, or other detail from it, do NOT match it against bike inventory, and keep the reply warm while the team follows up."
+  },
+  drivers_license: {
+    pii: true,
+    replyClause: "I'll pass your license along to the team, and someone will follow up shortly.",
+    staffRoute: "Get their license to the salesperson handling the test ride/deal.",
+    agentContext:
+      "Customer texted a photo of a DRIVER'S LICENSE / photo ID (test ride or deal — the MOST PII-sensitive doc). A human handles the document — attached in the thread, routed to the salesperson handling the test ride/deal on a staff task. Do NOT read, repeat, or record the name, DOB, address, or license number, do NOT match it against bike inventory, and keep the reply warm while the team follows up."
+  },
+  competitor_quote: {
+    pii: false,
+    replyClause:
+      "I see you've got a quote — let me get you our best number and I'll follow up shortly.",
+    staffRoute: "Get this to the salesperson right away.",
+    agentContext:
+      "Customer texted a photo of a COMPETING dealer's price quote (a HOT price-shopping signal). The salesperson has the competitor's bike + price on an URGENT staff task. Do NOT auto-counter, match, or quote any price to the customer — the salesperson decides the number. Do NOT match it against bike inventory; keep the reply warm while the team gets them our best number."
+  }
+};
+
+const DOCUMENT_PHOTO_ROUTED_TYPES = new Set<DocumentPhotoType>(
+  Object.keys(DOCUMENT_PHOTO_ROUTES) as DocumentPhotoType[]
+);
+
+// Is this a document_type we recognize + route (vs "other"/"none", which fall through to the
+// neutral document ack)? Type guard so callers get a narrowed DocumentPhotoType.
+export function isRoutedDocumentPhotoType(value: string | null | undefined): value is DocumentPhotoType {
+  return DOCUMENT_PHOTO_ROUTED_TYPES.has(String(value ?? "").trim() as DocumentPhotoType);
+}
+
+export type CompetitorQuoteRead = {
+  price?: number | null;
+  model?: string | null;
+  confidence?: number | null;
+};
+
+// STAFF-facing (internal) hint for a competitor quote. competitor_quote is NOT PII, so surfacing the
+// price + bike to the salesperson is a sales edge (Joe ruling 2026-07-25). Never customer-facing.
+export function buildCompetitorQuoteStaffHint(read: CompetitorQuoteRead | null | undefined): string {
+  const model = String(read?.model ?? "").trim();
+  const price = Number(read?.price ?? 0);
+  const confidence = Number(read?.confidence ?? 0);
+  if (!model && !(price > 0)) {
+    return "Couldn't read the quote's bike/price — open the image and confirm.";
+  }
+  const priceStr = price > 0 ? `$${Math.round(price).toLocaleString("en-US")}` : "an unlisted price";
+  const modelStr = model || "a bike";
+  const verify = confidence > 0 && confidence < 0.5 ? " (low-confidence read — verify from the image.)" : "";
+  return `Competitor quote: ${modelStr} @ ${priceStr} — beat it.${verify}`;
+}
+
+/**
+ * Recognize-ack reply for a document photo. Warm, gets it to a human fast, and names the TYPE ONLY —
+ * NEVER the private contents (governance) and, for a competitor quote, NEVER a price or a counter.
+ */
+export function buildDocumentPhotoShareReply(args: {
+  firstName?: string | null;
+  documentType: DocumentPhotoType;
+}): string {
+  const name = String(args.firstName ?? "").trim();
+  const opener = name ? `Thanks for sending that over, ${name}!` : "Thanks for sending that over!";
+  return `${opener} ${DOCUMENT_PHOTO_ROUTES[args.documentType].replyClause}`;
+}
+
+/**
+ * STAFF task summary for a document photo (internal). For the PII types it names the TYPE ONLY and
+ * tells staff to open the image + not record personal details (never OCR-and-persist PII). For a
+ * competitor quote (NOT PII) it carries the price/bike staff hint + an explicit no-auto-counter note.
+ */
+export function buildDocumentPhotoShareTodoSummary(args: {
+  firstName?: string | null;
+  documentType: DocumentPhotoType;
+  competitor?: CompetitorQuoteRead | null;
+}): string {
+  const who = String(args.firstName ?? "").trim() || "Customer";
+  const route = DOCUMENT_PHOTO_ROUTES[args.documentType];
+  const label = DOCUMENT_PHOTO_LABELS[args.documentType];
+  if (args.documentType === "competitor_quote") {
+    return `${who} sent a competitor's quote (HOT — price-shopping). ${buildCompetitorQuoteStaffHint(
+      args.competitor
+    )} ${route.staffRoute} Do NOT counter or match a price to the customer — that's the salesperson's call.`;
+  }
+  // PII/legal doc: recognized by TYPE only. The contents stay in the attached image for a human —
+  // never read back to the customer, never persisted as fields.
+  return `${who} sent a photo of their ${label} (recognized by type only — do NOT read or record any personal details from it; open the image in the thread). ${route.staffRoute}`;
+}
+
+// Durable record of a document photo the customer sent. Governance: for the PII types this stores
+// the TYPE ONLY (no contents). For a competitor quote (NOT PII) the read price/model are kept for
+// staff. `pii` marks which case, so nothing private is ever persisted.
+export type DocumentPhotoCapture = {
+  documentType: DocumentPhotoType;
+  context: "trade" | "general";
+  capturedAt: string;
+  pii: boolean;
+  // competitor_quote ONLY (NOT PII): the read competitor price/model for staff. 0/"" for PII types.
+  competitorPrice: number;
+  competitorModel: string;
+};
+
+export function captureDocumentPhotoOnConversation(
+  conv: { documentPhotoCapture?: DocumentPhotoCapture } | null | undefined,
+  args: { documentType: DocumentPhotoType; tradeContext: boolean; competitor?: CompetitorQuoteRead | null }
+): DocumentPhotoCapture {
+  const route = DOCUMENT_PHOTO_ROUTES[args.documentType];
+  const isCompetitor = args.documentType === "competitor_quote";
+  const capture: DocumentPhotoCapture = {
+    documentType: args.documentType,
+    context: args.tradeContext ? "trade" : "general",
+    capturedAt: new Date().toISOString(),
+    pii: route.pii,
+    // Never persist anything for a PII doc; only a competitor quote (non-PII) carries price/model.
+    competitorPrice: isCompetitor ? Number(args.competitor?.price ?? 0) : 0,
+    competitorModel: isCompetitor ? String(args.competitor?.model ?? "").trim() : ""
+  };
+  if (conv && typeof conv === "object") conv.documentPhotoCapture = capture;
+  return capture;
+}
+
+/**
+ * Shared document-photo result: recognize-ack reply + staff task + capture + the agent-context
+ * override the caller applies (both paths). Called from BOTH the trade branch and the general branch
+ * of buildPhotoShareReplyWithVision so the two paths share one implementation. Never surfaces PII or
+ * a competitor price to the customer.
+ */
+function buildDocumentPhotoShareResult(args: {
+  conv: { documentPhotoCapture?: DocumentPhotoCapture } | null | undefined;
+  firstName?: string | null;
+  documentType: DocumentPhotoType;
+  competitor?: CompetitorQuoteRead | null;
+  tradeContext: boolean;
+}): {
+  reply: string;
+  identifiedFamily: string | null;
+  todoSummary: string;
+  kind: "document";
+  documentType: DocumentPhotoType;
+  agentContextOverride: string;
+} {
+  const competitor = args.documentType === "competitor_quote" ? args.competitor ?? null : null;
+  captureDocumentPhotoOnConversation(args.conv, {
+    documentType: args.documentType,
+    tradeContext: args.tradeContext,
+    competitor
+  });
+  return {
+    reply: buildDocumentPhotoShareReply({ firstName: args.firstName, documentType: args.documentType }),
+    identifiedFamily: null,
+    todoSummary: buildDocumentPhotoShareTodoSummary({
+      firstName: args.firstName,
+      documentType: args.documentType,
+      competitor
+    }),
+    kind: "document",
+    documentType: args.documentType,
+    agentContextOverride: DOCUMENT_PHOTO_ROUTES[args.documentType].agentContext
+  };
+}
+
 export type PhotoShareInventoryMatch = {
   year?: string | null;
   model?: string | null;
@@ -464,7 +701,14 @@ async function buildTradePhotoShareResult(args: {
   firstName?: string | null;
   anchorAtIso?: string | null;
   dataDir: string;
-}): Promise<{ reply: string; identifiedFamily: string | null; todoSummary: string; kind?: "vin_plate" }> {
+}): Promise<{
+  reply: string;
+  identifiedFamily: string | null;
+  todoSummary: string;
+  kind?: "vin_plate" | "document";
+  documentType?: DocumentPhotoType;
+  agentContextOverride?: string;
+}> {
   let visionHint = "";
   try {
     const urls = findNearestInboundImageUrls(args.conv as any, args.anchorAtIso ?? null);
@@ -487,6 +731,28 @@ async function buildTradePhotoShareResult(args: {
             conv: args.conv as any,
             firstName: args.firstName,
             read: description,
+            tradeContext: true
+          });
+        }
+        // Document photo inside a trade thread (a lien release / title as trade payoff proof, an
+        // insurance card, etc.): recognize the TYPE + route to the right staff, instead of the
+        // generic "non-motorcycle item" trade hint. Flag-gated; off / unrouted type → the plate
+        // keeps the plain trade-hint path. Governance: PII contents are never read/stored.
+        if (
+          isDocumentPhotoIntakeEnabled() &&
+          description &&
+          description.isVinPlate !== true &&
+          isRoutedDocumentPhotoType(description.documentType)
+        ) {
+          return buildDocumentPhotoShareResult({
+            conv: args.conv as any,
+            firstName: args.firstName,
+            documentType: description.documentType,
+            competitor: {
+              price: description.competitorPrice,
+              model: description.competitorModel,
+              confidence: description.competitorConfidence
+            },
             tradeContext: true
           });
         }
@@ -514,7 +780,9 @@ export async function buildPhotoShareReplyWithVision(args: {
   reply: string;
   identifiedFamily: string | null;
   todoSummary: string;
-  kind?: "bike_match" | "part" | "non_motorcycle" | "vin_plate";
+  kind?: "bike_match" | "part" | "non_motorcycle" | "vin_plate" | "document";
+  documentType?: DocumentPhotoType;
+  agentContextOverride?: string;
 }> {
   // Trade-in photo: the customer is showing us their unit to appraise, not a bike they like to
   // match against our stock. Divert to the trade frame + appraisal handoff (covers all photo-share
@@ -572,6 +840,30 @@ export async function buildPhotoShareReplyWithVision(args: {
         todoSummary: `${who} sent a photo of a motorcycle PART/accessory — route to parts/service (buy vs install). Do NOT match it against bike inventory.`,
         kind: "part"
       };
+    }
+    // Document photo (flag-gated) — a title / lien release / insurance card|binder / driver's license
+    // / competitor quote. Recognize the TYPE + route to the right staff; for PII docs NEVER read or
+    // store the contents (the reply names the type only). Checked AFTER the VIN + part branches and
+    // BEFORE the generic non-motorcycle document ack (a document is is_motorcycle=false too). Flag OFF
+    // or an unrouted type (other/none) → falls through to today's exact neutral document ack.
+    if (
+      isDocumentPhotoIntakeEnabled() &&
+      description &&
+      description.isMotorcycle === false &&
+      description.isVinPlate !== true &&
+      isRoutedDocumentPhotoType(description.documentType)
+    ) {
+      return buildDocumentPhotoShareResult({
+        conv: args.conv as any,
+        firstName: args.firstName,
+        documentType: description.documentType,
+        competitor: {
+          price: description.competitorPrice,
+          model: description.competitorModel,
+          confidence: description.competitorConfidence
+        },
+        tradeContext: false
+      });
     }
     if (description && description.isMotorcycle === false) {
       const who = String(args.firstName ?? "").trim() || "Customer";

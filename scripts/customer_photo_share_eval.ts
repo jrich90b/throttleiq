@@ -33,7 +33,13 @@ const {
   isConfidentVinRead,
   buildVinPlatePhotoShareReply,
   buildVinPlatePhotoShareTodoSummary,
-  captureVinPlateOnConversation
+  captureVinPlateOnConversation,
+  isDocumentPhotoIntakeEnabled,
+  isRoutedDocumentPhotoType,
+  buildDocumentPhotoShareReply,
+  buildDocumentPhotoShareTodoSummary,
+  buildCompetitorQuoteStaffHint,
+  captureDocumentPhotoOnConversation
 } = await import("../services/api/src/domain/customerPhotoShare.ts");
 
 // Detector: production fixture and neighbors.
@@ -509,6 +515,195 @@ assert.match(
   photoShareSource,
   /CUSTOMER_PHOTO_SHARE_VIN_AGENT_CONTEXT[\s\S]{0,400}Do NOT match it against bike inventory/,
   "the VIN agent context must steer the next turn off inventory framing"
+);
+
+// --- Document-photo intake (flag-gated: recognize + route docs, NEVER extract PII). ------------
+// Generalizes the VIN pattern into a document classifier + router. Customers text a title, a lien
+// release, an insurance card/binder, a driver's license, or a competing dealer's quote. Behind
+// DOCUMENT_PHOTO_INTAKE_ENABLED we recognize the TYPE and route to the right staff — while NEVER
+// reading/repeating/storing the PII docs' private contents, and NEVER quoting/countering a
+// competitor's price to the customer.
+
+// (a) Flag governance: default OFF; only "1" turns it on. Off => today's neutral document ack.
+const savedDocFlag = process.env.DOCUMENT_PHOTO_INTAKE_ENABLED;
+delete process.env.DOCUMENT_PHOTO_INTAKE_ENABLED;
+assert.equal(isDocumentPhotoIntakeEnabled(), false, "document-photo intake defaults OFF (dark)");
+process.env.DOCUMENT_PHOTO_INTAKE_ENABLED = "0";
+assert.equal(isDocumentPhotoIntakeEnabled(), false, "explicit 0 stays OFF");
+process.env.DOCUMENT_PHOTO_INTAKE_ENABLED = "1";
+assert.equal(isDocumentPhotoIntakeEnabled(), true, "1 turns it ON");
+if (savedDocFlag === undefined) delete process.env.DOCUMENT_PHOTO_INTAKE_ENABLED;
+else process.env.DOCUMENT_PHOTO_INTAKE_ENABLED = savedDocFlag;
+
+// (b) Routed types vs the fall-through types: other/none (and junk) are NOT routed, so they fall
+// through to today's exact neutral document ack (fail-safe).
+const PII_DOC_TYPES = [
+  "title",
+  "lien_release",
+  "insurance_card",
+  "insurance_binder",
+  "drivers_license"
+] as const;
+for (const t of [...PII_DOC_TYPES, "competitor_quote"]) {
+  assert.equal(isRoutedDocumentPhotoType(t), true, `${t} is a routed document type`);
+}
+for (const t of ["other", "none", "", "random", null, undefined]) {
+  assert.equal(isRoutedDocumentPhotoType(t as any), false, `${t} is NOT routed → neutral-ack fall-through`);
+}
+
+// (c) PII types: the CUSTOMER reply names the TYPE only — never a name/DOB/number, never a price,
+// never an inventory pivot — and passes the voice-charter guard.
+const PII_LABEL_RE: Record<string, RegExp> = {
+  title: /\btitle\b/i,
+  lien_release: /lien release/i,
+  insurance_card: /insurance card/i,
+  insurance_binder: /insurance binder/i,
+  drivers_license: /\blicense\b/i
+};
+for (const t of PII_DOC_TYPES) {
+  const reply = buildDocumentPhotoShareReply({ firstName: "Dana", documentType: t });
+  const violations = checkMessage(reply, { firstOutbound: false, smsLike: true, staffHasSent: false });
+  assert.deepEqual(violations, [], `${t} reply must be charter-clean: "${reply}" -> ${JSON.stringify(violations)}`);
+  assert.match(reply, /Thanks for sending that over, Dana!/);
+  assert.match(reply, PII_LABEL_RE[t], `${t} reply names the document type`);
+  for (const banned of [
+    /\bDOB\b/i,
+    /date of birth/i,
+    /policy (number|no)/i,
+    /account (number|no)/i,
+    /license (number|no|#)/i,
+    /\bSSN\b/i,
+    /\bVIN\b/i,
+    /\$\d/,
+    /match it against/i,
+    /in stock/i,
+    /coming in/i
+  ]) {
+    assert.ok(!banned.test(reply), `${t} reply must not surface PII/price/inventory (${banned})`);
+  }
+}
+
+// (d) PII staff todo (INTERNAL): names the TYPE, tells staff NOT to record personal details, and
+// routes to the right staff. The contents are never OCR'd/persisted — only the image (attached).
+const STAFF_ROUTE_RE: Record<string, RegExp> = {
+  title: /salesperson\/F&I|finish the paperwork/i,
+  lien_release: /handling the trade/i,
+  insurance_card: /closing delivery/i,
+  insurance_binder: /closing delivery/i,
+  drivers_license: /test ride\/deal/i
+};
+for (const t of PII_DOC_TYPES) {
+  const todo = buildDocumentPhotoShareTodoSummary({ firstName: "Dana", documentType: t });
+  assert.match(todo, /recognized by type only/i, `${t} todo recognizes by TYPE only`);
+  assert.match(todo, /do NOT read or record any personal details/i, `${t} todo forbids recording PII`);
+  assert.match(todo, STAFF_ROUTE_RE[t], `${t} todo routes to the right staff`);
+}
+
+// (e) competitor_quote (NOT PII): the CUSTOMER reply offers our best number WITHOUT quoting or
+// countering a price; the STAFF hint (internal) carries the competitor's price + bike, and forbids
+// an auto-counter. Joe ruling 2026-07-25.
+const compReply = buildDocumentPhotoShareReply({ firstName: "Dana", documentType: "competitor_quote" });
+{
+  const violations = checkMessage(compReply, { firstOutbound: false, smsLike: true, staffHasSent: false });
+  assert.deepEqual(violations, [], `competitor reply must be charter-clean: "${compReply}" -> ${JSON.stringify(violations)}`);
+}
+assert.match(compReply, /best number/i, "competitor reply offers our best number");
+assert.ok(!/\$\d/.test(compReply), "competitor reply NEVER quotes/counters a price to the customer");
+assert.ok(!/beat it|28,?995|road glide/i.test(compReply), "competitor reply carries no staff-hint price/model");
+
+const compTodo = buildDocumentPhotoShareTodoSummary({
+  firstName: "Dana",
+  documentType: "competitor_quote",
+  competitor: { price: 28995, model: "2024 Road Glide", confidence: 0.8 }
+});
+assert.match(compTodo, /Competitor quote: 2024 Road Glide @ \$28,995 — beat it/, "staff hint carries the price + bike");
+assert.match(compTodo, /Do NOT counter or match a price to the customer/i, "staff hint forbids an auto-counter");
+// A blank/unreadable competitor read still routes urgently — never a fabricated price.
+const compTodoBlank = buildDocumentPhotoShareTodoSummary({
+  firstName: "Dana",
+  documentType: "competitor_quote",
+  competitor: null
+});
+assert.match(compTodoBlank, /Couldn't read the quote/i, "blank competitor read routes without inventing a price");
+assert.ok(!/@ \$\d/.test(compTodoBlank), "blank competitor read shows no price");
+// The staff-hint builder flags a low-confidence read for verification.
+assert.match(
+  buildCompetitorQuoteStaffHint({ price: 25000, model: "Fat Bob", confidence: 0.3 }),
+  /verify from the image/i,
+  "a low-confidence competitor read is flagged for staff verification"
+);
+
+// (f) Capture on the conversation: PII types store the TYPE ONLY (pii:true, no price/model — even
+// if a competitor read is passed in); a competitor quote (NOT PII) stores the read price/model.
+for (const t of PII_DOC_TYPES) {
+  const c: any = {};
+  const cap = captureDocumentPhotoOnConversation(c, {
+    documentType: t,
+    tradeContext: false,
+    competitor: { price: 9999, model: "Leaked", confidence: 0.9 }
+  });
+  assert.equal(cap.documentType, t);
+  assert.equal(cap.pii, true, `${t} capture is flagged PII`);
+  assert.equal(cap.competitorPrice, 0, `${t} capture persists NO price (PII doc)`);
+  assert.equal(cap.competitorModel, "", `${t} capture persists NO model (PII doc)`);
+  assert.equal(c.documentPhotoCapture.documentType, t, "capture is written onto the conversation");
+}
+const compConv: any = {};
+const compCap = captureDocumentPhotoOnConversation(compConv, {
+  documentType: "competitor_quote",
+  tradeContext: true,
+  competitor: { price: 28995, model: "2024 Road Glide", confidence: 0.8 }
+});
+assert.equal(compCap.pii, false, "a competitor quote is NOT PII");
+assert.equal(compCap.competitorPrice, 28995, "competitor price captured for staff");
+assert.equal(compCap.competitorModel, "2024 Road Glide", "competitor bike captured for staff");
+assert.equal(compCap.context, "trade");
+
+// (g) Source guards — buildPhotoShareReplyWithVision routing (both the general + trade paths):
+//  - the document branch is FLAG-GATED and returns kind:"document";
+//  - the general path checks it after VIN/part and before the generic non-motorcycle document ack;
+//  - both paths funnel through buildDocumentPhotoShareResult (trade + general → two-path parity).
+assert.match(
+  photoShareSource,
+  /description\.isMotorcycle === false &&\s*description\.isVinPlate !== true &&\s*isRoutedDocumentPhotoType\(description\.documentType\)[\s\S]{0,260}buildDocumentPhotoShareResult/,
+  "the general path must flag-gate + route a recognized document (after VIN/part, before the neutral ack)"
+);
+assert.ok(
+  photoShareSource.indexOf('kind: "document"') > 0,
+  "the document result returns kind:document"
+);
+assert.ok(
+  (photoShareSource.match(/buildDocumentPhotoShareResult\(\{/g) ?? []).length >= 2,
+  "both the general and trade paths build a document result (two-path parity, no regen mirror)"
+);
+assert.match(
+  photoShareSource,
+  /buildDocumentPhotoShareResult\(\{[\s\S]{0,500}tradeContext: true/,
+  "the trade path routes a document photo (a lien release / title as payoff proof)"
+);
+assert.match(
+  photoShareSource,
+  /isDocumentPhotoIntakeEnabled\(\)/,
+  "the document branch is flag-gated"
+);
+// The general document branch must be checked before the generic non-motorcycle document ack.
+assert.ok(
+  photoShareSource.indexOf("isMotorcycle === false &&") <
+    photoShareSource.lastIndexOf("description.isMotorcycle === false)"),
+  "the document branch precedes the generic non-motorcycle document ack"
+);
+// Vision schema/prompt carries the document classification (parser-first, strict JSON) + the PII rule.
+assert.match(llmSource, /document_type/, "vision schema must include the document_type classification");
+assert.match(llmSource, /competitor_price/, "vision schema must include competitor_price for a competitor quote");
+assert.match(
+  llmSource,
+  /NEVER read, transcribe, extract/i,
+  "vision prompt must forbid extracting PII from the title/lien/insurance/license docs"
+);
+// Caller parity: all three convergence points re-point the agent context for a document (both paths).
+assert.ok(
+  (apiSource.match(/photoShare\.kind === "document" && photoShare\.agentContextOverride[\s\S]{0,400}text: photoShare\.agentContextOverride/g) ?? []).length >= 3,
+  "all three photo-share convergence points must re-point the context for a recognized document"
 );
 
 console.log("PASS customer photo share eval");
