@@ -549,7 +549,7 @@ import {
   humanThreadNudgeSpacingDays
 } from "./domain/humanThreadNudge.js";
 import { referencesPastDatedEvent } from "./domain/pastEventGuard.js";
-import { stripLeadingVinCodes, stripLeadingMakeName, normalizeWatchModelsVin } from "./domain/watchModelVinCodes.js";
+import { stripLeadingVinCodes, stripLeadingMakeName, normalizeWatchModelsVin, modelLabelHasVinCode } from "./domain/watchModelVinCodes.js";
 import { trikeClassConflict, isFamilyOnlyModelLabel, referencesFamilyOnlyInText } from "./domain/modelFamily.js";
 import { decideWatchSiblingScopeAsk } from "./domain/watchSiblingScope.js";
 import { applyWatchFieldHygiene } from "./domain/watchFieldHygiene.js";
@@ -24916,6 +24916,35 @@ async function deriveContextNoteWatches(
       else if (watch.year) watch.exactness = "year_model";
       watches.push(watch);
     }
+  }
+
+  // EXPLOSION GUARD (Joe ruling 2026-07-25, +19292685345 Shawon): a family word in a voice call /
+  // note ("compare Sportster vs Fat Boy") can resolve against the VIN-decoded model catalog and mint a
+  // SPRAY of junk watches — 22 VIN-coded ones ("Xl1200cx 1lm3 1200 Roadster") were created from one
+  // call. Two deterministic guards on the derived model watches: (1) DROP any VIN-code-shaped label
+  // (catalog-decode garbage that fires wrong / never matches a friendly feed model); (2) CAP — beyond
+  // WATCH_DERIVE_MAX (default 3) it is a family/catalog explosion, not a genuine "watch these N specific
+  // bikes" ask, so mint NONE (the interest stays in the transcript + staff/the family-clarify path
+  // handle it). Fail direction: fewer / no watches, never a spray of wrong-model alerts. Segment/
+  // equipment watches below are single, style-scoped, and never explode — the guard is model-only.
+  {
+    const nonVinWatches = watches.filter(w => !modelLabelHasVinCode(String(w.model ?? "")));
+    const watchDeriveMax = Math.max(1, Number(process.env.WATCH_DERIVE_MAX ?? 3));
+    if (nonVinWatches.length > watchDeriveMax || nonVinWatches.length < watches.length) {
+      recordRouteOutcome("live", "watch_derive_explosion_suppressed", {
+        convId: conv?.id,
+        leadKey: conv?.leadKey,
+        derived: watches.length,
+        nonVin: nonVinWatches.length,
+        cap: watchDeriveMax
+      });
+    }
+    // Over the cap = explosion → mint none; otherwise keep the cleaned (non-VIN) set. Fall through to
+    // the equipment/segment section either way — a suppressed model spray can still leave a legitimate
+    // single segment watch when the note names a style group (the existing !watches.length branch).
+    const guarded = nonVinWatches.length > watchDeriveMax ? [] : nonVinWatches;
+    watches.length = 0;
+    watches.push(...guarded);
   }
 
   // Equipment + SEGMENT watches (canary, INVENTORY_EQUIPMENT_VISION_ENABLED off by default). ONE

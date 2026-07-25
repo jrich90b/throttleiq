@@ -53,6 +53,17 @@ export function stripLeadingVinCodes(model: string | null | undefined): string {
 }
 
 /**
+ * Does this model label carry a VIN factory-code token anywhere ("Xl1200cx 1lm3 1200 Roadster",
+ * "Rh1250s 1zc4 Sportster S")? Catalog-decode garbage that never matches a friendly feed model and
+ * fires wrong. Used to reject such labels before they become watches (the +19292685345 explosion).
+ */
+export function modelLabelHasVinCode(model: string | null | undefined): boolean {
+  const raw = String(model ?? "").trim();
+  if (!raw) return false;
+  return raw.split(/\s+/).some(tok => isVinCodeToken(tok));
+}
+
+/**
  * Strip a leading MAKE name off a watch model label (2026-07-23). ADF/lead vehicle model fields
  * sometimes arrive with the make glued in front ("HARLEY-DAVIDSON Street Glide", +17165600980's
  * held-guard watch) — the make already lives in the watch's own `make` field, so keeping it in the
