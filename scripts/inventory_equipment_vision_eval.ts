@@ -18,6 +18,10 @@
  * Run: npx tsx scripts/inventory_equipment_vision_eval.ts
  */
 import assert from "node:assert/strict";
+import { promises as fsp } from "node:fs";
+import path from "node:path";
+
+process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "eval-no-live-key";
 
 import {
   EQUIPMENT_ASSERTION_CONFIDENCE_MIN,
@@ -27,9 +31,18 @@ import {
   imageSetHash,
   matchesEquipmentQuery,
   modelEquipmentPrior,
-  reconcileEquipmentWithPrior
+  reconcileEquipmentWithPrior,
+  // Phase B (canary): equipment SEARCH filter + fail-safe classification.
+  classifyUnitForEquipmentQuery,
+  partitionInventoryByEquipment,
+  describeEquipmentQuery,
+  equipmentQueryHasFeatures,
+  type EquipmentProfile
 } from "../services/api/src/domain/inventoryEquipmentVision.ts";
+import { buildEquipmentRecommendationReply, selectEligibleInventory } from "../services/api/src/domain/inventoryRecommender.ts";
+import { normalizeRequestedEquipment } from "../services/api/src/domain/llmDraft.ts";
 import type { VehicleEquipmentDescription } from "../services/api/src/domain/llmDraft.ts";
+import { checkMessage } from "./voice_charter_audit.ts";
 
 // Confidence floor is the documented default.
 assert.equal(EQUIPMENT_ASSERTION_CONFIDENCE_MIN, 0.7, "assertion floor mirrors VISION_CONFIDENCE_MIN default (0.7)");
@@ -245,6 +258,222 @@ assert.equal(matchesEquipmentQuery(shakyShield, { bags: true }), true, "the conf
     imageCount: 1
   });
   assert.equal(EQUIPMENT_FEATURE_KEYS.every(k => !notABike.features[k].asserted), true, "a non-bike photo asserts no equipment");
+}
+
+// ===========================================================================
+// PHASE B (canary, INVENTORY_EQUIPMENT_VISION_ENABLED off) — equipment SEARCH
+// filter + fail-safe replies + both-paths wiring. The comprehension parser is
+// env-gated off in ci (house style — see vehicle_recommendation:eval); we pin the
+// parse SHAPE deterministically (normalizeRequestedEquipment) and the windshield≠
+// fairing comprehension rule via a source guard on the parser few-shots, and we
+// pin the governance-critical behavior deterministically at the filter + reply.
+// ===========================================================================
+
+// --- (e) requested-equipment parse shape. The normalizer maps snake→camel, keeps
+//         only the TRUE keys, and NEVER invents fairing from a windshield ask (Joe). ---
+{
+  const q = normalizeRequestedEquipment({
+    bags: true,
+    windshield: true,
+    fairing: false,
+    backrest_sissybar: false,
+    tourpak: false,
+    forward_controls: false,
+    ape_hangers: false,
+    floorboards: false,
+    crash_bars: false
+  });
+  assert.deepEqual(q, { bags: true, windshield: true }, "a bags+windshield ask maps to exactly those two keys");
+  assert.equal((q as any).fairing, undefined, "a windshield ask NEVER sets fairing (Joe's ruling at the parse level)");
+  assert.equal((q as any).windshield, true, "windshield is preserved as its own key");
+
+  // The parse keys are the SAME set as the vision taxonomy (single source of truth).
+  const full = normalizeRequestedEquipment(
+    Object.fromEntries(
+      ["bags", "windshield", "fairing", "backrest_sissybar", "tourpak", "forward_controls", "ape_hangers", "floorboards", "crash_bars"].map(k => [k, true])
+    )
+  );
+  assert.equal(Object.keys(full).length, EQUIPMENT_FEATURE_KEYS.length, "every taxonomy feature is a requestable key");
+  for (const k of EQUIPMENT_FEATURE_KEYS) assert.equal((full as any)[k], true, `requested key ${k} maps through`);
+
+  assert.deepEqual(normalizeRequestedEquipment({}), {}, "no features asked => empty query");
+  assert.deepEqual(normalizeRequestedEquipment(null), {}, "junk input => empty query (no throw)");
+  assert.equal(equipmentQueryHasFeatures({ bags: true }), true, "hasFeatures true when a key is set");
+  assert.equal(equipmentQueryHasFeatures({}), false, "hasFeatures false on empty query");
+}
+
+// --- (f) per-unit fail-safe classification. The three reused profiles from above:
+//         streetGlide (fairing+bags asserted), softailWithShield (bags+windshield, no
+//         fairing), shakyShield (bags asserted, 0.55 windshield NOT asserted). ---
+{
+  const wsQuery = { bags: true, windshield: true };
+
+  // Joe's ruling: a fairing bike is EXCLUDED from a windshield search (confident non-match).
+  assert.equal(
+    classifyUnitForEquipmentQuery(streetGlide, wsQuery),
+    "excluded",
+    "a fairing unit is EXCLUDED from a bags+windshield search (windshield≠fairing)"
+  );
+
+  // A true windshield bagger with no fairing is a confident ASSERTED match.
+  assert.equal(
+    classifyUnitForEquipmentQuery(softailWithShield, wsQuery),
+    "asserted",
+    "a genuine bags+windshield bagger is asserted"
+  );
+
+  // A below-threshold windshield read (bad angle) is UNCERTAIN — never a false yes, never wrongly excluded.
+  assert.equal(
+    classifyUnitForEquipmentQuery(shakyShield, wsQuery),
+    "uncertain",
+    "a shaky windshield read is uncertain (fail toward confirm), not asserted and not excluded"
+  );
+
+  // NO PROFILE YET → uncertain: an unprofiled unit is never falsely asserted, never silently dropped.
+  assert.equal(
+    classifyUnitForEquipmentQuery(null, wsQuery),
+    "uncertain",
+    "an unprofiled unit is uncertain (fail toward confirm), never asserted"
+  );
+
+  // CONFIDENTLY ABSENT: vision confidently saw NO bags → the unit is excluded from a bags search.
+  const noBags = buildEquipmentProfile({
+    item: { stockId: "TEST-NOBAGS", vin: null, model: "Iron 883", year: "2020", condition: "used", images: ["z.jpg"] },
+    desc: desc({ bags: { present: false, confidence: 0.95, bagType: "unknown" } }),
+    imageHash: "hash-nobags",
+    imageCount: 1
+  });
+  assert.equal(
+    classifyUnitForEquipmentQuery(noBags, { bags: true }),
+    "excluded",
+    "a unit vision is confident has NO bags is excluded from a bags search"
+  );
+}
+
+// --- (g) partition = the three buckets, and the fail-safe REPLY copy. ---
+{
+  const wsQuery = { bags: true, windshield: true };
+  type U = { model: string; year: string; price: number };
+  const asItem = (model: string, price: number): U => ({ model, year: "2021", price });
+
+  const parts = partitionInventoryByEquipment<U>(
+    [
+      { item: asItem("Road King", 18995), profile: softailWithShieldFor("Road King") }, // asserted
+      { item: asItem("Street Glide", 21995), profile: streetGlide }, // excluded (fairing)
+      { item: asItem("Street Bob", 12995), profile: null } // uncertain (unprofiled)
+    ],
+    wsQuery
+  );
+  assert.deepEqual(parts.asserted.map(u => u.model), ["Road King"], "asserted bucket = the confident match");
+  assert.deepEqual(parts.excluded.map(u => u.model), ["Street Glide"], "excluded bucket = the fairing bike");
+  assert.deepEqual(parts.uncertain.map(u => u.model), ["Street Bob"], "uncertain bucket = the unprofiled unit");
+
+  // Phrase helper.
+  assert.equal(describeEquipmentQuery(wsQuery), "bags and a windshield", "two-feature phrase");
+  assert.equal(describeEquipmentQuery({ bags: true }), "bags", "one-feature phrase");
+  assert.equal(
+    describeEquipmentQuery({ bags: true, windshield: true, floorboards: true }),
+    "bags, a windshield, and floorboards",
+    "three-feature phrase (oxford)"
+  );
+
+  // ASSERTED reply presents units factually.
+  const assertedReply = buildEquipmentRecommendationReply({
+    firstName: "Jordan",
+    equipmentPhrase: "bags and a windshield",
+    asserted: [{ model: "Road King", year: "2021", price: 18995 } as any],
+    uncertain: []
+  });
+  assert.ok(assertedReply, "asserted reply is produced");
+  assert.ok(/with bags and a windshield/i.test(assertedReply!), "asserted reply names the equipment as present");
+
+  // UNCERTAIN-ONLY reply HEDGES — never a definite "has X"; offers to confirm before the trip.
+  const uncertainReply = buildEquipmentRecommendationReply({
+    firstName: "Jordan",
+    equipmentPhrase: "bags and a windshield",
+    asserted: [],
+    uncertain: [{ model: "Street Bob", year: "2021", price: 12995 } as any]
+  });
+  assert.ok(uncertainReply, "uncertain reply is produced");
+  assert.ok(/look like/i.test(uncertainReply!), "uncertain reply HEDGES with 'look like' (never a false yes)");
+  assert.ok(/confirm|double-?check/i.test(uncertainReply!), "uncertain reply offers to confirm before the customer comes out");
+  assert.ok(
+    !/\bhas bags\b|\bhas a windshield\b|\bcomes with\b/i.test(uncertainReply!),
+    "uncertain reply never asserts the feature as a definite fact"
+  );
+
+  // Nothing to present → null (caller commits to follow-up instead of listing non-matching bikes).
+  assert.equal(
+    buildEquipmentRecommendationReply({ firstName: "Jordan", equipmentPhrase: "bags and a windshield", asserted: [], uncertain: [] }),
+    null,
+    "no asserted and no uncertain units => null (caller follows up; never lists random bikes)"
+  );
+
+  // Both replies pass the voice charter (em-dash cap, no banned phrases).
+  for (const r of [assertedReply!, uncertainReply!]) {
+    const violations = checkMessage(r, { firstOutbound: false, smsLike: true, staffHasSent: false });
+    assert.deepEqual(violations, [], `equipment reply must be charter-clean: "${r}"`);
+  }
+}
+
+// helper: a bags+windshield-asserting profile for an arbitrary (windshield) model.
+function softailWithShieldFor(model: string): EquipmentProfile {
+  return buildEquipmentProfile({
+    item: { stockId: `TEST-${model}`, vin: null, model, year: "2021", condition: "used", images: ["q.jpg"] },
+    desc: desc({
+      bags: { present: true, confidence: 0.9, bagType: "hard" },
+      windshield: feat(true, 0.9),
+      fairing: { present: false, confidence: 0.1, fairingType: "unknown" }
+    }),
+    imageHash: `hash-${model}`,
+    imageCount: 1
+  });
+}
+
+// --- (h) eligible-pool selection keeps the per-UNIT pool (no one-per-model dedupe)
+//         so two same-model units, one equipped and one not, are both reachable. ---
+{
+  const feedPool = [
+    { model: "Street Bob", year: "2021", price: 12995, condition: "used" },
+    { model: "Street Bob", year: "2020", price: 11995, condition: "used" }, // same model, cheaper
+    { model: "Road King", year: "2019", price: 15995, condition: "used" }
+  ] as any[];
+  const pool = selectEligibleInventory(feedPool, { condition: "used" });
+  assert.equal(pool.length, 3, "eligible pool keeps EVERY priced unit (no one-per-model cap for equipment)");
+  assert.equal(pool[0].price, 11995, "eligible pool is price-sorted ascending");
+}
+
+// ===========================================================================
+// (i) Both-paths + governance SOURCE GUARDS (route-parity law; flag-off canary).
+// ===========================================================================
+{
+  const repoRoot = path.resolve(new URL("..", import.meta.url).pathname);
+  const indexSrc = await fsp.readFile(path.join(repoRoot, "services/api/src/index.ts"), "utf8");
+  const llmSrc = await fsp.readFile(path.join(repoRoot, "services/api/src/domain/llmDraft.ts"), "utf8");
+
+  // The equipment filter runs INSIDE the shared recommendation resolver → live + regen share it.
+  assert.ok(
+    /resolveEquipmentRecommendationReply/.test(indexSrc),
+    "index.ts defines/calls the shared equipment resolver"
+  );
+  assert.ok(
+    /inventoryEquipmentVisionEnabled\(\)\s*&&\s*equipmentQueryHasFeatures/.test(indexSrc),
+    "the equipment path is gated behind the flag (canary, off) + a real feature query"
+  );
+  // The shared resolver is the ONLY caller-facing recommendation entry, invoked from BOTH paths.
+  const sharedCalls = (indexSrc.match(/resolveVehicleRecommendationReply\(/g) ?? []).length;
+  assert.ok(sharedCalls >= 3, "resolveVehicleRecommendationReply is defined + called from both live and regen (>=3 refs)");
+
+  // The parser carries the requested_equipment slot + the windshield≠fairing comprehension rule.
+  assert.ok(/requested_equipment/.test(llmSrc), "the recommendation parser schema has a requested_equipment slot");
+  assert.ok(
+    /a WINDSHIELD is NOT a FAIRING/i.test(llmSrc),
+    "the parser prompt spells out the windshield≠fairing ruling"
+  );
+  assert.ok(
+    /"requested_equipment":\{"bags":true,"windshield":true\}/.test(llmSrc),
+    "a bags+windshield few-shot pins the parse (windshield set, fairing NOT)"
+  );
 }
 
 console.log("inventory_equipment_vision:eval PASS");

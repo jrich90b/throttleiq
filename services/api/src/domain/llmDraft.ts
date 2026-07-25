@@ -2364,6 +2364,25 @@ export type VehicleChoiceConfidenceParse = {
   confidence?: number;
 };
 
+// Requested-equipment slot (Phase B, 2026-07-25). A structural mirror of the equipment taxonomy in
+// inventoryEquipmentVision.ts (kept as a plain type here to avoid a circular import — that module
+// imports the vision primitive FROM llmDraft). The keys MATCH EquipmentFeatureKey exactly, so a
+// RequestedEquipmentQuery is structurally assignable to that module's EquipmentQuery
+// (Partial<Record<EquipmentFeatureKey, boolean>>) and can be handed straight to matchesEquipmentQuery.
+// Only features the customer actually asked for appear (as true); everything else is omitted. Joe's
+// windshield≠fairing ruling is a PARSE-level rule: "a windshield" sets windshield, never fairing.
+export type RequestedEquipmentQuery = {
+  bags?: boolean;
+  windshield?: boolean;
+  fairing?: boolean;
+  backrestSissybar?: boolean;
+  tourpak?: boolean;
+  forwardControls?: boolean;
+  apeHangers?: boolean;
+  floorboards?: boolean;
+  crashBars?: boolean;
+};
+
 export type VehicleRecommendationParse = {
   // The customer is asking US to suggest/pick bikes for them (they did NOT name a specific model
   // to price): "give me some options", "what do you have", "what would you recommend", "suggest a
@@ -2376,6 +2395,10 @@ export type VehicleRecommendationParse = {
   // Style segments to EXCLUDE / require, from the customer's words ("not cruisers" => ["cruiser"]).
   excludeSegments: ("cruiser" | "touring" | "sport" | "adventure" | "trike")[];
   includeSegments: ("cruiser" | "touring" | "sport" | "adventure" | "trike")[];
+  // EQUIPMENT the customer asked to shop by ("something with bags and a windshield") — only the
+  // true keys. Empty object when no equipment was named. Consumed by the equipment search filter
+  // (inventoryEquipmentVision.matchesEquipmentQuery), behind INVENTORY_EQUIPMENT_VISION_ENABLED.
+  requestedEquipment: RequestedEquipmentQuery;
   confidence?: number;
 };
 
@@ -3734,6 +3757,63 @@ const VEHICLE_CHOICE_CONFIDENCE_PARSER_JSON_SCHEMA: { [key: string]: unknown } =
   }
 };
 
+// The equipment sub-schema (Phase B). snake_case keys the model returns; each is a plain boolean set
+// TRUE only when the customer asked for that feature. Strict structured outputs require every property
+// listed in `required` — the model returns false for anything not requested; normalizeRequestedEquipment
+// keeps only the trues. windshield and fairing are DISTINCT (Joe's ruling), enforced in the prompt.
+const REQUESTED_EQUIPMENT_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "bags",
+    "windshield",
+    "fairing",
+    "backrest_sissybar",
+    "tourpak",
+    "forward_controls",
+    "ape_hangers",
+    "floorboards",
+    "crash_bars"
+  ],
+  properties: {
+    bags: { type: "boolean" },
+    windshield: { type: "boolean" },
+    fairing: { type: "boolean" },
+    backrest_sissybar: { type: "boolean" },
+    tourpak: { type: "boolean" },
+    forward_controls: { type: "boolean" },
+    ape_hangers: { type: "boolean" },
+    floorboards: { type: "boolean" },
+    crash_bars: { type: "boolean" }
+  }
+};
+
+// Pure normalizer: raw snake_case equipment object -> camelCase RequestedEquipmentQuery of ONLY the
+// true keys (matches EquipmentFeatureKey names). Never invents a key and never maps windshield->fairing
+// or vice-versa — it copies the model's booleans verbatim so the windshield≠fairing ruling is preserved
+// exactly as the parser read it. Exported so the eval can pin the shape deterministically.
+const REQUESTED_EQUIPMENT_KEY_MAP: Record<string, keyof RequestedEquipmentQuery> = {
+  bags: "bags",
+  windshield: "windshield",
+  fairing: "fairing",
+  backrest_sissybar: "backrestSissybar",
+  tourpak: "tourpak",
+  forward_controls: "forwardControls",
+  ape_hangers: "apeHangers",
+  floorboards: "floorboards",
+  crash_bars: "crashBars"
+};
+
+export function normalizeRequestedEquipment(raw: unknown): RequestedEquipmentQuery {
+  const out: RequestedEquipmentQuery = {};
+  if (!raw || typeof raw !== "object") return out;
+  const obj = raw as Record<string, unknown>;
+  for (const [snake, camel] of Object.entries(REQUESTED_EQUIPMENT_KEY_MAP)) {
+    if (obj[snake] === true) out[camel] = true;
+  }
+  return out;
+}
+
 const VEHICLE_RECOMMENDATION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   type: "object",
   additionalProperties: false,
@@ -3743,6 +3823,7 @@ const VEHICLE_RECOMMENDATION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     "condition",
     "exclude_segments",
     "include_segments",
+    "requested_equipment",
     "confidence"
   ],
   properties: {
@@ -3757,6 +3838,7 @@ const VEHICLE_RECOMMENDATION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
       type: "array",
       items: { type: "string", enum: ["cruiser", "touring", "sport", "adventure", "trike"] }
     },
+    requested_equipment: REQUESTED_EQUIPMENT_SCHEMA,
     confidence: { type: "number" }
   }
 };
@@ -8120,14 +8202,29 @@ export async function parseVehicleRecommendationRequestWithLLM(args: {
     "  adventure (Pan America), trike (Tri Glide, Freewheeler).",
     "  \"not cruisers\" => exclude_segments:[\"cruiser\"]; \"something sporty\" => include_segments:[\"sport\"].",
     "  Leave arrays empty when no style is named.",
+    "- requested_equipment: which physical FEATURES/accessories the customer wants the bike to have.",
+    "  Set a key TRUE only when the customer asked for that feature; leave everything else false.",
+    "  Keys: bags (saddlebags), windshield, fairing, backrest_sissybar, tourpak (top trunk/tour-pak),",
+    "  forward_controls, ape_hangers, floorboards, crash_bars. A feature ask ALSO implies",
+    "  wants_recommendation=true (they want us to find a bike that has it), even with no budget/style.",
+    "  CRITICAL — a WINDSHIELD is NOT a FAIRING (dealer ruling): a windshield is a separate clear shield",
+    "  on brackets (Road King, or an aftermarket shield bolted onto a bare bike); a fairing is fixed",
+    "  bodywork (a batwing like a Street Glide, or a sharknose like a Road Glide). \"a windshield\" or",
+    "  \"a shield\" => windshield:true and fairing:false. Only set fairing:true when they explicitly want a",
+    "  fairing / a batwing / a full front fairing / a Street Glide-style front. Never set fairing for a",
+    "  plain \"windshield\" ask.",
     "- confidence 0..1; use >= 0.8 only when wants_recommendation is clear.",
     "",
+    "(requested_equipment below shows only its true keys for brevity; always return all keys.)",
     "Examples:",
-    '- "Can you give me some options" -> {"wants_recommendation":true,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"confidence":0.9}',
-    '- "give me some options, I\'m looking around 200 per month, not cruisers, focus on both new and used" -> {"wants_recommendation":true,"monthly_budget":200,"condition":"both","exclude_segments":["cruiser"],"include_segments":[],"confidence":0.95}',
-    '- "what would you recommend for a first bike?" -> {"wants_recommendation":true,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"confidence":0.88}',
-    '- "what\'s the out the door price on the Street Glide?" -> {"wants_recommendation":false,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"confidence":0.9}',
-    '- "can I come by Saturday?" -> {"wants_recommendation":false,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"confidence":0.93}',
+    '- "Can you give me some options" -> {"wants_recommendation":true,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"requested_equipment":{},"confidence":0.9}',
+    '- "give me some options, I\'m looking around 200 per month, not cruisers, focus on both new and used" -> {"wants_recommendation":true,"monthly_budget":200,"condition":"both","exclude_segments":["cruiser"],"include_segments":[],"requested_equipment":{},"confidence":0.95}',
+    '- "you got anything with bags and a windshield?" -> {"wants_recommendation":true,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"requested_equipment":{"bags":true,"windshield":true},"confidence":0.92}',
+    '- "looking for a used bagger with a backrest and floorboards" -> {"wants_recommendation":true,"monthly_budget":null,"condition":"used","exclude_segments":[],"include_segments":[],"requested_equipment":{"bags":true,"backrest_sissybar":true,"floorboards":true},"confidence":0.9}',
+    '- "something with a batwing fairing and a tour pak" -> {"wants_recommendation":true,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"requested_equipment":{"fairing":true,"tourpak":true},"confidence":0.9}',
+    '- "what would you recommend for a first bike?" -> {"wants_recommendation":true,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"requested_equipment":{},"confidence":0.88}',
+    '- "what\'s the out the door price on the Street Glide?" -> {"wants_recommendation":false,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"requested_equipment":{},"confidence":0.9}',
+    '- "can I come by Saturday?" -> {"wants_recommendation":false,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"requested_equipment":{},"confidence":0.93}',
     "",
     history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
     `Message: ${text}`
@@ -8167,6 +8264,7 @@ export async function parseVehicleRecommendationRequestWithLLM(args: {
     condition,
     excludeSegments: normalizeSegments(parsed.exclude_segments),
     includeSegments: normalizeSegments(parsed.include_segments),
+    requestedEquipment: normalizeRequestedEquipment(parsed.requested_equipment),
     confidence:
       typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
         ? Math.max(0, Math.min(1, parsed.confidence))
