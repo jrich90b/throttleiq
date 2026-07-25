@@ -126,6 +126,13 @@ const WINDSHIELD_MODEL_RES: RegExp[] = [
   /\bheritage\b/, // Heritage Classic ships a detachable windshield
   /\bfreewheeler\b/
 ];
+// Small/sport-fairing models: their only front element is a small quarter/'speed screen' shroud or a
+// sport fairing — per JOE'S RULING (2026-07-25) that does NOT count as "has a fairing" (only BIG TOURING
+// fairings do). A big-fairing detection on these is a false positive → penalized. Windshield stays
+// "unknown" (a used one could carry an aftermarket shield — don't penalize that).
+const SMALL_OR_NO_FAIRING_MODEL_RES: RegExp[] = [
+  /\blow rider\b/ // Low Rider / Low Rider S (quarter shroud) / Low Rider ST (sport fairing)
+];
 
 export function modelEquipmentPrior(model: string | null | undefined): EquipmentModelPrior {
   const key = normalizeModelText(model);
@@ -154,6 +161,14 @@ export function modelEquipmentPrior(model: string | null | undefined): Equipment
       fairingType: "unknown",
       windshield: "expected",
       reason: "separate-windshield stock model (no fixed fairing)"
+    };
+  }
+  if (SMALL_OR_NO_FAIRING_MODEL_RES.some(re => re.test(key))) {
+    return {
+      fairing: "unexpected",
+      fairingType: "unknown",
+      windshield: "unknown", // could carry an aftermarket shield — don't penalize windshield
+      reason: "small/sport-fairing model — a big touring fairing is not expected (Joe: only big touring fairings count)"
     };
   }
   return { fairing: "unknown", fairingType: "unknown", windshield: "unknown", reason: "model has no fairing/windshield prior" };
@@ -186,34 +201,75 @@ export function reconcileEquipmentWithPrior(
   let windshield: ReconciledFeature = { present: desc.windshield.present, confidence: desc.windshield.confidence };
   let fairing: ReconciledFeature = { present: desc.fairing.present, confidence: desc.fairing.confidence };
 
+  // Mutual exclusivity: a bike's front is EITHER a clear windshield OR a fixed fairing, never both.
+  // The model prior decides which one is the wrong-match trap to penalize — even when vision (wrongly)
+  // reported BOTH (the batwing-on-a-Heritage false positive: windshield 95% + batwing 90% on a
+  // separate-windshield cruiser). Penalizing the contradicting feature drops it below the assertion floor.
   if (prior.fairing === "expected") {
-    // Model says fairing. Vision calling it a windshield is the wrong-match trap → penalize windshield.
-    if (windshield.present && !fairing.present) {
-      windshield = penalize(windshield);
+    // Fairing model → a separate-windshield reading contradicts the model; penalize it regardless of fairing.
+    if (windshield.present) windshield = penalize(windshield);
+    if (fairing.present) {
       return {
         windshield,
         fairing,
-        agreement: "disagree",
-        note: "model is a fairing bike but vision read a windshield — windshield confidence lowered"
+        agreement: "agree",
+        note: desc.windshield.present
+          ? "fairing model + vision saw a fairing; contradicting windshield lowered"
+          : "fairing model + vision saw a fairing"
       };
     }
-    if (fairing.present) return { windshield, fairing, agreement: "agree", note: "fairing model + vision saw a fairing" };
+    if (desc.windshield.present) {
+      return { windshield, fairing, agreement: "disagree", note: "fairing model but vision read a windshield — windshield confidence lowered" };
+    }
     return { windshield, fairing, agreement: "na", note: "fairing model but vision saw neither clearly" };
   }
 
   if (prior.windshield === "expected") {
-    // Model is a separate-windshield bike. Vision calling it a fairing disagrees → penalize fairing.
-    if (fairing.present && !windshield.present) {
+    // Windshield model → a fixed-fairing reading contradicts the model; penalize it regardless of windshield.
+    if (fairing.present) fairing = penalize(fairing);
+    if (windshield.present) {
+      return {
+        windshield,
+        fairing,
+        agreement: "agree",
+        note: desc.fairing.present
+          ? "windshield model + vision saw a windshield; contradicting fairing lowered"
+          : "windshield model + vision saw a windshield"
+      };
+    }
+    if (desc.fairing.present) {
+      return { windshield, fairing, agreement: "disagree", note: "windshield model but vision read a fairing — fairing confidence lowered" };
+    }
+    return { windshield, fairing, agreement: "na", note: "windshield model but vision saw neither clearly" };
+  }
+
+  if (prior.fairing === "unexpected") {
+    // Small/sport-fairing model (e.g. Low Rider S/ST) whose windshield is "unknown": its little shroud is
+    // NOT a big touring fairing, so a detected big fairing contradicts Joe's "only big touring fairings
+    // count" ruling → penalize it below the floor. (Windshield-expected models were handled above.)
+    if (fairing.present) {
       fairing = penalize(fairing);
       return {
         windshield,
         fairing,
         agreement: "disagree",
-        note: "windshield model but vision read a fairing — fairing confidence lowered"
+        note: "small/sport-fairing model but vision read a big fairing — fairing confidence lowered (only big touring fairings count)"
       };
     }
-    if (windshield.present) return { windshield, fairing, agreement: "agree", note: "windshield model + vision saw a windshield" };
-    return { windshield, fairing, agreement: "na", note: "windshield model but vision saw neither clearly" };
+    return { windshield, fairing, agreement: "na", note: "small/sport-fairing model; no big touring fairing seen" };
+  }
+
+  // No model prior: still enforce mutual exclusivity — if vision reported BOTH, keep the higher-confidence
+  // one and penalize the weaker (they can't coexist on one bike).
+  if (windshield.present && fairing.present) {
+    if (windshield.confidence >= fairing.confidence) fairing = penalize(fairing);
+    else windshield = penalize(windshield);
+    return {
+      windshield,
+      fairing,
+      agreement: "na",
+      note: "no prior; vision saw both windshield+fairing — weaker one penalized (mutual exclusivity)"
+    };
   }
 
   return { windshield, fairing, agreement: "na", note: "no model prior" };

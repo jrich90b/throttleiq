@@ -99,6 +99,63 @@ function desc(overrides: Partial<VehicleEquipmentDescription>): VehicleEquipment
   assert.equal(rec2.fairing.confidence, 0.9, "an agreeing fairing read is not penalized");
 }
 
+// Mutual exclusivity (the row-15 batwing-over-detection fix): a WINDSHIELD-model
+// (Heritage Classic) where vision wrongly reported BOTH a windshield AND a batwing
+// fairing. The contradicting fairing must be penalized below the floor even though a
+// windshield was also seen — a bike's front is a windshield OR a fairing, never both.
+{
+  const heritagePrior = modelEquipmentPrior("Heritage Classic");
+  assert.equal(heritagePrior.windshield, "expected", "Heritage Classic is a separate-windshield model");
+  assert.equal(heritagePrior.fairing, "unexpected", "Heritage Classic does NOT expect a fixed fairing");
+  const bothSeen = desc({
+    windshield: feat(true, 0.95),
+    fairing: { present: true, confidence: 0.9, fairingType: "batwing" }
+  });
+  const rec = reconcileEquipmentWithPrior(bothSeen, heritagePrior);
+  assert.ok(rec.windshield.confidence >= EQUIPMENT_ASSERTION_CONFIDENCE_MIN, "the real windshield stays asserted");
+  assert.ok(
+    rec.fairing.confidence < EQUIPMENT_ASSERTION_CONFIDENCE_MIN,
+    "the contradicting batwing on a windshield-model is knocked below the floor (row-15 fix)"
+  );
+  assert.equal(rec.agreement, "agree", "windshield model + a real windshield => agree (with the fairing lowered)");
+
+  // No-prior mutual exclusivity: a cruiser with no prior where vision saw both — the
+  // weaker of the two is penalized so they can't both be asserted.
+  const noPrior = modelEquipmentPrior("Fat Boy");
+  const bothNoPrior = desc({
+    windshield: feat(true, 0.92),
+    fairing: { present: true, confidence: 0.78, fairingType: "batwing" }
+  });
+  const recNp = reconcileEquipmentWithPrior(bothNoPrior, noPrior);
+  assert.ok(recNp.windshield.confidence >= EQUIPMENT_ASSERTION_CONFIDENCE_MIN, "no-prior: the stronger windshield stays");
+  assert.ok(recNp.fairing.confidence < EQUIPMENT_ASSERTION_CONFIDENCE_MIN, "no-prior: the weaker fairing is penalized (mutual exclusivity)");
+}
+
+// Joe's ruling (2026-07-25): ONLY big touring fairings count as "has_fairing". A Low Rider S/ST
+// has a small quarter/sport fairing that must NOT register — the model prior marks it
+// fairing:unexpected and a big-fairing vision read is penalized below the assertion floor.
+{
+  const lrs = modelEquipmentPrior("Low Rider S");
+  assert.equal(lrs.fairing, "unexpected", "Low Rider S: a big touring fairing is not expected");
+  assert.equal(lrs.windshield, "unknown", "Low Rider S: windshield stays unknown (could be an aftermarket shield)");
+  const lrst = modelEquipmentPrior("Low Rider ST");
+  assert.equal(lrst.fairing, "unexpected", "Low Rider ST sport fairing is not a big touring fairing (Joe: only big touring counts)");
+
+  // Vision (wrongly, per the ruling) called the Low Rider S shroud a fairing → penalized below the floor.
+  const lrsRead = desc({ fairing: { present: true, confidence: 0.95, fairingType: "unknown" } });
+  const rec = reconcileEquipmentWithPrior(lrsRead, lrs);
+  assert.equal(rec.agreement, "disagree", "a big-fairing read on a Low Rider disagrees with the prior");
+  assert.ok(rec.fairing.confidence < EQUIPMENT_ASSERTION_CONFIDENCE_MIN, "the small-fairing read is knocked below the floor");
+
+  const lrsProfile = buildEquipmentProfile({
+    item: { stockId: "TEST-LRS", vin: null, model: "Low Rider S", year: "2023", condition: "used", images: ["x.jpg"] },
+    desc: lrsRead,
+    imageHash: "hash-lrs",
+    imageCount: 1
+  });
+  assert.equal(lrsProfile.features.fairing.asserted, false, "the Low Rider S does NOT assert a fairing (only big touring fairings count)");
+}
+
 // ===========================================================================
 // (a) windshield ≠ fairing  +  (b) below-threshold governance
 // ===========================================================================
