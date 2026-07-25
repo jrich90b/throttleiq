@@ -5709,6 +5709,38 @@ function detectGenericWatchFamilyLabel(model: string | null | undefined): Invent
   if (tokensExactly(tokens, ["dyna"])) return "dyna";
   if (tokensExactly(tokens, ["cvo"])) return "cvo";
   if (tokensExactly(tokens, ["deluxe"])) return "deluxe";
+  // Harley glossary (Joe 2026-07-24): body-style / segment slang the customer uses as an
+  // ATTRIBUTE — "bagger", "dresser", "sharknose", "dana" — must resolve to the SAME
+  // generic family a plain segment/family label already resolves to, so the broad
+  // catalog-code fire guard (see inventoryItemMatchesWatch) and the family-clarify path
+  // apply. Without this a bagger/sharknose/dana watch label maps to no family id, skips
+  // the broad-code guard, and a multi-code alias overlap can fire a wrong-model alert.
+  // Exact-only (umbrella), matching the segment rows above. Fail direction: unrecognized
+  // returns null and infers nothing — never a new fire, only inherits an existing family's
+  // governance.
+  if (
+    tokensExactly(tokens, ["bagger"]) ||
+    tokensExactly(tokens, ["baggers"]) ||
+    tokensExactly(tokens, ["dresser"]) ||
+    tokensExactly(tokens, ["decker"]) ||
+    tokensExactly(tokens, ["deckers"]) ||
+    tokensExactly(tokens, ["tourer"]) ||
+    tokensExactly(tokens, ["grand", "touring"])
+  ) {
+    return "touring";
+  }
+  if (tokensExactly(tokens, ["sportbike"]) || tokensExactly(tokens, ["sport", "bike"])) return "sport";
+  if (tokensExactly(tokens, ["adventure"]) || tokensExactly(tokens, ["adv"])) return "adventure_touring";
+  if (tokensExactly(tokens, ["dana"]) || tokensExactly(tokens, ["danas"])) return "dyna";
+  if (
+    tokensExactly(tokens, ["sharknose"]) ||
+    tokensExactly(tokens, ["shark", "nose"]) ||
+    tokensExactly(tokens, ["fixed", "fairing"]) ||
+    tokensExactly(tokens, ["frame", "mounted"]) ||
+    tokensExactly(tokens, ["frame", "mounted", "fairing"])
+  ) {
+    return "road_glide";
+  }
   return null;
 }
 
