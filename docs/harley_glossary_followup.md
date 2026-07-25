@@ -1,5 +1,21 @@
 # Harley knowledge layer — deferred parser-comprehension follow-up
 
+> **STATUS (2026-07-24, Phase 2 PR — approve-first, awaiting Joe):** Items 1, 2, 6, 7
+> (spec-search), 9 (police model resolution), and 10 are SHIPPED as additive typed
+> `inventory_entity` few-shots + a compact domain-knowledge block in
+> `parseInventoryEntitiesWithLLM` (`services/api/src/domain/llmDraft.ts`), pinned by
+> `scripts/harley_glossary_comprehension_examples.json` via the reused `inventory_entity_eval.ts`
+> harness (`harley_glossary_comprehension:eval`, wired into `ci:eval`). All use EXISTING slots
+> (`model` / `year` / `year_min` / `year_max` / `condition` / `target_type`) — no schema rewrite.
+> **DEFERRED (needs a new signal + a downstream consumer, not just the parser):** the POSITIVE
+> capture of a Buell/Aermacchi trade *make* (item 4) and the *kit modification note* (item 6) —
+> the load-bearing invariants (Buell never resolves to HD stock; the kit's BASE model still
+> resolves and the kit never becomes the model) are shipped via existing slots, but recording
+> the make/kit as typed fields is inert until the trade/appraisal cluster consumes them, so
+> those fields are deferred rather than added as dead plumbing. A positive `needs_clarification`
+> field (item 5) is likewise deferred — the parser now expresses "never guess" by not
+> hard-resolving; the clarify *turn* is a drafting-layer concern.
+
 Companion to the deterministic alias-map layer shipped in the "Harley knowledge layer:
 slang + attribute + engine glossary" PR (Joe glossary, 2026-07-24). That PR shipped the
 **phrase → catalog-code** parts (model slang, attribute/body-style → group, segment

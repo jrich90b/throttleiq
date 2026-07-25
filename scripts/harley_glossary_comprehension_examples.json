@@ -1,0 +1,141 @@
+[
+  {
+    "id": "engine_era_twin_cam_road_king_year_band",
+    "text": "you got any twin cam road kings?",
+    "expected": {
+      "is_availability_question": true,
+      "model_contains": "road king",
+      "year_min": 1999,
+      "year_max": 2016
+    }
+  },
+  {
+    "id": "engine_era_milwaukee_eight_street_glide_open_ended",
+    "text": "looking for a milwaukee eight street glide",
+    "expected": {
+      "model_contains": "street glide",
+      "year_min": 2017
+    }
+  },
+  {
+    "id": "fuel_carbureted_softail_older_band",
+    "text": "do you have a carbureted softail",
+    "expected": {
+      "model_contains": "softail",
+      "year_max": 2000
+    }
+  },
+  {
+    "id": "fuel_injected_road_king_newer_band",
+    "text": "after a fuel injected road king",
+    "expected": {
+      "model_contains": "road king",
+      "year_min": 2002
+    }
+  },
+  {
+    "id": "tank_six_gallon_touring_2008_plus",
+    "text": "any 6 gallon tank street glides?",
+    "expected": {
+      "model_contains": "street glide",
+      "year_min": 2008
+    }
+  },
+  {
+    "id": "anniversary_120th_street_glide_2023",
+    "text": "interested in a 120th anniversary street glide",
+    "expected": {
+      "model_contains": "street glide",
+      "year": 2023
+    }
+  },
+  {
+    "id": "per_dealer_gen2_street_glide_2024_plus",
+    "text": "you got a gen 2 street glide?",
+    "expected": {
+      "model_contains": "street glide",
+      "year_min": 2024
+    }
+  },
+  {
+    "id": "per_dealer_gen2_cvo_road_glide_2023_plus",
+    "text": "any gen 2 cvo road glide in stock?",
+    "expected": {
+      "model_contains": "road glide",
+      "year_min": 2023
+    }
+  },
+  {
+    "id": "spec_wide_240_rear_tire_no_single_model_no_watch",
+    "text": "got anything with a fat 240 rear tire?",
+    "expected": {
+      "model_contains": null
+    }
+  },
+  {
+    "id": "spec_vrod_wide_tire_does_not_pick_one_of_the_pair",
+    "text": "a v-rod with a wide tire",
+    "expected": {
+      "model_not_contains": "night rod special"
+    }
+  },
+  {
+    "id": "buell_ulysses_trade_never_hd_stock",
+    "text": "I have a Buell Ulysses I want to trade in",
+    "expected": {
+      "model_contains": null
+    }
+  },
+  {
+    "id": "buell_blast_availability_never_hd_stock",
+    "text": "do you have any buell blasts?",
+    "expected": {
+      "model_contains": null
+    }
+  },
+  {
+    "id": "aermacchi_sprint_never_hd_stock",
+    "text": "got an aermacchi sprint 350?",
+    "expected": {
+      "model_contains": null
+    }
+  },
+  {
+    "id": "ambiguous_883_not_hard_resolved_to_iron",
+    "text": "you got any 883s?",
+    "expected": {
+      "model_not_contains": "iron"
+    }
+  },
+  {
+    "id": "ambiguous_low_rider_not_hard_resolved_to_s",
+    "text": "looking for a low rider",
+    "expected": {
+      "model_contains": "low rider",
+      "model_not_contains": "low rider s"
+    }
+  },
+  {
+    "id": "kit_night_stalker_base_model_still_resolves",
+    "text": "interested in a Fat Boy with the Night Stalker kit",
+    "expected": {
+      "model_contains": "fat boy",
+      "model_not_contains": "night stalker"
+    }
+  },
+  {
+    "id": "police_electra_glide_variant_combines_with_base",
+    "text": "do you have an electra glide police?",
+    "expected": {
+      "model_contains": "police"
+    }
+  },
+  {
+    "id": "ex_police_road_king_is_used",
+    "text": "looking for an ex-police road king",
+    "expected": {
+      "model_contains": "road king",
+      "condition": "used"
+    }
+  }
+]
