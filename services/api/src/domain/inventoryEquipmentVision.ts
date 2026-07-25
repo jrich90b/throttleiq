@@ -460,7 +460,7 @@ export function equipmentCacheKey(item: Pick<InventoryFeedItem, "stockId" | "vin
   return `${id}::${imageSetHash(item.images)}`;
 }
 
-type EquipmentCacheFile = { version: number; profiles: Record<string, EquipmentProfile> };
+export type EquipmentCacheFile = { version: number; profiles: Record<string, EquipmentProfile> };
 
 const EQUIPMENT_CACHE_FILE = "inventory_equipment_profiles.json";
 const EQUIPMENT_CACHE_VERSION = 1;
@@ -581,4 +581,70 @@ export async function runEquipmentVisionPass(
     visionFailures,
     capped
   };
+}
+
+// ---------------------------------------------------------------------------
+// Equipment WATCHES — profile-on-arrival + the fire-match gate (canary).
+// ---------------------------------------------------------------------------
+
+/**
+ * PROFILE-ON-ARRIVAL. Called by the watch-fire engine's arrival sweep so a NEWLY-arrived unit gets
+ * an equipment profile BEFORE its watches are evaluated — the prerequisite for an equipment watch to
+ * fire on arrival. Bounded to the arrival set the caller passes (NEW stockIds only), per-run capped,
+ * and free on cache hits (vision runs ONLY on a genuinely new stockId / changed photo set). The
+ * caller flag-gates this (INVENTORY_EQUIPMENT_VISION_ENABLED). This is NOT the whole-lot background
+ * refresh (that is a separate follow-up) — it only touches the arrivals handed to it. Fail-safe: a
+ * vision failure leaves the unit unprofiled, so nothing is asserted and no equipment watch fires on it.
+ */
+export async function profileArrivedUnitsForEquipment(
+  arrivedItems: InventoryFeedItem[],
+  cache: EquipmentCacheFile,
+  opts?: { runCap?: number }
+): Promise<{ profiled: number; visionRuns: number; capped: boolean; skippedNoPhotos: number; cacheHits: number }> {
+  const runCap = Math.max(0, opts?.runCap ?? Number(process.env.INVENTORY_EQUIPMENT_ARRIVAL_VISION_CAP ?? 8));
+  let profiled = 0;
+  let visionRuns = 0;
+  let capped = false;
+  let skippedNoPhotos = 0;
+  let cacheHits = 0;
+  for (const item of arrivedItems ?? []) {
+    if (!(item.images ?? []).filter(Boolean).length) {
+      skippedNoPhotos++;
+      continue;
+    }
+    const key = equipmentCacheKey(item);
+    if (cache.profiles?.[key]) {
+      cacheHits++; // already profiled — free, no vision
+      continue;
+    }
+    if (visionRuns >= runCap) {
+      capped = true;
+      continue;
+    }
+    const res = await getUnitEquipmentProfile(item, { cache });
+    if (res.ranVision) visionRuns++;
+    if (res.profile) profiled++;
+  }
+  return { profiled, visionRuns, capped, skippedNoPhotos, cacheHits };
+}
+
+/**
+ * The equipment FIRE-MATCH gate (pure). An arriving unit passes when the watch carries no equipment
+ * (a model-only watch — the gate is a NO-OP, behavior UNCHANGED) OR its cached profile ASSERTS every
+ * requested feature. FAIL-SAFE: an unprofiled unit (profile null) or a below-assertion-threshold read
+ * is NOT a fire — classifyUnitForEquipmentQuery returns "uncertain"/"excluded", so this returns false
+ * and the engine holds off rather than sending a false "your bike came in." windshield≠fairing is
+ * enforced inside classifyUnitForEquipmentQuery (a fairing unit never satisfies a windshield ask).
+ *
+ * This is ANDed with the existing model/family/year/condition/price match (inventoryItemMatchesWatch),
+ * never a replacement for it — an equipment watch still must match the model/segment criteria first.
+ * The caller flag-gates it: with the flag off the gate is skipped entirely and the watch fires as a
+ * plain model watch (equipment ignored), so model-only watches are unaffected either way.
+ */
+export function watchEquipmentFireGate(
+  profile: EquipmentProfile | null | undefined,
+  requestedEquipment: EquipmentQuery | null | undefined
+): boolean {
+  if (!equipmentQueryHasFeatures(requestedEquipment)) return true; // model-only watch → no-op
+  return classifyUnitForEquipmentQuery(profile ?? null, requestedEquipment as EquipmentQuery) === "asserted";
 }
