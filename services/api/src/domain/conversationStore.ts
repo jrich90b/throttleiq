@@ -876,6 +876,27 @@ export type Conversation = {
     capturedAt: string;
     read: boolean;
   };
+  /** Set when a customer shares a photo of a DOCUMENT (title / lien release / insurance card|binder /
+   *  driver's license / competitor quote) and document-photo intake is enabled
+   *  (domain/customerPhotoShare.ts). GOVERNANCE (compliance line): for the PII/legal types this
+   *  stores the TYPE ONLY — never the contents (no names/DOB/addresses/account or policy numbers/
+   *  VIN/license #). `pii` marks those. competitor_quote is NOT PII, so its read price/model are kept
+   *  here for staff; for PII types `competitorPrice`/`competitorModel` stay 0/"". Durable so staff
+   *  see what kind of document arrived; the contents live only in the attached image for a human. */
+  documentPhotoCapture?: {
+    documentType:
+      | "title"
+      | "lien_release"
+      | "insurance_card"
+      | "insurance_binder"
+      | "drivers_license"
+      | "competitor_quote";
+    context: "trade" | "general";
+    capturedAt: string;
+    pii: boolean;
+    competitorPrice: number;
+    competitorModel: string;
+  };
   scheduler?: SchedulerMemory;
   followUpCadence?: FollowUpCadence;
   /** Set once when a stale manual-handoff lead is surfaced as a staff follow-up todo, so it is never re-nudged. */

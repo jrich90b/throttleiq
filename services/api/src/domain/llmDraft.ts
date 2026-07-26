@@ -13339,6 +13339,29 @@ export type VehicleImageDescription = {
   // Best-effort "<year> <model family>" the plate suggests (unconfirmed staff hint only, e.g.
   // "2018 Road Glide"). Empty when unsure. NEVER asserted to the customer as fact.
   vinDecodeHint: string;
+  // Document classification (flag-gated intake, DOCUMENT_PHOTO_INTAKE_ENABLED). A peer of isVinPlate:
+  // recognizes the KIND of paper/photo document a customer texted so it routes to the right staff.
+  // Governance (hard): for the PII/legal types (title, lien_release, insurance_card, insurance_binder,
+  // drivers_license) the vision returns ONLY the type — NEVER a name, DOB, address, account/policy
+  // number, VIN, or license number. competitor_quote is NOT PII, so the competing dealer's price +
+  // bike are read for a STAFF hint only (never auto-countered / quoted to the customer). "none" for a
+  // whole bike, a part, a VIN plate, or friendly chatter; "other" for an unrecognized document.
+  documentType:
+    | "title"
+    | "lien_release"
+    | "insurance_card"
+    | "insurance_binder"
+    | "drivers_license"
+    | "competitor_quote"
+    | "other"
+    | "none";
+  // competitor_quote ONLY (NOT PII): the competing dealer's asking price, read for the STAFF hint.
+  // 0 when not a competitor quote or unreadable. NEVER surfaced to / countered for the customer.
+  competitorPrice: number;
+  // competitor_quote ONLY: the bike named on the competing quote (e.g. "2024 Road Glide"). "" otherwise.
+  competitorModel: string;
+  // Confidence 0..1 of the competitor price/model read. Low → the staff hint flags "verify from the image".
+  competitorConfidence: number;
   make: string;
   modelFamily: string;
   color: string;
@@ -13355,6 +13378,24 @@ export type VehicleImageDescription = {
  * confidence-gated and says "looks like", because a wrong model ID to a
  * Harley rider is worse than no ID.
  */
+const VEHICLE_IMAGE_DOCUMENT_TYPES = new Set<VehicleImageDescription["documentType"]>([
+  "title",
+  "lien_release",
+  "insurance_card",
+  "insurance_binder",
+  "drivers_license",
+  "competitor_quote",
+  "other",
+  "none"
+]);
+
+// Fail-safe normalize: any value the model returns outside the enum collapses to "none" (→ the
+// document router treats it as an unrecognized doc and falls through to today's neutral ack).
+function normalizeDocumentType(value: unknown): VehicleImageDescription["documentType"] {
+  const v = String(value ?? "").trim().toLowerCase() as VehicleImageDescription["documentType"];
+  return VEHICLE_IMAGE_DOCUMENT_TYPES.has(v) ? v : "none";
+}
+
 export async function describeVehicleImageWithLLM(args: {
   imageBase64: string;
   mimeType?: string;
@@ -13378,6 +13419,10 @@ export async function describeVehicleImageWithLLM(args: {
       "vin",
       "vin_confidence",
       "vin_decode_hint",
+      "document_type",
+      "competitor_price",
+      "competitor_model",
+      "competitor_confidence",
       "make",
       "model_family",
       "color",
@@ -13392,6 +13437,22 @@ export async function describeVehicleImageWithLLM(args: {
       vin: { type: "string" },
       vin_confidence: { type: "number" },
       vin_decode_hint: { type: "string" },
+      document_type: {
+        type: "string",
+        enum: [
+          "title",
+          "lien_release",
+          "insurance_card",
+          "insurance_binder",
+          "drivers_license",
+          "competitor_quote",
+          "other",
+          "none"
+        ]
+      },
+      competitor_price: { type: "number" },
+      competitor_model: { type: "string" },
+      competitor_confidence: { type: "number" },
       make: { type: "string" },
       model_family: { type: "string" },
       color: { type: "string" },
@@ -13414,13 +13475,20 @@ export async function describeVehicleImageWithLLM(args: {
     "- vin: the 17-character VIN read off the plate, uppercased, no spaces or dashes. Empty string if you cannot read it or the photo is not a VIN plate. Do NOT invent or complete digits you cannot clearly see.",
     "- vin_confidence: 0 to 1, how confident you are that `vin` is read correctly and complete. Use a LOW value if the plate is blurry, glare-obscured, angled, or partially cropped, or if you had to guess any character. 0 when not a VIN plate.",
     "- vin_decode_hint: ONLY if is_vin_plate=true AND you are confident — a best-effort \"<year> <model family>\" the plate/VIN suggests (e.g. \"2018 Road Glide\"), for a human to VERIFY. Empty string when unsure. This is an internal hint, never shown to the customer.",
+    "- document_type: classify a paper/photo DOCUMENT the customer texted (a picture of a document, form, card, or quote — NOT a bike, a part, or a VIN plate). Use exactly one of: \"title\" (a vehicle certificate of title / pink slip / ownership document), \"lien_release\" (a lender's lien-release or payoff/loan-satisfaction letter), \"insurance_card\" (a wallet-size proof-of-insurance ID card), \"insurance_binder\" (a full insurance binder / policy declaration / coverage page), \"drivers_license\" (a government driver's license or state photo ID), \"competitor_quote\" (a price quote / buyer's order / worksheet from ANOTHER dealership for a motorcycle), \"other\" (any other document/screenshot you can't confidently place), or \"none\" (the photo is NOT a document — a whole bike, a part, a VIN plate, a person, a pet, scenery, chatter). When is_motorcycle, is_motorcycle_part, or is_vin_plate is true, document_type MUST be \"none\".",
+    "- PRIVACY (critical, non-negotiable): for title, lien_release, insurance_card, insurance_binder, and drivers_license, return ONLY the document_type. NEVER read, transcribe, extract, or output any personal or account data from these documents — no names, dates of birth, addresses, phone numbers, license numbers, policy or account numbers, VINs, or signatures. Put NOTHING from these documents into any field. A human handles the contents.",
+    "- competitor_price / competitor_model / competitor_confidence: fill these ONLY when document_type=\"competitor_quote\" (a competing dealer's quote is a sales document, not private customer PII). competitor_price = the bike's quoted price as a number (the sale/quoted price if shown; 0 if you cannot read it). competitor_model = the motorcycle named on the quote (e.g. \"2024 Road Glide\"; empty if unclear). competitor_confidence = 0..1 how sure you are of that price+model read. For every NON-competitor_quote document_type these MUST be 0 / \"\" / 0.",
     "- social_reply: ONLY when BOTH is_motorcycle and is_motorcycle_part are false AND the photo is friendly personal chatter (a fish someone caught, a pet, a kid, scenery, a meal) — a brief, warm, casual one-liner a friendly salesperson would text back, like \"Haha, nice catch!\" or \"Aw, cute pup!\". Under 12 words, no sales pitch, no question, no inventory, no mention of bikes. Leave social_reply EMPTY for a motorcycle photo, a part photo, documents/screenshots, or anything sensitive/unclear.",
     "",
-    'EXAMPLE whole tourer: {"is_motorcycle":true,"is_motorcycle_part":false,"is_vin_plate":false,"vin":"","vin_confidence":0,"vin_decode_hint":"","make":"Harley-Davidson","model_family":"Ultra Limited","color":"red over black two-tone","distinctive_features":"Tour-Pak, passenger backrest, lower fairings","confidence":0.85,"social_reply":""}',
-    'EXAMPLE a chrome exhaust on a workbench: {"is_motorcycle":false,"is_motorcycle_part":true,"is_vin_plate":false,"vin":"","vin_confidence":0,"vin_decode_hint":"","make":"","model_family":"","color":"chrome","distinctive_features":"slip-on exhaust","confidence":0,"social_reply":""}',
-    'EXAMPLE a clear VIN plate riveted to the frame neck: {"is_motorcycle":false,"is_motorcycle_part":false,"is_vin_plate":true,"vin":"1HD1KB4197Y612345","vin_confidence":0.9,"vin_decode_hint":"2007 Street Glide","make":"Harley-Davidson","model_family":"","color":"","distinctive_features":"riveted VIN plate","confidence":0,"social_reply":""}',
-    'EXAMPLE a blurry, glare-washed VIN sticker: {"is_motorcycle":false,"is_motorcycle_part":false,"is_vin_plate":true,"vin":"","vin_confidence":0.2,"vin_decode_hint":"","make":"","model_family":"","color":"","distinctive_features":"VIN sticker (unreadable)","confidence":0,"social_reply":""}',
-    'EXAMPLE a fish someone caught: {"is_motorcycle":false,"is_motorcycle_part":false,"is_vin_plate":false,"vin":"","vin_confidence":0,"vin_decode_hint":"","make":"","model_family":"","color":"","distinctive_features":"","confidence":0,"social_reply":"Haha, nice catch!"}',
+    'EXAMPLE whole tourer: {"is_motorcycle":true,"is_motorcycle_part":false,"is_vin_plate":false,"vin":"","vin_confidence":0,"vin_decode_hint":"","document_type":"none","competitor_price":0,"competitor_model":"","competitor_confidence":0,"make":"Harley-Davidson","model_family":"Ultra Limited","color":"red over black two-tone","distinctive_features":"Tour-Pak, passenger backrest, lower fairings","confidence":0.85,"social_reply":""}',
+    'EXAMPLE a chrome exhaust on a workbench: {"is_motorcycle":false,"is_motorcycle_part":true,"is_vin_plate":false,"vin":"","vin_confidence":0,"vin_decode_hint":"","document_type":"none","competitor_price":0,"competitor_model":"","competitor_confidence":0,"make":"","model_family":"","color":"chrome","distinctive_features":"slip-on exhaust","confidence":0,"social_reply":""}',
+    'EXAMPLE a clear VIN plate riveted to the frame neck: {"is_motorcycle":false,"is_motorcycle_part":false,"is_vin_plate":true,"vin":"1HD1KB4197Y612345","vin_confidence":0.9,"vin_decode_hint":"2007 Street Glide","document_type":"none","competitor_price":0,"competitor_model":"","competitor_confidence":0,"make":"Harley-Davidson","model_family":"","color":"","distinctive_features":"riveted VIN plate","confidence":0,"social_reply":""}',
+    'EXAMPLE a blurry, glare-washed VIN sticker: {"is_motorcycle":false,"is_motorcycle_part":false,"is_vin_plate":true,"vin":"","vin_confidence":0.2,"vin_decode_hint":"","document_type":"none","competitor_price":0,"competitor_model":"","competitor_confidence":0,"make":"","model_family":"","color":"","distinctive_features":"VIN sticker (unreadable)","confidence":0,"social_reply":""}',
+    'EXAMPLE a fish someone caught: {"is_motorcycle":false,"is_motorcycle_part":false,"is_vin_plate":false,"vin":"","vin_confidence":0,"vin_decode_hint":"","document_type":"none","competitor_price":0,"competitor_model":"","competitor_confidence":0,"make":"","model_family":"","color":"","distinctive_features":"","confidence":0,"social_reply":"Haha, nice catch!"}',
+    'EXAMPLE a photo of a vehicle title / pink slip (PII — TYPE only, read NOTHING off it): {"is_motorcycle":false,"is_motorcycle_part":false,"is_vin_plate":false,"vin":"","vin_confidence":0,"vin_decode_hint":"","document_type":"title","competitor_price":0,"competitor_model":"","competitor_confidence":0,"make":"","model_family":"","color":"","distinctive_features":"vehicle title document","confidence":0,"social_reply":""}',
+    'EXAMPLE a proof-of-insurance ID card (PII — TYPE only, do NOT read the policy number or name): {"is_motorcycle":false,"is_motorcycle_part":false,"is_vin_plate":false,"vin":"","vin_confidence":0,"vin_decode_hint":"","document_type":"insurance_card","competitor_price":0,"competitor_model":"","competitor_confidence":0,"make":"","model_family":"","color":"","distinctive_features":"insurance ID card","confidence":0,"social_reply":""}',
+    'EXAMPLE a driver license / state ID (MOST sensitive — TYPE only, read NO name/DOB/number): {"is_motorcycle":false,"is_motorcycle_part":false,"is_vin_plate":false,"vin":"","vin_confidence":0,"vin_decode_hint":"","document_type":"drivers_license","competitor_price":0,"competitor_model":"","competitor_confidence":0,"make":"","model_family":"","color":"","distinctive_features":"driver license","confidence":0,"social_reply":""}',
+    'EXAMPLE a competing dealer\'s price quote for a 2024 Road Glide at $28,995 (NOT PII — read the price+bike for staff): {"is_motorcycle":false,"is_motorcycle_part":false,"is_vin_plate":false,"vin":"","vin_confidence":0,"vin_decode_hint":"","document_type":"competitor_quote","competitor_price":28995,"competitor_model":"2024 Road Glide","competitor_confidence":0.8,"make":"","model_family":"","color":"","distinctive_features":"dealership price quote","confidence":0,"social_reply":""}',
     args.contextText ? `Customer message context: ${String(args.contextText).slice(0, 200)}` : ""
   ]
     .filter(Boolean)
@@ -13466,6 +13534,10 @@ export async function describeVehicleImageWithLLM(args: {
       vin: String(parsed.vin ?? "").trim().toUpperCase().replace(/[^A-Z0-9]/g, ""),
       vinConfidence: Number(parsed.vin_confidence ?? 0),
       vinDecodeHint: String(parsed.vin_decode_hint ?? "").trim(),
+      documentType: normalizeDocumentType(parsed.document_type),
+      competitorPrice: Number(parsed.competitor_price ?? 0),
+      competitorModel: String(parsed.competitor_model ?? "").trim(),
+      competitorConfidence: Number(parsed.competitor_confidence ?? 0),
       make: String(parsed.make ?? "").trim(),
       modelFamily: String(parsed.model_family ?? "").trim(),
       color: String(parsed.color ?? "").trim(),

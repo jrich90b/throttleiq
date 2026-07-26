@@ -11469,6 +11469,11 @@ async function maybeHandleInventoryStatusParserRoute(args: {
         // re-point the next turn away from inventory framing (VIN + decode live on a staff task).
         setAgentContext(args.conv, { text: CUSTOMER_PHOTO_SHARE_VIN_AGENT_CONTEXT, mode: "persistent" });
       }
+      if (photoShare.kind === "document" && photoShare.agentContextOverride) {
+        // A recognized document (title/lien/insurance/license/competitor quote) routes to staff, not
+        // an inventory match — re-point the next turn. For PII docs nothing private is read or stored.
+        setAgentContext(args.conv, { text: photoShare.agentContextOverride, mode: "persistent" });
+      }
       const reply = photoShare.reply;
       recordRouteOutcome(args.scope, "customer_shared_vehicle_photo", {
         convId: args.conv.id,
@@ -55866,6 +55871,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       // re-point the next turn away from inventory framing (VIN + decode live on a staff task).
       setAgentContext(conv, { text: CUSTOMER_PHOTO_SHARE_VIN_AGENT_CONTEXT, mode: "persistent" });
     }
+    if (photoShare.kind === "document" && photoShare.agentContextOverride) {
+      // A recognized document (title/lien/insurance/license/competitor quote) routes to staff, not
+      // an inventory match — re-point the next turn. For PII docs nothing private is read or stored.
+      setAgentContext(conv, { text: photoShare.agentContextOverride, mode: "persistent" });
+    }
     const reply = photoShare.reply;
     recordRouteOutcome("regen", "customer_shared_vehicle_photo", {
       convId: conv.id,
@@ -59550,6 +59560,11 @@ if (authToken && signature) {
       // A VIN/data-plate photo is a staff handoff (appraiser / unit lookup), not a bike match —
       // re-point the next turn away from inventory framing (VIN + decode live on a staff task).
       setAgentContext(conv, { text: CUSTOMER_PHOTO_SHARE_VIN_AGENT_CONTEXT, mode: "persistent" });
+    }
+    if (photoShare.kind === "document" && photoShare.agentContextOverride) {
+      // A recognized document (title/lien/insurance/license/competitor quote) routes to staff, not
+      // an inventory match — re-point the next turn. For PII docs nothing private is read or stored.
+      setAgentContext(conv, { text: photoShare.agentContextOverride, mode: "persistent" });
     }
     const reply = photoShare.reply;
     recordRouteOutcome("live", "customer_shared_vehicle_photo", {
