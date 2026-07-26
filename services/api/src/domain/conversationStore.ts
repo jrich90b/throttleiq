@@ -615,7 +615,12 @@ export type InventoryWatch = {
   // UNCHANGED. Gated behind INVENTORY_EQUIPMENT_VISION_ENABLED (flag off → a segment watch is inert, never
   // fires — the segment-membership modality is new firing surface kept inside the same canary). A segment
   // is a NARROW: a bike outside the group never fires it.
-  segments?: ("cruiser" | "touring" | "sport" | "adventure" | "trike")[];
+  // "cholo" is a BUILD segment (Cholo style vision, DARK) — resolved by the vision composite
+  // (deriveCholoBuild over the unit's equipment profile), NOT by classifyHarleySegment like the model
+  // segments. A cholo watch fires only when an arriving unit's build crosses the confident cholo bar
+  // (watchPassesCholoGate). Behind CHOLO_STYLE_VISION_ENABLED (which also requires the equipment-vision
+  // flag) → a cholo watch is INERT until the flag is flipped.
+  segments?: ("cruiser" | "touring" | "sport" | "adventure" | "trike" | "cholo")[];
 };
 
 // A watch match that arrived while the per-conversation daily alert cap was in effect

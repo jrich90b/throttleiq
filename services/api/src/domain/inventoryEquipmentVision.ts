@@ -47,7 +47,19 @@ export const EQUIPMENT_FEATURE_KEYS = [
   "forwardControls",
   "apeHangers",
   "floorboards",
-  "crashBars"
+  "crashBars",
+  // Cholo-BUILD cues (Cholo style vision, 2026-07-25, DARK). These are the extra vision reads the
+  // cholo composite scores; apeHangers (above) is REUSED as the biggest single cue. They live in the
+  // same feature record so the vision read + cache carry them, but they are NEVER shopped by an
+  // equipment query (RequestedEquipmentQuery has no such keys → normalizeRequestedEquipment never
+  // produces them, so matchesEquipmentQuery / classifyUnitForEquipmentQuery skip them). Populated only
+  // when CHOLO_STYLE_VISION_ENABLED is on (else the vision omits them → present:false, confidence:0).
+  "whitewalls",
+  "fatSpokeWheels",
+  "fishtailExhaust",
+  "soloSeat",
+  "heavyChrome",
+  "lowStance"
 ] as const;
 export type EquipmentFeatureKey = (typeof EQUIPMENT_FEATURE_KEYS)[number];
 
@@ -92,6 +104,23 @@ export type EquipmentProfile = {
   priorAgreement: "agree" | "disagree" | "na";
   priorNote: string;
   notes: string;
+  /**
+   * Cholo BUILD signature (Cholo style vision, DARK). Computed from the asserted cues via
+   * deriveCholoBuild — NEVER from the base model (a stock Heritage is not cholo). Present on every
+   * profile; isCholo is false unless the composite crosses Joe's combination bar. Only meaningful when
+   * CHOLO_STYLE_VISION_ENABLED populated the cues; otherwise all cues are absent → isCholo:false.
+   */
+  cholo: CholoBuild;
+};
+
+/** Result of the cholo build-signature composite (Joe ruling 1, 2026-07-25). */
+export type CholoBuild = {
+  /** The build crosses the cholo combination bar with every contributing cue ASSERTED (confident). */
+  isCholo: boolean;
+  /** Composite confidence — the weakest-link (min) of the required legs' cue confidences; 0 when not cholo. */
+  confidence: number;
+  /** The asserted cues that fed the decision (audit + the dark report). */
+  cues: string[];
 };
 
 // ---------------------------------------------------------------------------
@@ -306,7 +335,14 @@ export function buildEquipmentProfile(args: {
     forwardControls: assertedFeature(desc.forwardControls),
     apeHangers: assertedFeature(desc.apeHangers),
     floorboards: assertedFeature(desc.floorboards),
-    crashBars: assertedFeature(desc.crashBars)
+    crashBars: assertedFeature(desc.crashBars),
+    // Cholo cues — reconcile-free (no windshield≠fairing interplay); a plain assertion at the floor.
+    whitewalls: assertedFeature(desc.whitewalls),
+    fatSpokeWheels: assertedFeature(desc.fatSpokeWheels),
+    fishtailExhaust: assertedFeature(desc.fishtailExhaust),
+    soloSeat: assertedFeature(desc.soloSeat),
+    heavyChrome: assertedFeature(desc.heavyChrome),
+    lowStance: assertedFeature(desc.lowStance)
   };
 
   return {
@@ -326,8 +362,79 @@ export function buildEquipmentProfile(args: {
     modelPrior: prior,
     priorAgreement: reconciled.agreement,
     priorNote: reconciled.note,
-    notes: desc.notes
+    notes: desc.notes,
+    cholo: deriveCholoBuild({ features })
   };
+}
+
+// ---------------------------------------------------------------------------
+// CHOLO BUILD SIGNATURE (Cholo style vision, DARK, 2026-07-25). Joe's ruling 1: a unit is "cholo" only
+// when the build crosses a COMBINATION bar, NEVER from one part and NEVER from the base model:
+//
+//   ape hangers  AND  (whitewalls OR fat chrome spoke wheels)  AND  (fishtail exhaust OR solo seat OR
+//   heavy chrome)
+//
+// Each contributing cue must be ASSERTED (its vision read cleared EQUIPMENT_ASSERTION_CONFIDENCE_MIN —
+// the same confident floor the equipment features use). low stance is a supporting cue only (it rides
+// along in `cues` and never decides the bar). Confidence = the weakest-link (min) of the three required
+// legs' representative cue confidences, so isCholo confidence never overstates the shakiest leg and is
+// always at/above the assertion floor when isCholo is true. Fail direction (ruling 3): below/near the
+// bar → isCholo=false → nothing is tagged and no watch fires; the near-threshold customer copy is
+// "looks like a cholo build — let me confirm", never a flat claim (buildCholoConfirmLine).
+// ---------------------------------------------------------------------------
+
+/** The cues that make up each leg of the combination bar (apeHangers is the anchor leg on its own). */
+export const CHOLO_WHEEL_CUES: EquipmentFeatureKey[] = ["whitewalls", "fatSpokeWheels"];
+export const CHOLO_FINISH_CUES: EquipmentFeatureKey[] = ["fishtailExhaust", "soloSeat", "heavyChrome"];
+
+export function deriveCholoBuild(profile: Pick<EquipmentProfile, "features">): CholoBuild {
+  const f = profile.features;
+  const isAsserted = (k: EquipmentFeatureKey): boolean => f[k]?.asserted === true;
+  const conf = (k: EquipmentFeatureKey): number => f[k]?.confidence ?? 0;
+
+  const hasApe = isAsserted("apeHangers");
+  const wheelCues = CHOLO_WHEEL_CUES.filter(isAsserted);
+  const finishCues = CHOLO_FINISH_CUES.filter(isAsserted);
+
+  const isCholo = hasApe && wheelCues.length > 0 && finishCues.length > 0;
+
+  const cues: string[] = [];
+  if (hasApe) cues.push("apeHangers");
+  cues.push(...wheelCues, ...finishCues);
+  if (isAsserted("lowStance")) cues.push("lowStance");
+
+  let confidence = 0;
+  if (isCholo) {
+    const wheelConf = Math.max(...wheelCues.map(conf));
+    const finishConf = Math.max(...finishCues.map(conf));
+    confidence = Math.min(conf("apeHangers"), wheelConf, finishConf);
+  }
+
+  return { isCholo, confidence, cues };
+}
+
+// The cholo WATCH fire gate (pure, mirrors watchEquipmentFireGate). An arriving unit fires a standing
+// cholo watch ONLY when its cached profile's build crosses the confident cholo bar. FAIL-SAFE: a null
+// profile (unprofiled arrival) or a below-bar build is NOT a fire — deriveCholoBuild returns isCholo:false,
+// so the engine holds off rather than sending a false "a cholo build just came in." NEVER model-based.
+export function watchCholoFireGate(profile: EquipmentProfile | null | undefined): boolean {
+  if (!profile) return false;
+  return deriveCholoBuild(profile).isCholo;
+}
+
+// Customer-facing CONFIRM copy (Joe ruling 3 — always confirm, never hard-claim). Even at/above the
+// confident bar the alert says "looks like a cholo build — let me confirm", never "it is cholo": style
+// is subjective and a human confirms before the customer drives out. Pure; the fire path composes it.
+export function buildCholoConfirmLine(unitLabel?: string | null): string {
+  const bike = String(unitLabel ?? "").trim();
+  const subject = bike ? `this ${bike}` : "one";
+  return `Looks like ${subject} might be a cholo-style build — let me confirm the details before you head over.`;
+}
+
+export function choloStyleVisionEnabled(): boolean {
+  // Cholo tagging/fire rides INSIDE the equipment-vision canary: it requires BOTH its own flag AND the
+  // equipment-vision flag (the vision primitive + cache it reuses). Either off → 100% today's behavior.
+  return process.env.CHOLO_STYLE_VISION_ENABLED === "1" && inventoryEquipmentVisionEnabled();
 }
 
 // ---------------------------------------------------------------------------
@@ -431,7 +538,14 @@ const EQUIPMENT_FEATURE_LABELS: Record<EquipmentFeatureKey, string> = {
   forwardControls: "forward controls",
   apeHangers: "ape hangers",
   floorboards: "floorboards",
-  crashBars: "crash bars"
+  crashBars: "crash bars",
+  // Cholo cues are never part of a shoppable equipment query, but the Record must be total.
+  whitewalls: "whitewall tires",
+  fatSpokeWheels: "fat spoke wheels",
+  fishtailExhaust: "fishtail exhaust",
+  soloSeat: "a solo seat",
+  heavyChrome: "heavy chrome",
+  lowStance: "a low stance"
 };
 
 export function describeEquipmentQuery(query: EquipmentQuery): string {
