@@ -51,7 +51,10 @@ import { checkMessage } from "./voice_charter_audit.ts";
 
 // Confidence floor is the documented default.
 assert.equal(EQUIPMENT_ASSERTION_CONFIDENCE_MIN, 0.7, "assertion floor mirrors VISION_CONFIDENCE_MIN default (0.7)");
-assert.equal(EQUIPMENT_FEATURE_KEYS.length, 9, "the fuller v1 taxonomy has 9 features");
+// 9 equipment/accessory features + 8 cholo-BUILD cues (whitewalls, fatSpokeWheels, fishtailExhaust,
+// soloSeat, heavyChrome, lowStance, customPaint, blackedOut) = 17. apeHangers + bags are shared (equipment
+// features reused as cholo cues). customPaint + blackedOut were added 7/26 (finish-agnostic recalibration).
+assert.equal(EQUIPMENT_FEATURE_KEYS.length, 17, "9 equipment features + 8 cholo-build cues = 17");
 
 // --- helper: build a full vision read with sane defaults ---
 function feat(present: boolean, confidence: number) {
@@ -69,6 +72,14 @@ function desc(overrides: Partial<VehicleEquipmentDescription>): VehicleEquipment
     apeHangers: feat(false, 0),
     floorboards: feat(false, 0),
     crashBars: feat(false, 0),
+    whitewalls: feat(false, 0),
+    fatSpokeWheels: feat(false, 0),
+    fishtailExhaust: feat(false, 0),
+    soloSeat: feat(false, 0),
+    heavyChrome: feat(false, 0),
+    lowStance: feat(false, 0),
+    customPaint: feat(false, 0),
+    blackedOut: feat(false, 0),
     overallConfidence: 0.8,
     notes: "",
     ...overrides
@@ -292,14 +303,30 @@ assert.equal(matchesEquipmentQuery(shakyShield, { bags: true }), true, "the conf
   assert.equal((q as any).fairing, undefined, "a windshield ask NEVER sets fairing (Joe's ruling at the parse level)");
   assert.equal((q as any).windshield, true, "windshield is preserved as its own key");
 
-  // The parse keys are the SAME set as the vision taxonomy (single source of truth).
+  // The 9 shoppable EQUIPMENT features are a SUBSET of the vision taxonomy (which also carries the 7
+  // vision-only cholo BUILD cues — those are never requestable via an equipment query). Every requestable
+  // key must be a real taxonomy feature, and all 9 shoppable ones map through.
+  const REQUESTABLE_EQUIPMENT_KEYS = [
+    "bags",
+    "windshield",
+    "fairing",
+    "backrestSissybar",
+    "tourpak",
+    "forwardControls",
+    "apeHangers",
+    "floorboards",
+    "crashBars"
+  ] as const;
   const full = normalizeRequestedEquipment(
     Object.fromEntries(
       ["bags", "windshield", "fairing", "backrest_sissybar", "tourpak", "forward_controls", "ape_hangers", "floorboards", "crash_bars"].map(k => [k, true])
     )
   );
-  assert.equal(Object.keys(full).length, EQUIPMENT_FEATURE_KEYS.length, "every taxonomy feature is a requestable key");
-  for (const k of EQUIPMENT_FEATURE_KEYS) assert.equal((full as any)[k], true, `requested key ${k} maps through`);
+  assert.equal(Object.keys(full).length, REQUESTABLE_EQUIPMENT_KEYS.length, "all 9 shoppable equipment features are requestable keys");
+  for (const k of REQUESTABLE_EQUIPMENT_KEYS) {
+    assert.equal((full as any)[k], true, `requested key ${k} maps through`);
+    assert.ok((EQUIPMENT_FEATURE_KEYS as readonly string[]).includes(k), `requestable key ${k} is a real taxonomy feature`);
+  }
 
   assert.deepEqual(normalizeRequestedEquipment({}), {}, "no features asked => empty query");
   assert.deepEqual(normalizeRequestedEquipment(null), {}, "junk input => empty query (no throw)");
@@ -740,21 +767,23 @@ function segmentWatchFires(args: {
     "segment watches route through inventoryItemMatchesWatch (the shared fire entry — daily cap/dedup/opt-out still wrap it)"
   );
 
-  // FLAG-GATED: with the equipment-vision canary flag OFF a segment watch is INERT (returns false).
+  // FLAG-GATED: with the equipment-vision canary flag OFF a segment watch is INERT (returns false). A
+  // cholo build segment additionally requires the cholo flag (dark until flipped) — an optional extra
+  // guard line before the segment-matcher return.
   assert.ok(
-    /if \(watchIsSegmentWatch\(watch\)\) \{\s*if \(!inventoryEquipmentVisionEnabled\(\)\) return false;\s*return inventoryItemMatchesSegmentWatch\(item, watch\);/.test(indexSrc),
+    /if \(watchIsSegmentWatch\(watch\)\) \{\s*if \(!inventoryEquipmentVisionEnabled\(\)\) return false;[\s\S]{0,500}?return inventoryItemMatchesSegmentWatch\(item, watch\);/.test(indexSrc),
     "flag OFF → a segment watch is inert (never fires); flag ON → routed to the segment matcher"
   );
 
   // NARROW: the segment matcher fires only on IN-GROUP membership (classifyHarleySegment), never outside.
   assert.ok(
-    /function inventoryItemMatchesSegmentWatch[\s\S]{0,400}classifyHarleySegment\(item\.model\)[\s\S]{0,200}if \(seg === "unknown" \|\| !segments\.includes\(seg\)\) return false;/.test(indexSrc),
+    /function inventoryItemMatchesSegmentWatch[\s\S]{0,700}classifyHarleySegment\(item\.model\)[\s\S]{0,200}if \(seg === "unknown" \|\| !segments\.includes\(seg\)\) return false;/.test(indexSrc),
     "segment matcher requires in-group membership (unknown / out-of-group → no fire — NARROW)"
   );
 
   // Reuses the EXACT shared non-model criteria (year/condition/price/color) — no drift from model watches.
   assert.ok(
-    /function inventoryItemMatchesSegmentWatch[\s\S]{0,400}return inventoryItemPassesNonModelCriteria\(item, watch\);/.test(indexSrc),
+    /function inventoryItemMatchesSegmentWatch[\s\S]{0,1000}return inventoryItemPassesNonModelCriteria\(item, watch\);/.test(indexSrc),
     "segment matcher reuses inventoryItemPassesNonModelCriteria (shared with model watches — no second copy)"
   );
   assert.ok(

@@ -2400,6 +2400,13 @@ export type VehicleRecommendationParse = {
   // Style segments to EXCLUDE / require, from the customer's words ("not cruisers" => ["cruiser"]).
   excludeSegments: ("cruiser" | "touring" | "sport" | "adventure" | "trike")[];
   includeSegments: ("cruiser" | "touring" | "sport" | "adventure" | "trike")[];
+  // BUILD/STYLE segments resolved by CUSTOMIZATION, not by base model — a separate slot from the
+  // model-based include/exclude segments above (those feed classifyHarleySegment; these do NOT). Today
+  // the only member is "cholo" (Chicano / West-Coast lowrider build). ALL of Joe's words map here:
+  // cholo, cholo style, chicano/chicano style, lowrider, viclas, west coast style, OG style → ["cholo"].
+  // Parser-first (never a keyword regex on customer text); consumed by the cholo build-segment watch +
+  // the vision composite (deriveCholoBuild), behind CHOLO_STYLE_VISION_ENABLED. Empty when none named.
+  styleSegments: ("cholo")[];
   // EQUIPMENT the customer asked to shop by ("something with bags and a windshield") — only the
   // true keys. Empty object when no equipment was named. Consumed by the equipment search filter
   // (inventoryEquipmentVision.matchesEquipmentQuery), behind INVENTORY_EQUIPMENT_VISION_ENABLED.
@@ -3828,6 +3835,7 @@ const VEHICLE_RECOMMENDATION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     "condition",
     "exclude_segments",
     "include_segments",
+    "style_segments",
     "requested_equipment",
     "confidence"
   ],
@@ -3842,6 +3850,11 @@ const VEHICLE_RECOMMENDATION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     include_segments: {
       type: "array",
       items: { type: "string", enum: ["cruiser", "touring", "sport", "adventure", "trike"] }
+    },
+    // Build/style segments resolved by customization (NOT base model). Only "cholo" today.
+    style_segments: {
+      type: "array",
+      items: { type: "string", enum: ["cholo"] }
     },
     requested_equipment: REQUESTED_EQUIPMENT_SCHEMA,
     confidence: { type: "number" }
@@ -8207,6 +8220,15 @@ export async function parseVehicleRecommendationRequestWithLLM(args: {
     "  adventure (Pan America), trike (Tri Glide, Freewheeler).",
     "  \"not cruisers\" => exclude_segments:[\"cruiser\"]; \"something sporty\" => include_segments:[\"sport\"].",
     "  Leave arrays empty when no style is named.",
+    "- style_segments: a CUSTOM BUILD look defined by how the bike is customized, NOT by its model. The",
+    "  only value is \"cholo\" — the Chicano / West-Coast lowrider Harley build (ape hangers, whitewalls,",
+    "  fat chrome spoke wheels, fishtail pipes, solo seat, lots of chrome, low stance). ALL of these words",
+    "  mean the same look → style_segments:[\"cholo\"]:  cholo, cholo style, chicano, chicano style,",
+    "  lowrider / low rider (as a STYLE, e.g. \"a lowrider-style bike\", \"lowrider vibe\"), viclas, west",
+    "  coast style, OG style. IMPORTANT: this is a customization style, not the model — do NOT confuse it",
+    "  with the Harley MODEL named \"Low Rider\" / \"Low Rider S\" / \"Low Rider ST\" (that is a specific bike",
+    "  the customer would price or watch by name, NOT style_segments). Leave empty when no cholo/lowrider",
+    "  style is named.",
     "- requested_equipment: which physical FEATURES/accessories the customer wants the bike to have.",
     "  Set a key TRUE only when the customer asked for that feature; leave everything else false.",
     "  Keys: bags (saddlebags), windshield, fairing, backrest_sissybar, tourpak (top trunk/tour-pak),",
@@ -8220,16 +8242,20 @@ export async function parseVehicleRecommendationRequestWithLLM(args: {
     "  plain \"windshield\" ask.",
     "- confidence 0..1; use >= 0.8 only when wants_recommendation is clear.",
     "",
-    "(requested_equipment below shows only its true keys for brevity; always return all keys.)",
+    "(requested_equipment / style_segments below show only their true/named values for brevity; always return all keys.)",
     "Examples:",
-    '- "Can you give me some options" -> {"wants_recommendation":true,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"requested_equipment":{},"confidence":0.9}',
-    '- "give me some options, I\'m looking around 200 per month, not cruisers, focus on both new and used" -> {"wants_recommendation":true,"monthly_budget":200,"condition":"both","exclude_segments":["cruiser"],"include_segments":[],"requested_equipment":{},"confidence":0.95}',
-    '- "you got anything with bags and a windshield?" -> {"wants_recommendation":true,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"requested_equipment":{"bags":true,"windshield":true},"confidence":0.92}',
-    '- "looking for a used bagger with a backrest and floorboards" -> {"wants_recommendation":true,"monthly_budget":null,"condition":"used","exclude_segments":[],"include_segments":[],"requested_equipment":{"bags":true,"backrest_sissybar":true,"floorboards":true},"confidence":0.9}',
-    '- "something with a batwing fairing and a tour pak" -> {"wants_recommendation":true,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"requested_equipment":{"fairing":true,"tourpak":true},"confidence":0.9}',
-    '- "what would you recommend for a first bike?" -> {"wants_recommendation":true,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"requested_equipment":{},"confidence":0.88}',
-    '- "what\'s the out the door price on the Street Glide?" -> {"wants_recommendation":false,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"requested_equipment":{},"confidence":0.9}',
-    '- "can I come by Saturday?" -> {"wants_recommendation":false,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"requested_equipment":{},"confidence":0.93}',
+    '- "Can you give me some options" -> {"wants_recommendation":true,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"style_segments":[],"requested_equipment":{},"confidence":0.9}',
+    '- "give me some options, I\'m looking around 200 per month, not cruisers, focus on both new and used" -> {"wants_recommendation":true,"monthly_budget":200,"condition":"both","exclude_segments":["cruiser"],"include_segments":[],"style_segments":[],"requested_equipment":{},"confidence":0.95}',
+    '- "you got anything with bags and a windshield?" -> {"wants_recommendation":true,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"style_segments":[],"requested_equipment":{"bags":true,"windshield":true},"confidence":0.92}',
+    '- "looking for a used bagger with a backrest and floorboards" -> {"wants_recommendation":true,"monthly_budget":null,"condition":"used","exclude_segments":[],"include_segments":[],"style_segments":[],"requested_equipment":{"bags":true,"backrest_sissybar":true,"floorboards":true},"confidence":0.9}',
+    '- "something with a batwing fairing and a tour pak" -> {"wants_recommendation":true,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"style_segments":[],"requested_equipment":{"fairing":true,"tourpak":true},"confidence":0.9}',
+    '- "let me know if a cholo style bike comes in" -> {"wants_recommendation":true,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"style_segments":["cholo"],"requested_equipment":{},"confidence":0.9}',
+    '- "you got any lowriders or viclas? west coast style" -> {"wants_recommendation":true,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"style_segments":["cholo"],"requested_equipment":{},"confidence":0.9}',
+    '- "looking for a chicano style softail, that OG lowrider look" -> {"wants_recommendation":true,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"style_segments":["cholo"],"requested_equipment":{},"confidence":0.9}',
+    '- "what\'s the price on the Low Rider S?" -> {"wants_recommendation":false,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"style_segments":[],"requested_equipment":{},"confidence":0.92}',
+    '- "what would you recommend for a first bike?" -> {"wants_recommendation":true,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"style_segments":[],"requested_equipment":{},"confidence":0.88}',
+    '- "what\'s the out the door price on the Street Glide?" -> {"wants_recommendation":false,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"style_segments":[],"requested_equipment":{},"confidence":0.9}',
+    '- "can I come by Saturday?" -> {"wants_recommendation":false,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"style_segments":[],"requested_equipment":{},"confidence":0.93}',
     "",
     history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
     `Message: ${text}`
@@ -8259,6 +8285,13 @@ export async function parseVehicleRecommendationRequestWithLLM(args: {
           new Set(value.map(v => String(v ?? "").trim().toLowerCase()).filter(v => allowedSegments.has(v)))
         ) as VehicleRecommendationParse["excludeSegments"])
       : [];
+  const allowedStyleSegments = new Set(["cholo"]);
+  const normalizeStyleSegments = (value: unknown): VehicleRecommendationParse["styleSegments"] =>
+    Array.isArray(value)
+      ? (Array.from(
+          new Set(value.map(v => String(v ?? "").trim().toLowerCase()).filter(v => allowedStyleSegments.has(v)))
+        ) as VehicleRecommendationParse["styleSegments"])
+      : [];
   const conditionRaw = String(parsed.condition ?? "").toLowerCase();
   const condition: VehicleRecommendationParse["condition"] =
     conditionRaw === "new" || conditionRaw === "used" || conditionRaw === "both" ? conditionRaw : null;
@@ -8269,6 +8302,7 @@ export async function parseVehicleRecommendationRequestWithLLM(args: {
     condition,
     excludeSegments: normalizeSegments(parsed.exclude_segments),
     includeSegments: normalizeSegments(parsed.include_segments),
+    styleSegments: normalizeStyleSegments(parsed.style_segments),
     requestedEquipment: normalizeRequestedEquipment(parsed.requested_equipment),
     confidence:
       typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
@@ -13588,6 +13622,20 @@ export type VehicleEquipmentDescription = {
   apeHangers: EquipmentFeatureRead;
   floorboards: EquipmentFeatureRead;
   crashBars: EquipmentFeatureRead;
+  // Cholo-BUILD cues (Cholo style vision, DARK). Present on every read for a stable type; populated by the
+  // vision ONLY when CHOLO_STYLE_VISION_ENABLED is on (else the schema omits them and they parse to
+  // present:false / confidence:0 — flag off = byte-identical to today's equipment read).
+  whitewalls: EquipmentFeatureRead;
+  fatSpokeWheels: EquipmentFeatureRead;
+  fishtailExhaust: EquipmentFeatureRead;
+  soloSeat: EquipmentFeatureRead;
+  heavyChrome: EquipmentFeatureRead;
+  lowStance: EquipmentFeatureRead;
+  // customPaint = candy/metalflake/two-tone/graphics (NOT a factory solid) — a deliberate-build detail.
+  customPaint: EquipmentFeatureRead;
+  // blackedOut is INFORMATIONAL (finish-agnostic cholo, recalibrated 2026-07-26): a dark/murdered-out
+  // finish is NOT a disqualifier — a blacked-out CUSTOM build can be cholo. present:false when flag off.
+  blackedOut: EquipmentFeatureRead;
   overallConfidence: number;
   notes: string;
 };
@@ -13628,6 +13676,22 @@ export async function describeUnitEquipmentWithLLM(args: {
     .slice(0, maxImages);
   if (!urls.length) return null;
 
+  // Cholo-BUILD cues ride inside the equipment-vision canary: added ONLY when BOTH the cholo flag AND the
+  // equipment-vision flag are on. Flag off → the schema/prompt below are byte-identical to today (100%
+  // preserved behavior); the cue fields parse to present:false/0 via readFeature(undefined).
+  const choloOn =
+    process.env.CHOLO_STYLE_VISION_ENABLED === "1" && process.env.INVENTORY_EQUIPMENT_VISION_ENABLED === "1";
+  const CHOLO_CUE_KEYS = [
+    "has_whitewalls",
+    "has_fat_spoke_wheels",
+    "has_fishtail_exhaust",
+    "has_solo_seat",
+    "has_heavy_chrome",
+    "has_low_stance",
+    "has_custom_paint",
+    "has_blacked_out"
+  ] as const;
+
   const schema: { [key: string]: unknown } = {
     type: "object",
     additionalProperties: false,
@@ -13644,6 +13708,7 @@ export async function describeUnitEquipmentWithLLM(args: {
       "has_ape_hangers",
       "has_floorboards",
       "has_crash_bars",
+      ...(choloOn ? CHOLO_CUE_KEYS : []),
       "overall_confidence",
       "notes"
     ],
@@ -13660,6 +13725,18 @@ export async function describeUnitEquipmentWithLLM(args: {
       has_ape_hangers: EQUIPMENT_FEATURE_SCHEMA,
       has_floorboards: EQUIPMENT_FEATURE_SCHEMA,
       has_crash_bars: EQUIPMENT_FEATURE_SCHEMA,
+      ...(choloOn
+        ? {
+            has_whitewalls: EQUIPMENT_FEATURE_SCHEMA,
+            has_fat_spoke_wheels: EQUIPMENT_FEATURE_SCHEMA,
+            has_fishtail_exhaust: EQUIPMENT_FEATURE_SCHEMA,
+            has_solo_seat: EQUIPMENT_FEATURE_SCHEMA,
+            has_heavy_chrome: EQUIPMENT_FEATURE_SCHEMA,
+            has_low_stance: EQUIPMENT_FEATURE_SCHEMA,
+            has_custom_paint: EQUIPMENT_FEATURE_SCHEMA,
+            has_blacked_out: EQUIPMENT_FEATURE_SCHEMA
+          }
+        : {}),
       overall_confidence: { type: "number" },
       notes: { type: "string" }
     }
@@ -13717,6 +13794,31 @@ export async function describeUnitEquipmentWithLLM(args: {
     "- A Low Rider S with a small dark fork-mounted quarter/'speed screen' fairing shrouding just the headlight:",
     "  has_fairing=false (it is a SMALL sport fairing, not a large touring batwing) and has_windshield=false.",
     "",
+    choloOn
+      ? [
+          "",
+          "CHOLO-BUILD CUES (report each like the equipment above — present only if you actually SEE it, with a",
+          "per-cue confidence; a bad angle → present=false, low confidence; NEVER infer from the model name).",
+          "Cholo is a CUSTOM lowrider/Chicano BUILD and is FINISH-AGNOSTIC — it can be all CHROME or all BLACK.",
+          "The signature is the CUSTOM parts (TALL ape hangers + FAT spoke wheels + a slammed stance), not the",
+          "color. Judge whether each part is the EXAGGERATED CUSTOM version, not a mild stock one:",
+          "- has_ape_hangers: TALL ape-hanger bars that rise up toward/above the rider's shoulders (a dramatic",
+          "  reach-up). Chrome OR black both count. Set FALSE for mild/stock drag or mini bars.",
+          "- has_fat_spoke_wheels: FAT, showy laced SPOKE wheels (many thick spokes), often a big front wheel —",
+          "  a custom fat-spoke look. Chrome OR black both count. Set FALSE for solid cast/mag wheels.",
+          "- has_whitewalls: white-sidewall tires (a wide white band on the tire sidewall).",
+          "- has_fishtail_exhaust: exhaust tips that flare open at the end like a fish's tail (long slash).",
+          "- has_solo_seat: a SINGLE-rider seat (one saddle, no passenger seat), often leather/tooled.",
+          "- has_heavy_chrome: unusually heavy CHROME/gold brightwork — chrome forks/wheels/pipes/covers,",
+          "  engraved/tribal covers; a bright custom show-chrome look, NOT just a couple stock chrome parts.",
+          "- has_custom_paint: a CUSTOM paint job — candy, metalflake, two-tone, graphics, airbrush, pinstriping",
+          "  (NOT a plain factory solid color; flat/gloss stock black is NOT custom paint).",
+          "- has_low_stance: a low, 'slammed' stance — the bike sits low to the ground with long, low lines.",
+          "- has_blacked_out: the bike is predominantly DARK/blacked-out — black wheels/pipes/brightwork, minimal",
+          "  chrome. This is NOT disqualifying (a blacked-out CUSTOM can still be cholo); just report it honestly.",
+          "These cues describe a CUSTOM lowrider/Chicano BUILD; report what you see, do not judge the overall style."
+        ].join("\n")
+      : "",
     "- is_motorcycle: true if the photos show a motorcycle at all; false for a non-bike photo (then set every",
     "  feature present=false, confidence 0).",
     "- overall_confidence 0..1: how good the photo set is overall for judging equipment (angles/lighting/clarity).",
@@ -13740,7 +13842,7 @@ export async function describeUnitEquipmentWithLLM(args: {
         }
       ] as any,
       ...optionalReasoning(model),
-      max_output_tokens: 600,
+      max_output_tokens: choloOn ? 800 : 600,
       text: {
         format: {
           type: "json_schema",
@@ -13785,6 +13887,15 @@ export async function describeUnitEquipmentWithLLM(args: {
       apeHangers: readFeature(parsed.has_ape_hangers),
       floorboards: readFeature(parsed.has_floorboards),
       crashBars: readFeature(parsed.has_crash_bars),
+      // Cholo cues — absent from the read when the flag is off → readFeature(undefined) → present:false, 0.
+      whitewalls: readFeature(parsed.has_whitewalls),
+      fatSpokeWheels: readFeature(parsed.has_fat_spoke_wheels),
+      fishtailExhaust: readFeature(parsed.has_fishtail_exhaust),
+      soloSeat: readFeature(parsed.has_solo_seat),
+      heavyChrome: readFeature(parsed.has_heavy_chrome),
+      lowStance: readFeature(parsed.has_low_stance),
+      customPaint: readFeature(parsed.has_custom_paint),
+      blackedOut: readFeature(parsed.has_blacked_out),
       overallConfidence: clamp01(parsed.overall_confidence),
       notes: String(parsed.notes ?? "").trim()
     };

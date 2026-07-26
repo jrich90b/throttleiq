@@ -47,7 +47,26 @@ export const EQUIPMENT_FEATURE_KEYS = [
   "forwardControls",
   "apeHangers",
   "floorboards",
-  "crashBars"
+  "crashBars",
+  // Cholo-BUILD cues (Cholo style vision, 2026-07-25, DARK). These are the extra vision reads the
+  // cholo composite scores; apeHangers (above) is REUSED as the biggest single cue. They live in the
+  // same feature record so the vision read + cache carry them, but they are NEVER shopped by an
+  // equipment query (RequestedEquipmentQuery has no such keys → normalizeRequestedEquipment never
+  // produces them, so matchesEquipmentQuery / classifyUnitForEquipmentQuery skip them). Populated only
+  // when CHOLO_STYLE_VISION_ENABLED is on (else the vision omits them → present:false, confidence:0).
+  "whitewalls",
+  "fatSpokeWheels",
+  "fishtailExhaust",
+  "soloSeat",
+  "heavyChrome",
+  "lowStance",
+  // customPaint = candy/metalflake/two-tone/graphics/airbrush — NOT a factory solid. A deliberate-build
+  // detail (Joe 2026-07-26): it's one of the signals that a dark bike is a real CUSTOM cholo, not a stock
+  // blacked-out bobber (the flat-black stock Street Bob has none).
+  "customPaint",
+  // blackedOut is INFORMATIONAL (NOT a disqualifier — cholo is finish-agnostic, a blacked-out custom is a
+  // real cholo). It only shaves confidence toward "confirm" on the hardest stock-vs-custom-dark call.
+  "blackedOut"
 ] as const;
 export type EquipmentFeatureKey = (typeof EQUIPMENT_FEATURE_KEYS)[number];
 
@@ -92,7 +111,70 @@ export type EquipmentProfile = {
   priorAgreement: "agree" | "disagree" | "na";
   priorNote: string;
   notes: string;
+  /**
+   * Cholo BUILD signature (Cholo style vision, DARK). Computed from the asserted cues via
+   * deriveCholoBuild — NEVER from the base model (a stock Heritage is not cholo). Present on every
+   * profile; isCholo is false unless the composite crosses Joe's combination bar. Only meaningful when
+   * CHOLO_STYLE_VISION_ENABLED populated the cues; otherwise all cues are absent → isCholo:false.
+   */
+  cholo: CholoBuild;
 };
+
+/** Result of the cholo build-signature composite (Joe ruling 1, 2026-07-25). */
+export type CholoBuild = {
+  /** The build crosses the cholo combination bar with every contributing cue ASSERTED (confident). */
+  isCholo: boolean;
+  /** Composite confidence — the weakest-link (min) of the required legs' cue confidences; 0 when not cholo. */
+  confidence: number;
+  /** The asserted cues that fed the decision (audit + the dark report). */
+  cues: string[];
+  /**
+   * SOFT PRIOR (Joe 2026-07-26): cholo builds are USUALLY on a Heritage Softail / Softail Deluxe /
+   * Road King (valanced-fender, chrome-friendly canvases). This is informational + a confidence nudge
+   * ONLY — it never creates or blocks cholo (never-from-model law): a real cholo build on an odd base
+   * still counts, and a bare canvas model is still not cholo. Surfaced in the dark report.
+   */
+  baseModelIsCholoCanvas: boolean;
+};
+
+/**
+ * The base models cholo builds are USUALLY built on (Joe 2026-07-26). A SOFT prior, not a gate.
+ * Valanced-fender / chrome-friendly cruisers: Heritage (Softail Classic), Softail Deluxe, Road King,
+ * plus the close cousins that share the canvas (Fat Boy, Softail Slim, Springer). Matched loosely on
+ * the model LABEL only (never customer text).
+ */
+export const CHOLO_CANVAS_MODEL_PATTERNS: RegExp[] = [
+  /\bheritage\b/i,
+  /\bdeluxe\b/i,
+  /\broad\s*king\b/i,
+  /\bfat\s*boy\b/i,
+  /\bsoftail\s+slim\b/i,
+  /\bspringer\b/i
+];
+
+export function isCholoCanvasModel(model: string | null | undefined): boolean {
+  const m = (model ?? "").trim();
+  if (!m) return false;
+  return CHOLO_CANVAS_MODEL_PATTERNS.some((re) => re.test(m));
+}
+
+/**
+ * EXCLUDED platforms (Joe 2026-07-26): "Street Bobs will never really be considered a cholo — that's
+ * more of a bobber." Cholo is a full-size, full-fender cruiser/bagger build; bobber platforms (stripped,
+ * chopped fender) are a DIFFERENT genre and are NEVER cholo, no matter the detected cues. Unlike the
+ * canvas prior (a soft nudge), this is a HARD negative gate — but it only ever makes us MORE conservative
+ * (fail toward NOT cholo / "let me confirm"), the safe direction, so it does not violate the
+ * never-fabricate law. Matched on the model LABEL only (never customer text). Extensible as Joe names more.
+ */
+export const CHOLO_EXCLUDED_PLATFORM_PATTERNS: RegExp[] = [
+  /\bstreet\s*bob\b/i
+];
+
+export function isCholoExcludedPlatform(model: string | null | undefined): boolean {
+  const m = (model ?? "").trim();
+  if (!m) return false;
+  return CHOLO_EXCLUDED_PLATFORM_PATTERNS.some((re) => re.test(m));
+}
 
 // ---------------------------------------------------------------------------
 // Model-prior sanity: cross-check vision against what the MODEL NAME tells us.
@@ -306,7 +388,16 @@ export function buildEquipmentProfile(args: {
     forwardControls: assertedFeature(desc.forwardControls),
     apeHangers: assertedFeature(desc.apeHangers),
     floorboards: assertedFeature(desc.floorboards),
-    crashBars: assertedFeature(desc.crashBars)
+    crashBars: assertedFeature(desc.crashBars),
+    // Cholo cues — reconcile-free (no windshield≠fairing interplay); a plain assertion at the floor.
+    whitewalls: assertedFeature(desc.whitewalls),
+    fatSpokeWheels: assertedFeature(desc.fatSpokeWheels),
+    fishtailExhaust: assertedFeature(desc.fishtailExhaust),
+    soloSeat: assertedFeature(desc.soloSeat),
+    heavyChrome: assertedFeature(desc.heavyChrome),
+    lowStance: assertedFeature(desc.lowStance),
+    customPaint: assertedFeature(desc.customPaint),
+    blackedOut: assertedFeature(desc.blackedOut)
   };
 
   return {
@@ -326,8 +417,106 @@ export function buildEquipmentProfile(args: {
     modelPrior: prior,
     priorAgreement: reconciled.agreement,
     priorNote: reconciled.note,
-    notes: desc.notes
+    notes: desc.notes,
+    cholo: deriveCholoBuild({ features, model: item.model ?? null })
   };
+}
+
+// ---------------------------------------------------------------------------
+// CHOLO BUILD SIGNATURE (Cholo style vision, DARK). Joe rulings 2026-07-25/26. Cholo is a CUSTOM LOWRIDER
+// BUILD, and it is FINISH-AGNOSTIC — it can be chrome OR blacked-out. A unit is "cholo" only when:
+//
+//   (1) tall APE HANGERS  — the signature cholo bar (the anchor).
+//   (2) FAT SPOKE WHEELS   — the signature cholo wheel (big, fat-spoke, custom).
+//   (3) at least ONE DELIBERATE-BUILD DETAIL — evidence this is a real custom build, not a bare stock
+//       bike: heavy chrome, whitewalls, fishtail exhaust, custom paint (candy/metalflake/graphics), or
+//       saddlebags (a bagger conversion). This detail is the discriminator that separates a cholo from a
+//       STOCK bobber.
+//
+// Why finish-agnostic (Joe 2026-07-26, gold set below): an earlier cut made CHROME mandatory + blacked-out
+// a disqualifier — WRONG. Joe's "blacked out cholo" (IMG_1875: dramatic tall apes + fat 48-spoke + slammed
+// + custom purple paint + bags, all in BLACK) is a real cholo. The stock 2020 Street Bob (U598-20) is NOT
+// cholo — not because it's black, but because it's STOCK: it has NONE of the deliberate-build details
+// (no chrome/whitewalls/fishtails/custom paint/bags). So the discriminator is the CUSTOM BUILD, not color.
+//
+// BOBBER PLATFORMS ARE EXCLUDED (Joe 7/26): a Street Bob "will never really be considered a cholo — that's
+// more of a bobber." isCholoExcludedPlatform() hard-blocks those (a fail-safe negative gate, the safe
+// direction). low stance / solo seat are SUPPORTING cues only (they boost confidence, never decide — a
+// plain solo seat is too common to be the detail). blackedOut is INFORMATIONAL and shaves confidence toward
+// "confirm" (a blacked-out custom vs a stock bobber is the hardest call — lean on confirm), never disqualifies.
+// Each deciding cue must be ASSERTED (cleared EQUIPMENT_ASSERTION_CONFIDENCE_MIN). Fail direction: below
+// the bar → isCholo=false → nothing tagged, no watch fires; copy is "looks like a cholo build — let me
+// confirm", never a flat claim. The base model (Heritage/Deluxe/Road King) is a SOFT prior only (below).
+// ---------------------------------------------------------------------------
+
+/** The two SIGNATURE custom parts every cholo build has — tall apes + fat spoke wheels (both required). */
+export const CHOLO_REQUIRED_BONES: EquipmentFeatureKey[] = ["apeHangers", "fatSpokeWheels"];
+/** DELIBERATE-BUILD details — evidence of a real custom build (≥1 required); the stock-vs-cholo discriminator. */
+export const CHOLO_DETAIL_CUES: EquipmentFeatureKey[] = ["heavyChrome", "whitewalls", "fishtailExhaust", "customPaint", "bags"];
+
+export function deriveCholoBuild(profile: Pick<EquipmentProfile, "features" | "model">): CholoBuild {
+  const f = profile.features;
+  const isAsserted = (k: EquipmentFeatureKey): boolean => f[k]?.asserted === true;
+  const conf = (k: EquipmentFeatureKey): number => f[k]?.confidence ?? 0;
+
+  const bonesAsserted = CHOLO_REQUIRED_BONES.every(isAsserted);
+  const detailCues = CHOLO_DETAIL_CUES.filter(isAsserted);
+  const blackedOut = isAsserted("blackedOut");
+  const excludedPlatform = isCholoExcludedPlatform(profile.model);
+
+  // Finish-agnostic: the two signature bones (tall apes + fat spokes) + at least one deliberate-build
+  // detail. Chrome and blacked-out both qualify — blackedOut is NOT a gate. A bobber platform (Street Bob)
+  // is HARD-excluded (Joe 7/26) — a fail-safe negative gate. The base model NEVER *creates* cholo.
+  const isCholo = bonesAsserted && detailCues.length >= 1 && !excludedPlatform;
+
+  const baseModelIsCholoCanvas = isCholoCanvasModel(profile.model);
+
+  const cues: string[] = [];
+  for (const k of [...CHOLO_REQUIRED_BONES, ...CHOLO_DETAIL_CUES]) {
+    if (isAsserted(k) && !cues.includes(k)) cues.push(k);
+  }
+  if (isAsserted("lowStance")) cues.push("lowStance");
+  if (isAsserted("soloSeat")) cues.push("soloSeat");
+  if (blackedOut) cues.push("blackedOut");
+  if (excludedPlatform) cues.push("excludedPlatform(bobber):" + (profile.model ?? "").trim());
+  if (baseModelIsCholoCanvas) cues.push("canvas:" + (profile.model ?? "").trim());
+
+  let confidence = 0;
+  if (isCholo) {
+    const detailConf = Math.max(...detailCues.map(conf));
+    confidence = Math.min(conf("apeHangers"), conf("fatSpokeWheels"), detailConf);
+    // Soft nudges (bounded, never flip isCholo): a typical canvas (Heritage/Deluxe/Road King) reinforces;
+    // an atypical base + a blacked-out finish (the hardest stock-vs-custom call) shave toward "confirm".
+    confidence += baseModelIsCholoCanvas ? 0.03 : -0.05;
+    if (blackedOut) confidence -= 0.05;
+    confidence = Math.max(0, Math.min(1, confidence));
+  }
+
+  return { isCholo, confidence, cues, baseModelIsCholoCanvas };
+}
+
+// The cholo WATCH fire gate (pure, mirrors watchEquipmentFireGate). An arriving unit fires a standing
+// cholo watch ONLY when its cached profile's build crosses the confident cholo bar. FAIL-SAFE: a null
+// profile (unprofiled arrival) or a below-bar build is NOT a fire — deriveCholoBuild returns isCholo:false,
+// so the engine holds off rather than sending a false "a cholo build just came in." NEVER model-based.
+export function watchCholoFireGate(profile: EquipmentProfile | null | undefined): boolean {
+  if (!profile) return false;
+  return deriveCholoBuild(profile).isCholo;
+}
+
+// Customer-facing CONFIRM copy (Joe ruling 3 — always confirm, never hard-claim). Even at/above the
+// confident bar the alert says "looks like a cholo build — let me confirm", never "it is cholo": style
+// is subjective and a human confirms before the customer drives out. Pure; the fire path composes it.
+export function buildCholoConfirmLine(unitLabel?: string | null): string {
+  const bike = String(unitLabel ?? "").trim();
+  const subject = bike ? `this ${bike}` : "one";
+  return `Looks like ${subject} might be a cholo-style build — let me confirm the details before you head over.`;
+}
+
+export function choloStyleVisionEnabled(): boolean {
+  // Cholo tagging/fire rides INSIDE the equipment-vision canary: it requires BOTH its own flag AND the
+  // equipment-vision flag (the vision primitive + cache it reuses). Either off → 100% today's behavior.
+  return process.env.CHOLO_STYLE_VISION_ENABLED === "1" && inventoryEquipmentVisionEnabled();
 }
 
 // ---------------------------------------------------------------------------
@@ -431,7 +620,16 @@ const EQUIPMENT_FEATURE_LABELS: Record<EquipmentFeatureKey, string> = {
   forwardControls: "forward controls",
   apeHangers: "ape hangers",
   floorboards: "floorboards",
-  crashBars: "crash bars"
+  crashBars: "crash bars",
+  // Cholo cues are never part of a shoppable equipment query, but the Record must be total.
+  whitewalls: "whitewall tires",
+  fatSpokeWheels: "fat spoke wheels",
+  fishtailExhaust: "fishtail exhaust",
+  soloSeat: "a solo seat",
+  heavyChrome: "heavy chrome",
+  lowStance: "a low stance",
+  customPaint: "custom paint",
+  blackedOut: "a blacked-out finish"
 };
 
 export function describeEquipmentQuery(query: EquipmentQuery): string {

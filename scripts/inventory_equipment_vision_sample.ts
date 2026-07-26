@@ -43,7 +43,13 @@ const FEATURE_LABEL: Record<string, string> = {
   forwardControls: "fwd controls",
   apeHangers: "ape hangers",
   floorboards: "floorboards",
-  crashBars: "crash bars"
+  crashBars: "crash bars",
+  whitewalls: "whitewalls",
+  fatSpokeWheels: "fat spoke wheels",
+  fishtailExhaust: "fishtail exhaust",
+  soloSeat: "solo seat",
+  heavyChrome: "heavy chrome",
+  lowStance: "low stance"
 };
 
 function equipCell(profile: EquipmentProfile): string {

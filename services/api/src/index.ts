@@ -586,6 +586,8 @@ import {
   saveEquipmentCache,
   profileArrivedUnitsForEquipment,
   watchEquipmentFireGate,
+  choloStyleVisionEnabled,
+  watchCholoFireGate,
   type EquipmentCandidate,
   type EquipmentProfile,
   type EquipmentCacheFile,
@@ -6185,10 +6187,21 @@ function watchSegmentTargets(watch: InventoryWatch): SegmentWatchTarget[] {
   return out;
 }
 
-// A watch is a SEGMENT watch when it carries at least one valid segment target. Independent of the
-// synthetic `model` label, so detection never depends on the label text.
+// CHOLO build-segment (Cholo style vision, DARK). Unlike the model segments above, cholo is NOT resolved
+// by classifyHarleySegment — it is a VISION BUILD signature (deriveCholoBuild over the unit's equipment
+// profile). So it is deliberately kept OUT of SEGMENT_WATCH_KEYS (which routes to the model matcher) and
+// handled by its own gate at the caller sites (watchPassesCholoGate), exactly like the equipment gate.
+function watchHasCholoSegment(watch: InventoryWatch): boolean {
+  const raw = (watch as any)?.segments;
+  return Array.isArray(raw) && raw.some((s: unknown) => s === "cholo");
+}
+
+// A watch is a SEGMENT watch when it carries at least one valid MODEL segment target OR a cholo build
+// segment. Independent of the synthetic `model` label, so detection never depends on the label text. A
+// cholo watch routes here (away from model-token matching); its model-half is "any motorcycle" and the
+// cholo build test happens in the vision gate at the caller sites.
 function watchIsSegmentWatch(watch: InventoryWatch): boolean {
-  return watchSegmentTargets(watch).length > 0;
+  return watchSegmentTargets(watch).length > 0 || watchHasCholoSegment(watch);
 }
 
 // Human-readable synthetic model label for a segment watch (e.g. "Cruiser + Touring (segment)"). Stored
@@ -6272,10 +6285,18 @@ function inventoryItemPassesNonModelCriteria(item: any, watch: InventoryWatch): 
 // a segment never fires on a bike outside the group.
 function inventoryItemMatchesSegmentWatch(item: any, watch: InventoryWatch): boolean {
   const segments = watchSegmentTargets(watch);
-  if (!segments.length) return false;
+  const isCholoWatch = watchHasCholoSegment(watch);
+  if (!segments.length && !isCholoWatch) return false;
   if (!item?.model) return false;
-  const seg = classifyHarleySegment(item.model);
-  if (seg === "unknown" || !segments.includes(seg)) return false; // NARROW — never fire outside the group
+  // Model-segment half (classifyHarleySegment). A cholo watch carries no model segment, so this is
+  // skipped for it — its build test is the vision gate (watchPassesCholoGate) applied at the caller.
+  if (segments.length) {
+    const seg = classifyHarleySegment(item.model);
+    if (seg === "unknown" || !segments.includes(seg)) return false; // NARROW — never fire outside the group
+  }
+  // NOTE: cholo build membership is NOT tested here (it needs the equipment/vision profile cache). It is
+  // ANDed on top by watchPassesCholoGate at both fire sites — a cholo watch that reaches here still only
+  // fires when the unit's cached profile crosses the confident cholo bar (fail-safe otherwise).
   return inventoryItemPassesNonModelCriteria(item, watch);
 }
 
@@ -6288,6 +6309,10 @@ function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
   // skips this branch entirely and the logic below is 100% UNCHANGED — regression-pinned.
   if (watchIsSegmentWatch(watch)) {
     if (!inventoryEquipmentVisionEnabled()) return false;
+    // A cholo build-segment watch also requires the cholo flag — off → INERT (never fires), so a
+    // cholo watch is 100% dark until CHOLO_STYLE_VISION_ENABLED is flipped. Mirrors how a model
+    // segment watch is inert without the equipment-vision flag.
+    if (watchHasCholoSegment(watch) && !choloStyleVisionEnabled()) return false;
     return inventoryItemMatchesSegmentWatch(item, watch);
   }
   if (!item?.model || !watch?.model) return false;
@@ -6418,6 +6443,34 @@ function watchPassesEquipmentGate(item: any, watch: InventoryWatch, cache: Equip
   return watchEquipmentFireGate(profile, requested);
 }
 
+// CHOLO build gate (Cholo style vision, DARK). The caller-side vision gate for a cholo build-segment
+// watch, applied AFTER inventoryItemMatchesWatch in BOTH fire paths — the exact mirror of
+// watchPassesEquipmentGate. No-op (true) for a non-cholo watch, so model/equipment/segment watches are
+// UNCHANGED. For a cholo watch: flag off → inert (false, never fires); flag on → the unit fires only
+// when its cached equipment profile's build crosses the confident cholo bar (deriveCholoBuild.isCholo).
+// FAIL-SAFE: an unprofiled / below-bar unit does NOT fire (never a false "a cholo build came in"). The
+// cache holds the SAME EquipmentProfile the equipment gate reads (profile-on-arrival populates it).
+function watchPassesCholoGate(item: any, watch: InventoryWatch, cache: EquipmentCacheFile | null): boolean {
+  if (!watchHasCholoSegment(watch)) return true; // not a cholo watch → no-op
+  if (!choloStyleVisionEnabled()) return false; // flag off → inert
+  const key = equipmentCacheKey(item);
+  const profile = (key && cache?.profiles?.[key]) || null;
+  return watchCholoFireGate(profile);
+}
+
+// Does any watch on this conversation carry an ACTIVE cholo build-segment? Used (alongside the equipment
+// check) to gate profile-on-arrival so vision cost is only spent when a customer is waiting on one.
+function convHasActiveCholoWatch(conv: any): boolean {
+  if (!choloStyleVisionEnabled()) return false;
+  return collectInventoryWatches(conv).some((w: any) => w && w.status !== "paused" && watchHasCholoSegment(w));
+}
+
+// Any watch (equipment OR cholo build) that needs a vision EquipmentProfile — both read the same profile,
+// so profile-on-arrival runs when either is waiting.
+function convWaitsForVisionProfile(conv: any): boolean {
+  return convHasActiveEquipmentWatch(conv) || convHasActiveCholoWatch(conv);
+}
+
 // Does any watch on this conversation carry an ACTIVE equipment filter? Used to gate profile-on-arrival
 // so vision cost is only spent when a customer is actually waiting on an equipment-bearing watch.
 function convHasActiveEquipmentWatch(conv: any): boolean {
@@ -6436,6 +6489,12 @@ const EQUIPMENT_WATCH_HINT_RE =
 // recommendation parse to resolve include_segments for a SEGMENT watch. Purely a cost pre-filter — the
 // parser (glossary segment layer) makes the real call; a miss just means no segment watch is created.
 const SEGMENT_WATCH_HINT_RE = /\b(cruisers?|touring|sport|sporty|adventure|adv|trikes?|baggers?)\b/i;
+
+// Cheap hint: the note names a CHOLO/lowrider build style. PURELY a cost pre-filter that decides whether
+// to spend one recommendation parse — NOT a comprehension decision. The LLM style parser (style_segments)
+// makes the real call and disambiguates the STYLE from the "Low Rider" MODEL; a hint miss just means no
+// cholo watch. Broad on purpose (parser-first — never a regex verdict on customer intent).
+const CHOLO_WATCH_HINT_RE = /\b(cholos?|chicano|low[\s-]?rider|lowrider|viclas?|west[\s-]?coast|og[\s-]?style)\b/i;
 
 // Sibling-variant scope ask (Joe, 2026-07-04). When the fire pass found NO full match for this
 // conversation, check whether a candidate unit is a same-FAMILY sibling trim of a strict watch —
@@ -6707,7 +6766,7 @@ async function processInventoryWatchlist(targetConvId?: string, opts?: { include
       // PROFILE-ON-ARRIVAL: equipment-profile NEWLY-arrived units (bounded to new stockIds + per-run
       // capped) so an equipment watch has a real profile to fire against THIS sweep — but only when a
       // customer is actually waiting on one (cost guard). Never the whole lot (that is a follow-up).
-      const anyEquipmentWatcher = convs.some(convHasActiveEquipmentWatch);
+      const anyEquipmentWatcher = convs.some(convWaitsForVisionProfile);
       if (anyEquipmentWatcher && newItems.length) {
         const arrivals = newItems.filter(i => isWatchCandidateAvailable(i));
         const stats = await profileArrivedUnitsForEquipment(arrivals, equipmentCache);
@@ -6763,7 +6822,10 @@ async function processInventoryWatchlist(targetConvId?: string, opts?: { include
           if (!inventoryItemMatchesWatch(i, watch)) return false;
           // Equipment watches: the unit must ALSO assert the requested equipment (fail-safe — an
           // unprofiled/below-threshold unit does not fire). No-op for a model-only watch or flag off.
-          return watchPassesEquipmentGate(i, watch, equipmentCache);
+          if (!watchPassesEquipmentGate(i, watch, equipmentCache)) return false;
+          // Cholo build watches: the unit's build must ALSO cross the confident cholo bar (fail-safe —
+          // unprofiled/below-bar does not fire). No-op for a non-cholo watch.
+          return watchPassesCholoGate(i, watch, equipmentCache);
         });
         if (!match) continue;
         matches.push({ watch, item: match });
@@ -7003,7 +7065,10 @@ async function notifyInventoryWatchersForAvailableItem(
       if (!inventoryItemMatchesWatch(matchedItem, watch)) return false;
       // Equipment watches: the released unit must ALSO assert the requested equipment (fail-safe).
       // No-op for a model-only watch or with the flag off.
-      return watchPassesEquipmentGate(matchedItem, watch, equipmentCache);
+      if (!watchPassesEquipmentGate(matchedItem, watch, equipmentCache)) return false;
+      // Cholo build watches: the released unit's build must ALSO cross the confident cholo bar
+      // (fail-safe). No-op for a non-cholo watch.
+      return watchPassesCholoGate(matchedItem, watch, equipmentCache);
     });
     if (!matchedWatch) {
       // No full match for the released unit — same one-time sibling-scope ask as the cron
@@ -24973,12 +25038,17 @@ async function deriveContextNoteWatches(
   // wrong fire. Still a documented gap: a PURE equipment-only ask ("bags and a windshield", no segment or
   // model) yields no watch — that model-less/segment-less modality stays a separate follow-up.
   if (inventoryEquipmentVisionEnabled()) {
+    // Snapshot BEFORE any segment/cholo mint: a concrete MODEL watch already anchored the ask. Used to
+    // decide whether a segment / cholo build watch should ALSO be minted (a model watch is more specific).
+    const hadModelWatch = watches.length > 0;
+    const choloOn = choloStyleVisionEnabled();
     const wantsWatchIntent = parserRequestedWatch || watchSegments.length > 0;
     const noteNamesEquipment = EQUIPMENT_WATCH_HINT_RE.test(note);
     const noteNamesSegment = SEGMENT_WATCH_HINT_RE.test(note);
+    const noteNamesCholo = choloOn && CHOLO_WATCH_HINT_RE.test(note);
     const needParse =
       (watches.length && noteNamesEquipment) ||
-      (!watches.length && wantsWatchIntent && (noteNamesSegment || noteNamesEquipment));
+      (!watches.length && wantsWatchIntent && (noteNamesSegment || noteNamesEquipment || noteNamesCholo));
     if (needParse) {
       const recParse = await safeLlmParse("equipment_watch_parser", () =>
         parseVehicleRecommendationRequestWithLLM({ text: note, history: buildHistory(conv, 6) })
@@ -25040,6 +25110,60 @@ async function deriveContextNoteWatches(
             leadKey: conv?.leadKey,
             segments: segments.join("+"),
             equipment: equipmentQueryHasFeatures(eq) ? describeEquipmentQuery(eq as any) : "",
+            watches: watches.length
+          });
+        }
+      }
+      // (c) CHOLO build-segment watch (Cholo style vision, DARK). Minted only when the PARSER resolved a
+      // cholo/lowrider STYLE (style_segments:["cholo"] — never a keyword regex verdict) AND no concrete
+      // MODEL watch anchored the ask. It fires on any arriving unit whose BUILD crosses the confident
+      // cholo bar (watchPassesCholoGate → deriveCholoBuild), NOT by model/segment. Behind
+      // CHOLO_STYLE_VISION_ENABLED (choloOn) → wholly dark until the flag is flipped. A parse miss just
+      // leaves whatever we had — never a wrong fire.
+      if (choloOn && !hadModelWatch && wantsWatchIntent) {
+        const resolvedCholo = Array.isArray(recParse?.styleSegments) && recParse!.styleSegments.includes("cholo");
+        if (resolvedCholo) {
+          const choloSource = watchSegments.length ? watchSegments.join(" ") : note;
+          const choloYearRange = extractYearRange(choloSource) ?? semanticYearRange;
+          const choloSingleYear =
+            extractYearSingle(choloSource) ??
+            (Number.isFinite(semanticYear) && semanticYear > 1900 ? semanticYear : null);
+          const choloTextBudget = extractWatchBudgetPreference(choloSource);
+          const choloBudget = hasAnyWatchBudgetPreference(choloTextBudget)
+            ? choloTextBudget
+            : mergeWatchBudgetPreference(choloTextBudget, semanticBudget);
+          const choloCondition =
+            normalizeWatchCondition(choloSource) ??
+            semanticCondition ??
+            normalizeWatchCondition(conv?.lead?.vehicle?.condition);
+          const choloColor = sanitizeColorPhrase(extractColorMention(choloSource)) ?? semanticColor;
+          const choloWatch: InventoryWatch = {
+            // Synthetic label for copy/merge/bookkeeping — NEVER model-token matched (the fire engine
+            // routes cholo watches to the segment matcher via watchIsSegmentWatch, and the build test is
+            // watchPassesCholoGate).
+            model: "Cholo build (style)",
+            segments: ["cholo"],
+            year: choloSingleYear ?? undefined,
+            yearMin: choloYearRange?.min,
+            yearMax: choloYearRange?.max,
+            make: "Harley-Davidson", // cholo is an HD build style; never key off a trade vehicle's make
+            condition: choloCondition ?? undefined,
+            color: choloColor ?? undefined,
+            minPrice: choloBudget.minPrice,
+            maxPrice: choloBudget.maxPrice,
+            monthlyBudget: choloBudget.monthlyBudget,
+            termMonths: choloBudget.termMonths,
+            downPayment: choloBudget.downPayment,
+            exactness: "model_only",
+            status: "active",
+            createdAt: now,
+            note: "context_note_cholo_watch"
+          };
+          if (equipmentQueryHasFeatures(eq)) choloWatch.requestedEquipment = eq;
+          watches.push(choloWatch);
+          recordRouteOutcome("live", "cholo_watch_created", {
+            convId: conv?.id,
+            leadKey: conv?.leadKey,
             watches: watches.length
           });
         }
