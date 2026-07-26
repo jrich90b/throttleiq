@@ -60,10 +60,12 @@ export const EQUIPMENT_FEATURE_KEYS = [
   "soloSeat",
   "heavyChrome",
   "lowStance",
-  // blackedOut is a DISQUALIFIER, not a cholo cue: a predominantly dark/blacked-out bike (black
-  // brightwork, black wheels, black pipes — e.g. a stock murdered-out Street Bob) is NEVER cholo,
-  // no matter its bars/wheels. Cholo is a CHROME-and-whitewall lowrider look. Joe ruling 2026-07-26
-  // off the gold negative (blacked-out 2020 Street Bob U598-20 was a false positive).
+  // customPaint = candy/metalflake/two-tone/graphics/airbrush — NOT a factory solid. A deliberate-build
+  // detail (Joe 2026-07-26): it's one of the signals that a dark bike is a real CUSTOM cholo, not a stock
+  // blacked-out bobber (the flat-black stock Street Bob has none).
+  "customPaint",
+  // blackedOut is INFORMATIONAL (NOT a disqualifier — cholo is finish-agnostic, a blacked-out custom is a
+  // real cholo). It only shaves confidence toward "confirm" on the hardest stock-vs-custom-dark call.
   "blackedOut"
 ] as const;
 export type EquipmentFeatureKey = (typeof EQUIPMENT_FEATURE_KEYS)[number];
@@ -376,6 +378,7 @@ export function buildEquipmentProfile(args: {
     soloSeat: assertedFeature(desc.soloSeat),
     heavyChrome: assertedFeature(desc.heavyChrome),
     lowStance: assertedFeature(desc.lowStance),
+    customPaint: assertedFeature(desc.customPaint),
     blackedOut: assertedFeature(desc.blackedOut)
   };
 
@@ -402,74 +405,68 @@ export function buildEquipmentProfile(args: {
 }
 
 // ---------------------------------------------------------------------------
-// CHOLO BUILD SIGNATURE (Cholo style vision, DARK). Joe rulings 2026-07-25 (build-signature, not one
-// part; never from base model) + RECALIBRATED 2026-07-26 off the gold pair below. A unit is "cholo"
-// only when ALL of these hold:
+// CHOLO BUILD SIGNATURE (Cholo style vision, DARK). Joe rulings 2026-07-25/26. Cholo is a CUSTOM LOWRIDER
+// BUILD, and it is FINISH-AGNOSTIC — it can be chrome OR blacked-out. A unit is "cholo" only when:
 //
-//   (1) ape hangers  — tall apes, the anchor
-//   (2) THE CHROME / WHITEWALL LOWRIDER FINISH (MANDATORY)  — heavy chrome OR whitewalls. This is the
-//       essence of cholo: the old-school SHINE. Without it a bike is not cholo, full stop.
-//   (3) a period cue  — fishtail exhaust OR whitewalls OR fat CHROME spoke wheels
-//   (4) NOT blacked-out — a murdered-out / dark-finish bike is disqualified outright.
+//   (1) tall APE HANGERS  — the signature cholo bar (the anchor).
+//   (2) FAT SPOKE WHEELS   — the signature cholo wheel (big, fat-spoke, custom).
+//   (3) at least ONE DELIBERATE-BUILD DETAIL — evidence this is a real custom build, not a bare stock
+//       bike: heavy chrome, whitewalls, fishtail exhaust, custom paint (candy/metalflake/graphics), or
+//       saddlebags (a bagger conversion). This detail is the discriminator that separates a cholo from a
+//       STOCK bobber.
 //
-// Why the recalibration: the first rule counted a plain SOLO SEAT and BLACK spoke wheels as a cholo
-// signal, so a stock blacked-out 2020 Street Bob (U598-20 — apes + black fat spokes + solo seat) was a
-// FALSE POSITIVE. The discriminator between Joe's "not cholo" (blacked-out Street Bob) and his "this IS
-// cholo" (chrome Softail: chrome apes + chrome fishtails + chrome spoke wheels + whitewall) is CHROME.
-// So the finish (chrome/whitewalls) is now MANDATORY, blacked-out is a hard disqualifier, and solo seat
-// is dropped as a finish signal (it means nothing on its own — half the lot has one).
+// Why finish-agnostic (Joe 2026-07-26, gold set below): an earlier cut made CHROME mandatory + blacked-out
+// a disqualifier — WRONG. Joe's "blacked out cholo" (IMG_1875: dramatic tall apes + fat 48-spoke + slammed
+// + custom purple paint + bags, all in BLACK) is a real cholo. The stock 2020 Street Bob (U598-20) is NOT
+// cholo — not because it's black, but because it's STOCK: it has NONE of the deliberate-build details
+// (no chrome/whitewalls/fishtails/custom paint/bags). So the discriminator is the CUSTOM BUILD, not color.
 //
-// Each contributing cue must be ASSERTED (vision read cleared EQUIPMENT_ASSERTION_CONFIDENCE_MIN). low
-// stance is a supporting cue only (rides along in `cues`, never decides). Confidence = weakest-link (min)
-// of the deciding legs. Fail direction (ruling 3): below/near the bar → isCholo=false → nothing tagged,
-// no watch fires; near-threshold copy is "looks like a cholo build — let me confirm", never a flat claim.
+// low stance / solo seat are SUPPORTING cues only (they boost confidence, never decide — a plain solo
+// seat is too common to be the detail). blackedOut is INFORMATIONAL and shaves confidence toward "confirm"
+// (a blacked-out custom vs a stock bobber is the hardest call — lean on confirm), but it NEVER disqualifies.
+// Each deciding cue must be ASSERTED (cleared EQUIPMENT_ASSERTION_CONFIDENCE_MIN). Fail direction: below
+// the bar → isCholo=false → nothing tagged, no watch fires; copy is "looks like a cholo build — let me
+// confirm", never a flat claim. The base model (Heritage/Deluxe/Road King) is a SOFT prior only (below).
 // ---------------------------------------------------------------------------
 
-/** The chrome/whitewall lowrider FINISH — MANDATORY (recalibrated 7/26). This is what makes a bike cholo. */
-export const CHOLO_FINISH_CUES: EquipmentFeatureKey[] = ["heavyChrome", "whitewalls"];
-/** A period cue — an old-school lowrider signal beyond the finish. */
-export const CHOLO_PERIOD_CUES: EquipmentFeatureKey[] = ["fishtailExhaust", "whitewalls", "fatSpokeWheels"];
+/** The two SIGNATURE custom parts every cholo build has — tall apes + fat spoke wheels (both required). */
+export const CHOLO_REQUIRED_BONES: EquipmentFeatureKey[] = ["apeHangers", "fatSpokeWheels"];
+/** DELIBERATE-BUILD details — evidence of a real custom build (≥1 required); the stock-vs-cholo discriminator. */
+export const CHOLO_DETAIL_CUES: EquipmentFeatureKey[] = ["heavyChrome", "whitewalls", "fishtailExhaust", "customPaint", "bags"];
 
 export function deriveCholoBuild(profile: Pick<EquipmentProfile, "features" | "model">): CholoBuild {
   const f = profile.features;
   const isAsserted = (k: EquipmentFeatureKey): boolean => f[k]?.asserted === true;
   const conf = (k: EquipmentFeatureKey): number => f[k]?.confidence ?? 0;
 
-  const hasApe = isAsserted("apeHangers");
+  const bonesAsserted = CHOLO_REQUIRED_BONES.every(isAsserted);
+  const detailCues = CHOLO_DETAIL_CUES.filter(isAsserted);
   const blackedOut = isAsserted("blackedOut");
-  const finishCues = CHOLO_FINISH_CUES.filter(isAsserted);
-  const periodCues = CHOLO_PERIOD_CUES.filter(isAsserted);
-  // Distinct non-ape deciding cues — whitewalls lives in BOTH lists, so it must not double-count as the
-  // whole signature. A real cholo build shows tall apes + the chrome/whitewall FINISH + at least one MORE
-  // old-school cue → at least 2 distinct non-ape cues (never "one part").
-  const distinctNonApe = new Set<EquipmentFeatureKey>([...finishCues, ...periodCues]);
 
-  // The BUILD decides — MANDATORY chrome/whitewall finish + a period cue + ≥2 distinct non-ape cues +
-  // tall apes, and NEVER a blacked-out bike. The base model is a SOFT prior only (below) — it NEVER
-  // creates or blocks cholo.
-  const isCholo =
-    hasApe && finishCues.length > 0 && periodCues.length > 0 && distinctNonApe.size >= 2 && !blackedOut;
+  // Finish-agnostic: the two signature bones (tall apes + fat spokes) + at least one deliberate-build
+  // detail. Chrome and blacked-out both qualify — blackedOut is NOT a gate. The base model NEVER decides.
+  const isCholo = bonesAsserted && detailCues.length >= 1;
 
   const baseModelIsCholoCanvas = isCholoCanvasModel(profile.model);
 
   const cues: string[] = [];
-  if (hasApe) cues.push("apeHangers");
-  // de-duped union of the deciding cues, in a stable order
-  for (const k of [...CHOLO_FINISH_CUES, ...CHOLO_PERIOD_CUES]) {
+  for (const k of [...CHOLO_REQUIRED_BONES, ...CHOLO_DETAIL_CUES]) {
     if (isAsserted(k) && !cues.includes(k)) cues.push(k);
   }
   if (isAsserted("lowStance")) cues.push("lowStance");
-  if (blackedOut) cues.push("blackedOut(disqualifier)");
+  if (isAsserted("soloSeat")) cues.push("soloSeat");
+  if (blackedOut) cues.push("blackedOut");
   if (baseModelIsCholoCanvas) cues.push("canvas:" + (profile.model ?? "").trim());
 
   let confidence = 0;
   if (isCholo) {
-    const finishConf = Math.max(...finishCues.map(conf));
-    const periodConf = Math.max(...periodCues.map(conf));
-    confidence = Math.min(conf("apeHangers"), finishConf, periodConf);
-    // Soft prior nudge: a typical cholo canvas (Heritage/Deluxe/Road King...) reinforces the read; an
-    // atypical base shaves confidence toward "confirm". Bounded, and it can never flip isCholo.
-    confidence = Math.max(0, Math.min(1, confidence + (baseModelIsCholoCanvas ? 0.03 : -0.05)));
+    const detailConf = Math.max(...detailCues.map(conf));
+    confidence = Math.min(conf("apeHangers"), conf("fatSpokeWheels"), detailConf);
+    // Soft nudges (bounded, never flip isCholo): a typical canvas (Heritage/Deluxe/Road King) reinforces;
+    // an atypical base + a blacked-out finish (the hardest stock-vs-custom call) shave toward "confirm".
+    confidence += baseModelIsCholoCanvas ? 0.03 : -0.05;
+    if (blackedOut) confidence -= 0.05;
+    confidence = Math.max(0, Math.min(1, confidence));
   }
 
   return { isCholo, confidence, cues, baseModelIsCholoCanvas };
@@ -608,6 +605,7 @@ const EQUIPMENT_FEATURE_LABELS: Record<EquipmentFeatureKey, string> = {
   soloSeat: "a solo seat",
   heavyChrome: "heavy chrome",
   lowStance: "a low stance",
+  customPaint: "custom paint",
   blackedOut: "a blacked-out finish"
 };
 

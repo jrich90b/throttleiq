@@ -13631,9 +13631,10 @@ export type VehicleEquipmentDescription = {
   soloSeat: EquipmentFeatureRead;
   heavyChrome: EquipmentFeatureRead;
   lowStance: EquipmentFeatureRead;
-  // blackedOut is a cholo DISQUALIFIER read (recalibrated 2026-07-26): a predominantly dark/murdered-out
-  // finish (black brightwork, black wheels/pipes) → NOT cholo, no matter the bars. present:false when
-  // the flag is off.
+  // customPaint = candy/metalflake/two-tone/graphics (NOT a factory solid) — a deliberate-build detail.
+  customPaint: EquipmentFeatureRead;
+  // blackedOut is INFORMATIONAL (finish-agnostic cholo, recalibrated 2026-07-26): a dark/murdered-out
+  // finish is NOT a disqualifier — a blacked-out CUSTOM build can be cholo. present:false when flag off.
   blackedOut: EquipmentFeatureRead;
   overallConfidence: number;
   notes: string;
@@ -13687,6 +13688,7 @@ export async function describeUnitEquipmentWithLLM(args: {
     "has_solo_seat",
     "has_heavy_chrome",
     "has_low_stance",
+    "has_custom_paint",
     "has_blacked_out"
   ] as const;
 
@@ -13731,6 +13733,7 @@ export async function describeUnitEquipmentWithLLM(args: {
             has_solo_seat: EQUIPMENT_FEATURE_SCHEMA,
             has_heavy_chrome: EQUIPMENT_FEATURE_SCHEMA,
             has_low_stance: EQUIPMENT_FEATURE_SCHEMA,
+            has_custom_paint: EQUIPMENT_FEATURE_SCHEMA,
             has_blacked_out: EQUIPMENT_FEATURE_SCHEMA
           }
         : {}),
@@ -13796,20 +13799,23 @@ export async function describeUnitEquipmentWithLLM(args: {
           "",
           "CHOLO-BUILD CUES (report each like the equipment above — present only if you actually SEE it, with a",
           "per-cue confidence; a bad angle → present=false, low confidence; NEVER infer from the model name).",
-          "Cholo is a CHROME-and-whitewall OLD-SCHOOL LOWRIDER look — bright/shiny, NOT murdered-out. Judge the",
-          "FINISH carefully (chrome vs black), it is the deciding factor:",
+          "Cholo is a CUSTOM lowrider/Chicano BUILD and is FINISH-AGNOSTIC — it can be all CHROME or all BLACK.",
+          "The signature is the CUSTOM parts (TALL ape hangers + FAT spoke wheels + a slammed stance), not the",
+          "color. Judge whether each part is the EXAGGERATED CUSTOM version, not a mild stock one:",
+          "- has_ape_hangers: TALL ape-hanger bars that rise up toward/above the rider's shoulders (a dramatic",
+          "  reach-up). Chrome OR black both count. Set FALSE for mild/stock drag or mini bars.",
+          "- has_fat_spoke_wheels: FAT, showy laced SPOKE wheels (many thick spokes), often a big front wheel —",
+          "  a custom fat-spoke look. Chrome OR black both count. Set FALSE for solid cast/mag wheels.",
           "- has_whitewalls: white-sidewall tires (a wide white band on the tire sidewall).",
-          "- has_fat_spoke_wheels: fat CHROME/POLISHED laced SPOKE wheels — BRIGHT metal spokes, often a big 21\"",
-          "  front. Set FALSE for solid cast/mag wheels AND for BLACK / blacked-out / dark spoke wheels (black",
-          "  spokes are NOT a cholo cue — cholo spokes shine).",
-          "- has_fishtail_exhaust: CHROME exhaust tips that flare open at the end like a fish's tail (long slash).",
+          "- has_fishtail_exhaust: exhaust tips that flare open at the end like a fish's tail (long slash).",
           "- has_solo_seat: a SINGLE-rider seat (one saddle, no passenger seat), often leather/tooled.",
-          "- has_heavy_chrome: unusually heavy CHROME/gold brightwork — chrome forks, wheels, pipes, covers,",
+          "- has_heavy_chrome: unusually heavy CHROME/gold brightwork — chrome forks/wheels/pipes/covers,",
           "  engraved/tribal covers; a bright custom show-chrome look, NOT just a couple stock chrome parts.",
+          "- has_custom_paint: a CUSTOM paint job — candy, metalflake, two-tone, graphics, airbrush, pinstriping",
+          "  (NOT a plain factory solid color; flat/gloss stock black is NOT custom paint).",
           "- has_low_stance: a low, 'slammed' stance — the bike sits low to the ground with long, low lines.",
-          "- has_blacked_out: the bike is predominantly DARK/MURDERED-OUT — black or dark wheels, black pipes,",
-          "  black/dark brightwork, minimal chrome (e.g. a factory blacked-out Street Bob). This is the OPPOSITE",
-          "  of cholo; set TRUE with high confidence when the bike is clearly a dark/blacked-out build.",
+          "- has_blacked_out: the bike is predominantly DARK/blacked-out — black wheels/pipes/brightwork, minimal",
+          "  chrome. This is NOT disqualifying (a blacked-out CUSTOM can still be cholo); just report it honestly.",
           "These cues describe a CUSTOM lowrider/Chicano BUILD; report what you see, do not judge the overall style."
         ].join("\n")
       : "",
@@ -13888,6 +13894,7 @@ export async function describeUnitEquipmentWithLLM(args: {
       soloSeat: readFeature(parsed.has_solo_seat),
       heavyChrome: readFeature(parsed.has_heavy_chrome),
       lowStance: readFeature(parsed.has_low_stance),
+      customPaint: readFeature(parsed.has_custom_paint),
       blackedOut: readFeature(parsed.has_blacked_out),
       overallConfidence: clamp01(parsed.overall_confidence),
       notes: String(parsed.notes ?? "").trim()

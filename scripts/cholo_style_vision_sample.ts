@@ -44,23 +44,27 @@ const USED_ONLY = process.env.CHOLO_SAMPLE_USED_ONLY === "1";
 
 const CHOLO_CUE_KEYS = [
   "apeHangers",
-  "whitewalls",
   "fatSpokeWheels",
+  "whitewalls",
   "fishtailExhaust",
-  "soloSeat",
   "heavyChrome",
+  "customPaint",
+  "bags",
+  "soloSeat",
   "lowStance",
   "blackedOut"
 ] as const;
 const CUE_LABEL: Record<string, string> = {
-  apeHangers: "ape hangers",
-  whitewalls: "whitewalls",
+  apeHangers: "tall apes",
   fatSpokeWheels: "fat spokes",
+  whitewalls: "whitewalls",
   fishtailExhaust: "fishtails",
-  soloSeat: "solo seat",
   heavyChrome: "heavy chrome",
+  customPaint: "custom paint",
+  bags: "bags",
+  soloSeat: "solo seat",
   lowStance: "low stance",
-  blackedOut: "BLACKED-OUT(disqualifier)"
+  blackedOut: "blacked-out"
 };
 
 function cueCell(profile: EquipmentProfile): string {
@@ -95,13 +99,14 @@ async function main() {
   lines.push("");
   lines.push(
     "What this is: for each real used unit below, the vision looked at the actual listing photos and scored " +
-      "the CHOLO BUILD SIGNATURE (recalibrated 7/26): tall ape hangers AND the CHROME/WHITEWALL lowrider FINISH " +
-      "(heavy chrome OR whitewalls — MANDATORY) AND a period cue (fishtails OR whitewalls OR chrome fat spokes), " +
-      `and NOT blacked-out. Each cue needs ≥${Math.round(EQUIPMENT_ASSERTION_CONFIDENCE_MIN * 100)}% confidence. ` +
-      "Cholo is the CHROME lowrider look — a murdered-out/blacked-out bike is disqualified, no matter the bars. " +
-      "The base model (Heritage/Deluxe/Road King = the usual canvas) is a SOFT prior only, never a decider. " +
-      "A unit reads **CHOLO** only when the whole signature holds — never one part, never the model alone. DARK: " +
-      "no customer sees it. Joe: spot-check the CHOLO? column against the photo. A YES is 'looks like — let me confirm'.");
+      "the CHOLO BUILD SIGNATURE (finish-agnostic, recalibrated 7/26): tall APE HANGERS AND FAT SPOKE WHEELS " +
+      "(the two signature custom parts) AND at least one DELIBERATE-BUILD detail (heavy chrome, whitewalls, " +
+      `fishtails, custom paint, or bags). Each cue needs ≥${Math.round(EQUIPMENT_ASSERTION_CONFIDENCE_MIN * 100)}% confidence. ` +
+      "Cholo can be CHROME or BLACKED-OUT — color does NOT decide; the CUSTOM BUILD does. A stock bike is not " +
+      "cholo because it lacks the deliberate-build details (not because it's black). Base model (Heritage/Deluxe/" +
+      "Road King = the usual canvas) is a SOFT prior only, never a decider. A unit reads **CHOLO** only when the " +
+      "whole signature holds — never one part, never the model alone. DARK: no customer sees it. Joe: spot-check " +
+      "the CHOLO? column against the photo. A YES is 'looks like — let me confirm'.");
   lines.push("");
 
   if (dry) {

@@ -4,11 +4,13 @@
  * Pins the cholo BUILD-signature rules and governance WITHOUT any photos or a live LLM (the vision read
  * is passed in, exactly like the equipment eval). Pure, deterministic. It pins:
  *
- *  (1) BUILD SIGNATURE, not one part (Joe ruling 1; RECALIBRATED 7/26 off the gold pair): a unit is cholo
- *      ONLY when its build shows tall ape hangers AND the MANDATORY chrome/whitewall FINISH (heavy chrome
- *      OR whitewalls) AND a distinct period cue (fishtail OR whitewalls OR fat CHROME spokes) — ≥2 distinct
- *      non-ape cues — and is NOT blacked-out. Chrome is the essence; a murdered-out bike is disqualified.
- *      Gold negative: a blacked-out stock Street Bob. Gold positives: a chrome Softail + a cholo Road King.
+ *  (1) BUILD SIGNATURE — FINISH-AGNOSTIC (Joe 7/25-7/26 gold set): a unit is cholo ONLY when its build
+ *      shows tall APE HANGERS AND FAT SPOKE WHEELS (the two signature custom parts) AND ≥1 DELIBERATE-BUILD
+ *      detail (heavy chrome, whitewalls, fishtails, custom paint, or bags). Cholo can be CHROME or
+ *      BLACKED-OUT — color never decides. A STOCK bike is not cholo because it lacks the deliberate-build
+ *      details, NOT because it's black. Gold NEGATIVE: stock blacked-out Street Bob (no details). Gold
+ *      POSITIVES: chrome Softail, chrome Road King, AND a BLACKED-OUT custom cholo (apes+fat spokes+custom
+ *      paint+bags in black). blackedOut is informational (shaves confidence toward confirm), never a gate.
  *  (2) NEVER from base model (Joe ruling 1): a stock Heritage with no cues is NOT cholo; a Sportster with
  *      the full combo IS cholo. The model name never decides it.
  *  (3) ALL of Joe's words → segment=cholo (Joe ruling 2): cholo, cholo style, chicano, chicano style,
@@ -32,8 +34,8 @@ process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "eval-no-live-key";
 import {
   EQUIPMENT_ASSERTION_CONFIDENCE_MIN,
   EQUIPMENT_FEATURE_KEYS,
-  CHOLO_FINISH_CUES,
-  CHOLO_PERIOD_CUES,
+  CHOLO_REQUIRED_BONES,
+  CHOLO_DETAIL_CUES,
   isCholoCanvasModel,
   buildEquipmentProfile,
   deriveCholoBuild,
@@ -75,6 +77,7 @@ function read(overrides: Partial<VehicleEquipmentDescription>): VehicleEquipment
     soloSeat: feat(false, 0),
     heavyChrome: feat(false, 0),
     lowStance: feat(false, 0),
+    customPaint: feat(false, 0),
     blackedOut: feat(false, 0),
     overallConfidence: 0.85,
     notes: "",
@@ -92,81 +95,88 @@ function profileFrom(model: string, desc: VehicleEquipmentDescription): Equipmen
 }
 
 // ===========================================================================
-// (1) BUILD SIGNATURE (recalibrated 2026-07-26) — tall apes + the MANDATORY chrome/whitewall FINISH +
-//     a period cue + ≥2 distinct non-ape cues, and NEVER blacked-out. Not one part; chrome is the essence.
+// (1) BUILD SIGNATURE — FINISH-AGNOSTIC (Joe 7/26): tall apes + fat spoke wheels + ≥1 deliberate-build
+//     detail (chrome / whitewalls / fishtails / custom paint / bags). Chrome OR blacked-out both count.
 // ===========================================================================
 {
-  // One cue alone is NEVER cholo.
+  // Neither signature bone alone is cholo.
   assert.equal(deriveCholoBuild(profileFrom("Softail", read({ apeHangers: feat(true, HI) }))).isCholo, false, "ape hangers ALONE is not cholo");
-  assert.equal(profileFrom("Softail", read({ whitewalls: feat(true, HI) })).cholo.isCholo, false, "whitewalls alone is not cholo");
-  assert.equal(profileFrom("Softail", read({ heavyChrome: feat(true, HI) })).cholo.isCholo, false, "heavy chrome alone is not cholo");
-
-  // THE GOLD NEGATIVE (Joe 7/26): a blacked-out stock 2020 Street Bob — apes + BLACK fat spokes + solo
-  // seat + low stance, but NO chrome/whitewall finish and blacked-out. This was the false positive that
-  // triggered the recalibration. It must read NOT cholo for BOTH reasons.
-  const blackedOutStreetBob = profileFrom("Street Bob", read({
-    apeHangers: feat(true, 0.9), fatSpokeWheels: feat(true, 0.95), soloSeat: feat(true, 0.95),
-    lowStance: feat(true, 0.8), blackedOut: feat(true, 0.9)
-  }));
-  assert.equal(blackedOutStreetBob.cholo.isCholo, false, "GOLD NEGATIVE: a blacked-out Street Bob (apes+black spokes+solo seat) is NOT cholo");
-
-  // Even WITHOUT the blacked-out flag, that same build lacks the mandatory chrome/whitewall finish → not cholo.
-  const noFinish = profileFrom("Street Bob", read({ apeHangers: feat(true, HI), fatSpokeWheels: feat(true, HI), soloSeat: feat(true, HI), lowStance: feat(true, HI) }));
-  assert.equal(noFinish.cholo.isCholo, false, "no chrome/whitewall FINISH → not cholo (solo seat + black spokes don't make cholo)");
-
-  // The MANDATORY finish (chrome OR whitewalls) is required even with apes + a period cue.
+  assert.equal(profileFrom("Softail", read({ fatSpokeWheels: feat(true, HI) })).cholo.isCholo, false, "fat spokes alone is not cholo");
+  // Both bones but NO deliberate-build detail → not cholo (a bare custom-ish bike is not yet cholo).
   assert.equal(
     profileFrom("Softail", read({ apeHangers: feat(true, HI), fatSpokeWheels: feat(true, HI) })).cholo.isCholo,
     false,
-    "apes + fat spokes but NO chrome/whitewall finish is not cholo"
+    "apes + fat spokes but NO deliberate-build detail is not cholo"
   );
-  // A blacked-out DISQUALIFIER kills an otherwise-passing build.
+  // A detail without BOTH bones is not cholo (needs the signature parts).
   assert.equal(
-    profileFrom("Softail", read({ apeHangers: feat(true, HI), heavyChrome: feat(true, HI), fishtailExhaust: feat(true, HI), blackedOut: feat(true, HI) })).cholo.isCholo,
+    profileFrom("Softail", read({ apeHangers: feat(true, HI), heavyChrome: feat(true, HI) })).cholo.isCholo,
     false,
-    "blacked-out disqualifies even a chrome+fishtail build"
-  );
-  // Whitewalls must NOT double-count as the whole signature (it's in both lists) — need ≥2 distinct non-ape cues.
-  assert.equal(
-    profileFrom("Softail", read({ apeHangers: feat(true, HI), whitewalls: feat(true, HI) })).cholo.isCholo,
-    false,
-    "apes + whitewalls ALONE (one non-ape cue) is not cholo — need a second old-school cue"
+    "apes + chrome but no fat spoke wheels is not cholo"
   );
 
-  // THE GOLD POSITIVES (Joe 7/26): real cholo builds — chrome finish + apes + period cue, not blacked-out.
-  // (a) Chrome Softail: chrome apes + heavy chrome + fishtails + chrome spokes + whitewall + low.
+  // THE GOLD NEGATIVE (Joe 7/26): a STOCK blacked-out 2020 Street Bob — apes + fat spokes + solo seat +
+  // low stance + blacked-out, but NO deliberate-build detail (no chrome/whitewalls/fishtails/custom paint/
+  // bags). Not cholo — because it's STOCK, not because it's black.
+  const stockStreetBob = profileFrom("Street Bob", read({
+    apeHangers: feat(true, 0.9), fatSpokeWheels: feat(true, 0.95), soloSeat: feat(true, 0.95),
+    lowStance: feat(true, 0.8), blackedOut: feat(true, 0.9)
+  }));
+  assert.equal(stockStreetBob.cholo.isCholo, false, "GOLD NEGATIVE: a STOCK blacked-out Street Bob (no build details) is NOT cholo");
+
+  // THE GOLD POSITIVES.
+  // (a) Chrome Softail — apes + fat spokes + heavy chrome + fishtails + whitewalls + low.
   const choloSoftail = profileFrom("Heritage Softail Classic", read({
-    apeHangers: feat(true, 0.9), heavyChrome: feat(true, 0.92), fishtailExhaust: feat(true, 0.9),
-    fatSpokeWheels: feat(true, 0.9), whitewalls: feat(true, 0.85), lowStance: feat(true, 0.85)
+    apeHangers: feat(true, 0.9), fatSpokeWheels: feat(true, 0.9), heavyChrome: feat(true, 0.92),
+    fishtailExhaust: feat(true, 0.9), whitewalls: feat(true, 0.85), lowStance: feat(true, 0.85)
   }));
   assert.equal(choloSoftail.cholo.isCholo, true, "GOLD POSITIVE: a chrome cholo Softail is cholo");
   assert.ok(choloSoftail.cholo.confidence >= EQUIPMENT_ASSERTION_CONFIDENCE_MIN, "a cholo build's confidence is at/above the floor");
-  // (b) Cholo Road King: chrome apes + whitewalls + chrome spoke wheel + chrome.
+  // (b) Chrome Road King — apes + fat spokes + whitewalls + chrome + bags.
   const choloRoadKing = profileFrom("Road King", read({
-    apeHangers: feat(true, 0.9), whitewalls: feat(true, 0.9), fatSpokeWheels: feat(true, 0.9), heavyChrome: feat(true, 0.9)
+    apeHangers: feat(true, 0.9), fatSpokeWheels: feat(true, 0.9), whitewalls: feat(true, 0.9),
+    heavyChrome: feat(true, 0.9), bags: { present: true, confidence: 0.9, bagType: "hard" }
   }));
-  assert.equal(choloRoadKing.cholo.isCholo, true, "GOLD POSITIVE: a cholo Road King is cholo");
+  assert.equal(choloRoadKing.cholo.isCholo, true, "GOLD POSITIVE: a chrome cholo Road King is cholo");
+  // (c) THE BLACKED-OUT CHOLO (Joe 7/26, IMG_1875): tall apes + fat spokes + custom paint + bags + slammed,
+  // all in BLACK. Finish-agnostic → this IS cholo even though blacked-out.
+  const blackedOutCholo = profileFrom("Road King", read({
+    apeHangers: feat(true, 0.92), fatSpokeWheels: feat(true, 0.95), customPaint: feat(true, 0.85),
+    bags: { present: true, confidence: 0.9, bagType: "hard" }, soloSeat: feat(true, 0.9),
+    lowStance: feat(true, 0.9), blackedOut: feat(true, 0.9)
+  }));
+  assert.equal(blackedOutCholo.cholo.isCholo, true, "GOLD POSITIVE: a BLACKED-OUT custom cholo (apes+fat spokes+custom paint+bags) IS cholo");
+  // ...and the blacked-out finish shaves its confidence toward 'confirm' vs the same build in chrome (never flips it).
+  const sameInChrome = profileFrom("Road King", read({
+    apeHangers: feat(true, 0.92), fatSpokeWheels: feat(true, 0.95), customPaint: feat(true, 0.85),
+    bags: { present: true, confidence: 0.9, bagType: "hard" }, soloSeat: feat(true, 0.9), lowStance: feat(true, 0.9)
+  }));
+  assert.ok(sameInChrome.cholo.confidence > blackedOutCholo.cholo.confidence, "a blacked-out cholo reads lower-confidence (lean on confirm) than the same build not blacked-out");
 
-  // Minimum true cholo — apes + whitewalls(finish) + fishtail(distinct period) = 2 distinct non-ape cues.
-  const minimal = profileFrom("Softail", read({ apeHangers: feat(true, HI), whitewalls: feat(true, HI), fishtailExhaust: feat(true, HI) }));
-  assert.equal(minimal.cholo.isCholo, true, "apes + whitewalls + fishtail (2 distinct cues) = cholo");
-  // chrome(finish) + fat spokes(period) also works.
-  assert.equal(profileFrom("Softail", read({ apeHangers: feat(true, HI), heavyChrome: feat(true, HI), fatSpokeWheels: feat(true, HI) })).cholo.isCholo, true, "apes + chrome + chrome spokes = cholo");
+  // A single deliberate-build detail is enough with both bones.
+  assert.equal(profileFrom("Softail", read({ apeHangers: feat(true, HI), fatSpokeWheels: feat(true, HI), whitewalls: feat(true, HI) })).cholo.isCholo, true, "apes + fat spokes + whitewalls = cholo");
+  assert.equal(profileFrom("Softail", read({ apeHangers: feat(true, HI), fatSpokeWheels: feat(true, HI), customPaint: feat(true, HI) })).cholo.isCholo, true, "apes + fat spokes + custom paint = cholo");
+  assert.equal(profileFrom("Softail", read({ apeHangers: feat(true, HI), fatSpokeWheels: feat(true, HI), bags: { present: true, confidence: HI, bagType: "hard" } })).cholo.isCholo, true, "apes + fat spokes + bags = cholo");
 
-  // Each contributing cue must be ASSERTED. A below-floor finish does not complete it.
+  // Each deciding cue must be ASSERTED — a below-floor bone or detail does not qualify.
   assert.equal(
-    profileFrom("Softail", read({ apeHangers: feat(true, HI), heavyChrome: feat(true, LO), fishtailExhaust: feat(true, HI) })).cholo.isCholo,
+    profileFrom("Softail", read({ apeHangers: feat(true, LO), fatSpokeWheels: feat(true, HI), heavyChrome: feat(true, HI) })).cholo.isCholo,
     false,
-    "a below-threshold finish cue does NOT complete the build (fail toward confirm)"
+    "a below-threshold ape read does NOT satisfy the bone (fail toward confirm)"
+  );
+  assert.equal(
+    profileFrom("Softail", read({ apeHangers: feat(true, HI), fatSpokeWheels: feat(true, HI), heavyChrome: feat(true, LO) })).cholo.isCholo,
+    false,
+    "a below-threshold detail does NOT complete the build (fail toward confirm)"
   );
 
-  // low stance is a SUPPORTING cue only — never a finish or period leg.
+  // solo seat + low stance are SUPPORTING only — never the deliberate-build detail (too common/stock).
   assert.equal(
-    profileFrom("Softail", read({ apeHangers: feat(true, HI), whitewalls: feat(true, HI), lowStance: feat(true, HI) })).cholo.isCholo,
+    profileFrom("Softail", read({ apeHangers: feat(true, HI), fatSpokeWheels: feat(true, HI), soloSeat: feat(true, HI), lowStance: feat(true, HI) })).cholo.isCholo,
     false,
-    "low stance does NOT stand in for a distinct period cue (supporting only)"
+    "solo seat + low stance do NOT count as a deliberate-build detail (supporting only)"
   );
-  assert.ok(minimal.cholo.cues.includes("apeHangers"), "the contributing cues are recorded");
+  assert.ok(choloSoftail.cholo.cues.includes("apeHangers") && choloSoftail.cholo.cues.includes("fatSpokeWheels"), "the signature bones are recorded in cues");
 }
 
 // ===========================================================================
@@ -177,9 +187,9 @@ function profileFrom(model: string, desc: VehicleEquipmentDescription): Equipmen
   const stockHeritage = profileFrom("Heritage Classic", read({ windshield: feat(true, HI) }));
   assert.equal(stockHeritage.cholo.isCholo, false, "a stock Heritage is NOT cholo (never from the base model, even a canvas one)");
 
-  // A Sportster (NOT a canvas model) WITH a real chrome cholo build IS cholo — model never blocks it.
-  const choloSportster = profileFrom("Sportster Iron 883", read({ apeHangers: feat(true, HI), heavyChrome: feat(true, HI), whitewalls: feat(true, HI) }));
-  assert.equal(choloSportster.cholo.isCholo, true, "a chrome cholo build on a non-canvas Sportster is STILL cholo (model never blocks)");
+  // A Sportster (NOT a canvas model) WITH a real cholo build IS cholo — model never blocks it.
+  const choloSportster = profileFrom("Sportster Iron 883", read({ apeHangers: feat(true, HI), fatSpokeWheels: feat(true, HI), heavyChrome: feat(true, HI) }));
+  assert.equal(choloSportster.cholo.isCholo, true, "a cholo build on a non-canvas Sportster is STILL cholo (model never blocks)");
   assert.equal(choloSportster.cholo.baseModelIsCholoCanvas, false, "the Sportster is not flagged a canvas model");
 
   // The canvas prior is informational + a bounded confidence nudge, and NEVER flips isCholo.
@@ -187,9 +197,9 @@ function profileFrom(model: string, desc: VehicleEquipmentDescription): Equipmen
   assert.equal(isCholoCanvasModel("Softail Deluxe"), true, "Deluxe is a cholo canvas model");
   assert.equal(isCholoCanvasModel("Road King"), true, "Road King is a cholo canvas model");
   assert.equal(isCholoCanvasModel("Street Bob"), false, "Street Bob is not a canvas model");
-  const onCanvas = profileFrom("Road King", read({ apeHangers: feat(true, 0.9), heavyChrome: feat(true, 0.9), whitewalls: feat(true, 0.9) }));
-  const offCanvas = profileFrom("Nightster", read({ apeHangers: feat(true, 0.9), heavyChrome: feat(true, 0.9), whitewalls: feat(true, 0.9) }));
-  assert.equal(onCanvas.cholo.isCholo, true, "canvas base + chrome build = cholo");
+  const onCanvas = profileFrom("Road King", read({ apeHangers: feat(true, 0.9), fatSpokeWheels: feat(true, 0.9), heavyChrome: feat(true, 0.9) }));
+  const offCanvas = profileFrom("Nightster", read({ apeHangers: feat(true, 0.9), fatSpokeWheels: feat(true, 0.9), heavyChrome: feat(true, 0.9) }));
+  assert.equal(onCanvas.cholo.isCholo, true, "canvas base + cholo build = cholo");
   assert.equal(offCanvas.cholo.isCholo, true, "same build on a non-canvas base is STILL cholo (prior never flips it)");
   assert.ok(onCanvas.cholo.confidence > offCanvas.cholo.confidence, "the canvas prior nudges confidence up vs an atypical base (soft signal only)");
 }
@@ -245,11 +255,11 @@ function profileFrom(model: string, desc: VehicleEquipmentDescription): Equipmen
 // (5) Watch fires ONLY at the confident threshold (fail-safe otherwise).
 // ===========================================================================
 {
-  const confidentCholo = profileFrom("Softail Deluxe", read({ apeHangers: feat(true, HI), heavyChrome: feat(true, HI), fishtailExhaust: feat(true, HI) }));
+  const confidentCholo = profileFrom("Softail Deluxe", read({ apeHangers: feat(true, HI), fatSpokeWheels: feat(true, HI), heavyChrome: feat(true, HI) }));
   assert.equal(watchCholoFireGate(confidentCholo), true, "a confident cholo build fires the watch");
 
-  const shakyCholo = profileFrom("Softail Deluxe", read({ apeHangers: feat(true, HI), heavyChrome: feat(true, LO), fishtailExhaust: feat(true, HI) }));
-  assert.equal(watchCholoFireGate(shakyCholo), false, "a below-threshold finish cue means no fire (fail toward confirm)");
+  const shakyCholo = profileFrom("Softail Deluxe", read({ apeHangers: feat(true, HI), fatSpokeWheels: feat(true, LO), heavyChrome: feat(true, HI) }));
+  assert.equal(watchCholoFireGate(shakyCholo), false, "a below-threshold signature bone means no fire (fail toward confirm)");
 
   const notCholo = profileFrom("Road King", read({ windshield: feat(true, HI) }));
   assert.equal(watchCholoFireGate(notCholo), false, "a non-cholo unit never fires a cholo watch");
@@ -284,17 +294,17 @@ function profileFrom(model: string, desc: VehicleEquipmentDescription): Equipmen
   for (const k of ["bags", "windshield", "fairing", "backrestSissybar", "tourpak", "forwardControls", "apeHangers", "floorboards", "crashBars"] as const) {
     assert.ok((EQUIPMENT_FEATURE_KEYS as readonly string[]).includes(k), `original equipment key preserved: ${k}`);
   }
-  // The recalibrated cholo cue legs are configured as documented (7/26): chrome/whitewall FINISH is
-  // mandatory; the period cue is a distinct old-school signal.
-  assert.deepEqual(CHOLO_FINISH_CUES, ["heavyChrome", "whitewalls"], "finish leg (MANDATORY) = heavy chrome OR whitewalls");
-  assert.deepEqual(CHOLO_PERIOD_CUES, ["fishtailExhaust", "whitewalls", "fatSpokeWheels"], "period leg = fishtail OR whitewalls OR fat chrome spokes");
+  // The finish-agnostic cholo signature is configured as documented (7/26): two signature bones + ≥1
+  // deliberate-build detail (bags is a shared equipment key reused as a cholo detail).
+  assert.deepEqual(CHOLO_REQUIRED_BONES, ["apeHangers", "fatSpokeWheels"], "signature bones = tall apes + fat spoke wheels");
+  assert.deepEqual(CHOLO_DETAIL_CUES, ["heavyChrome", "whitewalls", "fishtailExhaust", "customPaint", "bags"], "deliberate-build details = chrome / whitewalls / fishtails / custom paint / bags");
 
   // An equipment "bags + windshield" query is UNAFFECTED by the added cholo cues — a bagger with a
   // windshield (and, incidentally, ape hangers) still matches; the cholo cues never enter the query.
   const bagger = profileFrom("Road King", read({ bags: { present: true, confidence: HI, bagType: "hard" }, windshield: feat(true, HI), apeHangers: feat(true, HI) }));
   assert.equal(matchesEquipmentQuery(bagger, { bags: true, windshield: true }), true, "the equipment query still matches a real bagger — cholo cues don't interfere");
   // And a cholo build with NO bags does not match a bags query (the cues are orthogonal to the query).
-  const choloNoBags = profileFrom("Softail", read({ apeHangers: feat(true, HI), whitewalls: feat(true, HI), heavyChrome: feat(true, HI) }));
+  const choloNoBags = profileFrom("Softail", read({ apeHangers: feat(true, HI), fatSpokeWheels: feat(true, HI), heavyChrome: feat(true, HI) }));
   assert.equal(matchesEquipmentQuery(choloNoBags, { bags: true }), false, "a cholo build without bags does not satisfy a bags query");
 }
 
