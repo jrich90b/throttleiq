@@ -32,6 +32,13 @@ type Thresholds = {
   toneRespondedPassRateMin: number;
   toneMissingMax: number;
   charterViolationRateMax: number;
+  // A RATE (charter % / tone %) may only fail the gate once its sample clears a
+  // floor — one flag on a quiet weekend (e.g. 1/11 outbounds = 9.1%) is noise,
+  // not a rollout blocker (Joe ruling 2026-07-26). Absolute zero-tolerance
+  // counts (template-sourced, repeats, persona-reintro, owned-bike, missing
+  // responses) are NOT sample-gated and still fire on any volume.
+  minOutboundForRate: number;
+  minRespondedForRate: number;
   templateSourcedViolationsMax: number;
   repeatsMax: number;
   personaReintrosMax: number;
@@ -49,6 +56,8 @@ const DEFAULT_THRESHOLDS: Thresholds = {
   toneRespondedPassRateMin: num(process.env.RELEASE_GATE_TONE_PASS_MIN, 85),
   toneMissingMax: num(process.env.RELEASE_GATE_TONE_MISSING_MAX, 1),
   charterViolationRateMax: num(process.env.RELEASE_GATE_CHARTER_RATE_MAX, 5),
+  minOutboundForRate: num(process.env.RELEASE_GATE_MIN_OUTBOUND_FOR_RATE, 20),
+  minRespondedForRate: num(process.env.RELEASE_GATE_MIN_RESPONDED_FOR_RATE, 5),
   templateSourcedViolationsMax: 0,
   repeatsMax: 0,
   personaReintrosMax: 0,
@@ -135,6 +144,8 @@ export function buildDayRow(args: {
     .filter(row => String(row?.check ?? "") === "persona_reintro")
     .reduce((sum, row) => sum + num(row?.count), 0);
   const charterRate = charter?.violationRate ?? null;
+  const charterOutbound = num(charter?.outboundCount);
+  const toneResponded = num(tone?.respondedTurns);
   const repeats = num(charter?.repeatCount);
 
   const watchdogRows: any[] = Array.isArray(args.routeWatchdog?.stuckTurns?.rows)
@@ -202,6 +213,8 @@ export function buildDayRow(args: {
     toneMissingResponses: toneMissing,
     charterViolationRate: typeof charterRate === "number" ? charterRate : null,
     charterViolations: num(charter?.violationCount),
+    charterOutboundCount: charterOutbound,
+    toneRespondedTurns: toneResponded,
     templateSourcedViolations: templateSourced,
     repeats,
     personaReintros,
@@ -222,14 +235,16 @@ export function buildDayRow(args: {
   };
 
   const failures: string[] = [];
-  if (tonePass != null && tonePass < t.toneRespondedPassRateMin) {
+  // Tone/charter RATES only gate once the sample clears the floor; below it the
+  // rate is still reported as a metric but too noisy to block the streak.
+  if (tonePass != null && tonePass < t.toneRespondedPassRateMin && toneResponded >= t.minRespondedForRate) {
     failures.push(`tone pass ${tonePass} < ${t.toneRespondedPassRateMin}`);
   }
   if (toneMissing > t.toneMissingMax) {
     failures.push(`tone missing ${toneMissing} > ${t.toneMissingMax}`);
   }
-  if (typeof charterRate === "number" && charterRate > t.charterViolationRateMax) {
-    failures.push(`charter rate ${charterRate}% > ${t.charterViolationRateMax}%`);
+  if (typeof charterRate === "number" && charterRate > t.charterViolationRateMax && charterOutbound >= t.minOutboundForRate) {
+    failures.push(`charter rate ${charterRate}% > ${t.charterViolationRateMax}% (n=${charterOutbound})`);
   }
   if (templateSourced > t.templateSourcedViolationsMax) {
     failures.push(`template-sourced charter violations ${templateSourced} > ${t.templateSourcedViolationsMax}`);
@@ -419,7 +434,7 @@ function selfTest() {
   const dirtyDay = buildDayRow({
     date: "2026-06-20",
     toneSummary: { totalInboundTurns: 12, respondedTurns: 10, respondedPassRate: 57, missingResponseCount: 7 },
-    charterSummary: { summary: { violationCount: 9, violationRate: 24, repeatCount: 2, byCheck: [
+    charterSummary: { summary: { outboundCount: 38, violationCount: 9, violationRate: 24, repeatCount: 2, byCheck: [
       { check: "banned_phrase", count: 3 },
       { check: "persona_reintro", count: 1 }
     ] } },
@@ -436,6 +451,40 @@ function selfTest() {
   assertOk(dirtyDay.metrics.personaReintros === 1, "persona reintro counted");
   assertOk(dirtyDay.metrics.templateSourcedViolations === 3, "template-sourced counted");
   assertOk(dirtyDay.failures.length >= 6, `dirty day lists failures, got: ${dirtyDay.failures.join("; ")}`);
+
+  // Low-sample weekend (Joe ruling 2026-07-26): a single charter flag on tiny
+  // volume (1/11 = 9.1%) AND a 0% tone pass over a single responded turn must
+  // NOT dirty the gate. The rates are still reported as metrics.
+  const lowSampleWeekend = buildDayRow({
+    date: "2026-07-26",
+    toneSummary: { totalInboundTurns: 1, respondedTurns: 1, respondedPassRate: 0, missingResponseCount: 0 },
+    charterSummary: { summary: { outboundCount: 11, violationCount: 1, violationRate: 9.1, repeatCount: 0, byCheck: [{ check: "long_brand_repeat", count: 1 }] } },
+    outcomeQaReport: { findings: [] },
+    routeWatchdog: { stuckTurns: { rows: [] } },
+    sinceHours: 24,
+    nowMs: Date.parse("2026-07-26T08:15:00.000Z")
+  });
+  assertOk(lowSampleWeekend.clean, `low-sample weekend rates must not gate, got: ${lowSampleWeekend.failures.join("; ")}`);
+  assertOk(
+    lowSampleWeekend.metrics.charterOutboundCount === 11 && lowSampleWeekend.metrics.charterViolationRate === 9.1,
+    "low-sample charter rate + denominator still reported as metrics"
+  );
+
+  // Same rate, adequate sample: the guard must NOT neuter the gate — a real
+  // 10% charter rate over 40 outbounds still fails.
+  const highSampleCharter = buildDayRow({
+    date: "2026-07-26",
+    toneSummary: { totalInboundTurns: 12, respondedTurns: 11, respondedPassRate: 92, missingResponseCount: 0 },
+    charterSummary: { summary: { outboundCount: 40, violationCount: 4, violationRate: 10, repeatCount: 0, byCheck: [{ check: "long_brand_repeat", count: 4 }] } },
+    outcomeQaReport: { findings: [] },
+    routeWatchdog: { stuckTurns: { rows: [] } },
+    sinceHours: 24,
+    nowMs: Date.parse("2026-07-26T08:15:00.000Z")
+  });
+  assertOk(
+    !highSampleCharter.clean && highSampleCharter.failures.some(f => f.includes("charter rate")),
+    `charter rate must still gate with adequate sample, got: ${highSampleCharter.failures.join("; ")}`
+  );
 
   let rows: DayRow[] = [];
   for (const [d, c] of [["2026-06-14", false], ["2026-06-15", true], ["2026-06-16", true]] as const) {
