@@ -101,6 +101,101 @@ export function checkMessage(body: string, opts: {
   return out;
 }
 
+// Scan conversations for charter violations. Extracted from main() so the loop
+// (first-touch / stale-draft handling) is unit-testable.
+export function scanConversations(
+  convs: any[],
+  windowStart: number
+): { violations: Violation[]; outboundCount: number; repeatCount: number } {
+  const violations: Violation[] = [];
+  let outboundCount = 0;
+  let repeatCount = 0;
+
+  for (const conv of convs) {
+    const msgs: any[] = Array.isArray(conv?.messages) ? conv.messages : [];
+    let staffHasSent = false;
+    let sawOutbound = false;
+    const sentNorms = new Map<string, string>();
+    const campaignThread = (conv as any)?.campaignThread;
+    for (const m of msgs) {
+      if (m?.direction !== "out") continue;
+      if (isShadowReplayMessage(m)) continue;
+      // A staff-composed Campaign Studio blast is not the agent's conversational
+      // voice — leading with the full dealer brand is correct for a marketing
+      // send, so it must not count against the Agent Voice Charter (report-only
+      // exclusion; see scoringExclusions.isCampaignBroadcastSend).
+      if (isCampaignBroadcastSend(m, campaignThread)) continue;
+      // A staff member typing their own SMS from the console is not the agent's voice.
+      // Their message still marks staffHasSent below (that IS charter-relevant context
+      // for the agent's next turn) — it just is not graded as an agent message.
+      if (isStaffAuthoredOutbound(m)) {
+        staffHasSent = true;
+        continue;
+      }
+      const provider = String(m?.provider ?? "");
+      const body = String(m?.body ?? "");
+      const isDraft = provider === "draft_ai";
+      const isSent = SENT_PROVIDERS.has(provider);
+      if (!isDraft && !isSent) continue;
+      // An overwritten/superseded draft (draftStatus === "stale") was never sent
+      // to the customer, so it must NOT establish that a first-touch intro
+      // already happened — otherwise the genuine first-touch that REPLACED it is
+      // mis-scored as a brand-name "repeat" (David Boos 2026-07-26: a pre-qual
+      // draft overwritten by a credit-app lead a minute later flipped the real
+      // first-touch credit-app reply into a long_brand_repeat). It never reached
+      // anyone, so it is neither graded nor counted toward first-touch.
+      if (isDraft && String(m?.draftStatus ?? "") === "stale") continue;
+      const firstOutbound = !sawOutbound;
+      sawOutbound = true;
+      const atMs = Date.parse(String(m?.at ?? ""));
+      const inWindow = Number.isFinite(atMs) && atMs >= windowStart;
+
+      if (isSent && body.trim().length >= 40) {
+        const nb = norm(body);
+        if (sentNorms.has(nb)) {
+          if (inWindow) {
+            repeatCount++;
+            violations.push({
+              check: "verbatim_repeat",
+              convId: String(conv?.id ?? ""),
+              at: String(m?.at ?? ""),
+              provider,
+              draft: false,
+              detail: `same message previously sent at ${sentNorms.get(nb)}`,
+              body: body.slice(0, 200)
+            });
+          }
+        } else {
+          sentNorms.set(nb, String(m?.at ?? ""));
+        }
+      }
+
+      if (inWindow && body.trim()) {
+        outboundCount++;
+        const found = checkMessage(body, {
+          firstOutbound,
+          smsLike: SMS_PROVIDERS.has(provider),
+          staffHasSent
+        });
+        for (const v of found) {
+          violations.push({
+            check: v.check,
+            convId: String(conv?.id ?? ""),
+            at: String(m?.at ?? ""),
+            provider,
+            draft: isDraft && m?.draftStatus !== undefined,
+            detail: v.detail,
+            body: body.slice(0, 200)
+          });
+        }
+      }
+      if (isSent && String(m?.actorUserName ?? "").trim()) staffHasSent = true;
+    }
+  }
+
+  return { violations, outboundCount, repeatCount };
+}
+
 function selfTest() {
   const assert = (cond: boolean, label: string) => {
     if (!cond) {
@@ -192,6 +287,53 @@ function selfTest() {
     ).length === 0,
     "staff-style message passes clean"
   );
+  // Loop-level: an overwritten (stale) first draft must NOT make the real
+  // first-touch that replaced it read as a brand-name repeat (David Boos 7/26).
+  const w = Date.parse("2026-07-26T00:00:00.000Z");
+  const davidBoos = [
+    {
+      id: "+17169906891",
+      messages: [
+        { direction: "in", provider: "sendgrid_adf", at: "2026-07-26T03:20:08.000Z", body: "WEB LEAD (ADF) Prequal" },
+        // pre-qual intro draft, overwritten by the credit-app lead → stale, never sent
+        { direction: "out", provider: "draft_ai", draftStatus: "stale", at: "2026-07-26T03:20:12.000Z",
+          body: "Hey David, it's Alexandra over at American Harley-Davidson. Thanks — I received your pre-qualification submission." },
+        { direction: "in", provider: "sendgrid_adf", at: "2026-07-26T03:21:08.000Z", body: "WEB LEAD (ADF) HDFS COA Online" },
+        // the genuine first-touch that actually sent
+        { direction: "out", provider: "twilio", at: "2026-07-26T03:21:11.000Z",
+          body: "Hey David, it's Alexandra over at American Harley-Davidson. Thanks — I received your credit application. I'll have our finance team reach out shortly. Reply STOP to opt out." }
+      ]
+    }
+  ];
+  const boosScan = scanConversations(davidBoos, w);
+  assert(
+    !boosScan.violations.some(v => v.check === "long_brand_repeat"),
+    `overwritten (stale) draft must not flip the real first-touch into long_brand_repeat, got: ${boosScan.violations.map(v => v.check).join(", ")}`
+  );
+  assert(
+    boosScan.outboundCount === 1,
+    `stale draft is not counted toward outbound denominator, got outboundCount=${boosScan.outboundCount}`
+  );
+
+  // Guard the guard: a genuine SECOND sent intro (both real, no stale) still
+  // fires long_brand_repeat — the fix only ignores overwritten drafts.
+  const twoRealSends = [
+    {
+      id: "+15550000000",
+      messages: [
+        { direction: "out", provider: "twilio", at: "2026-07-26T03:20:12.000Z",
+          body: "Hey David, it's Alexandra at American Harley-Davidson. Thanks for reaching out." },
+        { direction: "out", provider: "twilio", at: "2026-07-26T05:00:00.000Z",
+          body: "Just following up from American Harley-Davidson — did you want to set a time?" }
+      ]
+    }
+  ];
+  const twoScan = scanConversations(twoRealSends, w);
+  assert(
+    twoScan.violations.some(v => v.check === "long_brand_repeat"),
+    `a real second brand-name touch still fires long_brand_repeat, got: ${twoScan.violations.map(v => v.check).join(", ")}`
+  );
+
   console.log("PASS voice charter audit self-test");
 }
 
@@ -226,83 +368,7 @@ function main() {
   const convs: any[] = Array.isArray(raw?.conversations) ? raw.conversations : [];
   const windowStart = Date.now() - sinceHours * 60 * 60 * 1000;
 
-  const violations: Violation[] = [];
-  let outboundCount = 0;
-  let repeatCount = 0;
-
-  for (const conv of convs) {
-    const msgs: any[] = Array.isArray(conv?.messages) ? conv.messages : [];
-    let staffHasSent = false;
-    let sawOutbound = false;
-    const sentNorms = new Map<string, string>();
-    const campaignThread = (conv as any)?.campaignThread;
-    for (const m of msgs) {
-      if (m?.direction !== "out") continue;
-      if (isShadowReplayMessage(m)) continue;
-      // A staff-composed Campaign Studio blast is not the agent's conversational
-      // voice — leading with the full dealer brand is correct for a marketing
-      // send, so it must not count against the Agent Voice Charter (report-only
-      // exclusion; see scoringExclusions.isCampaignBroadcastSend).
-      if (isCampaignBroadcastSend(m, campaignThread)) continue;
-      // A staff member typing their own SMS from the console is not the agent's voice.
-      // Their message still marks staffHasSent below (that IS charter-relevant context
-      // for the agent's next turn) — it just is not graded as an agent message.
-      if (isStaffAuthoredOutbound(m)) {
-        staffHasSent = true;
-        continue;
-      }
-      const provider = String(m?.provider ?? "");
-      const body = String(m?.body ?? "");
-      const isDraft = provider === "draft_ai";
-      const isSent = SENT_PROVIDERS.has(provider);
-      if (!isDraft && !isSent) continue;
-      const firstOutbound = !sawOutbound;
-      sawOutbound = true;
-      const atMs = Date.parse(String(m?.at ?? ""));
-      const inWindow = Number.isFinite(atMs) && atMs >= windowStart;
-
-      if (isSent && body.trim().length >= 40) {
-        const nb = norm(body);
-        if (sentNorms.has(nb)) {
-          if (inWindow) {
-            repeatCount++;
-            violations.push({
-              check: "verbatim_repeat",
-              convId: String(conv?.id ?? ""),
-              at: String(m?.at ?? ""),
-              provider,
-              draft: false,
-              detail: `same message previously sent at ${sentNorms.get(nb)}`,
-              body: body.slice(0, 200)
-            });
-          }
-        } else {
-          sentNorms.set(nb, String(m?.at ?? ""));
-        }
-      }
-
-      if (inWindow && body.trim()) {
-        outboundCount++;
-        const found = checkMessage(body, {
-          firstOutbound,
-          smsLike: SMS_PROVIDERS.has(provider),
-          staffHasSent
-        });
-        for (const v of found) {
-          violations.push({
-            check: v.check,
-            convId: String(conv?.id ?? ""),
-            at: String(m?.at ?? ""),
-            provider,
-            draft: isDraft && m?.draftStatus !== undefined,
-            detail: v.detail,
-            body: body.slice(0, 200)
-          });
-        }
-      }
-      if (isSent && String(m?.actorUserName ?? "").trim()) staffHasSent = true;
-    }
-  }
+  const { violations, outboundCount, repeatCount } = scanConversations(convs, windowStart);
 
   const byCheck = new Map<string, number>();
   for (const v of violations) byCheck.set(v.check, (byCheck.get(v.check) ?? 0) + 1);
