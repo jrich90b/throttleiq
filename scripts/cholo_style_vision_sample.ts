@@ -49,7 +49,8 @@ const CHOLO_CUE_KEYS = [
   "fishtailExhaust",
   "soloSeat",
   "heavyChrome",
-  "lowStance"
+  "lowStance",
+  "blackedOut"
 ] as const;
 const CUE_LABEL: Record<string, string> = {
   apeHangers: "ape hangers",
@@ -58,7 +59,8 @@ const CUE_LABEL: Record<string, string> = {
   fishtailExhaust: "fishtails",
   soloSeat: "solo seat",
   heavyChrome: "heavy chrome",
-  lowStance: "low stance"
+  lowStance: "low stance",
+  blackedOut: "BLACKED-OUT(disqualifier)"
 };
 
 function cueCell(profile: EquipmentProfile): string {
@@ -93,11 +95,13 @@ async function main() {
   lines.push("");
   lines.push(
     "What this is: for each real used unit below, the vision looked at the actual listing photos and scored " +
-      "the CHOLO BUILD SIGNATURE — ape hangers AND (whitewalls OR fat spoke wheels) AND (fishtail OR solo seat OR " +
-      `heavy chrome), each cue needing at least ${Math.round(EQUIPMENT_ASSERTION_CONFIDENCE_MIN * 100)}% confidence. ` +
-      "A unit reads **CHOLO** only when the full combination crosses the bar — never from one part and never from " +
-      "the base model (a stock Heritage is NOT cholo). This is DARK: no customer sees it. Joe: spot-check the " +
-      "CHOLO? column against the photo. Even a YES is a 'looks like — let me confirm', never a hard claim.");
+      "the CHOLO BUILD SIGNATURE (recalibrated 7/26): tall ape hangers AND the CHROME/WHITEWALL lowrider FINISH " +
+      "(heavy chrome OR whitewalls — MANDATORY) AND a period cue (fishtails OR whitewalls OR chrome fat spokes), " +
+      `and NOT blacked-out. Each cue needs ≥${Math.round(EQUIPMENT_ASSERTION_CONFIDENCE_MIN * 100)}% confidence. ` +
+      "Cholo is the CHROME lowrider look — a murdered-out/blacked-out bike is disqualified, no matter the bars. " +
+      "The base model (Heritage/Deluxe/Road King = the usual canvas) is a SOFT prior only, never a decider. " +
+      "A unit reads **CHOLO** only when the whole signature holds — never one part, never the model alone. DARK: " +
+      "no customer sees it. Joe: spot-check the CHOLO? column against the photo. A YES is 'looks like — let me confirm'.");
   lines.push("");
 
   if (dry) {
@@ -136,7 +140,7 @@ async function main() {
       continue;
     }
     try {
-      const res = await getUnitEquipmentProfile(item, { cache });
+      const res = await getUnitEquipmentProfile(item, { cache, forceRefresh: process.env.CHOLO_SAMPLE_FORCE === "1" });
       if (res.ranVision) ran++;
       if (!res.profile) {
         failures++;

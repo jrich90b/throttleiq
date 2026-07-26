@@ -13631,6 +13631,10 @@ export type VehicleEquipmentDescription = {
   soloSeat: EquipmentFeatureRead;
   heavyChrome: EquipmentFeatureRead;
   lowStance: EquipmentFeatureRead;
+  // blackedOut is a cholo DISQUALIFIER read (recalibrated 2026-07-26): a predominantly dark/murdered-out
+  // finish (black brightwork, black wheels/pipes) → NOT cholo, no matter the bars. present:false when
+  // the flag is off.
+  blackedOut: EquipmentFeatureRead;
   overallConfidence: number;
   notes: string;
 };
@@ -13682,7 +13686,8 @@ export async function describeUnitEquipmentWithLLM(args: {
     "has_fishtail_exhaust",
     "has_solo_seat",
     "has_heavy_chrome",
-    "has_low_stance"
+    "has_low_stance",
+    "has_blacked_out"
   ] as const;
 
   const schema: { [key: string]: unknown } = {
@@ -13725,7 +13730,8 @@ export async function describeUnitEquipmentWithLLM(args: {
             has_fishtail_exhaust: EQUIPMENT_FEATURE_SCHEMA,
             has_solo_seat: EQUIPMENT_FEATURE_SCHEMA,
             has_heavy_chrome: EQUIPMENT_FEATURE_SCHEMA,
-            has_low_stance: EQUIPMENT_FEATURE_SCHEMA
+            has_low_stance: EQUIPMENT_FEATURE_SCHEMA,
+            has_blacked_out: EQUIPMENT_FEATURE_SCHEMA
           }
         : {}),
       overall_confidence: { type: "number" },
@@ -13789,15 +13795,21 @@ export async function describeUnitEquipmentWithLLM(args: {
       ? [
           "",
           "CHOLO-BUILD CUES (report each like the equipment above — present only if you actually SEE it, with a",
-          "per-cue confidence; a bad angle → present=false, low confidence; NEVER infer from the model name):",
+          "per-cue confidence; a bad angle → present=false, low confidence; NEVER infer from the model name).",
+          "Cholo is a CHROME-and-whitewall OLD-SCHOOL LOWRIDER look — bright/shiny, NOT murdered-out. Judge the",
+          "FINISH carefully (chrome vs black), it is the deciding factor:",
           "- has_whitewalls: white-sidewall tires (a wide white band on the tire sidewall).",
-          "- has_fat_spoke_wheels: fat chrome/laced SPOKE wheels (many thin metal spokes), often a big 21\" front —",
-          "  NOT solid cast/mag wheels and NOT plain black spokes.",
-          "- has_fishtail_exhaust: exhaust tips that flare open at the end like a fish's tail (long, splayed slash).",
+          "- has_fat_spoke_wheels: fat CHROME/POLISHED laced SPOKE wheels — BRIGHT metal spokes, often a big 21\"",
+          "  front. Set FALSE for solid cast/mag wheels AND for BLACK / blacked-out / dark spoke wheels (black",
+          "  spokes are NOT a cholo cue — cholo spokes shine).",
+          "- has_fishtail_exhaust: CHROME exhaust tips that flare open at the end like a fish's tail (long slash).",
           "- has_solo_seat: a SINGLE-rider seat (one saddle, no passenger seat), often leather/tooled.",
-          "- has_heavy_chrome: unusually heavy chrome/gold brightwork — engraved/tribal covers, extra chrome",
-          "  everywhere beyond a normal bike (a custom show-chrome look), not just a couple stock chrome parts.",
+          "- has_heavy_chrome: unusually heavy CHROME/gold brightwork — chrome forks, wheels, pipes, covers,",
+          "  engraved/tribal covers; a bright custom show-chrome look, NOT just a couple stock chrome parts.",
           "- has_low_stance: a low, 'slammed' stance — the bike sits low to the ground with long, low lines.",
+          "- has_blacked_out: the bike is predominantly DARK/MURDERED-OUT — black or dark wheels, black pipes,",
+          "  black/dark brightwork, minimal chrome (e.g. a factory blacked-out Street Bob). This is the OPPOSITE",
+          "  of cholo; set TRUE with high confidence when the bike is clearly a dark/blacked-out build.",
           "These cues describe a CUSTOM lowrider/Chicano BUILD; report what you see, do not judge the overall style."
         ].join("\n")
       : "",
@@ -13876,6 +13888,7 @@ export async function describeUnitEquipmentWithLLM(args: {
       soloSeat: readFeature(parsed.has_solo_seat),
       heavyChrome: readFeature(parsed.has_heavy_chrome),
       lowStance: readFeature(parsed.has_low_stance),
+      blackedOut: readFeature(parsed.has_blacked_out),
       overallConfidence: clamp01(parsed.overall_confidence),
       notes: String(parsed.notes ?? "").trim()
     };

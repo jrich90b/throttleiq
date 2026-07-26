@@ -51,9 +51,10 @@ import { checkMessage } from "./voice_charter_audit.ts";
 
 // Confidence floor is the documented default.
 assert.equal(EQUIPMENT_ASSERTION_CONFIDENCE_MIN, 0.7, "assertion floor mirrors VISION_CONFIDENCE_MIN default (0.7)");
-// 9 equipment/accessory features + 6 cholo-BUILD cues (whitewalls, fatSpokeWheels, fishtailExhaust,
-// soloSeat, heavyChrome, lowStance) = 15. apeHangers is shared (an equipment feature reused as a cholo cue).
-assert.equal(EQUIPMENT_FEATURE_KEYS.length, 15, "9 equipment features + 6 cholo-build cues = 15");
+// 9 equipment/accessory features + 7 cholo-BUILD cues (whitewalls, fatSpokeWheels, fishtailExhaust,
+// soloSeat, heavyChrome, lowStance, blackedOut) = 16. apeHangers is shared (an equipment feature reused
+// as a cholo cue). blackedOut is the cholo DISQUALIFIER read (added 7/26 in the recalibration).
+assert.equal(EQUIPMENT_FEATURE_KEYS.length, 16, "9 equipment features + 7 cholo-build cues = 16");
 
 // --- helper: build a full vision read with sane defaults ---
 function feat(present: boolean, confidence: number) {
@@ -77,6 +78,7 @@ function desc(overrides: Partial<VehicleEquipmentDescription>): VehicleEquipment
     soloSeat: feat(false, 0),
     heavyChrome: feat(false, 0),
     lowStance: feat(false, 0),
+    blackedOut: feat(false, 0),
     overallConfidence: 0.8,
     notes: "",
     ...overrides
@@ -300,7 +302,7 @@ assert.equal(matchesEquipmentQuery(shakyShield, { bags: true }), true, "the conf
   assert.equal((q as any).fairing, undefined, "a windshield ask NEVER sets fairing (Joe's ruling at the parse level)");
   assert.equal((q as any).windshield, true, "windshield is preserved as its own key");
 
-  // The 9 shoppable EQUIPMENT features are a SUBSET of the vision taxonomy (which also carries the 6
+  // The 9 shoppable EQUIPMENT features are a SUBSET of the vision taxonomy (which also carries the 7
   // vision-only cholo BUILD cues — those are never requestable via an equipment query). Every requestable
   // key must be a real taxonomy feature, and all 9 shoppable ones map through.
   const REQUESTABLE_EQUIPMENT_KEYS = [
