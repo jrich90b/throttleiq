@@ -37,6 +37,7 @@ import {
   CHOLO_REQUIRED_BONES,
   CHOLO_DETAIL_CUES,
   isCholoCanvasModel,
+  isCholoExcludedPlatform,
   buildEquipmentProfile,
   deriveCholoBuild,
   watchCholoFireGate,
@@ -116,13 +117,24 @@ function profileFrom(model: string, desc: VehicleEquipmentDescription): Equipmen
   );
 
   // THE GOLD NEGATIVE (Joe 7/26): a STOCK blacked-out 2020 Street Bob — apes + fat spokes + solo seat +
-  // low stance + blacked-out, but NO deliberate-build detail (no chrome/whitewalls/fishtails/custom paint/
-  // bags). Not cholo — because it's STOCK, not because it's black.
+  // low stance + blacked-out, but NO deliberate-build detail. Not cholo (no details).
   const stockStreetBob = profileFrom("Street Bob", read({
     apeHangers: feat(true, 0.9), fatSpokeWheels: feat(true, 0.95), soloSeat: feat(true, 0.95),
     lowStance: feat(true, 0.8), blackedOut: feat(true, 0.9)
   }));
   assert.equal(stockStreetBob.cholo.isCholo, false, "GOLD NEGATIVE: a STOCK blacked-out Street Bob (no build details) is NOT cholo");
+
+  // BOBBER EXCLUSION (Joe 7/26: "Street Bobs will never really be considered a cholo — that's a bobber").
+  // Even a Street Bob WITH the full build + deliberate details (whitewalls etc.) is NOT cholo — the bobber
+  // platform is hard-excluded. This is the U591-18 case (blacked-out Street Bob w/ whitewalls + apes).
+  assert.equal(isCholoExcludedPlatform("Street Bob"), true, "Street Bob is an excluded bobber platform");
+  assert.equal(isCholoExcludedPlatform("Street Bob 114"), true, "Street Bob variants are excluded too");
+  assert.equal(isCholoExcludedPlatform("Road King"), false, "a Road King is NOT an excluded platform");
+  const builtStreetBob = profileFrom("Street Bob", read({
+    apeHangers: feat(true, 0.95), fatSpokeWheels: feat(true, 0.9), whitewalls: feat(true, 0.99),
+    soloSeat: feat(true, 0.98), lowStance: feat(true, 0.8), blackedOut: feat(true, 0.95)
+  }));
+  assert.equal(builtStreetBob.cholo.isCholo, false, "a Street Bob WITH whitewalls+apes is STILL not cholo (bobber platform excluded)");
 
   // THE GOLD POSITIVES.
   // (a) Chrome Softail — apes + fat spokes + heavy chrome + fishtails + whitewalls + low.
@@ -187,10 +199,11 @@ function profileFrom(model: string, desc: VehicleEquipmentDescription): Equipmen
   const stockHeritage = profileFrom("Heritage Classic", read({ windshield: feat(true, HI) }));
   assert.equal(stockHeritage.cholo.isCholo, false, "a stock Heritage is NOT cholo (never from the base model, even a canvas one)");
 
-  // A Sportster (NOT a canvas model) WITH a real cholo build IS cholo — model never blocks it.
-  const choloSportster = profileFrom("Sportster Iron 883", read({ apeHangers: feat(true, HI), fatSpokeWheels: feat(true, HI), heavyChrome: feat(true, HI) }));
-  assert.equal(choloSportster.cholo.isCholo, true, "a cholo build on a non-canvas Sportster is STILL cholo (model never blocks)");
-  assert.equal(choloSportster.cholo.baseModelIsCholoCanvas, false, "the Sportster is not flagged a canvas model");
+  // A non-canvas, non-EXCLUDED model WITH a real cholo build IS cholo — a non-canvas model never blocks
+  // (only the bobber-platform exclusion does). Generic Softail: not a named canvas, not a bobber.
+  const choloGenericSoftail = profileFrom("Softail", read({ apeHangers: feat(true, HI), fatSpokeWheels: feat(true, HI), heavyChrome: feat(true, HI) }));
+  assert.equal(choloGenericSoftail.cholo.isCholo, true, "a cholo build on a non-canvas (non-bobber) model is STILL cholo (canvas is only a soft prior)");
+  assert.equal(choloGenericSoftail.cholo.baseModelIsCholoCanvas, false, "a generic Softail is not flagged a named canvas model");
 
   // The canvas prior is informational + a bounded confidence nudge, and NEVER flips isCholo.
   assert.equal(isCholoCanvasModel("Heritage Softail Classic"), true, "Heritage is a cholo canvas model");

@@ -158,6 +158,24 @@ export function isCholoCanvasModel(model: string | null | undefined): boolean {
   return CHOLO_CANVAS_MODEL_PATTERNS.some((re) => re.test(m));
 }
 
+/**
+ * EXCLUDED platforms (Joe 2026-07-26): "Street Bobs will never really be considered a cholo — that's
+ * more of a bobber." Cholo is a full-size, full-fender cruiser/bagger build; bobber platforms (stripped,
+ * chopped fender) are a DIFFERENT genre and are NEVER cholo, no matter the detected cues. Unlike the
+ * canvas prior (a soft nudge), this is a HARD negative gate — but it only ever makes us MORE conservative
+ * (fail toward NOT cholo / "let me confirm"), the safe direction, so it does not violate the
+ * never-fabricate law. Matched on the model LABEL only (never customer text). Extensible as Joe names more.
+ */
+export const CHOLO_EXCLUDED_PLATFORM_PATTERNS: RegExp[] = [
+  /\bstreet\s*bob\b/i
+];
+
+export function isCholoExcludedPlatform(model: string | null | undefined): boolean {
+  const m = (model ?? "").trim();
+  if (!m) return false;
+  return CHOLO_EXCLUDED_PLATFORM_PATTERNS.some((re) => re.test(m));
+}
+
 // ---------------------------------------------------------------------------
 // Model-prior sanity: cross-check vision against what the MODEL NAME tells us.
 // A Street Glide / Road Glide is a fairing model → fairing expected, windshield
@@ -421,9 +439,11 @@ export function buildEquipmentProfile(args: {
 // cholo — not because it's black, but because it's STOCK: it has NONE of the deliberate-build details
 // (no chrome/whitewalls/fishtails/custom paint/bags). So the discriminator is the CUSTOM BUILD, not color.
 //
-// low stance / solo seat are SUPPORTING cues only (they boost confidence, never decide — a plain solo
-// seat is too common to be the detail). blackedOut is INFORMATIONAL and shaves confidence toward "confirm"
-// (a blacked-out custom vs a stock bobber is the hardest call — lean on confirm), but it NEVER disqualifies.
+// BOBBER PLATFORMS ARE EXCLUDED (Joe 7/26): a Street Bob "will never really be considered a cholo — that's
+// more of a bobber." isCholoExcludedPlatform() hard-blocks those (a fail-safe negative gate, the safe
+// direction). low stance / solo seat are SUPPORTING cues only (they boost confidence, never decide — a
+// plain solo seat is too common to be the detail). blackedOut is INFORMATIONAL and shaves confidence toward
+// "confirm" (a blacked-out custom vs a stock bobber is the hardest call — lean on confirm), never disqualifies.
 // Each deciding cue must be ASSERTED (cleared EQUIPMENT_ASSERTION_CONFIDENCE_MIN). Fail direction: below
 // the bar → isCholo=false → nothing tagged, no watch fires; copy is "looks like a cholo build — let me
 // confirm", never a flat claim. The base model (Heritage/Deluxe/Road King) is a SOFT prior only (below).
@@ -442,10 +462,12 @@ export function deriveCholoBuild(profile: Pick<EquipmentProfile, "features" | "m
   const bonesAsserted = CHOLO_REQUIRED_BONES.every(isAsserted);
   const detailCues = CHOLO_DETAIL_CUES.filter(isAsserted);
   const blackedOut = isAsserted("blackedOut");
+  const excludedPlatform = isCholoExcludedPlatform(profile.model);
 
   // Finish-agnostic: the two signature bones (tall apes + fat spokes) + at least one deliberate-build
-  // detail. Chrome and blacked-out both qualify — blackedOut is NOT a gate. The base model NEVER decides.
-  const isCholo = bonesAsserted && detailCues.length >= 1;
+  // detail. Chrome and blacked-out both qualify — blackedOut is NOT a gate. A bobber platform (Street Bob)
+  // is HARD-excluded (Joe 7/26) — a fail-safe negative gate. The base model NEVER *creates* cholo.
+  const isCholo = bonesAsserted && detailCues.length >= 1 && !excludedPlatform;
 
   const baseModelIsCholoCanvas = isCholoCanvasModel(profile.model);
 
@@ -456,6 +478,7 @@ export function deriveCholoBuild(profile: Pick<EquipmentProfile, "features" | "m
   if (isAsserted("lowStance")) cues.push("lowStance");
   if (isAsserted("soloSeat")) cues.push("soloSeat");
   if (blackedOut) cues.push("blackedOut");
+  if (excludedPlatform) cues.push("excludedPlatform(bobber):" + (profile.model ?? "").trim());
   if (baseModelIsCholoCanvas) cues.push("canvas:" + (profile.model ?? "").trim());
 
   let confidence = 0;
