@@ -62,4 +62,25 @@ const gateIdx = indexSrc.indexOf("evaluateTestRideInventoryGate({ lead: conv.lea
 const timeReplyIdx = indexSrc.indexOf("buildTestRidePreferredDateReply(conv)");
 assert.ok(gateIdx > 0 && timeReplyIdx > gateIdx, "the inventory gate is evaluated BEFORE the time-first test-ride reply (stock-check-first)");
 
-console.log("PASS test_ride_stock_check_first — out-of-stock test-ride ADF leads with unavailability + watch offer, never a time");
+// ── WIRING (source-grep): the PRIMARY generation path is routes/sendgridInbound.ts (the live ADF
+//    first-touch + regenerate both flow through it). The out-of-stock reply+watch builder must fire for
+//    TEST-RIDE buckets too (was inventory_interest-only → the reported miss), and the time-first reply
+//    must be gated on availability (no time on an on-hold bike).
+const sgSrc = await fs.readFile(path.resolve("services/api/src/routes/sendgridInbound.ts"), "utf8");
+// The unavailable-inventory watch (reply leads with "not in stock" + offers the watch AND sets it) now
+// also covers test-ride leads.
+assert.ok(
+  /inferredBucket === "inventory_interest" \|\|\s*inferredBucket === "test_ride" \|\|\s*inferredCta === "schedule_test_ride"/.test(sgSrc),
+  "the unavailable-inventory watch fires for test-ride buckets (not just inventory_interest)"
+);
+// It's fed by the fail-safe builder (returns null unless genuinely not_found/sold) and, when it fires,
+// sets a real watch on the conversation (the follow-up).
+assert.ok(/buildInitialAdfUnavailableInventoryWatch\(\{/.test(sgSrc), "the watch builder is invoked");
+assert.ok(/conv\.inventoryWatch = initialAdfUnavailableInventoryWatch\.watch;/.test(sgSrc), "a firing out-of-stock ADF sets the watch (the follow-up)");
+// The time-first test-ride reply is excluded when the watch fired (not_found/sold) AND when on hold.
+assert.ok(
+  /!initialAdfUnavailableInventoryWatch &&[\s\S]{0,600}initialAvailability !== "on_hold"[\s\S]{0,120}buildInitialTestRidePreferredDateReply\(conv\)/.test(sgSrc),
+  "the time-first test-ride reply is gated: never when the unavailable-watch fired, never on hold"
+);
+
+console.log("PASS test_ride_stock_check_first — out-of-stock test-ride ADF leads with unavailability + watch (+ sets it), never a time (both paths)");
