@@ -8834,7 +8834,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     !isSellLead &&
     !isCreditLead &&
     !isWalkInLead &&
-    inferredBucket === "inventory_interest"
+    // A TEST-RIDE ADF for a bike we don't have must ALSO lead with the unavailability + a watch (Joe
+    // ruling 7/27) — not offer/confirm a time (buildInitialTestRidePreferredDateReply). The builder is
+    // fail-safe: it returns null unless the bike is genuinely not_found/sold, so extending the bucket
+    // never touches an in-stock test-ride lead. When it fires, the time-first reply below is excluded
+    // via its own `!initialAdfUnavailableInventoryWatch` guard.
+    (inferredBucket === "inventory_interest" ||
+      inferredBucket === "test_ride" ||
+      inferredCta === "schedule_test_ride")
       ? await buildInitialAdfUnavailableInventoryWatch({
           conv,
           inquiryText: effectiveInquiry,
@@ -8956,7 +8963,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     !initialAdfUnavailableInventoryWatch &&
     !initialAdfVehicleFactDecision &&
     !initialAdfVehicleInfoDecision &&
-    !initialAdfInventoryStatusAccepted
+    !initialAdfInventoryStatusAccepted &&
+    // Never confirm a test-ride time on a bike that's on hold (not_found/sold are already handled by
+    // the unavailable-inventory watch above). Lead with the hold instead (force-copy branch below).
+    initialAvailability !== "on_hold"
       ? buildInitialTestRidePreferredDateReply(conv)
       : null;
   if (preferredTestRideDateReply) {
