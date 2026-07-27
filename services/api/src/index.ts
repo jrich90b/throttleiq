@@ -14,7 +14,7 @@ import OpenAI, { toFile } from "openai";
 import { google } from "googleapis";
 import sharp from "sharp";
 import { orchestrateInbound } from "./domain/orchestrator.js";
-import { buildAgentIntro, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, hasCustomerReceivedOutbound } from "./domain/agentVoice.js";
+import { buildAgentIntro, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildWatchAvailableReply, buildCholoWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, hasCustomerReceivedOutbound } from "./domain/agentVoice.js";
 import {
   postSaleVehicleIsNew,
   postSaleAccessoryOrEnjoyMessage,
@@ -6890,13 +6890,22 @@ async function processInventoryWatchlist(targetConvId?: string, opts?: { include
         const isNewArrival = matchedKey ? newItemKeys.has(matchedKey) : false;
         const unitColor = matchedItem.color ? String(matchedItem.color) : null;
         const watchedColor = matchedWatch.color ? String(matchedWatch.color) : null;
-        const singleBase = buildWatchAvailableReply({
-          firstName: leadFirstName || null,
-          bikeLabel: name,
-          unitColor: matchedItem.color ? String(matchedItem.color) : null, // UNIT's FEED color
-          watchedColor: matchedWatch.color ? String(matchedWatch.color) : null, // customer's asked-about color
-          availability: isNewArrival ? "new" : "in_stock"
-        });
+        // A cholo STYLE watch fires with cholo-specific, hedged copy (names the style, not a model the
+        // customer never asked for); every other watch uses the generic model-availability reply.
+        const singleBase = watchHasCholoSegment(matchedWatch)
+          ? buildCholoWatchAvailableReply({
+              firstName: leadFirstName || null,
+              bikeLabel: name,
+              unitColor: matchedItem.color ? String(matchedItem.color) : null, // UNIT's FEED color only
+              availability: isNewArrival ? "new" : "in_stock"
+            })
+          : buildWatchAvailableReply({
+              firstName: leadFirstName || null,
+              bikeLabel: name,
+              unitColor: matchedItem.color ? String(matchedItem.color) : null, // UNIT's FEED color
+              watchedColor: matchedWatch.color ? String(matchedWatch.color) : null, // customer's asked-about color
+              availability: isNewArrival ? "new" : "in_stock"
+            });
         const listingUrlRaw = String(matchedItem?.url ?? "").trim();
         const listingUrl = listingUrlRaw && /^https?:\/\//i.test(listingUrlRaw) ? listingUrlRaw : "";
         const singleReply = listingUrl ? `${singleBase}\n${listingUrl}` : singleBase;
@@ -7106,13 +7115,21 @@ async function notifyInventoryWatchersForAvailableItem(
     const leadFirstName = normalizeDisplayCase(String(conv.lead?.firstName ?? "").split(/\s+/)[0] ?? "");
     // Color honesty (Joe ruling 7/23): unit color from the FEED only + the customer's asked-about
     // color for the composer's difference disclosure — same contract as the cron fire path above.
-    const baseReply = buildWatchAvailableReply({
-      firstName: leadFirstName || null,
-      bikeLabel: name,
-      unitColor: matchedItem.color ? String(matchedItem.color) : null,
-      watchedColor: matchedWatch.color ? String(matchedWatch.color) : null,
-      availability: "again"
-    });
+    // A cholo STYLE watch fires with cholo-specific hedged copy (parity with the cron path above).
+    const baseReply = watchHasCholoSegment(matchedWatch)
+      ? buildCholoWatchAvailableReply({
+          firstName: leadFirstName || null,
+          bikeLabel: name,
+          unitColor: matchedItem.color ? String(matchedItem.color) : null, // UNIT's FEED color only
+          availability: "again"
+        })
+      : buildWatchAvailableReply({
+          firstName: leadFirstName || null,
+          bikeLabel: name,
+          unitColor: matchedItem.color ? String(matchedItem.color) : null,
+          watchedColor: matchedWatch.color ? String(matchedWatch.color) : null,
+          availability: "again"
+        });
     const listingUrlRaw = String(matchedItem?.url ?? "").trim();
     const listingUrl = listingUrlRaw && /^https?:\/\//i.test(listingUrlRaw) ? listingUrlRaw : "";
     const reply = listingUrl ? `${baseReply}\n${listingUrl}` : baseReply;
