@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import OpenAI, { toFile } from "openai";
 import { google } from "googleapis";
 import sharp from "sharp";
-import { orchestrateInbound } from "./domain/orchestrator.js";
+import { orchestrateInbound, evaluateTestRideInventoryGate, buildBlockedTestRideInventoryDraft } from "./domain/orchestrator.js";
 import { buildAgentIntro, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildWatchAvailableReply, buildCholoWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, hasCustomerReceivedOutbound } from "./domain/agentVoice.js";
 import {
   postSaleVehicleIsNew,
@@ -58390,33 +58390,48 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const classificationIsTestRide =
       conv.classification?.bucket === "test_ride" || conv.classification?.cta === "schedule_test_ride";
     const jumpStartLead = isJumpStartExperienceText(conv?.lead?.inquiry ?? null);
-    const preferredDateReply =
-      jumpStartLead
-        ? buildJumpStartPreferredDateReply(conv)
-        : sourceIsTestRide || classificationIsTestRide
-          ? buildTestRidePreferredDateReply(conv)
-          : null;
-    const shouldForceTestRideCopy = shouldForceInitialTestRideSourceScheduleCopy({
-      isInitialAdf: true,
-      inferredBucket: conv.classification?.bucket ?? null,
-      inferredCta: conv.classification?.cta ?? null,
-      leadSourceLower: String(conv.lead?.source ?? "").toLowerCase(),
-      draft: reply
-    });
-    if (preferredDateReply || shouldForceTestRideCopy) {
-      const modelLabel = formatModelLabel(
-        conv.lead?.vehicle?.year ? String(conv.lead.vehicle.year) : null,
-        conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null
-      );
-      const modelClause = modelLabel ? ` on the ${modelLabel}` : "";
-      const unavailableTestRideReply = await buildRecentManualTestRideAvailabilityCadenceOverride({
-        conv,
-        name: normalizeDisplayCase(conv.lead?.firstName) || "there"
+    // STOCK-CHECK-FIRST (Joe 7/27): a test-ride ADF for a specific bike we don't have must NOT offer or
+    // confirm a time — lead with the honest unavailability + a watch offer (the follow-up). Reuse the
+    // shared gate so this ADF first-touch/regen path matches the live orchestrator path (which already
+    // gates at evaluateTestRideInventoryGate). Jump-start-experience leads aren't a model-specific test
+    // ride → never gated.
+    const testRideAdfLead = (sourceIsTestRide || classificationIsTestRide) && !jumpStartLead;
+    const testRideInventoryGate = testRideAdfLead
+      ? await evaluateTestRideInventoryGate({ lead: conv.lead, dealerProfile })
+      : null;
+    if (testRideInventoryGate && !testRideInventoryGate.canOfferTestRide) {
+      // Out of stock / on hold → the blocked draft (leads with "not in stock, won't book you on a bike
+      // we don't have" + alternate/inventory + "want me to keep an eye out?"). No time, no appointment.
+      reply = buildBlockedTestRideInventoryDraft(testRideInventoryGate);
+    } else {
+      const preferredDateReply =
+        jumpStartLead
+          ? buildJumpStartPreferredDateReply(conv)
+          : sourceIsTestRide || classificationIsTestRide
+            ? buildTestRidePreferredDateReply(conv)
+            : null;
+      const shouldForceTestRideCopy = shouldForceInitialTestRideSourceScheduleCopy({
+        isInitialAdf: true,
+        inferredBucket: conv.classification?.bucket ?? null,
+        inferredCta: conv.classification?.cta ?? null,
+        leadSourceLower: String(conv.lead?.source ?? "").toLowerCase(),
+        draft: reply
       });
-      reply =
-        preferredDateReply ??
-        unavailableTestRideReply ??
-        `Thanks — I saw you’re interested in a test ride${modelClause}. What day works best for you?`;
+      if (preferredDateReply || shouldForceTestRideCopy) {
+        const modelLabel = formatModelLabel(
+          conv.lead?.vehicle?.year ? String(conv.lead.vehicle.year) : null,
+          conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null
+        );
+        const modelClause = modelLabel ? ` on the ${modelLabel}` : "";
+        const unavailableTestRideReply = await buildRecentManualTestRideAvailabilityCadenceOverride({
+          conv,
+          name: normalizeDisplayCase(conv.lead?.firstName) || "there"
+        });
+        reply =
+          preferredDateReply ??
+          unavailableTestRideReply ??
+          `Thanks — I saw you’re interested in a test ride${modelClause}. What day works best for you?`;
+      }
     }
   }
   if (event.provider === "sendgrid_adf" && !hasSentOutbound) {
