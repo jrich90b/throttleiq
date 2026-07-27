@@ -6358,6 +6358,36 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       return { ok: true, draft: conv.emailDraft };
     }
     appendOutbound(conv, "dealership", leadKey, invariant.draftText, "draft_ai", undefined, mediaUrls);
+    // Evidence stream (LOG-ONLY, behind FIRST_TOUCH_ACK_AUTOSEND_DEBUG — never sends). This is the
+    // MAIN first-touch ack path and may carry LLM-composed text, so it ALWAYS stays a staff draft
+    // and is NOT auto-send-eligible (isDeterministicReply:false → wouldSend honestly false). We log
+    // what it WOULD send anyway so Joe can review a full running streak of real first-touch messages
+    // before trusting the (deterministic-only) auto-send. Same JSONL as the early-opener shadow.
+    if (isInitialAdf && firstTouchAutoSendDebugEnabled()) {
+      const shadow = decideFirstTouchAutoSend({
+        enabled: true,
+        isFirstTouch: true,
+        isDeterministicReply: false,
+        suppressed: typeof leadKey === "string" && isSuppressed(leadKey),
+        optedOut: isOptOutKeywordInbound(event?.body ?? null),
+        callOnly: conv?.lead?.preferredContactMethod === "phone",
+        invariantAllow: true,
+        hasDeliverablePhone: typeof leadKey === "string" && leadKey.startsWith("+")
+      });
+      appendFirstTouchShadowLog(
+        buildFirstTouchShadowRecord({
+          at: new Date().toISOString(),
+          convId: conv?.id ?? null,
+          leadKey: typeof leadKey === "string" ? leadKey : null,
+          leadName: [conv?.lead?.firstName, conv?.lead?.lastName].filter(Boolean).join(" ") || null,
+          model: conv?.lead?.vehicle?.model ?? null,
+          leadSource: typeof leadSource === "string" ? leadSource : null,
+          inboundText: effectiveInquiry || event?.body || null,
+          ackText: invariant.draftText,
+          decision: shadow
+        })
+      );
+    }
     return { ok: true, draft: invariant.draftText };
   };
   const queueInitialDraftForPreferredContact = publishAdfDraftForPreferredContact;

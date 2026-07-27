@@ -146,8 +146,19 @@ function run(): void {
     /send failed -> held draft/.test(adfSrc),
     "STEP 2: a send failure falls back to the held draft (never lose the message)"
   );
+  // Evidence stream: the MAIN opener logs first-touch acks (log-only, never send —
+  // isDeterministicReply false so wouldSend is honestly false), gated on first-touch + the debug
+  // flag, so the shadow report shows a full streak of real first-touch messages before any flip.
+  assert.ok(
+    /Evidence stream \(LOG-ONLY/.test(adfSrc),
+    "evidence stream: the main first-touch opener logs (log-only) what it would send"
+  );
+  assert.ok(
+    /if \(isInitialAdf && firstTouchAutoSendDebugEnabled\(\)\) \{[\s\S]{0,600}?isDeterministicReply: false/.test(adfSrc),
+    "evidence stream: the main-opener log is first-touch + debug gated and NOT auto-send-eligible"
+  );
 
-  console.log("PASS first-touch-autosend eval (dark no-op + 1 send case + 7 fail-safes + parity + shadow record + STEP 2 wiring)");
+  console.log("PASS first-touch-autosend eval (dark no-op + 1 send case + 7 fail-safes + parity + shadow record + STEP 2 wiring + evidence stream)");
 }
 
 const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
