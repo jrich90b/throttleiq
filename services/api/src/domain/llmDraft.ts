@@ -1,5 +1,7 @@
 // services/api/src/domain/llmDraft.ts
 import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import OpenAI from "openai";
 import type { Conversation } from "./conversationStore.js";
 import { dataPath } from "./dataDir.js";
@@ -5547,9 +5549,151 @@ export type TurnUnderstandingSchedule = {
   isCommitment: boolean;
   isEvent: boolean;
 };
+// A bike referenced ONLY by engine/platform/tier spec ("117", "M8", "CVO") — captured so the
+// agent can ACT on it (hold it, watch it, ask "which 117?") without fabricating a concrete
+// model (#300 stopped the fabrication; the 2nd 1000-text net showed dropping the ref entirely
+// loses real hold/notify requests — this slot is the middle path).
+export type TurnUnderstandingSpec = {
+  specText: string; // the customer's phrase, e.g. "117", "m8", "cvo 117"
+  kind: "engine_displacement" | "engine_generation" | "trim_tier" | "other";
+  confidence: number;
+};
+// Post-parse hygiene guard (deterministic, same class as applyMergedWatchRelevanceGuard):
+// the parser occasionally (~10-35%, stochastic) grades an en-route DELAY ("15 mins late",
+// "+20 min", "be there in 20") as a requestedSchedule time. A delay-shaped time with no day
+// and no clock/day-part is an ETA, never a bookable slot — blank it. Fail direction: blanking
+// fails toward NOT creating a phantom booking (safe); a real proposal names a day ("saturday"),
+// a clock time ("5:30", "around 10am"), or a day-part ("afternoon"), none of which match.
+const ETA_DELAY_SHAPED_TIME_RE =
+  /(?:\blate\b|\bbehind\b|^\s*(?:\+|~)?\s*(?:like\s+|about\s+|prob\w*\s+|gonna be\s+)?\d{1,2}(?:\s*-\s*\d{1,2})?\s*min(?:ute)?s?\b|^\s*(?:be there\s+)?in\s+\d{1,2}\s*(?:min(?:ute)?s?)?\s*$)/i;
+const CLOCK_OR_DAYPART_RE = /(\d\s*(?::|am|pm)|o'?clock|morning|afternoon|evening|noon|tonight)/i;
+export function applyTurnUnderstandingEtaGuard(
+  schedule: TurnUnderstandingSchedule | null
+): TurnUnderstandingSchedule | null {
+  if (!schedule) return null;
+  const day = String(schedule.dayLabel ?? "").trim();
+  const time = String(schedule.timeText ?? "").trim();
+  if (day) return schedule; // a named day is a real proposal — never blank
+  if (!time) return schedule.isCommitment ? schedule : null;
+  if (CLOCK_OR_DAYPART_RE.test(time)) return schedule; // real clock time / day-part
+  if (ETA_DELAY_SHAPED_TIME_RE.test(time)) return null; // delay/ETA — not a schedule
+  return schedule;
+}
+// Model-evidence guard (deterministic, same class as applyMergedWatchRelevanceGuard /
+// passesModelRelevanceGuard): the parser has a strong prior that resolves bare specs
+// ("hold the 117", "that cvo i saw") — and sometimes even spec-less pronouns ("don't
+// sell it") — to a concrete model, most often Street Glide. A requested model with NO
+// evidence in the customer's turn or the recent agent messages is a fabrication → drop
+// it (the spec, if any, is already kept in requestedSpec). Evidence = the family name
+// (spaced or one-word), a factory code of the family, or a known slang alias of the
+// family (the #288 glossary map). Fail direction: dropping an un-evidenced model fails
+// toward asking which bike (safe); a customer-named model — including slang the map
+// knows — always survives.
+let turnModelAliasCatalog: { aliases: Record<string, string[]> } | null | undefined;
+function loadTurnModelAliasCatalog(): { aliases: Record<string, string[]> } | null {
+  if (turnModelAliasCatalog !== undefined) return turnModelAliasCatalog;
+  const candidates = [
+    path.resolve(process.cwd(), "src/domain/model_codes_by_family.json"),
+    path.resolve(process.cwd(), "services/api/src/domain/model_codes_by_family.json"),
+    fileURLToPath(new URL("./model_codes_by_family.json", import.meta.url))
+  ];
+  for (const p of candidates) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(p, "utf8"));
+      if (parsed && typeof parsed.aliases === "object") {
+        turnModelAliasCatalog = { aliases: parsed.aliases };
+        return turnModelAliasCatalog;
+      }
+    } catch {
+      /* try next */
+    }
+  }
+  turnModelAliasCatalog = null;
+  return null;
+}
+const normModelPhrase = (s: string): string =>
+  String(s ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+const codesOverlap = (a: string[], b: string[]): boolean =>
+  a.some(x => b.some(y => {
+    const xl = x.toUpperCase(); const yl = y.toUpperCase();
+    return xl.startsWith(yl) || yl.startsWith(xl);
+  }));
+// Capped edit distance for typo-tolerant name evidence ("roadglid" ~ "roadglide").
+function editDistanceCapped(a: string, b: string, cap: number): number {
+  if (Math.abs(a.length - b.length) > cap) return cap + 1;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let rowMin = i;
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (cur[j] < rowMin) rowMin = cur[j];
+    }
+    if (rowMin > cap) return cap + 1;
+    prev = cur;
+  }
+  return prev[b.length];
+}
+export function turnModelEvidenceInText(combinedRaw: string, familyRaw: string): boolean {
+  const family = normModelPhrase(familyRaw);
+  if (!family) return false;
+  const combined = normModelPhrase(combinedRaw);
+  if (!combined) return false;
+  // 1) name evidence — spaced or run-together ("street glide" / "streetglide")
+  if (` ${combined} `.includes(` ${family} `)) return true;
+  const flatCombined = combined.replace(/ /g, "");
+  const flatFamily = family.replace(/ /g, "");
+  if (flatFamily.length >= 5 && flatCombined.includes(flatFamily)) return true;
+  const catalog = loadTurnModelAliasCatalog();
+  if (!catalog) return false; // no map → name evidence only (still kills most fabrications)
+  // 2) build the family's code set from alias keys that match the family name
+  const familyCodes: string[] = [];
+  for (const [key, codes] of Object.entries(catalog.aliases)) {
+    const k = normModelPhrase(key);
+    if (!k) continue;
+    if (k === family || k.includes(family) || family.includes(k)) {
+      for (const c of codes ?? []) familyCodes.push(String(c));
+    }
+  }
+  if (!familyCodes.length) return false;
+  const tokens = combined.split(" ");
+  // 3) factory-code evidence — a text token IS one of the family's codes ("fxlrs")
+  if (tokens.some(t => t.length >= 3 && familyCodes.some(c => c.toUpperCase() === t.toUpperCase()))) return true;
+  // 4) slang-alias evidence — an alias term in the text maps into the family's codes ("lrs", "sgs")
+  for (const [key, codes] of Object.entries(catalog.aliases)) {
+    const k = normModelPhrase(key);
+    if (!k || !codes?.length) continue;
+    const present = k.includes(" ") ? ` ${combined} `.includes(` ${k} `) : tokens.includes(k);
+    if (present && codesOverlap(codes.map(String), familyCodes)) return true;
+  }
+  // 5) typo evidence — a 1-3 token window is within a small edit distance of the family name
+  //    ("roadglid speical" ~ "road glide"). A window that exactly IS another model's alias
+  //    ("fat bob" vs "Fat Boy") is claimed by that model and never counts as a near-miss.
+  if (flatFamily.length >= 5) {
+    const cap = flatFamily.length >= 9 ? 2 : 1;
+    const flatAlias = new Map<string, string[]>();
+    for (const [key, codes] of Object.entries(catalog.aliases)) {
+      const fk = normModelPhrase(key).replace(/ /g, "");
+      if (fk) flatAlias.set(fk, (flatAlias.get(fk) ?? []).concat((codes ?? []).map(String)));
+    }
+    for (let i = 0; i < tokens.length; i++) {
+      for (let w = 1; w <= 3 && i + w <= tokens.length; w++) {
+        const gram = tokens.slice(i, i + w).join("");
+        if (Math.abs(gram.length - flatFamily.length) > cap) continue;
+        if (editDistanceCapped(gram, flatFamily, cap) <= cap) {
+          const claimed = flatAlias.get(gram);
+          if (claimed && !codesOverlap(claimed, familyCodes)) continue; // another model's exact alias
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
 export type TurnUnderstandingParse = {
   requestedModels: TurnUnderstandingModel[];
   ownedOrTradeModel: { family: string; trim: string | null } | null;
+  requestedSpec: TurnUnderstandingSpec | null;
   requestedSchedule: TurnUnderstandingSchedule | null;
   primaryIntent: string;
   flags: {
@@ -5569,7 +5713,7 @@ const TURN_UNDERSTANDING_PRIMARY_INTENTS = [
 const TURN_UNDERSTANDING_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   type: "object",
   additionalProperties: false,
-  required: ["requested_models", "owned_or_trade_model", "requested_schedule", "primary_intent", "flags", "confidence"],
+  required: ["requested_models", "owned_or_trade_model", "requested_spec", "requested_schedule", "primary_intent", "flags", "confidence"],
   properties: {
     requested_models: {
       type: "array",
@@ -5590,6 +5734,17 @@ const TURN_UNDERSTANDING_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
       additionalProperties: false,
       required: ["family", "trim"],
       properties: { family: { type: "string" }, trim: { type: "string" } }
+    },
+    // spec_text "" means the customer referenced no bare engine/platform/tier spec this turn.
+    requested_spec: {
+      type: "object",
+      additionalProperties: false,
+      required: ["spec_text", "kind", "confidence"],
+      properties: {
+        spec_text: { type: "string" },
+        kind: { type: "string", enum: ["engine_displacement", "engine_generation", "trim_tier", "other", "none"] },
+        confidence: { type: "number" }
+      }
     },
     // day_label "" means no schedule was given.
     requested_schedule: {
@@ -5676,14 +5831,20 @@ export async function parseTurnUnderstandingWithLLM(args: {
     'input: "whats my 2013 sporty worth on trade" output: {"requested_models":[],"owned_or_trade_model":{"family":"Sportster","trim":""},"requested_schedule":{"day_label":"","time_text":"","window":"unknown","is_commitment":false,"is_event":false},"primary_intent":"trade","flags":{"is_opt_out":false,"is_wrong_number":false,"is_comparison":false,"asked_for_photos":false},"confidence":0.9}',
     // TRADE VALUATION with a SLANG-named own bike: X is appraised (owned), NOT a requested model. requested_models stays [].
     'input: "what could i get for my lrs on trade?" output: {"requested_models":[],"owned_or_trade_model":{"family":"Low Rider S","trim":""},"requested_schedule":{"day_label":"","time_text":"","window":"unknown","is_commitment":false,"is_event":false},"primary_intent":"trade","flags":{"is_opt_out":false,"is_wrong_number":false,"is_comparison":false,"asked_for_photos":false},"confidence":0.9}',
-    // ENGINE-SPEC: a bare displacement ("117") is NOT a model — do NOT invent one. requested_models stays []; intent still captured.
-    'input: "whats your best price on a 117?" output: {"requested_models":[],"owned_or_trade_model":{"family":"","trim":""},"requested_schedule":{"day_label":"","time_text":"","window":"unknown","is_commitment":false,"is_event":false},"primary_intent":"pricing","flags":{"is_opt_out":false,"is_wrong_number":false,"is_comparison":false,"asked_for_photos":false},"confidence":0.9}',
-    // PLATFORM-SPEC: "M8" (Milwaukee-Eight) is an engine generation, not a model — stays [].
-    'input: "do you ever get older m8 bikes in?" output: {"requested_models":[],"owned_or_trade_model":{"family":"","trim":""},"requested_schedule":{"day_label":"","time_text":"","window":"unknown","is_commitment":false,"is_event":false},"primary_intent":"availability","flags":{"is_opt_out":false,"is_wrong_number":false,"is_comparison":false,"asked_for_photos":false},"confidence":0.88}',
-    // TIER-SPEC: "CVO" and a bare displacement are tiers/specs spanning many models — never fabricate a concrete model.
-    'input: "price difference between a cvo and a 114?" output: {"requested_models":[],"owned_or_trade_model":{"family":"","trim":""},"requested_schedule":{"day_label":"","time_text":"","window":"unknown","is_commitment":false,"is_event":false},"primary_intent":"pricing","flags":{"is_opt_out":false,"is_wrong_number":false,"is_comparison":false,"asked_for_photos":false},"confidence":0.85}',
-    // ENGINE-SPEC RESOLVED BY CONTEXT: a specific model IS named alongside the spec — capture the model (do not over-blank).
-    'input: "can you hold the 117 street glide for me?" output: {"requested_models":[{"family":"Street Glide","trim":"","confidence":0.9}],"owned_or_trade_model":{"family":"","trim":""},"requested_schedule":{"day_label":"","time_text":"","window":"unknown","is_commitment":false,"is_event":false},"primary_intent":"availability","flags":{"is_opt_out":false,"is_wrong_number":false,"is_comparison":false,"asked_for_photos":false},"confidence":0.9}',
+    // ENGINE-SPEC: a bare displacement ("117") is NOT a model — no invented model, but CAPTURE it in requested_spec (actionable!).
+    'input: "whats your best price on a 117?" output: {"requested_models":[],"owned_or_trade_model":{"family":"","trim":""},"requested_spec":{"spec_text":"117","kind":"engine_displacement","confidence":0.92},"requested_schedule":{"day_label":"","time_text":"","window":"unknown","is_commitment":false,"is_event":false},"primary_intent":"pricing","flags":{"is_opt_out":false,"is_wrong_number":false,"is_comparison":false,"asked_for_photos":false},"confidence":0.9}',
+    // PLATFORM-SPEC: "M8" (Milwaukee-Eight) is an engine generation, not a model — requested_spec carries it.
+    'input: "do you ever get older m8 bikes in?" output: {"requested_models":[],"owned_or_trade_model":{"family":"","trim":""},"requested_spec":{"spec_text":"m8","kind":"engine_generation","confidence":0.9},"requested_schedule":{"day_label":"","time_text":"","window":"unknown","is_commitment":false,"is_event":false},"primary_intent":"availability","flags":{"is_opt_out":false,"is_wrong_number":false,"is_comparison":false,"asked_for_photos":false},"confidence":0.88}',
+    // TIER-SPEC: "CVO" and a bare displacement span many models — no fabricated model; the spec phrase is captured.
+    'input: "price difference between a cvo and a 114?" output: {"requested_models":[],"owned_or_trade_model":{"family":"","trim":""},"requested_spec":{"spec_text":"cvo and a 114","kind":"trim_tier","confidence":0.85},"requested_schedule":{"day_label":"","time_text":"","window":"unknown","is_commitment":false,"is_event":false},"primary_intent":"pricing","flags":{"is_opt_out":false,"is_wrong_number":false,"is_comparison":false,"asked_for_photos":false},"confidence":0.85}',
+    // SPEC + ACTION ("hold the 117", "lmk if m8s come in"): never drop it — requested_spec keeps the actionable reference.
+    'input: "ok cool keep the m8 on hold but also lemme know if any cvo 117s come in this week" output: {"requested_models":[],"owned_or_trade_model":{"family":"","trim":""},"requested_spec":{"spec_text":"m8; cvo 117","kind":"engine_generation","confidence":0.88},"requested_schedule":{"day_label":"","time_text":"","window":"unknown","is_commitment":false,"is_event":false},"primary_intent":"availability","flags":{"is_opt_out":false,"is_wrong_number":false,"is_comparison":false,"asked_for_photos":false},"confidence":0.85}',
+    // ENGINE-SPEC RESOLVED THIS TURN: a specific model IS named alongside the spec — capture the model (and the spec).
+    'input: "can you hold the 117 street glide for me?" output: {"requested_models":[{"family":"Street Glide","trim":"","confidence":0.9}],"owned_or_trade_model":{"family":"","trim":""},"requested_spec":{"spec_text":"117","kind":"engine_displacement","confidence":0.9},"requested_schedule":{"day_label":"","time_text":"","window":"unknown","is_commitment":false,"is_event":false},"primary_intent":"availability","flags":{"is_opt_out":false,"is_wrong_number":false,"is_comparison":false,"asked_for_photos":false},"confidence":0.9}',
+    // SPEC RESOLVED BY AGENT CONTEXT: the agent just offered the specific bike; the customer refers back by spec — resolve requested_models to the offered bike.
+    'input: "so that 117 is for sale here or just a display?" history: "Agent: we\'ve got the new 117 CVO Street Glide on the showroom floor if you wanna come look" output: {"requested_models":[{"family":"Street Glide","trim":"CVO","confidence":0.88}],"owned_or_trade_model":{"family":"","trim":""},"requested_spec":{"spec_text":"117","kind":"engine_displacement","confidence":0.9},"requested_schedule":{"day_label":"","time_text":"","window":"unknown","is_commitment":false,"is_event":false},"primary_intent":"availability","flags":{"is_opt_out":false,"is_wrong_number":false,"is_comparison":false,"asked_for_photos":false},"confidence":0.88}',
+    // NO CONTEXT = NO RESOLUTION (critical counter-example): a bare spec with NO family named anywhere stays requested_spec ONLY. Guessing "Street Glide" here is a fabrication.
+    'input: "can u hold that cvo i was lookin at? not even sure which model it was tbh" output: {"requested_models":[],"owned_or_trade_model":{"family":"","trim":""},"requested_spec":{"spec_text":"cvo","kind":"trim_tier","confidence":0.9},"requested_schedule":{"day_label":"","time_text":"","window":"unknown","is_commitment":false,"is_event":false},"primary_intent":"availability","flags":{"is_opt_out":false,"is_wrong_number":false,"is_comparison":false,"asked_for_photos":false},"confidence":0.85}',
     // FAMILY NAME IS A MODEL: a chassis/model family (Softail, Sportster, Touring, ...) resolves normally — the engine-spec rule does NOT swallow it.
     'input: "what do monthly payments look like on a softail?" output: {"requested_models":[{"family":"Softail","trim":"","confidence":0.9}],"owned_or_trade_model":{"family":"","trim":""},"requested_schedule":{"day_label":"","time_text":"","window":"unknown","is_commitment":false,"is_event":false},"primary_intent":"pricing","flags":{"is_opt_out":false,"is_wrong_number":false,"is_comparison":false,"asked_for_photos":false},"confidence":0.9}',
     // SCHEDULE relevance: an en-route ETA is logistics, NOT a new day/time to schedule. requested_schedule stays empty.
@@ -5695,7 +5856,9 @@ export async function parseTurnUnderstandingWithLLM(args: {
     // SCHEDULE relevance: a bare "be there in N" / "on my way" ETA is logistics — never a new day/time. requested_schedule NULL.
     'input: "heading your way now, be there in 20" output: {"requested_models":[],"owned_or_trade_model":{"family":"","trim":""},"requested_schedule":{"day_label":"","time_text":"","window":"unknown","is_commitment":false,"is_event":false},"primary_intent":"smalltalk","flags":{"is_opt_out":false,"is_wrong_number":false,"is_comparison":false,"asked_for_photos":false},"confidence":0.9}',
     // SCHEDULE relevance: a DELAY amount + a trailing question ("still ok?") is logistics, not a new time. The "15 mins" is a delay, not an appointment. requested_schedule NULL.
-    'input: "running 15 late, en route — still ok?" output: {"requested_models":[],"owned_or_trade_model":{"family":"","trim":""},"requested_schedule":{"day_label":"","time_text":"","window":"unknown","is_commitment":false,"is_event":false},"primary_intent":"smalltalk","flags":{"is_opt_out":false,"is_wrong_number":false,"is_comparison":false,"asked_for_photos":false},"confidence":0.9}'
+    'input: "running 15 late, en route — still ok?" output: {"requested_models":[],"owned_or_trade_model":{"family":"","trim":""},"requested_schedule":{"day_label":"","time_text":"","window":"unknown","is_commitment":false,"is_event":false},"primary_intent":"smalltalk","flags":{"is_opt_out":false,"is_wrong_number":false,"is_comparison":false,"asked_for_photos":false},"confidence":0.9}',
+    // ETA + a BIKE named: capture the bike (model or spec) they are coming for — but the delay is STILL not a schedule. requested_schedule stays NULL.
+    'input: "gonna be like 15-20 late but still coming to grab the sgs, dont let it go" output: {"requested_models":[{"family":"Street Glide","trim":"Special","confidence":0.85}],"owned_or_trade_model":{"family":"","trim":""},"requested_spec":{"spec_text":"","kind":"none","confidence":0},"requested_schedule":{"day_label":"","time_text":"","window":"unknown","is_commitment":false,"is_event":false},"primary_intent":"availability","flags":{"is_opt_out":false,"is_wrong_number":false,"is_comparison":false,"asked_for_photos":false},"confidence":0.87}'
   ];
 
   const prompt = [
@@ -5704,7 +5867,9 @@ export async function parseTurnUnderstandingWithLLM(args: {
     "",
     "Rules:",
     "- requested_models: bikes the customer WANTS (to ride, buy, see, price). family is the base model (Road Glide, Street Glide, Ultra Limited, Fat Boy, ...); trim is the variant when named (Special, Limited, Ultra, S) else empty string. Multiple bikes => multiple entries. One word forms (roadglide, streetglide) map to the spaced family. Typos (gide->glide) map to the real model. Slang/shorthand that names a SPECIFIC MODEL maps too (lrs->Low Rider S, SGS->Street Glide Special, fxlrs->Low Rider S).",
-    "- ENGINE-SIZE / ENGINE-GENERATION / CVO-TIER shorthand is NOT a model (critical — never guess). When the customer names a bike ONLY by engine displacement (117, 114, 110, 107, 103, 131, 121), by engine generation (M8, Milwaukee-Eight, TC, Twin Cam, Evo), or by the CVO tier alone, do NOT invent a specific model — requested_models stays []. That spec fits many models, so guessing a concrete model (Street Glide, Road Glide, Fat Boy, ...) the customer never said is WRONG. Still capture the intent (pricing/availability/etc.) so the agent can ask which model. This does NOT apply to model / chassis FAMILY names — Softail, Sportster, Touring, Dyna, Road Glide, Street Glide, Tri Glide, Fat Boy, Low Rider, Heritage, Breakout, etc. ARE models and resolve normally (a bare 'softail' -> family 'Softail'). Resolve a spec too when a specific model is named alongside it ('117 Street Glide' -> Street Glide).",
+    "- ENGINE-SIZE / ENGINE-GENERATION / CVO-TIER shorthand is NOT a model (critical — never guess a concrete model). When the customer names a bike ONLY by engine displacement (117, 114, 110, 107, 103, 131, 121), by engine generation (M8, Milwaukee-Eight, TC, Twin Cam, Evo), or by the CVO tier alone, do NOT invent a specific model — requested_models stays [] and instead CAPTURE the reference in requested_spec ({spec_text: their phrase e.g. '117'/'m8'/'cvo 117', kind: engine_displacement|engine_generation|trim_tier}). NEVER silently drop the reference: a 'hold the 117', 'lmk if any m8s come in', 'still coming for the 117 pickup' is an actionable request about a REAL bike — requested_spec is how the agent keeps it. Still capture the intent (pricing/availability/etc.).",
+    "- SPEC RESOLUTION BY CONTEXT (STRICT precondition): resolve a spec into requested_models ONLY when the model family is EXPLICITLY WRITTEN either (a) in the customer's OWN turn next to the spec ('117 Street Glide' -> Street Glide), or (b) in the agent's message shown above in Recent messages ('we got the 117 CVO Street Glide in' + customer: 'so that 117 is for sale?' -> Street Glide CVO). If NEITHER text names the family, requested_models stays [] and ONLY requested_spec is filled — no matter how strongly a spec suggests a typical model. 'hold the 117', 'that cvo i saw', 'lemme see the m8 117s' with no named family = requested_spec ONLY; outputting Street Glide (or any family) there is a FABRICATION and strictly wrong. This does NOT apply to model / chassis FAMILY names — Softail, Sportster, Touring, Dyna, Road Glide, Street Glide, Tri Glide, Fat Boy, Low Rider, Heritage, Breakout, etc. ARE models and resolve normally into requested_models (a bare 'softail' -> family 'Softail'; requested_spec stays empty for family names).",
+    "- requested_spec is ALWAYS present in the output: {spec_text:'',kind:'none',confidence:0} when no bare spec was referenced this turn.",
     "- RELEVANCE (critical): only include a model the customer references ON THIS TURN, or one the agent just offered that they are directly answering. Do NOT carry a model from earlier in the thread onto a bare acknowledgement, thanks, reaction, or logistics reply ('ok', 'thanks', 'sounds good', 'this bike is awesome', 'see you then'). For those, requested_models is []. A model in the thread is context, not a fresh request.",
     "- owned_or_trade_model: the bike the customer CURRENTLY OWNS or is TRADING ('my current X', 'compared to my X', 'trading my X', 'I ride a X', 'what's my X worth'). This is NEVER a requested model — even when a wanted bike and a trade bike appear in the SAME message ('price on a Road Glide, also trading my Street Bob' => Road Glide requested, Street Bob owned/trade). Use ONLY the family/trim the customer actually said; do NOT invent a trim ('my sporty'/'2013 sportster' => family 'Sportster', trim '', never fabricate '883'/'1200'). family empty string if none.",
     "- CHANGE OF MIND (critical): a bike the customer REJECTS or drops ('not the X anymore', 'forget the X', 'scratch the X', 'nvm on the X', 'don't want the X') goes in NEITHER field — it is not requested and NOT owned (dropping interest is not ownership). If they name a NEW bike they want instead ('...maybe the Y now', 'thinking Y now'), that Y => requested_models. The rejected bike simply disappears from the output.",
@@ -5745,7 +5910,10 @@ export async function parseTurnUnderstandingWithLLM(args: {
     const t = String(v ?? "").trim();
     return t ? t : null;
   };
-  const requestedModels: TurnUnderstandingModel[] = Array.isArray(parsed.requested_models)
+  // Evidence guard: a model with no trace in the customer's turn or recent agent messages
+  // is a fabrication (the LLM's "hold the 117 -> Street Glide" prior) — drop it.
+  const evidenceText = [text, ...(args.history ?? []).slice(-6).map(m => String(m?.body ?? ""))].join(" \n ");
+  const requestedModels: TurnUnderstandingModel[] = (Array.isArray(parsed.requested_models)
     ? parsed.requested_models
         .map((m: any) => ({
           family: String(m?.family ?? "").trim(),
@@ -5756,15 +5924,30 @@ export async function parseTurnUnderstandingWithLLM(args: {
               : 0.5
         }))
         .filter((m: TurnUnderstandingModel) => m.family.length > 0)
-    : [];
+    : []
+  ).filter((m: TurnUnderstandingModel) => turnModelEvidenceInText(evidenceText, m.family));
   const ownedFamily = String(parsed.owned_or_trade_model?.family ?? "").trim();
   const ownedOrTradeModel = ownedFamily
     ? { family: ownedFamily, trim: cleanTrim(parsed.owned_or_trade_model?.trim) }
     : null;
+  const specText = String(parsed.requested_spec?.spec_text ?? "").trim();
+  const specKindRaw = String(parsed.requested_spec?.kind ?? "");
+  const requestedSpec: TurnUnderstandingSpec | null = specText
+    ? {
+        specText,
+        kind: ["engine_displacement", "engine_generation", "trim_tier"].includes(specKindRaw)
+          ? (specKindRaw as TurnUnderstandingSpec["kind"])
+          : "other",
+        confidence:
+          typeof parsed.requested_spec?.confidence === "number" && Number.isFinite(parsed.requested_spec.confidence)
+            ? Math.max(0, Math.min(1, parsed.requested_spec.confidence))
+            : 0.5
+      }
+    : null;
   const schedRaw = parsed.requested_schedule ?? {};
   const dayLabel = String(schedRaw?.day_label ?? "").trim();
   const timeText = String(schedRaw?.time_text ?? "").trim();
-  const requestedSchedule: TurnUnderstandingSchedule | null =
+  const requestedSchedule: TurnUnderstandingSchedule | null = applyTurnUnderstandingEtaGuard(
     dayLabel || timeText
       ? {
           dayLabel: dayLabel || null,
@@ -5775,7 +5958,8 @@ export async function parseTurnUnderstandingWithLLM(args: {
           isCommitment: !!schedRaw?.is_commitment,
           isEvent: !!schedRaw?.is_event
         }
-      : null;
+      : null
+  );
   const primaryIntent = TURN_UNDERSTANDING_PRIMARY_INTENTS.includes(String(parsed.primary_intent))
     ? String(parsed.primary_intent)
     : "other";
@@ -5788,6 +5972,7 @@ export async function parseTurnUnderstandingWithLLM(args: {
   return {
     requestedModels,
     ownedOrTradeModel,
+    requestedSpec,
     requestedSchedule,
     primaryIntent,
     flags: {

@@ -36,7 +36,64 @@ if (!apiKey || apiKey.trim().length < 20 || apiKey.trim() === "...") {
 process.env.LLM_ENABLED = "1";
 process.env.LLM_TURN_UNDERSTANDING_PARSER_ENABLED = "1";
 
-const { parseTurnUnderstandingWithLLM } = await import("../services/api/src/domain/llmDraft.ts");
+const { parseTurnUnderstandingWithLLM, applyTurnUnderstandingEtaGuard, turnModelEvidenceInText } = await import("../services/api/src/domain/llmDraft.ts");
+
+// ---- Deterministic pin of the model-evidence guard (no LLM) ----
+// Drops fabricated models (the LLM's "hold the 117 -> Street Glide" prior) while keeping every
+// legitimate evidence path: exact/one-word names, slang aliases (#288 map), factory codes,
+// agent-context, and typo fuzz — with the claimed-alias safeguard (fat bob never evidences Fat Boy).
+{
+  const mustDrop: Array<[string, string]> = [
+    ["hold the 117 till sat?", "Street Glide"],
+    ["pls dont sell it im on my way", "Street Glide"],
+    ["that cvo i saw, price?", "Street Glide"],
+    ["wanna try the 2023 fat bob", "Fat Boy"]
+  ];
+  const mustKeep: Array<[string, string]> = [
+    ["can you lmk when you get the 23 lrs?", "Low Rider S"],
+    ["keep that 21 SGS under wraps", "Street Glide"],
+    ["is the streetglide still there", "Street Glide"],
+    ["got a 2016 fxlrs to trade", "Low Rider S"],
+    ["so that 117 is for sale? \n we've got the new 117 cvo street glide on the floor", "Street Glide"],
+    ["do u have a roadglid speical", "Road Glide"],
+    ["price on the ultra limted?", "Ultra Limited"]
+  ];
+  for (const [t, f] of mustDrop) {
+    if (turnModelEvidenceInText(t, f)) { console.error(`evidence guard FAILED to drop fabrication: "${t}" -> ${f}`); process.exit(1); }
+  }
+  for (const [t, f] of mustKeep) {
+    if (!turnModelEvidenceInText(t, f)) { console.error(`evidence guard WRONGLY dropped: "${t}" -> ${f}`); process.exit(1); }
+  }
+}
+
+// ---- Deterministic pin of the ETA hygiene guard (no LLM) ----
+// The guard blanks a delay-shaped schedule the parser stochastically emits on en-route texts
+// ("15 mins late" / "+20 min" / "be there in 20" with no day) and must NEVER blank a real
+// proposal (a day, a clock time, or a day-part). Runs before the LLM cases; fails hard.
+{
+  const sched = (dayLabel: string | null, timeText: string | null, isCommitment = false) =>
+    ({ dayLabel, timeText, window: "unknown" as const, isCommitment, isEvent: false });
+  const mustBlank: Array<[string | null, string | null]> = [
+    [null, "15 mins late"], [null, "+20 min"], [null, "be there in 20"],
+    [null, "like 10-15 mins"], [null, "20 min behind"], [null, "in 20"]
+  ];
+  const mustKeep: Array<[string | null, string | null]> = [
+    ["Saturday", null], ["Saturday", "2"], [null, "around 10am"], [null, "5:30"],
+    [null, "afternoon"], [null, "tonight"], ["tomorrow", "15 mins late"] // a day always wins
+  ];
+  for (const [d, t] of mustBlank) {
+    if (applyTurnUnderstandingEtaGuard(sched(d, t)) !== null) {
+      console.error(`ETA guard FAILED to blank a delay-shaped schedule: day=${d} time=${t}`);
+      process.exit(1);
+    }
+  }
+  for (const [d, t] of mustKeep) {
+    if (applyTurnUnderstandingEtaGuard(sched(d, t, true)) === null) {
+      console.error(`ETA guard WRONGLY blanked a real proposal: day=${d} time=${t}`);
+      process.exit(1);
+    }
+  }
+}
 
 // How many SCORED misses to absorb as LLM nondeterminism before the gate reds.
 // The scored pool now holds ~3 inherently-stochastic edge cases (trade+spec combo,
@@ -265,6 +322,48 @@ const CASES: Case[] = [
     id: "spec_resolved_by_context", cat: "engine-spec", tier: "scored",
     text: "can u hold the 117 street glide till saturday?",
     check: p => wantFamily(p, "street glide")
+  },
+
+  // ---------- requested_spec capture (hole #1 round 2) ----------
+  // The 2nd 1000-text net showed #300's fail-safe over-corrected: bare specs were DROPPED entirely,
+  // losing real hold/notify/pickup requests (missed_model 52->130, 65% engine-spec). The requestedSpec
+  // slot is the middle path: no fabricated model AND the actionable reference is kept.
+  {
+    // The run-3 pronoun fabrication: no bike named at all — nothing may be invented.
+    id: "spec_no_pronoun_fabrication", cat: "spec-capture", tier: "critical",
+    text: "stuck in traffic, about 25 min out — pls dont sell it yet im on my way",
+    check: p => noHallucinatedModel(p, "stuck in traffic, about 25 min out — pls dont sell it yet im on my way")
+  },
+  {
+    id: "spec_captured_hold_notify", cat: "spec-capture", tier: "critical",
+    text: "can u put that m8 on hold? and text me if any cvo 117s show up",
+    check: p => {
+      const s = String(p?.requestedSpec?.specText ?? "").toLowerCase();
+      if (!(s.includes("m8") || s.includes("117") || s.includes("cvo")))
+        return `actionable spec dropped — requestedSpec empty (got ${JSON.stringify(p?.requestedSpec)})`;
+      return noHallucinatedModel(p, "can u put that m8 on hold? and text me if any cvo 117s show up");
+    }
+  },
+  {
+    id: "spec_captured_pickup_eta", cat: "spec-capture", tier: "scored",
+    text: "running like 20 min behind, stuck in traffic. still coming for the 117 pick up so dont sell it.",
+    check: p => {
+      const s = String(p?.requestedSpec?.specText ?? "").toLowerCase();
+      if (!s.includes("117")) return `the 117 pickup reference was dropped (requestedSpec=${JSON.stringify(p?.requestedSpec)})`;
+      if (hasSchedule(p)) return `phantom schedule from the ETA: ${JSON.stringify(p?.requestedSchedule)}`;
+      return null;
+    }
+  },
+  {
+    // Agent offered the specific bike; customer refers back by spec — resolve to the offered bike (or at least keep the spec).
+    id: "spec_ctx_agent_offer", cat: "spec-capture", tier: "scored",
+    text: "so that 117 is for sale here or u talking about the display at the rally?",
+    history: [{ direction: "out", body: "we've got the new 117 cvo on the showroom floor if you wanna come look" }],
+    check: p => {
+      const s = String(p?.requestedSpec?.specText ?? "").toLowerCase();
+      if (families(p).length > 0 || s.includes("117")) return null;
+      return `follow-up about the offered 117 lost both model and spec (models=${JSON.stringify(p?.requestedModels)}, spec=${JSON.stringify(p?.requestedSpec)})`;
+    }
   },
 
   // ---------- trade vs buy vs "changed my mind" (hole #2) ----------
