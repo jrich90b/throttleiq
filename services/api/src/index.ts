@@ -604,7 +604,12 @@ import {
   buildInventoryBackedVehicleFactAnswer,
   mergeRecentPriceQuestionIntoFinanceAnswer
 } from "./domain/inventoryFactAnswers.js";
-import { getInventoryNote, listInventoryNotes, setInventoryNote } from "./domain/inventoryNotes.js";
+import {
+  getInventoryNote,
+  listInventoryNotes,
+  setInventoryNote,
+  inventoryNoteMatchesNarratedYear
+} from "./domain/inventoryNotes.js";
 import {
   listInventoryHolds,
   getInventoryHold,
@@ -13150,6 +13155,11 @@ async function buildEarlyCadencePromotionOverride(args: {
 
   const noteSet = new Set<string>();
   for (const item of matches.slice(0, 5)) {
+    // A unit's note (e.g. a "$1,000 trade-in credit" that lives on the 2025 Breakout stock) must
+    // only be narrated for the SAME model+year we're naming above (modelLabel). When the inventory
+    // match was broadened across years (year:null fallback), skip other-year units so we never
+    // borrow one year's credit onto another year's unit (Joe ruling 2026-07-27, +15854890786).
+    if (!inventoryNoteMatchesNarratedYear(item?.year ?? null, year ?? null)) continue;
     const note = await getInventoryNote(item?.stockId ?? null, item?.vin ?? null);
     const cleaned = String(note ?? "").replace(/\s+/g, " ").trim();
     if (cleaned) noteSet.add(cleaned);

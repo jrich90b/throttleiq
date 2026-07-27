@@ -55,6 +55,27 @@ export function isInventoryNoteExpired(expiresAt?: string): boolean {
   return isExpired(expiresAt);
 }
 
+/**
+ * Model/year-scope guard for surfacing a unit's inventory note in customer copy (Joe ruling
+ * 2026-07-27). An inventory note (e.g. the "$1,000 trade-in credit" that lives on the 2025
+ * Breakout stock) belongs to the UNIT it is listed under — it must only be narrated for that same
+ * model+year, never borrowed onto another year's unit when the inventory lookup was broadened
+ * across years (findInventoryMatches({year:null}) fallback). A note whose unit year differs from
+ * the year we are narrating (the model-label year) is cross-year misattribution and must be
+ * dropped. Returns true (surface it) only when the unit's year matches the narrated year, or when
+ * no specific year is being claimed. Fail direction: DROP the note (a generic touch) rather than
+ * attach a wrong-year offer.
+ */
+export function inventoryNoteMatchesNarratedYear(
+  unitYear: string | null | undefined,
+  narratedYear: string | null | undefined
+): boolean {
+  const narrated = String(narratedYear ?? "").trim();
+  if (!narrated) return true; // no year claimed → not a cross-year misattribution
+  const unit = String(unitYear ?? "").trim();
+  return unit === narrated;
+}
+
 async function saveStore(store: InventoryNotesStore): Promise<void> {
   const filePath = dataPath(FILE_NAME);
   const payload = {
