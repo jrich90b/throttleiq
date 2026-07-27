@@ -7,6 +7,8 @@
  * See docs/first_touch_autosend_spec.md. Run: npm run first_touch_autosend:eval
  */
 import assert from "node:assert";
+import fs from "node:fs";
+import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   decideFirstTouchAutoSend,
@@ -113,7 +115,50 @@ function run(): void {
   assert.ok(clipped.inbound!.length <= 241, "inbound clipped");
   assert.ok(clipped.ack.length <= 601, "ack clipped");
 
-  console.log("PASS first-touch-autosend eval (dark no-op + 1 send case + 7 fail-safes + parity + shadow record)");
+  // 4) STEP 2 live-send wiring source guards (sendgridInbound.ts ADF opener). Ships DARK — these
+  //    prove the send path exists, is gated by the REAL flag (not hardcoded on), wires the REAL
+  //    compliance inputs, keeps send==record parity (footer before send), and falls back to a held
+  //    draft on any send failure.
+  const adfSrc = fs.readFileSync(path.resolve("services/api/src/routes/sendgridInbound.ts"), "utf8");
+  assert.ok(adfSrc.includes("async function sendCustomerFirstTouchSms("), "STEP 2: customer first-touch SMS sender exists");
+  // The live decision is gated by the REAL flag (dark by default), NOT hardcoded enabled:true.
+  assert.ok(
+    adfSrc.includes("enabled: isFirstTouchAckAutoSendEnabled()"),
+    "STEP 2: the live auto-send decision reads the real flag (dark by default)"
+  );
+  // Real compliance inputs are wired (STEP 1 stubbed these false).
+  assert.ok(
+    adfSrc.includes("suppressed: typeof leadKey === \"string\" && isSuppressed(leadKey)"),
+    "STEP 2: suppression is wired from isSuppressed(leadKey)"
+  );
+  assert.ok(adfSrc.includes("optedOut: isOptOutKeywordInbound("), "STEP 2: opt-out is wired from the inbound text");
+  // Send/record parity: footer applied to the body BEFORE the send, so the sent text == recorded text.
+  assert.ok(
+    adfSrc.includes("ensureInitialSmsOptOutFooter(conv, invariant.draftText, { provider: \"twilio\", to: leadKey })"),
+    "STEP 2: STOP footer is applied before send (send==record parity)"
+  );
+  // On send success it records a real "twilio" outbound; on failure it falls back to a held draft.
+  assert.ok(
+    /appendOutbound\(conv, sendResult\.from \?\? "dealership", leadKey, publishedBody, "twilio", sendResult\.sid/.test(adfSrc),
+    "STEP 2: a successful send is recorded as a real twilio outbound (send==record)"
+  );
+  assert.ok(
+    /send failed -> held draft/.test(adfSrc),
+    "STEP 2: a send failure falls back to the held draft (never lose the message)"
+  );
+  // Evidence stream: the MAIN opener logs first-touch acks (log-only, never send —
+  // isDeterministicReply false so wouldSend is honestly false), gated on first-touch + the debug
+  // flag, so the shadow report shows a full streak of real first-touch messages before any flip.
+  assert.ok(
+    /Evidence stream \(LOG-ONLY/.test(adfSrc),
+    "evidence stream: the main first-touch opener logs (log-only) what it would send"
+  );
+  assert.ok(
+    /if \(isInitialAdf && firstTouchAutoSendDebugEnabled\(\)\) \{[\s\S]{0,600}?isDeterministicReply: false/.test(adfSrc),
+    "evidence stream: the main-opener log is first-touch + debug gated and NOT auto-send-eligible"
+  );
+
+  console.log("PASS first-touch-autosend eval (dark no-op + 1 send case + 7 fail-safes + parity + shadow record + STEP 2 wiring + evidence stream)");
 }
 
 const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
