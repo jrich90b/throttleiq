@@ -499,6 +499,89 @@ export async function buildDepartmentHandoffAckWithLLM(args: {
   }
 }
 
+// === Dept-widget bike-interest classifier (comprehend, never regex) ===
+// A web-text-widget lead can arrive tagged to a NON-SALES department (Motor Clothes / Parts /
+// Service) yet actually be asking about a MOTORCYCLE — e.g. James Brown (+15415147201, Joe ruling
+// 2026-07-26 #4) came through the "Motor Clothes" widget with "Checking out Pan America HD". The
+// old behavior gave the pure apparel handoff ack (staying apparel-only) OR pivoted straight to
+// sales — both wrong. Joe's ruling: CLARIFY (dept vs bike) instead. This typed parser reads the
+// customer's message and reports whether they're actually asking about a motorcycle so the caller
+// can offer a clarify draft. Fail direction: returns null on ANY failure (LLM off / error / empty)
+// → the caller keeps the existing plain dept ack (status quo), never a fabricated answer.
+
+export type DeptWidgetBikeInterestParse = {
+  asksAboutMotorcycle: boolean;
+  motorcycleReference: string | null;
+  confidence: number;
+};
+
+const DEPT_WIDGET_BIKE_INTEREST_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["asksAboutMotorcycle", "motorcycleReference", "confidence"],
+  properties: {
+    asksAboutMotorcycle: { type: "boolean" },
+    motorcycleReference: { type: ["string", "null"] },
+    confidence: { type: "number" }
+  }
+};
+
+export async function classifyDeptWidgetBikeInterestWithLLM(args: {
+  message: string;
+  deptLabel: string;
+}): Promise<DeptWidgetBikeInterestParse | null> {
+  const enabled = String(process.env.LLM_DEPT_WIDGET_BIKE_INTEREST_ENABLED ?? "1").trim().toLowerCase();
+  if (enabled === "0" || enabled === "false" || enabled === "no") return null;
+  const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+  const message = String(args.message ?? "").trim();
+  if (!message) return null;
+  const deptLabel = String(args.deptLabel ?? "team").trim() || "team";
+  const model = process.env.OPENAI_MODEL || "gpt-5-mini";
+  const prompt = [
+    "You classify one inbound message from a customer who reached a Harley-Davidson dealership",
+    `through the "${deptLabel}" web widget (a NON-SALES department: apparel/MotorClothes, parts, or service).`,
+    "Decide whether the customer's message is actually about a MOTORCYCLE (a bike model, buying/",
+    "looking at a bike, availability, a test ride, pricing on a unit) rather than the department the",
+    "widget is for.",
+    "",
+    "RULES:",
+    '- asksAboutMotorcycle=true ONLY when the message references an actual motorcycle interest',
+    '  (a bike model like "Pan America"/"Street Glide", "looking at bikes", "test ride", "buy a bike").',
+    "- A request that fits the department itself (gear/clothing/helmet for apparel; a part/accessory",
+    "  for parts; a repair/oil change/inspection for service) is NOT a motorcycle-buying interest →",
+    "  asksAboutMotorcycle=false, even if a bike model is named only as the bike the gear/part is FOR",
+    '  (e.g. "gloves for my Street Glide" is apparel, not motorcycle interest).',
+    "- motorcycleReference = the bike the customer named (verbatim-ish), or null if none.",
+    "- confidence in [0,1].",
+    "",
+    `Message: ${message}`,
+    "",
+    'Return only JSON: { "asksAboutMotorcycle": <bool>, "motorcycleReference": <string|null>, "confidence": <0..1> }'
+  ].join("\n");
+  try {
+    const parsed = await requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "dept_widget_bike_interest",
+      schema: DEPT_WIDGET_BIKE_INTEREST_JSON_SCHEMA,
+      maxOutputTokens: 200,
+      debugTag: "llm-dept-widget-bike-interest"
+    });
+    if (!parsed || typeof parsed !== "object") return null;
+    const p = parsed as any;
+    const ref = p.motorcycleReference == null ? null : String(p.motorcycleReference).trim() || null;
+    const confidence = Number(p.confidence);
+    return {
+      asksAboutMotorcycle: !!p.asksAboutMotorcycle,
+      motorcycleReference: ref,
+      confidence: Number.isFinite(confidence) ? confidence : 0
+    };
+  } catch {
+    return null;
+  }
+}
+
 // === National Offers (H-D national promotions) — parser-first ingestion + matching ===
 // Reads the H-D national offers page TEXT and matches offers to a lead's bike of interest so the
 // proactive cadence can send a REAL, model-specific offer instead of a generic "just checking in"

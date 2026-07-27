@@ -34,6 +34,10 @@ import {
 import { leadVehicleRelevantToFollowUp } from "./domain/followUpVehicleRelevance.js";
 import { parsePreferredAdfDate } from "./domain/preferredAdfDate.js";
 import { buildDeptHandoffAckFallback, buildWebTextWidgetSalesAckFallback } from "./domain/webWidgetAckTemplates.js";
+import {
+  hasDeptWidgetBikeHint,
+  decideDeptWidgetBikeClarify
+} from "./domain/webWidgetDeptBikeClarify.js";
 import { decideConversationAccess } from "./domain/conversationAccess.js";
 import { isProactiveContactPaused } from "./domain/proactiveContactPause.js";
 import {
@@ -275,6 +279,7 @@ import {
   classifySchedulingIntent,
   classifySmallTalkWithLLM,
   buildDepartmentHandoffAckWithLLM,
+  classifyDeptWidgetBikeInterestWithLLM,
   classifyBlendedChatterWithLLM,
   generateSmallTalkReplyWithLLM,
   generateBlendedLeadInWithLLM,
@@ -4138,6 +4143,24 @@ function requirePermission(
 }
 
 type DepartmentRole = "service" | "parts" | "apparel";
+
+// Shared dept-widget bike-vs-department clarify (Joe ruling 2026-07-26 #4) — the ONE decision both
+// the live widget-arrival path and the mirrored live-twilio/regen department blocks call, so the
+// clarify logic can't drift across paths (route-parity law: no hand-mirrored per-path locals). The
+// hint is a cheap cost gate; the typed parser owns the verdict; the decision + template are pure.
+// Returns null (keep the plain dept ack) on no-hint / non-motorcycle verdict / LLM-off — safe.
+async function resolveDeptWidgetBikeClarify(args: {
+  message: string;
+  deptLabel: string;
+  firstName?: string | null;
+}): Promise<string | null> {
+  if (!hasDeptWidgetBikeHint(args.message)) return null;
+  return decideDeptWidgetBikeClarify({
+    parse: await classifyDeptWidgetBikeInterestWithLLM({ message: args.message, deptLabel: args.deptLabel }),
+    firstName: args.firstName,
+    deptLabel: args.deptLabel
+  });
+}
 type ManualOutboundSoftTag = {
   tag: "department_mention";
   department: DepartmentRole;
@@ -7879,8 +7902,15 @@ app.post("/public/widget/text-us", async (req, res) => {
       // follow up but NEVER promises WHEN (Tom Bradsky +16054313150: "right back" on the
       // July 4 holiday had to be hand-corrected by staff to "on Monday").
       const deptAckFallback = buildDeptHandoffAckFallback({ firstName, deptLabel });
-      const deptAckEngaged = await buildDepartmentHandoffAckWithLLM({ message, deptLabel, firstName });
-      const deptAck = deptAckEngaged || deptAckFallback;
+      // A non-sales widget lead who is actually asking about a MOTORCYCLE (James Brown +15415147201:
+      // "Checking out Pan America HD" through the Motor Clothes widget) should be CLARIFIED, not
+      // handed the pure apparel ack (staying apparel-only) or pivoted to sales (Joe ruling 2026-07-26
+      // #4). Parser-first: the typed classifier owns the verdict; the hint is only a cost gate.
+      const deptBikeClarify = await resolveDeptWidgetBikeClarify({ message, deptLabel, firstName });
+      const deptAckEngaged = deptBikeClarify
+        ? null
+        : await buildDepartmentHandoffAckWithLLM({ message, deptLabel, firstName });
+      const deptAck = deptBikeClarify || deptAckEngaged || deptAckFallback;
       const evaluateDeptAckInvariant = (
         text: string,
         invariantHints?: CustomerReplyDraftInvariantHints
@@ -7904,8 +7934,10 @@ app.post("/public/widget/text-us", async (req, res) => {
         to: phone,
         discardPendingDraftsBeforePublish: true,
         routeScope: "live",
-        routeOutcome: `web_text_widget_${todoReason}_ack_draft_created`,
-        routeDetail: { department }
+        routeOutcome: deptBikeClarify
+          ? `web_text_widget_${todoReason}_bike_clarify_draft_created`
+          : `web_text_widget_${todoReason}_ack_draft_created`,
+        routeDetail: { department, bikeClarify: !!deptBikeClarify }
       });
     }
     upsertContact({
@@ -57576,8 +57608,17 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     setFollowUpMode(conv, "manual_handoff", `${regenInboundDepartmentIntent}_request`);
     stopFollowUpCadence(conv, "manual_handoff");
     stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
-    const reply =
-      regenInboundDepartmentIntent === "parts"
+    // Two-path parity with the live widget-arrival clarify (Joe ruling 2026-07-26 #4): an
+    // apparel/parts-classified turn that is actually asking about a MOTORCYCLE gets a clarify
+    // (bike vs department) instead of the plain "reach out shortly" ack. Parser owns the verdict.
+    const bikeClarifyReply = await resolveDeptWidgetBikeClarify({
+      message: event.body ?? "",
+      deptLabel: regenInboundDepartmentIntent === "apparel" ? "Motor Clothes" : "Parts",
+      firstName: normalizeDisplayCase(conv.lead?.firstName)
+    });
+    const reply = bikeClarifyReply
+      ? bikeClarifyReply
+      : regenInboundDepartmentIntent === "parts"
         ? isTakeOffMilwaukeeEightEngineRequestText(event.body)
           ? buildTakeOffMilwaukeeEightEngineReply()
           : "Thanks — I’ll have our parts department reach out shortly."
@@ -61485,8 +61526,17 @@ if (authToken && signature) {
     setFollowUpMode(conv, "manual_handoff", `${inboundDepartmentIntent}_request`);
     stopFollowUpCadence(conv, "manual_handoff");
     stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
-    const reply =
-      inboundDepartmentIntent === "parts"
+    // Two-path parity with the live widget-arrival clarify (Joe ruling 2026-07-26 #4): an
+    // apparel/parts-classified turn that is actually asking about a MOTORCYCLE gets a clarify
+    // (bike vs department) instead of the plain "reach out shortly" ack. Parser owns the verdict.
+    const bikeClarifyReply = await resolveDeptWidgetBikeClarify({
+      message: event.body ?? "",
+      deptLabel: inboundDepartmentIntent === "apparel" ? "Motor Clothes" : "Parts",
+      firstName: normalizeDisplayCase(conv.lead?.firstName)
+    });
+    const reply = bikeClarifyReply
+      ? bikeClarifyReply
+      : inboundDepartmentIntent === "parts"
         ? isTakeOffMilwaukeeEightEngineRequestText(event.body)
           ? buildTakeOffMilwaukeeEightEngineReply()
           : "Thanks — I’ll have our parts department reach out shortly."
