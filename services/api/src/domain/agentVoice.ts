@@ -321,6 +321,35 @@ export function buildWatchAvailableReply(args: {
 }
 
 /**
+ * CHOLO build-segment watch alert (Cholo style vision, 2026-07-26). A cholo watch is a STYLE watch, not
+ * a model watch — the customer asked for "a cholo", never for the specific model that happens to match.
+ * So the generic buildWatchAvailableReply ("a <model> you were watching for") is WRONG here: it would name
+ * a model they never asked about and drop the always-confirm hedge. This copy instead (a) names the STYLE
+ * they watched for, (b) keeps the "let me double-check" hedge — cholo is the vision's READ of the photos,
+ * never asserted as fact (Joe ruling 3) — and (c) still names the real arriving unit + offers pics/a visit
+ * and the opt-out. The unit color, when known, is stated as the UNIT's (never as a "watched color" — a
+ * cholo watch carries none). Pinned by cholo_style_vision:eval + voice_charter:eval.
+ */
+export function buildCholoWatchAvailableReply(args: {
+  firstName?: string | null;
+  bikeLabel: string; // the arriving UNIT, e.g. "2020 Harley-Davidson Road King"
+  unitColor?: string | null; // the arriving unit's FEED color only
+  availability?: "new" | "in_stock" | "again";
+}): string {
+  const opener = args.firstName ? `Hey ${args.firstName}, good news` : "Good news";
+  const arrival =
+    args.availability === "again" ? "just came back in" : args.availability === "in_stock" ? "just turned up" : "just landed";
+  const unitColor = String(args.unitColor ?? "").trim();
+  const bikeLabel = String(args.bikeLabel ?? "").trim();
+  const bike = bikeLabel ? (unitColor ? `${bikeLabel} in ${unitColor}` : bikeLabel) : "one";
+  return (
+    `${opener} — something ${arrival} that's got that cholo style you're after: a ${bike}. ` +
+    "Let me double-check the details, but want me to send a few pics or line up a time to come see it? " +
+    "If you're all set, just say the word and I'll take you off the list."
+  );
+}
+
+/**
  * BUNDLED inventory-watch notification (Joe ruling 2026-07-23): when the per-conversation daily
  * alert cap held back additional same-day matches, the next delivery covers ALL of them in ONE
  * text instead of a drip of separate alerts (MD +19292685345 got 5 in two days, two minutes

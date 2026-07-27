@@ -43,9 +43,11 @@ import {
   watchCholoFireGate,
   buildCholoConfirmLine,
   choloStyleVisionEnabled,
+  // buildCholoWatchAvailableReply lives in agentVoice; imported below for the alert-copy test.
   matchesEquipmentQuery,
   type EquipmentProfile
 } from "../services/api/src/domain/inventoryEquipmentVision.ts";
+import { buildCholoWatchAvailableReply } from "../services/api/src/domain/agentVoice.ts";
 import type { VehicleEquipmentDescription } from "../services/api/src/domain/llmDraft.ts";
 import type { InventoryWatch } from "../services/api/src/domain/conversationStore.ts";
 import { checkMessage } from "./voice_charter_audit.ts";
@@ -265,6 +267,28 @@ function profileFrom(model: string, desc: VehicleEquipmentDescription): Equipmen
 }
 
 // ===========================================================================
+// (4b) The LIVE cholo WATCH ALERT copy (buildCholoWatchAvailableReply) — the message a firing cholo
+//      watch actually sends. Names the STYLE (not a model the customer never asked for), keeps the
+//      "let me double-check" hedge, names the real unit, offers pics/a visit + the opt-out.
+// ===========================================================================
+{
+  const alert = buildCholoWatchAvailableReply({ firstName: "Mike", bikeLabel: "2020 Harley-Davidson Road King", unitColor: "Vivid Black", availability: "new" });
+  assert.ok(/cholo/i.test(alert), "the alert names the CHOLO style the customer watched for");
+  assert.ok(/double-check|confirm|let me/i.test(alert), "the alert keeps the always-confirm hedge (never a flat claim)");
+  assert.ok(/2020 Harley-Davidson Road King/.test(alert), "the alert names the real arriving unit");
+  assert.ok(/Vivid Black/.test(alert), "the unit's feed color is stated as the UNIT's color");
+  // NEVER claims the customer 'was watching for' that specific MODEL (they watched a style, not a model).
+  assert.ok(!/Road King you were watching for/i.test(alert), "the alert does NOT claim the customer watched for the specific model");
+  assert.ok(/pics|photos|come see|time/i.test(alert) && /off the list/i.test(alert), "the alert offers pics/a visit and the opt-out");
+  // Passes the voice charter (texting-a-friend, no AI-tells / banned phrasing).
+  const alertCharter = checkMessage(alert, { firstOutbound: false, smsLike: true, staffHasSent: false });
+  assert.equal(alertCharter.length, 0, `cholo watch alert passes the voice charter (${alertCharter.map(v => v.check).join("; ")})`);
+  // Graceful with no name / no color / no unit label.
+  const bare = buildCholoWatchAvailableReply({ availability: "again" });
+  assert.ok(/cholo/i.test(bare) && /double-check|let me/i.test(bare), "bare alert still names cholo + hedges");
+}
+
+// ===========================================================================
 // (5) Watch fires ONLY at the confident threshold (fail-safe otherwise).
 // ===========================================================================
 {
@@ -364,6 +388,16 @@ function profileFrom(model: string, desc: VehicleEquipmentDescription): Equipmen
 
   // The fire gate reads the SAME EquipmentProfile cache the equipment gate uses (profile-on-arrival covers it).
   assert.ok(/convHasActiveCholoWatch/.test(indexSrc), "profile-on-arrival accounts for cholo watchers");
+
+  // ALERT COPY: a firing cholo watch sends the cholo-specific reply (buildCholoWatchAvailableReply),
+  // branched on watchHasCholoSegment, in BOTH single-fire paths (cron + hold-release) — NOT the generic
+  // model reply. >=2 usages (one per path).
+  const choloReplyRefs = (indexSrc.match(/buildCholoWatchAvailableReply\(/g) ?? []).length;
+  assert.ok(choloReplyRefs >= 2, "buildCholoWatchAvailableReply is used at BOTH single-fire sites (cron + hold-release)");
+  assert.ok(
+    /watchHasCholoSegment\(matchedWatch\)\s*\?\s*buildCholoWatchAvailableReply\(/.test(indexSrc),
+    "the fire sites branch to the cholo reply on watchHasCholoSegment (else the generic reply)"
+  );
 }
 
 console.log("PASS cholo_style_vision — build-signature, never-from-model, all-words→cholo, confirm-not-claim, confident-only fire, both-paths wiring, regression");
