@@ -2157,6 +2157,10 @@
       "TLE",
       "TLE-ULTRA",
       "TLEU"
+    ],
+    "lrs": [
+      "FXDLS",
+      "FXLRS"
     ]
   }
 }
