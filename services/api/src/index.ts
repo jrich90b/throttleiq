@@ -968,6 +968,14 @@ import {
   resolveEscalationCandidates
 } from "./domain/taskEscalation.js";
 import {
+  appendStaffPingRecord,
+  collectPingableTasks,
+  decideStaffPing,
+  DEFAULT_STAFF_PING_COOLDOWN_MINUTES,
+  lastStaffPingAt,
+  resolveStaffPingOwnerRef
+} from "./domain/staffPing.js";
+import {
   buildGateBlockerDigestMessage,
   collectGateBlockers,
   shouldSendGateBlockerDigest
@@ -40324,6 +40332,109 @@ app.post("/conversations/:id/lead-owner", requirePermission("canAccessTodos"), a
   conv.updatedAt = new Date().toISOString();
   saveConversation(conv);
   return res.json({ ok: true, conversation: conv, reassignedTodoCount });
+});
+
+/**
+ * Manager "Ping" (Joe, 2026-07-27) — the manual counterpart to the automatic nudges. A manager
+ * looking at a thread taps Ping and the rep who owns the work gets a text on their phone right
+ * now, with the open task summaries and a link back to the thread. The ping is recorded on the
+ * conversation so there is a record of who poked whom and when.
+ *
+ * Internal staff SMS only — never a customer send, and nothing here touches the customer thread.
+ * Decision logic (target selection, cooldown, message body) is pure in domain/staffPing.ts; this
+ * endpoint owns the clock, the user lookup, the send, and persistence.
+ *
+ * Manager-gated by canViewAllTasks. Kill switch: STAFF_PING_ENABLED=0.
+ * Cooldown: STAFF_PING_COOLDOWN_MIN (default 120).
+ */
+app.post("/conversations/:id/ping-owner", requirePermission("canViewAllTasks"), async (req, res) => {
+  const conv = getConversation(req.params.id);
+  if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
+  const actor = (req as any).user ?? null;
+  if (!canUserAccessConversation(actor, conv)) {
+    return res.status(403).json({ ok: false, error: "forbidden" });
+  }
+
+  const enabled = String(process.env.STAFF_PING_ENABLED ?? "1").trim() === "1";
+  const cooldownMinutes = Math.max(
+    0,
+    Number(process.env.STAFF_PING_COOLDOWN_MIN ?? DEFAULT_STAFF_PING_COOLDOWN_MINUTES) ||
+      DEFAULT_STAFF_PING_COOLDOWN_MINUTES
+  );
+
+  const tasks = collectPingableTasks(listOpenTodos(), [String(conv.id ?? ""), String(conv.leadKey ?? "")]);
+  const ownerRef = resolveStaffPingOwnerRef(tasks, conv);
+  const users = await listUsers();
+  const userById = new Map(users.map(u => [String(u?.id ?? "").trim(), u]));
+  const targetUser = ownerRef
+    ? resolveTodoOwnerUser({ ownerId: ownerRef.id, ownerName: ownerRef.name }, conv, users, userById)
+    : null;
+  const dealerProfile = await getDealerProfileHot();
+  const managerName =
+    String(actor?.firstName ?? "").trim() ||
+    String(actor?.name ?? "").trim() ||
+    String(actor?.email ?? "").trim() ||
+    "A manager";
+  const customerName =
+    [conv?.lead?.firstName, conv?.lead?.lastName].filter(Boolean).join(" ").trim() ||
+    String(conv?.lead?.name ?? "").trim() ||
+    String(conv?.leadKey ?? "").trim() ||
+    "this lead";
+
+  const decision = decideStaffPing({
+    enabled,
+    nowMs: Date.now(),
+    cooldownMinutes,
+    ownerRef,
+    target: targetUser
+      ? {
+          id: String(targetUser.id ?? "").trim(),
+          name:
+            String(targetUser.firstName ?? "").trim() ||
+            String(targetUser.name ?? "").trim() ||
+            String(targetUser.email ?? "").trim(),
+          phone: pickUserPhoneFromRecord(targetUser)
+        }
+      : null,
+    lastPingedAt: lastStaffPingAt(conv.staffPings),
+    managerName,
+    customerName,
+    tasks,
+    link: buildStaffInboxConversationLink(conv, dealerProfile)
+  });
+
+  if (decision.kind !== "send") {
+    recordRouteOutcome("manual", "staff_ping_blocked", { convId: conv.id, kind: decision.kind });
+    return res.json({ ok: true, sent: false, ...decision });
+  }
+
+  const sent = await sendInternalSms(decision.targetPhone, decision.message);
+  conv.staffPings = appendStaffPingRecord(conv.staffPings, {
+    at: new Date().toISOString(),
+    byUserId: String(actor?.id ?? "").trim() || undefined,
+    byUserName: managerName,
+    toUserId: decision.targetId || undefined,
+    toUserName: decision.targetName,
+    taskIds: decision.taskIds,
+    delivered: sent
+  });
+  conv.updatedAt = new Date().toISOString();
+  saveConversation(conv);
+  recordRouteOutcome("manual", sent ? "staff_ping_sent" : "staff_ping_send_failed", {
+    convId: conv.id,
+    leadKey: conv.leadKey,
+    to: decision.targetName,
+    taskCount: decision.taskIds.length
+  });
+
+  return res.json({
+    ok: true,
+    sent,
+    kind: sent ? "send" : "send_failed",
+    targetName: decision.targetName,
+    taskCount: decision.taskIds.length,
+    conversation: conv
+  });
 });
 
 app.post("/conversations/:id/contact-preference", (req, res) => {

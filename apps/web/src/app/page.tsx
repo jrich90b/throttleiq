@@ -1014,6 +1014,13 @@ type ConversationDetail = {
     name?: string;
     assignedAt?: string;
   } | null;
+  // Manager "Ping" audit trail (newest last) — who was texted about this thread and when.
+  staffPings?: {
+    at?: string;
+    byUserName?: string;
+    toUserName?: string;
+    delivered?: boolean;
+  }[];
   walkIn?: boolean | null;
   hold?: {
     key?: string;
@@ -3544,6 +3551,8 @@ export default function Home() {
   const lastSelectedSigRef = useRef<string>("");
   const [modeSaving, setModeSaving] = useState(false);
   const [modeError, setModeError] = useState<string | null>(null);
+  const [pingSaving, setPingSaving] = useState(false);
+  const [pingNotice, setPingNotice] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<"dealer" | "scheduler" | "users" | "notifications">("dealer");
   const [desktopNotifyEnabled, setDesktopNotifyEnabled] = useState(false);
@@ -5534,6 +5543,7 @@ export default function Home() {
   useEffect(() => {
     setAgentContextOpen(false);
     setManualContextError(null);
+    setPingNotice(null);
   }, [selectedConv?.id]);
 
   useEffect(() => {
@@ -12148,6 +12158,50 @@ export default function Home() {
     if (payload?.conversation && updateSelected) setSelectedConv(payload.conversation);
     await load();
     setModeSaving(false);
+  }
+
+  /**
+   * Manager "Ping" — text the rep who owns the work on this thread that they have something
+   * waiting. Internal staff SMS only; the customer thread is untouched. The API owns target
+   * selection and the cooldown, so every outcome comes back as a `kind` we translate here.
+   */
+  async function pingLeadOwner() {
+    if (!selectedConv) return;
+    setPingSaving(true);
+    setPingNotice(null);
+    try {
+      const resp = await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/ping-owner`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}"
+      });
+      const payload = await resp.json().catch(() => null);
+      if (!resp.ok || payload?.ok === false) {
+        setPingNotice({ tone: "warn", text: payload?.error ?? "Could not send the ping." });
+        return;
+      }
+      const who = String(payload?.targetName ?? "the assigned rep");
+      if (payload?.sent) {
+        setPingNotice({ tone: "ok", text: `Texted ${who}.` });
+      } else if (payload?.kind === "cooldown") {
+        const mins = Number(payload?.minutesRemaining ?? 0);
+        const wait = mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`;
+        setPingNotice({ tone: "warn", text: `${who} was pinged recently — you can ping again in ${wait}.` });
+      } else if (payload?.kind === "no_phone") {
+        setPingNotice({ tone: "warn", text: `${who} has no mobile number on file.` });
+      } else if (payload?.kind === "no_target") {
+        setPingNotice({ tone: "warn", text: "Nobody is assigned to this lead yet." });
+      } else if (payload?.kind === "disabled") {
+        setPingNotice({ tone: "warn", text: "Ping is turned off." });
+      } else {
+        setPingNotice({ tone: "warn", text: `Could not text ${who}.` });
+      }
+      if (payload?.conversation) setSelectedConv(payload.conversation);
+    } catch {
+      setPingNotice({ tone: "warn", text: "Could not send the ping." });
+    } finally {
+      setPingSaving(false);
+    }
   }
 
   async function addSuppression() {
@@ -21315,6 +21369,16 @@ export default function Home() {
                     Context
                   </button>
                 ) : null}
+                {(authUser?.role === "manager" || authUser?.permissions?.canViewAllTasks) ? (
+                  <button
+                    className="px-2 py-1 border rounded text-sm shrink-0 hover:bg-gray-50 disabled:opacity-60"
+                    onClick={() => void pingLeadOwner()}
+                    disabled={pingSaving}
+                    title="Text the rep who owns this thread that they have a task waiting"
+                  >
+                    {pingSaving ? "Pinging…" : "Ping"}
+                  </button>
+                ) : null}
                 {(authUser?.role === "manager" || authUser?.permissions?.canAccessTodos) ? (
                   <button
                     className="px-2 py-1 border rounded text-sm shrink-0 text-red-700 bg-red-50 hover:bg-red-100"
@@ -21328,6 +21392,24 @@ export default function Home() {
               </div>
             </div>
             {modeError ? <div className="text-xs text-red-600 mt-1">{modeError}</div> : null}
+            {pingNotice ? (
+              <div
+                className={`text-xs mt-1 ${pingNotice.tone === "ok" ? "text-emerald-700" : "text-amber-700"}`}
+              >
+                {pingNotice.text}
+              </div>
+            ) : null}
+            {(() => {
+              const pings = (selectedConv.staffPings ?? []).filter(p => p?.delivered && p?.at);
+              const last = pings.length ? pings[pings.length - 1] : null;
+              if (!last) return null;
+              return (
+                <div className="text-xs text-gray-500 mt-1">
+                  Last ping: {last.toUserName || "rep"}
+                  {last.byUserName ? ` (by ${last.byUserName})` : ""} • {formatCadenceDate(String(last.at))}
+                </div>
+              );
+            })()}
             {selectedConv.manualContext?.status === "needed" && selectedConv.status !== "closed" ? (
               <div className="mt-3 rounded-lg border px-3 py-3 text-sm lr-cadence-context-panel">
                 <div className="font-medium lr-cadence-context-title">What is this follow-up about?</div>

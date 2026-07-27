@@ -26,6 +26,7 @@ import {
   type DraftStateInvariantInput
 } from "./draftStateInvariants.js";
 import { isPhoneLogConversation } from "./phoneLogLead.js";
+import type { StaffPingRecord } from "./staffPing.js";
 import { buildPersonaSelfIntroPattern } from "./agentVoice.js";
 import { getCachedDealerProfile } from "./dealerProfile.js";
 import { findComputerLikePhrases } from "./voiceBannedPhrases.js";
@@ -806,6 +807,10 @@ export type Conversation = {
   inboxActivityAt?: string;
   messages: Message[];
   leadOwner?: LeadOwner;
+  // Audit trail for the manager "Ping" button (newest last, capped at STAFF_PING_HISTORY_LIMIT):
+  // who poked whom, when, about which tasks. Internal staff SMS only — never a customer send.
+  // Also the cooldown source of truth, so a rep can't be pinged five times in a row.
+  staffPings?: StaffPingRecord[];
   manualSender?: {
     userId?: string;
     userName?: string;
