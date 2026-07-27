@@ -39,8 +39,13 @@ process.env.LLM_TURN_UNDERSTANDING_PARSER_ENABLED = "1";
 const { parseTurnUnderstandingWithLLM } = await import("../services/api/src/domain/llmDraft.ts");
 
 // How many SCORED misses to absorb as LLM nondeterminism before the gate reds.
-// Every scored case passes 3/3 standalone; a real regression breaks 2+ at once.
-const SCORED_TOLERANCE = 1;
+// The scored pool now holds ~3 inherently-stochastic edge cases (trade+spec combo,
+// the "catch the tech" ETA question, a slang variant) each ~10-15% flaky, so two can
+// coincide in one run. Tolerance 2 (floor ~88%) absorbs that without leaning on the
+// retry wrapper; a REAL regression breaks a whole category (3+) and/or trips a CRITICAL
+// (0-tolerance), which is the actual safety gate. Raised 1->2 on 7/27 when hole #3
+// fixtures grew the pool.
+const SCORED_TOLERANCE = 2;
 
 type H = { direction: "in" | "out"; body: string }[];
 type Tier = "critical" | "scored";
@@ -97,12 +102,40 @@ const CASES: Case[] = [
     history: [{ direction: "out", body: "Here are photos of the Road Glide." }],
     check: wantNoModels // a reaction is not a fresh request
   },
-  // NOTE (7/26): a "sign-off after a time is already set" case ("perfect see you then" ->
-  // must NOT re-capture the existing Saturday/2pm as a new schedule) was shipped CRITICAL in
-  // #299, but the 1000-text stress run showed the parser flakes ~25% on it — it re-grabs the
-  // set time (phantom schedule). That is hole #3 (ETA/sign-off vs schedule). A ~25%-flaky case
-  // does not belong in a hard gate, so it is REMOVED here and tracked by the stress harness
-  // instead; it returns as a CRITICAL case once the hole-#3 fix makes it reliably green.
+  // ---------- CRITICAL: en-route ETA / sign-off must NOT create a phantom schedule (hole #3) ----------
+  // Fixtures are real leaking texts from the 1000-text stress run (~50 phantom_schedule cases). The
+  // parser was grabbing an ETA/delay ("running 15 late", "be there in 20") or an already-booked time
+  // ("still coming for the 3pm") as a NEW appointment. Fixed 7/27; all verified 5/5 stable NULL.
+  {
+    // Re-promoted to CRITICAL (was removed in #300 while it flaked ~25%; the hole-#3 fix makes it reliable).
+    id: "relevance_signoff_no_phantom_schedule", cat: "relevance-trap", tier: "critical",
+    text: "perfect see you then",
+    history: [{ direction: "out", body: "You're all set for Saturday at 2." }],
+    check: p => (hasSchedule(p) ? `phantom schedule captured on a sign-off: ${JSON.stringify(p?.requestedSchedule)}` : null)
+  },
+  {
+    id: "eta_delay_still_ok", cat: "eta-schedule", tier: "critical",
+    text: "vp but running 15 mins late, en la 105 heading there, still ok?",
+    check: p => (hasSchedule(p) ? `phantom schedule from an ETA/delay: ${JSON.stringify(p?.requestedSchedule)}` : null)
+  },
+  {
+    // SCORED (not critical): the "...catch the tech before he leaves?" question about an existing
+    // plan occasionally (~15%) still tempts a schedule read — tracked, not 0-tolerance.
+    id: "eta_catch_tech", cat: "eta-schedule", tier: "scored",
+    text: "runin 20 mins, boss traffic on 35 — still good to catch the tech before he leaves?",
+    check: p => (hasSchedule(p) ? `phantom schedule from an ETA: ${JSON.stringify(p?.requestedSchedule)}` : null)
+  },
+  {
+    id: "eta_still_coming_existing", cat: "eta-schedule", tier: "critical",
+    text: "stuck in meeting, gonna be +20 min. still coming for the 21 sgs but might park in lot 3",
+    check: p => (hasSchedule(p) ? `phantom schedule on a 'still coming for existing appt' note: ${JSON.stringify(p?.requestedSchedule)}` : null)
+  },
+  {
+    // REGRESSION guard: a REAL proposed time must STILL be captured (don't over-suppress).
+    id: "real_proposal_still_captured", cat: "eta-schedule", tier: "scored",
+    text: "can i come by saturday at 2 to see it?",
+    check: p => (hasSchedule(p) ? null : `a real proposed time must be captured, got ${JSON.stringify(p?.requestedSchedule)}`)
+  },
   {
     id: "service_not_sales", cat: "service-vs-sales", tier: "critical",
     text: "my street glide is making a clunking noise when i shift, can someone look at it",
