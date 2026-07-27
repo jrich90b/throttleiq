@@ -265,6 +265,52 @@ const CASES: Case[] = [
     id: "spec_resolved_by_context", cat: "engine-spec", tier: "scored",
     text: "can u hold the 117 street glide till saturday?",
     check: p => wantFamily(p, "street glide")
+  },
+
+  // ---------- trade vs buy vs "changed my mind" (hole #2) ----------
+  // Fixtures are the real failing texts from the 1000-text stress run (owned_as_requested + trade over_attach).
+  // CRITICAL = the dangerous directions: the TRADE bike must never be pitched back as a bike-to-buy, and the
+  // customer's OWNED bike must never land in requested_models.
+  {
+    id: "trade_not_requested", cat: "trade-disentangle", tier: "critical",
+    text: "price on the 21 sgs? also wanna trade my softail, when can i swing by to see both?",
+    check: p => (families(p).some(f => f.includes("softail"))
+      ? `the trade bike (Softail) leaked into requested_models: ${JSON.stringify(p?.requestedModels ?? [])}`
+      : (owned(p).includes("softail") ? null : `Softail should be the owned/trade bike, got owned="${owned(p)}"`))
+  },
+  {
+    id: "owned_not_requested", cat: "trade-disentangle", tier: "critical",
+    text: "can u give me cash value on my 2016 street glide? also whats final price on that 117?",
+    check: p => (families(p).some(f => f.includes("street glide"))
+      ? `the customer's OWNED Street Glide leaked into requested_models: ${JSON.stringify(p?.requestedModels ?? [])}`
+      : (owned(p).includes("street glide") ? null : `their 2016 Street Glide should be owned/trade, got owned="${owned(p)}"`))
+  },
+  {
+    // "what's my X worth" — a trade valuation of their OWN bike must not duplicate X into requested_models.
+    id: "trade_valuation_owned_only", cat: "trade-disentangle", tier: "scored",
+    text: "whats my 21 sgs worth on trade",
+    check: p => (families(p).length === 0 && owned(p).includes("street glide"))
+      ? null : `trade valuation should be owned-only, got requested=${JSON.stringify(p?.requestedModels ?? [])} owned="${owned(p)}"`
+  },
+  {
+    // Change of mind: a DROPPED bike must not be recorded as owned; the NEW bike is what they want.
+    id: "rescind_new_want", cat: "trade-disentangle", tier: "scored",
+    text: "honestly not the fatbob now — change of plans, maybe the low rider s instead? whatd you say total was?",
+    check: p => (families(p).some(f => f.includes("low rider")) && !owned(p).includes("fat bob"))
+      ? null : `dropped Fat Bob should not be owned & Low Rider S should be requested, got requested=${JSON.stringify(p?.requestedModels ?? [])} owned="${owned(p)}"`
+  },
+  {
+    id: "rescind_not_owned", cat: "trade-disentangle", tier: "scored",
+    text: "actually not the fxlr anymore, think i want the tri glide now. sorry for flip flopping lol",
+    check: p => (families(p).some(f => f.includes("tri glide")) && !owned(p).includes("low rider"))
+      ? null : `dropped fxlr should not be owned & Tri Glide should be requested, got requested=${JSON.stringify(p?.requestedModels ?? [])} owned="${owned(p)}"`
+  },
+  {
+    // REGRESSION guard: a normal owned+want message must still split correctly (don't over-suppress requested).
+    id: "trade_split_regression", cat: "trade-disentangle", tier: "scored",
+    text: "trading my ultra limited, want to look at a road glide",
+    check: p => (families(p).some(f => f.includes("road glide")) && owned(p).includes("ultra limited"))
+      ? null : `must split Ultra Limited=owned / Road Glide=requested, got requested=${JSON.stringify(p?.requestedModels ?? [])} owned="${owned(p)}"`
   }
 ];
 
