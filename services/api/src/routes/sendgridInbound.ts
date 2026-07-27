@@ -48,9 +48,12 @@ import {
   flushConversationStore,
   listOpenQuestions,
   markQuestionDone,
-  markOpenTodosResolvedByCommunication
+  markOpenTodosResolvedByCommunication,
+  ensureInitialSmsOptOutFooter
 } from "../domain/conversationStore.js";
 import type { InventoryWatch } from "../domain/conversationStore.js";
+import { isSuppressed } from "../domain/suppressionStore.js";
+import { isOptOutKeywordInbound } from "../domain/scoringExclusions.js";
 import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, shouldIntroduceOnAdfTouch, stripAgentIntroPhraseForDealer, stripLeadingAgentGreeting, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, greetingFirstName } from "../domain/agentVoice.js";
 import { buildAdfResubmissionAck, detectAdfFormResubmission } from "../domain/adfResubmission.js";
 import { buildMarketplaceRelayFirstTouchReply, buildMarketplaceRelayTaskSummary } from "../domain/marketplaceRelay.js";
@@ -707,6 +710,36 @@ async function sendInternalSalespersonSms(
     const client = twilio(accountSid, authToken);
     const msg = await client.messages.create({ from, to, body: String(body ?? "").trim() });
     return { sent: true, sid: String(msg.sid ?? "") || undefined };
+  } catch (e: any) {
+    return { sent: false, reason: String(e?.message ?? "send_failed") };
+  }
+}
+
+/**
+ * First-touch auto-send STEP 2 (approve-first; ships DARK behind FIRST_TOUCH_ACK_AUTOSEND).
+ * Sends the deterministic first-touch ack to the CUSTOMER over SMS via the dealer's Twilio number
+ * — the same mechanism as sendInternalSalespersonSms, but customer-facing. Returns {sent,sid} so the
+ * caller records the exact body it SENT (send == record). Any failure → {sent:false,reason} and the
+ * caller falls back to a held draft (never lose the message, never double-send).
+ */
+async function sendCustomerFirstTouchSms(
+  toNumberRaw: string | null | undefined,
+  body: string
+): Promise<{ sent: boolean; sid?: string; from?: string; reason?: string }> {
+  const to = normalizePhoneE164(toNumberRaw);
+  const from = normalizePhoneE164(String(process.env.TWILIO_FROM_NUMBER ?? "").trim());
+  const accountSid = String(process.env.TWILIO_ACCOUNT_SID ?? "").trim();
+  const authToken = String(process.env.TWILIO_AUTH_TOKEN ?? "").trim();
+  const text = String(body ?? "").trim();
+  if (!to || !to.startsWith("+")) return { sent: false, reason: "invalid_to_number" };
+  if (!from || !from.startsWith("+") || !accountSid || !authToken) {
+    return { sent: false, reason: "twilio_not_configured" };
+  }
+  if (!text) return { sent: false, reason: "empty_body" };
+  try {
+    const client = twilio(accountSid, authToken);
+    const msg = await client.messages.create({ from, to, body: text });
+    return { sent: true, sid: String(msg.sid ?? "") || undefined, from };
   } catch (e: any) {
     return { sent: false, reason: String(e?.message ?? "send_failed") };
   }
@@ -1980,6 +2013,7 @@ import { getSystemMode } from "../domain/settingsStore.js";
 import {
   decideFirstTouchAutoSend,
   firstTouchAutoSendDebugEnabled,
+  isFirstTouchAckAutoSendEnabled,
   buildFirstTouchShadowRecord,
   appendFirstTouchShadowLog
 } from "../domain/firstTouchAutoSend.js";
@@ -5799,22 +5833,56 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       stopFollowUpCadence(conv, "manual_handoff");
       return { ok: false, reason };
     }
-    appendOutbound(conv, "dealership", leadKey, invariant.draftText, "draft_ai", undefined, mediaUrls);
-    // First-touch auto-send STEP 1 (dark): shadow-measure eligibility only — NO send.
-    // Live customer-send is STEP 2 (approve-first); see docs/first_touch_autosend_spec.md.
+    // First-touch auto-send (STEP 2, approve-first; ships DARK behind FIRST_TOUCH_ACK_AUTOSEND,
+    // default OFF). The deterministic first-touch ack is the ONE reply already safe to send
+    // instantly — it kills the ~186-min median wait before a brand-new lead's first "got you"
+    // (docs/first_touch_autosend_spec.md). Every OTHER reply stays a staff-approved draft. The
+    // eligibility is the pure decideFirstTouchAutoSend gate with the REAL compliance inputs now
+    // wired in (STEP 1 shadow-stubbed suppressed/optedOut false): flag on + first touch +
+    // deterministic reply + not suppressed/opted-out/call-only + invariant-clean + deliverable
+    // phone. Any miss OR a send failure → the held draft (fail-safe: never auto-send when unsure,
+    // never lose the message, never double-send).
+    const firstTouchGateInputs = {
+      isFirstTouch: isInitialAdf,
+      isDeterministicReply: true, // publishEarlyAdfSmsDraft is the deterministic early-ADF opener path
+      suppressed: typeof leadKey === "string" && isSuppressed(leadKey),
+      optedOut: isOptOutKeywordInbound(event?.body ?? null),
+      callOnly: conv?.lead?.preferredContactMethod === "phone",
+      invariantAllow: true, // past the invariant.allow gate above
+      hasDeliverablePhone: typeof leadKey === "string" && leadKey.startsWith("+")
+    };
+    const autoSendDecision = decideFirstTouchAutoSend({
+      enabled: isFirstTouchAckAutoSendEnabled(),
+      ...firstTouchGateInputs
+    });
+    let autoSent = false;
+    let publishedBody = invariant.draftText;
+    if (autoSendDecision.send) {
+      // Footer FIRST so the SENT text == the RECORDED text (send/record parity — mirrors the live
+      // Twilio publish path). ensureInitialSmsOptOutFooter is idempotent.
+      publishedBody = ensureInitialSmsOptOutFooter(conv, invariant.draftText, { provider: "twilio", to: leadKey });
+      const sendResult = await sendCustomerFirstTouchSms(leadKey, publishedBody);
+      if (sendResult.sent) {
+        appendOutbound(conv, sendResult.from ?? "dealership", leadKey, publishedBody, "twilio", sendResult.sid, mediaUrls);
+        autoSent = true;
+        console.log("[first_touch_autosend SENT]", { convId: conv?.id ?? null, leadKey, sid: sendResult.sid ?? null });
+      } else {
+        // Delivery failed — never lose the message: fall back to the held draft the operator sends.
+        appendOutbound(conv, "dealership", leadKey, invariant.draftText, "draft_ai", undefined, mediaUrls);
+        console.warn("[first_touch_autosend send failed -> held draft]", {
+          convId: conv?.id ?? null,
+          reason: sendResult.reason
+        });
+      }
+    } else {
+      appendOutbound(conv, "dealership", leadKey, invariant.draftText, "draft_ai", undefined, mediaUrls);
+    }
+    // Shadow log (behind FIRST_TOUCH_ACK_AUTOSEND_DEBUG): record the ACTUAL ack + risk context +
+    // the decision so it stays reviewable message-by-message. Measures POTENTIAL (enabled:true) so
+    // the report shows what a flip WOULD fire even while the live flag is off; the send above obeys
+    // the real flag.
     if (firstTouchAutoSendDebugEnabled()) {
-      const shadow = decideFirstTouchAutoSend({
-        enabled: true, // measure potential regardless of the live flag
-        isFirstTouch: isInitialAdf,
-        isDeterministicReply: true, // publishEarlyAdfSmsDraft is the deterministic early-ADF opener path
-        suppressed: false, // STEP 2 wires isSuppressed(leadKey)
-        callOnly: conv?.lead?.preferredContactMethod === "phone",
-        optedOut: false,
-        invariantAllow: true, // past the invariant.allow gate above
-        hasDeliverablePhone: typeof leadKey === "string" && leadKey.startsWith("+")
-      });
-      // Log the ACTUAL ack text + risk context (sold/held disclosure lives in the
-      // ack itself) so it can be reviewed message-by-message — never sent.
+      const shadow = decideFirstTouchAutoSend({ enabled: true, ...firstTouchGateInputs });
       const shadowRecord = buildFirstTouchShadowRecord({
         at: new Date().toISOString(),
         convId: conv?.id ?? null,
@@ -5830,10 +5898,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       console.log("[first_touch_autosend shadow]", {
         convId: shadowRecord.convId,
         wouldSend: shadowRecord.wouldSend,
-        reason: shadowRecord.reason
+        reason: shadowRecord.reason,
+        autoSent
       });
     }
-    return { ok: true, draft: invariant.draftText };
+    return { ok: true, draft: publishedBody, autoSent };
   };
   // A stale (never-sent) thank-you draft must NOT count as "already thanked" — that latched
   // +17168641440 into permanent silence when the 5/16 draft went stale and the 5/18 repeat
