@@ -3,7 +3,7 @@ import fs from "node:fs";
 import OpenAI from "openai";
 import type { Conversation } from "./conversationStore.js";
 import { dataPath } from "./dataDir.js";
-import { isFabricatedGratitudeLeadIn } from "./leadInGuards.js";
+import { isFabricatedGratitudeLeadIn, isEchoedInboundOpening } from "./leadInGuards.js";
 import { customerVisitConfirmed, phantomVisitGuardEnabled, stripPhantomVisitFraming } from "./visitFraming.js";
 import { recordOpenAIUsage } from "./openaiUsageLogger.js";
 import { buildPartsCatalogParserHint, matchPartsCatalogLexicon } from "./partsCatalogLexicon.js";
@@ -15226,13 +15226,19 @@ export async function selfHealDraftWithLLM(args: {
   try {
     const v1 = await judgeDraftQualityWithLLM({ draft: original, inbound, history: args.ctx.history, lead: args.ctx.lead, channel });
     const conf1 = typeof v1?.confidence === "number" ? v1.confidence : 0;
-    if (!v1 || v1.overall === "good" || conf1 < 0.8) {
+    // Deterministic echo trigger (2026-07-27): the LLM judge misses the "parrots the customer's words
+    // back" class, so catch it here — an echoed opening forces the re-draft even if the judge passed it.
+    const echoesInbound = isEchoedInboundOpening(original, inbound);
+    if (!echoesInbound && (!v1 || v1.overall === "good" || conf1 < 0.8)) {
       // Draft is good/unsure — cache the verdict so the publish gate reuses it (no second judge call).
       cacheSelfHealVerdict(inbound, original, v1);
       return { draft: original, healed: false, outcome: "passed" };
     }
-    // The PATCH: regenerate with the judge's steering so the re-draft fixes what was wrong.
-    const steering = String(v1.steering || v1.reason || "").trim();
+    // The PATCH: regenerate with steering so the re-draft fixes what was wrong. An echoed opening gets
+    // an explicit anti-parrot instruction (it dominates, since the judge often rates the echo "good").
+    const steering = echoesInbound
+      ? "Do NOT open by repeating the customer's own words back — rewrite the opening in your own words (e.g. 'Tomorrow after work works great —'), keeping the same meaning."
+      : String(v1?.steering || v1?.reason || "").trim();
     const steered = String((await generateDraftWithLLM({ ...args.ctx, steering })) ?? "").trim();
     if (!steered || steered === original.trim()) {
       cacheSelfHealVerdict(inbound, original, v1); // returned draft is the bad original → gate reuses v1 to hold
@@ -15242,6 +15248,12 @@ export async function selfHealDraftWithLLM(args: {
     const conf2 = typeof v2?.confidence === "number" ? v2.confidence : 0;
     if (v2 && v2.overall !== "good" && conf2 >= 0.8) {
       // Re-draft still bad — keep the ORIGINAL so the publish gate holds it (don't ship a worse re-roll).
+      cacheSelfHealVerdict(inbound, original, v1);
+      return { draft: original, healed: false, outcome: "still_failing" };
+    }
+    // If the trigger was an echoed opening, the re-draft only counts as healed when it NO LONGER echoes
+    // (a judge-"good" re-roll that still parrots the customer isn't a fix).
+    if (echoesInbound && isEchoedInboundOpening(steered, inbound)) {
       cacheSelfHealVerdict(inbound, original, v1);
       return { draft: original, healed: false, outcome: "still_failing" };
     }
@@ -15255,7 +15267,7 @@ export async function selfHealDraftWithLLM(args: {
       inbound: inbound.slice(0, 600),
       before: original.trim().slice(0, 600),
       after: steered.slice(0, 600),
-      judgeReason: String(v1.reason ?? "").slice(0, 300),
+      judgeReason: String(v1?.reason ?? "").slice(0, 300),
       judgeSteering: steering.slice(0, 300)
     });
     return { draft: steered, healed: true, outcome: "healed" };
@@ -15379,6 +15391,7 @@ ANSWER, DON'T HEDGE (strict):
 - ONLY defer to a person/follow-up when you GENUINELY need something you don't have: a finance/credit decision, a trade appraisal, a parts or backorder lookup, service records, or physically checking a specific bike. When you do defer, name exactly what you're checking — don't be vague. (Never invent a price, rate, stock number, or availability just to avoid deferring — that rule still wins.)
 ${channelRules}
 ${hardshipRules}
+- Never OPEN by repeating the customer's own words back to them — acknowledge in your OWN words. If they wrote "might be able to swing tomorrow after work," reply like "Tomorrow after work works great —", NOT "might be able to swing tomorrow after work can work." Parroting their sentence reads robotic (and often starts mid-thought/lowercase).
 CONTROLLED VARIATIONS (use these to sound human):
 - Use ONE variant per response section. Do not repeat the same variant if it already appeared in the thread.
 - Prefer natural contractions (I'm, you're, that's).

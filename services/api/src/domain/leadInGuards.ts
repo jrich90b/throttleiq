@@ -63,3 +63,54 @@ export function detectFabricatedFrame(reply: string, customerText: string): Fabr
   if (isFabricatedQuestionFrame(opener, customerText)) return { fabricated: true, type: "question" };
   return { fabricated: false, type: null };
 }
+
+// ---------------------------------------------------------------------------
+// ECHOED-INBOUND-OPENING guard (draft-quality, 2026-07-27). A recurring miss class: the reply LLM
+// opens by PARROTING the customer's own words back verbatim, then bolts a few words on — e.g.
+// customer "Might be able to swing tomorrow after work" -> draft "might be able to swing tomorrow
+// after work can work. Just give me a heads up...". It reads robotic and often starts lowercase
+// (it grabbed the customer's fragment). A person acknowledges in their OWN words ("Tomorrow after
+// work works great —"). This detector flags a reply whose OPENING is a long verbatim run of the
+// customer's message. It is intentionally CONSERVATIVE (a self-heal REGENERATE trigger, not a hard
+// strip): natural 2-3 word reuse ("tomorrow after work works") is NOT an echo — only a run of
+// ECHO_MIN_RUN+ consecutive customer words, anchored at the very start of the reply, trips it.
+const ECHO_MIN_RUN = 4; // consecutive customer words at the reply's opening → a parrot, not an ack
+
+function echoTokens(s: string): string[] {
+  return String(s ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ") // drop punctuation/emoji so "work…" == "work"
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .filter(Boolean);
+}
+
+/**
+ * True when `reply` OPENS by repeating a run of >= ECHO_MIN_RUN consecutive words taken verbatim
+ * from `customerText`, starting within the reply's first word or two. Deterministic + fail-safe:
+ * used only to TRIGGER a re-draft (never to block a send), so a rare false positive costs one
+ * regenerate, never a lost reply. Pinned by outbound_echo_guard:eval.
+ */
+export function isEchoedInboundOpening(reply: string, customerText: string): boolean {
+  const r = echoTokens(reply);
+  const c = echoTokens(customerText);
+  if (r.length < ECHO_MIN_RUN || c.length < ECHO_MIN_RUN) return false;
+  // The echoed run must begin at the reply's opening (word 0 or 1 — allow one throwaway lead word).
+  for (let start = 0; start <= 1 && start < r.length; start++) {
+    // Find where r[start] appears in the customer text, then measure the contiguous match length.
+    for (let ci = 0; ci < c.length; ci++) {
+      if (c[ci] !== r[start]) continue;
+      let run = 0;
+      while (
+        start + run < r.length &&
+        ci + run < c.length &&
+        r[start + run] === c[ci + run]
+      ) {
+        run++;
+      }
+      if (run >= ECHO_MIN_RUN) return true;
+    }
+  }
+  return false;
+}
