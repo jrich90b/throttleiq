@@ -8964,9 +8964,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     !initialAdfVehicleFactDecision &&
     !initialAdfVehicleInfoDecision &&
     !initialAdfInventoryStatusAccepted &&
-    // Never confirm a test-ride time on a bike that's on hold (not_found/sold are already handled by
-    // the unavailable-inventory watch above). Lead with the hold instead (force-copy branch below).
-    initialAvailability !== "on_hold"
+    // STOCK-CHECK-FIRST (Joe 7/27): ONLY confirm a test-ride time when the bike is CONFIRMED in stock.
+    // Any other state — not_found, sold, on_hold, OR unknown (model couldn't be confidently resolved in
+    // the feed) — must NOT offer a time on a bike we don't have; it leads with the unavailability instead
+    // (the unavailable-inventory watch for not_found/sold, else the availability line / force-copy branch).
+    // Fail-safe direction: when unsure, never promise a ride.
+    initialAvailability === "in_stock"
       ? buildInitialTestRidePreferredDateReply(conv)
       : null;
   if (preferredTestRideDateReply) {

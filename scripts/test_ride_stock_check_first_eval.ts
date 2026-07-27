@@ -77,10 +77,15 @@ assert.ok(
 // sets a real watch on the conversation (the follow-up).
 assert.ok(/buildInitialAdfUnavailableInventoryWatch\(\{/.test(sgSrc), "the watch builder is invoked");
 assert.ok(/conv\.inventoryWatch = initialAdfUnavailableInventoryWatch\.watch;/.test(sgSrc), "a firing out-of-stock ADF sets the watch (the follow-up)");
-// The time-first test-ride reply is excluded when the watch fired (not_found/sold) AND when on hold.
+// The time-first test-ride reply is produced ONLY when the bike is CONFIRMED in stock — never on
+// not_found / sold / on_hold / unknown (fail-safe: never promise a ride on a bike we can't confirm).
 assert.ok(
-  /!initialAdfUnavailableInventoryWatch &&[\s\S]{0,600}initialAvailability !== "on_hold"[\s\S]{0,120}buildInitialTestRidePreferredDateReply\(conv\)/.test(sgSrc),
-  "the time-first test-ride reply is gated: never when the unavailable-watch fired, never on hold"
+  /initialAvailability === "in_stock"[\s\S]{0,120}buildInitialTestRidePreferredDateReply\(conv\)/.test(sgSrc),
+  "the time-first test-ride reply fires ONLY when initialAvailability === 'in_stock'"
+);
+assert.ok(
+  !/initialAvailability !== "on_hold"[\s\S]{0,120}buildInitialTestRidePreferredDateReply\(conv\)/.test(sgSrc),
+  "the weaker on_hold-only gate is gone (replaced by in-stock-only)"
 );
 
 console.log("PASS test_ride_stock_check_first — out-of-stock test-ride ADF leads with unavailability + watch (+ sets it), never a time (both paths)");
