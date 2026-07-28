@@ -116,8 +116,8 @@ assert.match(
 );
 assert.match(
   indexSrc,
-  /const deptAck = deptBikeClarify \|\| deptAckEngaged \|\| deptAckFallback/,
-  "the department path falls back to the static template when the LLM ack (and the bike-clarify) is unavailable"
+  /const deptAck = deptIntake\.reply \|\| deptAckEngaged \|\| deptAckFallback/,
+  "the department path falls back to the static template when the LLM ack (and the dept-widget intake reply) is unavailable"
 );
 
 const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));

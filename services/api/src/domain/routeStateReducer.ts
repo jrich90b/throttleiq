@@ -2619,6 +2619,64 @@ export function decideSellToDealerTurn(input: SellToDealerTurnInput): SellToDeal
   return { kind: "sell_to_dealer_appraisal" };
 }
 
+// Dept-widget intake precedence (the Lynn Kraus class, +17164785613, corpus sweep 2026-07-28).
+// The bike-vs-department clarify (Joe ruling 2026-07-26 #4) shipped as a TWO-state decision —
+// clarify or plain dept ack — in a THREE-state world. Lynn came through the Motor Clothes widget
+// with "Do you guys buy motorcycles? I have a '17 Road King Special with just under 11k miles I'm
+// looking to sell." and got "are you looking for info on the '17 Road King itself, or Motor Clothes
+// gear/support for it?" — a clarify for a question that was never ambiguous. Her ask was an
+// ACQUISITION lead (she is selling TO us), already fully modeled by the disposition parser's
+// sell_to_dealer_interest slot (the Josh Kiddy fix, 2026-07-23) — this path just never consulted it.
+//
+// So: clarify only when the customer's own words leave apparel-vs-bike genuinely open. A stated
+// sell-to-dealer ask outranks the clarify, which outranks the plain dept ack. Structured slots only
+// (no raw text) — comprehension stays upstream in the two typed parsers. The acquisition arm
+// delegates to decideSellToDealerTurn so there is ONE definition of "is this an acquisition lead"
+// (same 0.8 floor, same sell_on_own conflict guard) rather than a second drifting opinion.
+//
+// Containment property that makes this safe: the acquisition arm is a strict SUBSET of today's
+// clarify cohort — it is reachable only when asksAboutMotorcycle is already true, which the parser's
+// department carve-out already suppresses for gear/parts/service asks. A pure apparel ask can never
+// reach it. Fail-direction: a missed/low-confidence acquisition read falls through to today's
+// clarify (status quo, staff edits it), and a null parse falls through to the plain ack — nothing
+// fails toward silence, a closeout, or a cadence pause.
+export type DeptWidgetIntakeTurnKind = "sell_to_dealer_appraisal" | "bike_clarify" | "plain_dept_ack";
+
+export type DeptWidgetIntakeTurnInput = {
+  // classifyDeptWidgetBikeInterestWithLLM's structured verdict.
+  asksAboutMotorcycle: boolean;
+  bikeConfidence?: number | null;
+  bikeConfidenceMin?: number;
+  // parseCustomerDispositionWithLLM's structured slots (never raw text).
+  sellToDealerInterest?: boolean;
+  disposition?: string | null;
+  dispositionConfidence?: number | null;
+  conversationClosed?: boolean;
+  saleRecorded?: boolean;
+};
+
+export type DeptWidgetIntakeTurnDecision = { kind: DeptWidgetIntakeTurnKind };
+
+export const DEPT_WIDGET_BIKE_CLARIFY_CONFIDENCE_FLOOR = 0.6;
+
+export function decideDeptWidgetIntakeTurn(input: DeptWidgetIntakeTurnInput): DeptWidgetIntakeTurnDecision {
+  if (!input.asksAboutMotorcycle) return { kind: "plain_dept_ack" };
+  const bikeMin =
+    typeof input.bikeConfidenceMin === "number" ? input.bikeConfidenceMin : DEPT_WIDGET_BIKE_CLARIFY_CONFIDENCE_FLOOR;
+  const bikeConfidence = typeof input.bikeConfidence === "number" ? input.bikeConfidence : 0;
+  if (!(bikeConfidence >= bikeMin)) return { kind: "plain_dept_ack" };
+  // Acquisition outranks the clarify — she told us what she wants; don't ask her again.
+  const acquisition = decideSellToDealerTurn({
+    sellToDealerInterest: !!input.sellToDealerInterest,
+    disposition: input.disposition ?? null,
+    confidence: input.dispositionConfidence ?? null,
+    conversationClosed: input.conversationClosed,
+    saleRecorded: input.saleRecorded
+  });
+  if (acquisition.kind === "sell_to_dealer_appraisal") return { kind: "sell_to_dealer_appraisal" };
+  return { kind: "bike_clarify" };
+}
+
 // Non-buyer / passenger survey lead (the Elizabeth Klapa class, 2026-06-25). A Dealer Lead
 // App "Passenger" / survey submission whose STRUCTURED purchase-timeframe field says the
 // person is explicitly NOT a buyer ("I am not interested in purchasing at this time") was

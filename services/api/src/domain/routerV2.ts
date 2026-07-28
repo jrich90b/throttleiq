@@ -15,6 +15,8 @@ export {
   decideIndefiniteDeferTurn,
   decideDecideSoonTurn,
   decideSellToDealerTurn,
+  decideDeptWidgetIntakeTurn,
+  type DeptWidgetIntakeTurnKind,
   decideNonBuyerSurveyTurn,
   decideDealerLeadSurveyTurn,
   decideFinancePricingTurn,

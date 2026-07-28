@@ -36,7 +36,8 @@ import { parsePreferredAdfDate } from "./domain/preferredAdfDate.js";
 import { buildDeptHandoffAckFallback, buildWebTextWidgetSalesAckFallback } from "./domain/webWidgetAckTemplates.js";
 import {
   hasDeptWidgetBikeHint,
-  decideDeptWidgetBikeClarify
+  buildDeptBikeClarifyReply,
+  buildDeptWidgetAcquisitionReply
 } from "./domain/webWidgetDeptBikeClarify.js";
 import { decideConversationAccess } from "./domain/conversationAccess.js";
 import { isProactiveContactPaused } from "./domain/proactiveContactPause.js";
@@ -670,6 +671,8 @@ import {
   decideInternationalLeadTurn,
   decideDecideSoonTurn,
   decideSellToDealerTurn,
+  decideDeptWidgetIntakeTurn,
+  type DeptWidgetIntakeTurnKind,
   decideNonBuyerSurveyTurn,
   decideDealerLeadSurveyTurn,
   decideFinancePricingTurn,
@@ -4300,22 +4303,67 @@ function requirePermission(
 
 type DepartmentRole = "service" | "parts" | "apparel";
 
-// Shared dept-widget bike-vs-department clarify (Joe ruling 2026-07-26 #4) — the ONE decision both
-// the live widget-arrival path and the mirrored live-twilio/regen department blocks call, so the
-// clarify logic can't drift across paths (route-parity law: no hand-mirrored per-path locals). The
-// hint is a cheap cost gate; the typed parser owns the verdict; the decision + template are pure.
-// Returns null (keep the plain dept ack) on no-hint / non-motorcycle verdict / LLM-off — safe.
-async function resolveDeptWidgetBikeClarify(args: {
+// Shared dept-widget intake decision (Joe ruling 2026-07-26 #4, widened for the Lynn Kraus
+// acquisition class +17164785613 on 2026-07-28) — the ONE decision both the live widget-arrival path
+// and the mirrored live-twilio/regen department blocks call, so the precedence can't drift across
+// paths (route-parity law: no hand-mirrored per-path locals). Three-state: a clear sell-to-dealer ask
+// gets ANSWERED (acquisition), a genuinely open bike-vs-department turn gets the clarify, everything
+// else keeps the plain dept ack. Hints are cheap cost gates; the two typed parsers own the verdicts;
+// the precedence (decideDeptWidgetIntakeTurn) and the templates are pure.
+//
+// The disposition parser is only consulted once the bike verdict is already positive, so the plain
+// apparel path costs nothing extra and the acquisition arm can never fire on a pure gear ask.
+// Returns kind "plain_dept_ack" (reply null) on no-hint / non-motorcycle verdict / LLM-off — safe.
+async function resolveDeptWidgetIntakeDecision(args: {
   message: string;
   deptLabel: string;
   firstName?: string | null;
-}): Promise<string | null> {
-  if (!hasDeptWidgetBikeHint(args.message)) return null;
-  return decideDeptWidgetBikeClarify({
-    parse: await classifyDeptWidgetBikeInterestWithLLM({ message: args.message, deptLabel: args.deptLabel }),
-    firstName: args.firstName,
-    deptLabel: args.deptLabel
+  conv?: any;
+}): Promise<{
+  kind: DeptWidgetIntakeTurnKind;
+  reply: string | null;
+  dispositionParse: CustomerDispositionParse | null;
+}> {
+  const plain = { kind: "plain_dept_ack" as const, reply: null, dispositionParse: null };
+  // Both live/regen sites pass the full widget envelope (Department:/Page:/Message:) while the
+  // widget-arrival site passes the raw message — normalize here so all three parse identical text
+  // (the page title alone, "Motorcycles For Sale Near Buffalo", used to skew the read).
+  const message = extractWebTextWidgetCustomerMessage(args.message);
+  if (!hasDeptWidgetBikeHint(message)) return plain;
+  const bikeParse = await classifyDeptWidgetBikeInterestWithLLM({ message, deptLabel: args.deptLabel });
+  if (!bikeParse?.asksAboutMotorcycle) return plain;
+  const dispositionParse = await parseCustomerDispositionWithLLM({ text: message, lead: args.conv?.lead ?? null });
+  const decision = decideDeptWidgetIntakeTurn({
+    asksAboutMotorcycle: !!bikeParse.asksAboutMotorcycle,
+    bikeConfidence: bikeParse.confidence ?? null,
+    sellToDealerInterest: !!dispositionParse?.sellToDealerInterest,
+    disposition: dispositionParse?.disposition ?? null,
+    dispositionConfidence: dispositionParse?.confidence ?? null,
+    conversationClosed: args.conv?.status === "closed",
+    saleRecorded: !!args.conv?.sale?.soldAt
   });
+  if (decision.kind === "sell_to_dealer_appraisal") {
+    return {
+      kind: decision.kind,
+      reply: buildDeptWidgetAcquisitionReply({
+        firstName: args.firstName,
+        motorcycleReference: bikeParse.motorcycleReference
+      }),
+      dispositionParse
+    };
+  }
+  if (decision.kind === "bike_clarify") {
+    return {
+      kind: decision.kind,
+      reply: buildDeptBikeClarifyReply({
+        firstName: args.firstName,
+        deptLabel: args.deptLabel,
+        motorcycleReference: bikeParse.motorcycleReference
+      }),
+      dispositionParse
+    };
+  }
+  return { ...plain, dispositionParse };
 }
 type ManualOutboundSoftTag = {
   tag: "department_mention";
@@ -8133,12 +8181,24 @@ app.post("/public/widget/text-us", async (req, res) => {
       // A non-sales widget lead who is actually asking about a MOTORCYCLE (James Brown +15415147201:
       // "Checking out Pan America HD" through the Motor Clothes widget) should be CLARIFIED, not
       // handed the pure apparel ack (staying apparel-only) or pivoted to sales (Joe ruling 2026-07-26
-      // #4). Parser-first: the typed classifier owns the verdict; the hint is only a cost gate.
-      const deptBikeClarify = await resolveDeptWidgetBikeClarify({ message, deptLabel, firstName });
-      const deptAckEngaged = deptBikeClarify
+      // #4) — UNLESS the message already says what they want, e.g. a sell-to-dealer ask (Lynn Kraus
+      // +17164785613: "Do you guys buy motorcycles? I have a '17 Road King … looking to sell"), which
+      // gets answered instead. Parser-first: the typed parsers own the verdicts; hints are cost gates.
+      const deptIntake = await resolveDeptWidgetIntakeDecision({ message, deptLabel, firstName, conv });
+      // This lane never runs the sales orchestration, so unlike the twilio/regen dept blocks the
+      // acquisition side effects (trade_cash + the staff appraisal task) have not been applied yet.
+      if (deptIntake.kind === "sell_to_dealer_appraisal") {
+        applySellToDealerAppraisalFromDispositionParse(
+          conv,
+          deptIntake.dispositionParse,
+          event.providerMessageId,
+          "live"
+        );
+      }
+      const deptAckEngaged = deptIntake.reply
         ? null
         : await buildDepartmentHandoffAckWithLLM({ message, deptLabel, firstName });
-      const deptAck = deptBikeClarify || deptAckEngaged || deptAckFallback;
+      const deptAck = deptIntake.reply || deptAckEngaged || deptAckFallback;
       const evaluateDeptAckInvariant = (
         text: string,
         invariantHints?: CustomerReplyDraftInvariantHints
@@ -8162,10 +8222,13 @@ app.post("/public/widget/text-us", async (req, res) => {
         to: phone,
         discardPendingDraftsBeforePublish: true,
         routeScope: "live",
-        routeOutcome: deptBikeClarify
-          ? `web_text_widget_${todoReason}_bike_clarify_draft_created`
-          : `web_text_widget_${todoReason}_ack_draft_created`,
-        routeDetail: { department, bikeClarify: !!deptBikeClarify }
+        routeOutcome:
+          deptIntake.kind === "sell_to_dealer_appraisal"
+            ? `web_text_widget_${todoReason}_sell_to_dealer_draft_created`
+            : deptIntake.kind === "bike_clarify"
+              ? `web_text_widget_${todoReason}_bike_clarify_draft_created`
+              : `web_text_widget_${todoReason}_ack_draft_created`,
+        routeDetail: { department, deptIntakeKind: deptIntake.kind }
       });
     }
     upsertContact({
@@ -57938,16 +58001,20 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     setFollowUpMode(conv, "manual_handoff", `${regenInboundDepartmentIntent}_request`);
     stopFollowUpCadence(conv, "manual_handoff");
     stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
-    // Two-path parity with the live widget-arrival clarify (Joe ruling 2026-07-26 #4): an
-    // apparel/parts-classified turn that is actually asking about a MOTORCYCLE gets a clarify
-    // (bike vs department) instead of the plain "reach out shortly" ack. Parser owns the verdict.
-    const bikeClarifyReply = await resolveDeptWidgetBikeClarify({
+    // Two-path parity with the live widget-arrival intake decision (Joe ruling 2026-07-26 #4 +
+    // the Lynn Kraus acquisition class 2026-07-28): an apparel/parts-classified turn that is
+    // actually asking about a MOTORCYCLE gets a clarify (bike vs department) — or, when it is a
+    // clear sell-to-dealer ask, the acquisition answer — instead of the plain "reach out shortly"
+    // ack. Parsers own the verdicts. The appraisal side effects already ran upstream on this path
+    // (applySellToDealerAppraisalFromDispositionParse), so only the reply wording changes here.
+    const deptIntake = await resolveDeptWidgetIntakeDecision({
       message: event.body ?? "",
       deptLabel: regenInboundDepartmentIntent === "apparel" ? "Motor Clothes" : "Parts",
-      firstName: normalizeDisplayCase(conv.lead?.firstName)
+      firstName: normalizeDisplayCase(conv.lead?.firstName),
+      conv
     });
-    const reply = bikeClarifyReply
-      ? bikeClarifyReply
+    const reply = deptIntake.reply
+      ? deptIntake.reply
       : regenInboundDepartmentIntent === "parts"
         ? isTakeOffMilwaukeeEightEngineRequestText(event.body)
           ? buildTakeOffMilwaukeeEightEngineReply()
@@ -61856,16 +61923,20 @@ if (authToken && signature) {
     setFollowUpMode(conv, "manual_handoff", `${inboundDepartmentIntent}_request`);
     stopFollowUpCadence(conv, "manual_handoff");
     stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
-    // Two-path parity with the live widget-arrival clarify (Joe ruling 2026-07-26 #4): an
-    // apparel/parts-classified turn that is actually asking about a MOTORCYCLE gets a clarify
-    // (bike vs department) instead of the plain "reach out shortly" ack. Parser owns the verdict.
-    const bikeClarifyReply = await resolveDeptWidgetBikeClarify({
+    // Two-path parity with the regen widget/dept intake decision (Joe ruling 2026-07-26 #4 + the
+    // Lynn Kraus acquisition class 2026-07-28): an apparel/parts-classified turn that is actually
+    // asking about a MOTORCYCLE gets a clarify (bike vs department) — or, when it is a clear
+    // sell-to-dealer ask, the acquisition answer — instead of the plain "reach out shortly" ack.
+    // Parsers own the verdicts. The appraisal side effects already ran upstream on this path
+    // (applySellToDealerAppraisalFromDispositionParse), so only the reply wording changes here.
+    const deptIntake = await resolveDeptWidgetIntakeDecision({
       message: event.body ?? "",
       deptLabel: inboundDepartmentIntent === "apparel" ? "Motor Clothes" : "Parts",
-      firstName: normalizeDisplayCase(conv.lead?.firstName)
+      firstName: normalizeDisplayCase(conv.lead?.firstName),
+      conv
     });
-    const reply = bikeClarifyReply
-      ? bikeClarifyReply
+    const reply = deptIntake.reply
+      ? deptIntake.reply
       : inboundDepartmentIntent === "parts"
         ? isTakeOffMilwaukeeEightEngineRequestText(event.body)
           ? buildTakeOffMilwaukeeEightEngineReply()

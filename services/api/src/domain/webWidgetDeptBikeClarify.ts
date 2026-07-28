@@ -62,6 +62,35 @@ export function buildDeptBikeClarifyReply(args: {
 }
 
 /**
+ * Approved ACQUISITION reply (the Lynn Kraus class, +17164785613, corpus sweep 2026-07-28): a
+ * dept-widget lead whose message is a clear sell-to-dealer ask ("Do you guys buy motorcycles? I have
+ * a '17 Road King Special … looking to sell") must be ANSWERED, not clarified — see
+ * decideDeptWidgetIntakeTurn in routeStateReducer.
+ *
+ * Hard constraints baked into the wording (eval-pinned):
+ * - Confirms we DO buy bikes (that was the literal question) but never promises we WILL buy THIS one
+ *   — inventory levels are a human call (Joe's own reply hedged: "a little heavy on pre-owned").
+ * - Never quotes or estimates a number: no offer, no range, no "worth". We have no appraisal yet.
+ * - Never promises a reply time (widget forms arrive after hours / on holidays).
+ * - Moves to the one real next step, the in-person appraisal, and asks for the details the appraisal
+ *   needs — mirroring the established trade_cash copy so the voice matches the rest of the lane.
+ */
+export function buildDeptWidgetAcquisitionReply(args: {
+  firstName?: string | null;
+  motorcycleReference?: string | null;
+}): string {
+  const firstName = String(args.firstName ?? "").trim();
+  const ref = String(args.motorcycleReference ?? "").trim();
+  const greeting = firstName ? `Hi ${firstName}` : "Hi there";
+  const bikePhrase = ref ? `the ${ref}` : "your bike";
+  return (
+    `${greeting} — yes, we do buy bikes. To put a real number on ${bikePhrase} we do an in‑person ` +
+    `appraisal, so the team can take a look at it. Do you have any lien or payoff on it, and what's ` +
+    `the mileage? I can get you set up to bring it by.`
+  );
+}
+
+/**
  * Pure decision: given the parser verdict, return the clarify reply to use INSTEAD of the plain
  * department ack, or null to keep the plain ack. Deterministic — the LLM is upstream (the parse).
  */
