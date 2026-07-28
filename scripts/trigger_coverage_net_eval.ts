@@ -13,9 +13,12 @@
  *   - availability               (intent AVAILABILITY / wantsAvailability)
  *   - pricing + staff task        (pricingAttempted / PRICING / a pricing|payments handoff => a task)
  *   - photo request              (parseVehicleMediaRequestWithLLM.wantsMedia)
- * WATCHES fire DOWNSTREAM of the orchestrator in the index.ts handler (out-of-stock model), so they
- * need the full-handler harness — tracked as the next extension; meanwhile the watch_* fixture evals
- * cover them. This net grows the same way the comprehension scorecard did (curated set -> larger net).
+ *   - inventory watch            (parseConversationStateWithLLM.stateIntent === "inventory_watch" —
+ *                                 the exact comprehension parserInventoryWatchIntent uses in the handler
+ *                                 to create a watch for an out-of-stock model)
+ * Each check asserts the trigger DECISION/signal the handler acts on (the same level the scorecard
+ * tests intent) — not the applied row; the fixture evals (watch_*, appointment_*, payment_*, …) pin the
+ * application. This net grows the same way the comprehension scorecard did (curated set -> larger net).
  *
  * Two tiers, mirroring the fail-direction law:
  *   - CRITICAL (0 tolerance): an unambiguous trigger message MUST fire its action — a miss is a real
@@ -44,9 +47,11 @@ await fs.cp("services/api/data", evalDataDir, { recursive: true });
 process.env.DATA_DIR = evalDataDir;
 
 const { orchestrateInbound } = await import("../services/api/src/domain/orchestrator.ts");
-const { parseVehicleMediaRequestWithLLM } = await import("../services/api/src/domain/llmDraft.ts");
+const { parseVehicleMediaRequestWithLLM, parseConversationStateWithLLM } = await import(
+  "../services/api/src/domain/llmDraft.ts"
+);
 
-type Trigger = "schedule" | "payment" | "availability" | "pricing_or_task" | "photo";
+type Trigger = "schedule" | "payment" | "availability" | "pricing_or_task" | "photo" | "watch";
 type Case = {
   id: string;
   body: string;
@@ -64,6 +69,8 @@ const usedVehicle = {
 };
 const ctx: any = { lead: { firstName: "Sam", vehicle: usedVehicle } };
 const priorOffer = [{ direction: "out" as const, body: "The 2021 Street Glide is in stock. Want to come see it?" }];
+// A watch fires when a customer wants a model we DON'T have — set that out-of-stock context.
+const outOfStock = [{ direction: "out" as const, body: "We don't have a Road King in stock right now." }];
 
 const cases: Case[] = [
   // --- appointment / scheduling ---
@@ -84,7 +91,11 @@ const cases: Case[] = [
   // --- photo request ---
   { id: "photo_pics", body: "can you send me some pictures of it", trigger: "photo", tier: "critical", history: priorOffer },
   { id: "photo_seeit", body: "got any photos of the street glide?", trigger: "photo", tier: "critical", history: priorOffer },
-  { id: "photo_more", body: "any other pics? the ones online are just stock", trigger: "photo", tier: "scored", history: priorOffer }
+  { id: "photo_more", body: "any other pics? the ones online are just stock", trigger: "photo", tier: "scored", history: priorOffer },
+  // --- watch (customer wants a model we don't have -> set an inventory watch) ---
+  { id: "watch_notify", body: "ok can you let me know when one comes in", trigger: "watch", tier: "critical", history: outOfStock },
+  { id: "watch_keepeye", body: "keep an eye out for a Road King for me and text me if you get one", trigger: "watch", tier: "critical", history: outOfStock },
+  { id: "watch_soft", body: "no worries, just reach out if a used Road King shows up", trigger: "watch", tier: "scored", history: outOfStock }
 ];
 
 const scheduleFired = (r: OrchestratorResult) =>
@@ -99,6 +110,12 @@ async function triggerFired(c: Case): Promise<boolean> {
   if (c.trigger === "photo") {
     const p = await parseVehicleMediaRequestWithLLM({ text: c.body, history: c.history });
     return !!p?.wantsMedia;
+  }
+  if (c.trigger === "watch") {
+    // The handler creates a watch when the conversation-state parser reads an inventory_watch intent
+    // (parserInventoryWatchIntent, index.ts) — the exact comprehension the watch trigger depends on.
+    const p = await parseConversationStateWithLLM({ text: c.body, history: c.history });
+    return p?.stateIntent === "inventory_watch";
   }
   const event: InboundMessageEvent = {
     channel: "sms",
@@ -171,7 +188,7 @@ async function run() {
   );
 
   await fs.rm(evalDataDir, { recursive: true, force: true }).catch(() => {});
-  console.log("PASS trigger-coverage net (schedule / payment / availability / pricing+task / photo — critical 0-miss + scored floor)");
+  console.log("PASS trigger-coverage net (schedule / payment / availability / pricing+task / photo / watch — critical 0-miss + scored floor)");
 }
 
 await run();
