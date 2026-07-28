@@ -76,6 +76,10 @@ const cases: Case[] = [
   // --- appointment / scheduling ---
   { id: "sched_daytime", body: "Can I come test ride it Saturday at 2pm?", trigger: "schedule", tier: "critical", history: priorOffer },
   { id: "sched_visit", body: "what time can I swing by tomorrow to see it", trigger: "schedule", tier: "critical", history: priorOffer },
+  // TRACKED DE-TANGLE GAP (Joe 2026-07-28): the LIVE turn-understanding parser reads this as a test
+  // ride (locked in by intent_comprehension:eval soft_test_ride_take_it_for_a_spin), but the older
+  // orchestrateInbound path this net checks mislabels it GENERAL. Kept SCORED (tracked, not gated)
+  // until the de-tangle routes the reply through the correct parser here — then promote to critical.
   { id: "sched_soft", body: "I'd love to take it for a spin this weekend", trigger: "schedule", tier: "scored", history: priorOffer },
   // --- monthly-payment calculator ---
   { id: "pay_monthly", body: "what would my monthly payment be with 2000 down", trigger: "payment", tier: "critical", history: priorOffer },
@@ -87,6 +91,10 @@ const cases: Case[] = [
   // --- pricing (+ a staff task via handoff) ---
   { id: "price_asking", body: "what's the asking price on the street glide", trigger: "pricing_or_task", tier: "critical" },
   { id: "price_otd", body: "whats the out the door price", trigger: "pricing_or_task", tier: "critical", history: priorOffer },
+  // TRACKED DE-TANGLE GAP (Joe 2026-07-28): the LIVE turn-understanding parser reads this as pricing
+  // (locked in by intent_comprehension:eval soft_pricing_how_much_you_looking_to_get), but the older
+  // orchestrateInbound path this net checks mis-answers it as a trade-in appraisal. SCORED until the
+  // de-tangle routes the reply through the correct parser here — then promote to critical.
   { id: "price_soft", body: "how much are you looking to get for it", trigger: "pricing_or_task", tier: "scored", history: priorOffer },
   // --- photo request ---
   { id: "photo_pics", body: "can you send me some pictures of it", trigger: "photo", tier: "critical", history: priorOffer },
