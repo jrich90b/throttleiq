@@ -14025,11 +14025,11 @@ export async function describeUnitEquipmentWithLLM(args: {
   // preserved behavior); the cue fields parse to present:false/0 via readFeature(undefined).
   const choloOn =
     process.env.CHOLO_STYLE_VISION_ENABLED === "1" && process.env.INVENTORY_EQUIPMENT_VISION_ENABLED === "1";
-  // Photo-realness read (Phase 2, DARK): adds a "real dealer photos vs stock studio image" judgment,
-  // ONLY when its flag AND the equipment-vision flag are on. Off → schema/prompt byte-identical to
-  // today; photo_realness parses to verdict "unknown"/0.
-  const photoRealnessOn =
-    process.env.PHOTO_REALNESS_VISION_ENABLED === "1" && process.env.INVENTORY_EQUIPMENT_VISION_ENABLED === "1";
+  // Photo-realness read (Phase 2, DARK): adds a "real dealer photos vs stock studio image" judgment.
+  // Phase 2b — INDEPENDENT of the equipment-vision flag so it can be flipped on WITHOUT enabling the
+  // (unreviewed) equipment-shopping feature: gated on its OWN flag only. Off → schema/prompt
+  // byte-identical to today; photo_realness parses to verdict "unknown"/0.
+  const photoRealnessOn = process.env.PHOTO_REALNESS_VISION_ENABLED === "1";
   const CHOLO_CUE_KEYS = [
     "has_whitewalls",
     "has_fat_spoke_wheels",

@@ -561,9 +561,11 @@ export function choloStyleVisionEnabled(): boolean {
 }
 
 export function photoRealnessVisionEnabled(): boolean {
-  // Photo-realness (Phase 2) rides inside the equipment-vision canary too: BOTH its own flag AND the
-  // equipment-vision flag. Off → the photo-request path uses the deterministic photo-count heuristic.
-  return process.env.PHOTO_REALNESS_VISION_ENABLED === "1" && inventoryEquipmentVisionEnabled();
+  // Phase 2b: photo-realness is INDEPENDENT of the equipment-vision flag — flipping it on does NOT
+  // enable the (unreviewed) equipment-shopping feature (that stays gated on INVENTORY_EQUIPMENT_VISION_
+  // ENABLED). Off → the photo-request path uses the deterministic photo-count heuristic. The vision is
+  // computed on-demand for the discussed units (in the suggest-mode draft step) and cached.
+  return process.env.PHOTO_REALNESS_VISION_ENABLED === "1";
 }
 
 // ---------------------------------------------------------------------------

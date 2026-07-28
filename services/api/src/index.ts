@@ -597,7 +597,6 @@ import {
   choloStyleVisionEnabled,
   watchCholoFireGate,
   photoRealnessVisionEnabled,
-  getCachedUnitEquipmentProfile,
   profilePhotosLookStock,
   profilePhotosLookReal,
   type EquipmentCandidate,
@@ -2729,26 +2728,53 @@ async function resolveRecommendedUnitsMediaReply(
   if (!units.length) units = Array.isArray(conv.recommendedUnits) ? conv.recommendedUnits : [];
   if (!units.length) return null; // truly no unit context => existing handling
 
-  // Phase 2 (DARK behind PHOTO_REALNESS_VISION_ENABLED): when the vision viewer has a CONFIDENT
-  // real-vs-stock verdict for a unit (read cache-only — never a live vision call), it OVERRIDES the
-  // photo-count heuristic — a stock studio image (even a full set) becomes a task, a confirmed real
-  // photo is sendable. Uncached / low-confidence / flag off => the count heuristic stands.
-  let visionCache: EquipmentCacheFile | null = null;
+  // Phase 2/2b (DARK behind PHOTO_REALNESS_VISION_ENABLED): the vision viewer's CONFIDENT real-vs-stock
+  // verdict OVERRIDES the photo-count heuristic — a stock studio image (even a full set) becomes a task,
+  // a confirmed real photo is sendable. INDEPENDENT of the equipment-shopping flag. The verdict is
+  // computed ON-DEMAND for the few discussed units and CACHED (fingerprinted on the image set), so it
+  // runs in the suggest-mode DRAFT step, not on a customer-facing send, and only once per photo set.
+  // Uncached-then-vision-fails / low-confidence / flag off => the count heuristic stands (fail-safe).
+  const sendableByUnit = new Map<import("./domain/inventoryRecommender.js").RecommendedUnit, boolean>();
   if (photoRealnessVisionEnabled()) {
+    let cache: EquipmentCacheFile | null = null;
     try {
-      visionCache = await loadEquipmentCache();
+      cache = await loadEquipmentCache();
     } catch {
-      visionCache = null;
+      cache = null;
     }
+    let cacheDirty = false;
+    for (const u of units) {
+      let sendable = unitHasRealPhotos(u); // fallback
+      try {
+        const { profile, ranVision } = await getUnitEquipmentProfile(
+          {
+            stockId: u.stockId ?? undefined,
+            model: u.model ?? undefined,
+            year: u.year ?? undefined,
+            images: u.images
+          } as any,
+          { cache: cache ?? undefined }
+        );
+        if (ranVision) cacheDirty = true;
+        if (profilePhotosLookStock(profile)) sendable = false;
+        else if (profilePhotosLookReal(profile)) sendable = true;
+      } catch {
+        /* vision failure => keep the count-heuristic fallback */
+      }
+      sendableByUnit.set(u, sendable);
+    }
+    if (cacheDirty && cache) {
+      try {
+        await saveEquipmentCache(cache);
+      } catch {
+        /* best-effort cache persist */
+      }
+    }
+  } else {
+    for (const u of units) sendableByUnit.set(u, unitHasRealPhotos(u));
   }
-  const unitHasSendablePhotos = (u: import("./domain/inventoryRecommender.js").RecommendedUnit): boolean => {
-    if (visionCache) {
-      const profile = getCachedUnitEquipmentProfile({ stockId: u.stockId ?? undefined, vin: undefined, images: u.images }, visionCache);
-      if (profilePhotosLookStock(profile)) return false; // stock studio image => salesperson task
-      if (profilePhotosLookReal(profile)) return true; // confirmed real photos => sendable
-    }
-    return unitHasRealPhotos(u); // fallback: deterministic photo-count heuristic
-  };
+  const unitHasSendablePhotos = (u: import("./domain/inventoryRecommender.js").RecommendedUnit): boolean =>
+    sendableByUnit.get(u) ?? unitHasRealPhotos(u);
   const hasUnitsWithRealPhotos = units.some(unitHasSendablePhotos);
   const hasUnitsNeedingPhotos = units.some(u => !unitHasSendablePhotos(u));
   const decision = decideVehicleMediaRequestTurn({

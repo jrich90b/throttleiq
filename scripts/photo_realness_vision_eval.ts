@@ -46,35 +46,37 @@ assert.equal(
 );
 assert.equal(getCachedUnitEquipmentProfile(item, null), null, "no cache => null (=> caller uses the count heuristic)");
 
-// --- 3) Flag gate (dark by default). ---
+// --- 3) Flag gate — Phase 2b: INDEPENDENT of the equipment-vision flag. ---
 {
   const prevA = process.env.PHOTO_REALNESS_VISION_ENABLED;
   const prevB = process.env.INVENTORY_EQUIPMENT_VISION_ENABLED;
   process.env.PHOTO_REALNESS_VISION_ENABLED = "1";
   process.env.INVENTORY_EQUIPMENT_VISION_ENABLED = "0";
-  assert.equal(photoRealnessVisionEnabled(), false, "needs BOTH flags (equipment-vision off => off)");
-  process.env.INVENTORY_EQUIPMENT_VISION_ENABLED = "1";
-  assert.equal(photoRealnessVisionEnabled(), true, "both on => enabled");
+  assert.equal(photoRealnessVisionEnabled(), true, "Phase 2b: enabled by its OWN flag alone (equipment-vision off => still on)");
   process.env.PHOTO_REALNESS_VISION_ENABLED = "0";
-  assert.equal(photoRealnessVisionEnabled(), false, "own flag off => off");
+  process.env.INVENTORY_EQUIPMENT_VISION_ENABLED = "1";
+  assert.equal(photoRealnessVisionEnabled(), false, "own flag off => off (equipment-vision on does NOT enable it)");
   if (prevA === undefined) delete process.env.PHOTO_REALNESS_VISION_ENABLED; else process.env.PHOTO_REALNESS_VISION_ENABLED = prevA;
   if (prevB === undefined) delete process.env.INVENTORY_EQUIPMENT_VISION_ENABLED; else process.env.INVENTORY_EQUIPMENT_VISION_ENABLED = prevB;
 }
 
-// --- 4) Source guards: vision read is conditional (dark), profile defaults, resolver override. ---
+// --- 4) Source guards: dark read, profile default, independent flag, on-demand resolver override. ---
 const llm = fs.readFileSync("services/api/src/domain/llmDraft.ts", "utf8");
-assert.match(llm, /const photoRealnessOn\s*=/, "the vision read gates photo_realness behind its flag");
+assert.match(llm, /const photoRealnessOn = process\.env\.PHOTO_REALNESS_VISION_ENABLED === "1";/, "Phase 2b: the vision read gates photo_realness on its OWN flag (independent of equipment-vision)");
 assert.match(llm, /\.\.\.\(photoRealnessOn \? \["photo_realness"\] : \[\]\)/, "photo_realness is only required when the flag is on (dark otherwise)");
 assert.match(llm, /photoRealness: \{[\s\S]{0,120}?verdict:/, "the vision read maps photo_realness");
 
 const vision = fs.readFileSync("services/api/src/domain/inventoryEquipmentVision.ts", "utf8");
 assert.match(vision, /photoRealness: desc\.photoRealness \?\? \{ verdict: "unknown", confidence: 0 \}/, "buildEquipmentProfile defaults to unknown when the read omits it (flag off)");
+assert.match(vision, /return process\.env\.PHOTO_REALNESS_VISION_ENABLED === "1";/, "photoRealnessVisionEnabled is independent of the equipment-vision flag");
 
 const api = fs.readFileSync("services/api/src/index.ts", "utf8");
 assert.match(api, /if \(photoRealnessVisionEnabled\(\)\) \{/, "the resolver only consults vision when the flag is on");
-assert.match(api, /profilePhotosLookStock\(profile\)\) return false/, "a stock verdict makes the unit a task (not sendable)");
-assert.match(api, /profilePhotosLookReal\(profile\)\) return true/, "a real verdict makes the unit sendable");
-assert.match(api, /return unitHasRealPhotos\(u\); \/\/ fallback: deterministic photo-count heuristic/, "falls back to the count heuristic when vision is silent");
+assert.match(api, /getUnitEquipmentProfile\(/, "Phase 2b: the resolver computes the verdict ON-DEMAND for the discussed units (no equipment sweep needed)");
+assert.match(api, /profilePhotosLookStock\(profile\)\) sendable = false/, "a stock verdict makes the unit a task (not sendable)");
+assert.match(api, /profilePhotosLookReal\(profile\)\) sendable = true/, "a real verdict makes the unit sendable");
+assert.match(api, /let sendable = unitHasRealPhotos\(u\); \/\/ fallback/, "falls back to the count heuristic when vision is silent/fails");
+assert.match(api, /if \(cacheDirty && cache\)/, "a fresh vision read is persisted to the cache (so the next request is free)");
 assert.match(api, /attachable: unitHasSendablePhotos/, "the reply builder attaches photos per the vision-aware predicate (never a stock shot)");
 
 const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
