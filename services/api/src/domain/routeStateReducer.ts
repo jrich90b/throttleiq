@@ -1112,15 +1112,22 @@ export type VehicleMediaRequestTurnInput = {
   confidence: number;
   confidenceMin: number;
   hasUnitsWithUrl: boolean;
+  /** True when the conversation has recommended/named units at all (even without a link/photo). */
+  hasUnits: boolean;
 };
-export type VehicleMediaRequestTurnDecision = { kind: "send_media" | "none" };
+export type VehicleMediaRequestTurnDecision = { kind: "send_media" | "salesperson_photo_task" | "none" };
 
 export function decideVehicleMediaRequestTurn(input: VehicleMediaRequestTurnInput): VehicleMediaRequestTurnDecision {
   if (!input.parserAccepted) return { kind: "none" };
   if (!input.wantsMedia) return { kind: "none" };
   if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) return { kind: "none" };
-  if (!input.hasUnitsWithUrl) return { kind: "none" }; // nothing real to send => existing handling
-  return { kind: "send_media" };
+  if (input.hasUnitsWithUrl) return { kind: "send_media" };
+  // Customer clearly wants photos but we have NOTHING to auto-send (e.g. used units with no listing
+  // link or MMS-able photo, like Melanie Castro's 2006 Sportster / Iron 1200, +19518078554). Hand it
+  // to a human — a salesperson task to send real photos + a warm ack — instead of punting to the LLM,
+  // which fabricated "I'll check on that bike in the back" and created NO task (Joe report 2026-07-27).
+  if (input.hasUnits) return { kind: "salesperson_photo_task" };
+  return { kind: "none" }; // no unit context at all => existing handling
 }
 
 // --- Inventory unit clarification (2026-07-10; centralized 2026-07-19) --------

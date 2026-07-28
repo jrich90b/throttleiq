@@ -16,25 +16,32 @@ import fs from "node:fs";
 import { decideVehicleMediaRequestTurn } from "../services/api/src/domain/routeStateReducer.ts";
 import {
   toRecommendedUnits,
-  buildRecommendedUnitsMediaReply
+  buildRecommendedUnitsMediaReply,
+  buildSalespersonPhotoAckReply,
+  buildSalespersonPhotoTaskSummary
 } from "../services/api/src/domain/inventoryRecommender.ts";
 
 // --- 1) Pure decision table. ---
-const base = { parserAccepted: true, wantsMedia: true, confidence: 0.9, confidenceMin: 0.7, hasUnitsWithUrl: true };
+const base = { parserAccepted: true, wantsMedia: true, confidence: 0.9, confidenceMin: 0.7, hasUnitsWithUrl: true, hasUnits: true };
 type Row = { id: string; input: Parameters<typeof decideVehicleMediaRequestTurn>[0]; kind: string };
 const rows: Row[] = [
   { id: "no_parse", input: { ...base, parserAccepted: false }, kind: "none" },
   { id: "not_media", input: { ...base, wantsMedia: false }, kind: "none" },
   { id: "low_conf", input: { ...base, confidence: 0.5 }, kind: "none" },
-  { id: "no_units_with_url", input: { ...base, hasUnitsWithUrl: false }, kind: "none" },
   { id: "send", input: { ...base }, kind: "send_media" },
-  { id: "at_floor", input: { ...base, confidence: 0.7 }, kind: "send_media" }
+  { id: "at_floor", input: { ...base, confidence: 0.7 }, kind: "send_media" },
+  // Wants photos, nothing auto-sendable, but units exist => hand to a salesperson (the Melanie
+  // Castro case: used units with no link/photo). Was "none" (punt to LLM => fabricated).
+  { id: "photo_task", input: { ...base, hasUnitsWithUrl: false, hasUnits: true }, kind: "salesperson_photo_task" },
+  // No unit context at all => existing handling (none).
+  { id: "no_units_at_all", input: { ...base, hasUnitsWithUrl: false, hasUnits: false }, kind: "none" }
 ];
 for (const r of rows) {
   assert.equal(decideVehicleMediaRequestTurn(r.input).kind, r.kind, `decide[${r.id}] expected ${r.kind}`);
 }
-// Fail-safe: never fire without something real to send.
-assert.equal(decideVehicleMediaRequestTurn({ ...base, hasUnitsWithUrl: false }).kind, "none");
+// Fail-safe: never send links without something real to send (but a salesperson task is fine).
+assert.equal(decideVehicleMediaRequestTurn({ ...base, hasUnitsWithUrl: false, hasUnits: true }).kind, "salesperson_photo_task");
+assert.equal(decideVehicleMediaRequestTurn({ ...base, hasUnitsWithUrl: false, hasUnits: false }).kind, "none");
 
 // --- 2) Deterministic reply: PREFER photos (MMS), link the rest, exact URLs only. ---
 const units = toRecommendedUnits([
@@ -101,4 +108,37 @@ assert.match(
   "persist skips url-less units — never enables an empty/fabricated link"
 );
 
-console.log("PASS vehicle media request eval (decision + deterministic links + parser + both paths)");
+// --- 6) Salesperson photo-task arm (Melanie Castro +19518078554, Joe 2026-07-27): wants photos we
+// can't auto-send => a "send customer photos" salesperson task + a warm ack, never a fabricated frame. ---
+const photoAck = buildSalespersonPhotoAckReply({ firstName: "Melanie" });
+assert.match(photoAck, /Melanie/, "photo ack greets by name");
+assert.match(photoAck, /salesperson/i, "photo ack hands it to a salesperson");
+assert.match(photoAck, /photos/i, "photo ack references photos");
+assert.doesNotMatch(photoAck, /bike in the back|in the back/i, "photo ack never invents a 'bike in the back'");
+assert.doesNotMatch(photoAck, /\b(shortly|soon|today|right (?:back|away)|momentarily|asap|right now)\b/i, "photo ack makes no reply-time promise (Tom Bradsky rule)");
+assert.match(buildSalespersonPhotoAckReply({ firstName: null }), /Happy to help/, "ack degrades gracefully with no name");
+
+const taskSummary = buildSalespersonPhotoTaskSummary({
+  units: toRecommendedUnits([
+    { year: "2006", model: "Sportster 883 Low" } as any,
+    { year: "2018", model: "Iron 1200" } as any
+  ]),
+  inboundText: "can i see photos of the 2006 sportster? and the iron 1200"
+});
+assert.match(taskSummary, /^Send customer photos/i, "task label reads 'Send customer photos …' (the flag Joe asked for)");
+assert.match(taskSummary, /2006 Sportster 883 Low/, "task names the recommended units for the rep");
+assert.match(taskSummary, /2018 Iron 1200/, "task names the second unit");
+assert.match(taskSummary, /can i see photos/i, "task carries the customer's ask");
+
+// --- 7) Source guard: the resolver wires the salesperson task (live-only) + ack (both paths) + dedup. ---
+assert.match(api, /kind === "salesperson_photo_task"/, "the resolver handles the salesperson-photo-task arm");
+assert.match(api, /buildSalespersonPhotoAckReply\(/, "the resolver returns the warm ack (both paths)");
+assert.match(
+  api,
+  /if \(scope === "live"\) \{[\s\S]{0,400}?addTodo\(conv, "other", buildSalespersonPhotoTaskSummary\(/,
+  "the salesperson photo task is created LIVE-only (regen never creates tasks)"
+);
+assert.match(api, /alreadyHasPhotoTask/, "a repeated photo ask does not stack duplicate tasks (dedup)");
+assert.match(api, /recordRouteOutcome\(scope, "vehicle_media_request_salesperson_photo_task"/, "the photo-task outcome is recorded");
+
+console.log("PASS vehicle media request eval (decision + deterministic links + salesperson photo task + parser + both paths)");

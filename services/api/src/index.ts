@@ -578,7 +578,9 @@ import {
   buildVehicleRecommendationFollowupReply,
   buildVehicleRecommendationTodoSummary,
   toRecommendedUnits,
-  buildRecommendedUnitsMediaReply
+  buildRecommendedUnitsMediaReply,
+  buildSalespersonPhotoAckReply,
+  buildSalespersonPhotoTaskSummary
 } from "./domain/inventoryRecommender.js";
 import {
   inventoryEquipmentVisionEnabled,
@@ -2700,13 +2702,13 @@ async function resolveRecommendedUnitsMediaReply(
   const text = String(inboundText ?? "").trim();
   if (!conv || !text) return null;
   const units = Array.isArray(conv.recommendedUnits) ? conv.recommendedUnits : [];
-  // We can answer if any unit has a usable photo OR a listing url.
+  if (!units.length) return null; // no recommended context => let normal handling run
+  // We can auto-answer if any unit has a usable photo OR a listing url.
   const hasSomethingToSend = units.some(
     u =>
       /^https?:\/\//i.test(String(u?.url ?? "")) ||
       (Array.isArray(u?.images) && u.images.some(x => /\.(jpe?g|png)(\?|$)/i.test(String(x ?? ""))))
   );
-  if (!hasSomethingToSend) return null; // nothing real to send => let normal handling run
   if (!vehicleMediaRequestParserHint(text)) return null;
   const parse = await safeLlmParse("vehicle_media_request_parser", () =>
     parseVehicleMediaRequestWithLLM({ text, history: buildHistory(conv, 8) })
@@ -2716,21 +2718,46 @@ async function resolveRecommendedUnitsMediaReply(
     wantsMedia: !!parse?.wantsMedia,
     confidence: parse?.confidence ?? 0,
     confidenceMin: vehicleRecommendationConfidenceMin(),
-    hasUnitsWithUrl: hasSomethingToSend
+    hasUnitsWithUrl: hasSomethingToSend,
+    hasUnits: units.length > 0
   });
-  if (decision.kind !== "send_media") return null;
-  const built = buildRecommendedUnitsMediaReply({
-    firstName: normalizeDisplayCase(conv.lead?.firstName),
-    units
-  });
-  if (!built) return null;
-  recordRouteOutcome(scope, "vehicle_media_request", {
-    convId: conv.id,
-    leadKey: conv.leadKey,
-    photos: built.mediaUrls.length,
-    focus: parse?.focus ?? null
-  });
-  return built;
+  if (decision.kind === "send_media") {
+    const built = buildRecommendedUnitsMediaReply({
+      firstName: normalizeDisplayCase(conv.lead?.firstName),
+      units
+    });
+    if (!built) return null;
+    recordRouteOutcome(scope, "vehicle_media_request", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      photos: built.mediaUrls.length,
+      focus: parse?.focus ?? null
+    });
+    return built;
+  }
+  if (decision.kind === "salesperson_photo_task") {
+    // Customer clearly wants photos but nothing is auto-sendable (used units, no link/photo) — the
+    // agent used to punt to the LLM, which fabricated "I'll check on that bike in the back" and made
+    // NO task (Melanie Castro +19518078554, Joe report 2026-07-27). Instead: a salesperson "send
+    // customer photos" task + a warm ack. Task is a LIVE-only side effect (regen never creates
+    // tasks); the ack returns in BOTH paths so live + regenerate match. Dedup so a repeated ask
+    // doesn't stack tasks. Fail direction: adds a staff task + a safe ack, never fabricates.
+    if (scope === "live") {
+      const alreadyHasPhotoTask = listOpenTodos().some(
+        t => t.convId === conv.id && t.reason === "other" && /^send customer photos/i.test(String(t.summary ?? ""))
+      );
+      if (!alreadyHasPhotoTask) {
+        addTodo(conv, "other", buildSalespersonPhotoTaskSummary({ units, inboundText: text }), undefined, conv.leadOwner);
+      }
+    }
+    recordRouteOutcome(scope, "vehicle_media_request_salesperson_photo_task", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      units: units.length
+    });
+    return { reply: buildSalespersonPhotoAckReply({ firstName: normalizeDisplayCase(conv.lead?.firstName) }), mediaUrls: [] };
+  }
+  return null;
 }
 
 // Cheap pre-filter: only run the media-request parser on photo/link/color-ish turns. A hint MISS

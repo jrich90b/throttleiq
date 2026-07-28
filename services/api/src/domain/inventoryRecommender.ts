@@ -274,6 +274,32 @@ function unitDisplayName(u: RecommendedUnit): string {
   return [String(u.year ?? "").trim(), String(u.model ?? "").trim()].filter(Boolean).join(" ").trim() || "that one";
 }
 
+/**
+ * Warm ack when the customer wants photos we can't auto-send (used units with no link/photo) — the
+ * agent hands it to a salesperson instead of fabricating (Joe report 2026-07-27, Melanie Castro).
+ * Deliberately does NOT name specific units (the parser doesn't reliably resolve WHICH of the
+ * recommended units they meant) — the salesperson task + thread carry the specifics. Never promises
+ * a time.
+ */
+export function buildSalespersonPhotoAckReply(args: { firstName?: string | null }): string {
+  const firstName = String(args.firstName ?? "").trim();
+  const greeting = firstName ? `Happy to help, ${firstName}` : "Happy to help";
+  return `${greeting} — I'll have a salesperson text you photos of those.`;
+}
+
+/** The salesperson task label (Joe: "the task flag should say something like send customer pictures").
+ * References the recommended units + the customer's ask so the rep knows exactly what to send. */
+export function buildSalespersonPhotoTaskSummary(args: {
+  units: RecommendedUnit[];
+  inboundText?: string | null;
+}): string {
+  const names = (args.units ?? []).map(unitDisplayName).filter(n => n && n !== "that one");
+  const unitList = names.length ? ` (recommended: ${names.join(", ")})` : "";
+  const asked = String(args.inboundText ?? "").replace(/\s+/g, " ").trim().slice(0, 140);
+  const askedPart = asked ? ` Customer asked: "${asked}"` : "";
+  return `Send customer photos of the bike(s) they asked to see${unitList}.${askedPart}`;
+}
+
 // MMS-reliable image formats only — carriers handle jpg/png well but choke on webp/avif (the dealer
 // feed mixes them). A unit whose only images are webp falls back to its listing link.
 const MMS_IMAGE_RE = /\.(jpe?g|png)(\?|$)/i;
