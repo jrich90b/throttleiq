@@ -101,6 +101,7 @@
     "watch_prune:eval": "npx tsx scripts/watch_prune_eval.ts",
     "watch_year_pin:eval": "npx tsx scripts/watch_year_pin_eval.ts",
     "backfill_unfireable_watch_pins:selftest": "npx tsx scripts/backfill_unfireable_watch_pins.ts --self-test",
+    "backfill_peter_super_glide_incoming:selftest": "npx tsx scripts/backfill_peter_super_glide_incoming.ts --self-test",
     "watch_model_vin_codes:eval": "npx tsx scripts/watch_model_vin_codes_eval.ts",
     "watch_derive_explosion_guard:eval": "npx tsx scripts/watch_derive_explosion_guard_eval.ts",
     "loop_pr_ledger_filter": "npx tsx scripts/loop_pr_ledger_filter.ts",
