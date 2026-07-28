@@ -1111,23 +1111,34 @@ export type VehicleMediaRequestTurnInput = {
   wantsMedia: boolean;
   confidence: number;
   confidenceMin: number;
-  hasUnitsWithUrl: boolean;
-  /** True when the conversation has recommended/named units at all (even without a link/photo). */
+  /** Customer wants MORE / different photos than what's posted (always a task — site isn't enough). */
+  wantsAdditionalPhotos: boolean;
+  /** Any resolved/discussed unit at all (from the customer's reference or the recommender). */
   hasUnits: boolean;
+  /** Any resolved unit has a REAL photo gallery (>= MIN_REAL_PHOTOS) we can text. */
+  hasUnitsWithRealPhotos: boolean;
+  /** Any resolved unit has NO real gallery (no photos or just a stock shot) — needs a salesperson. */
+  hasUnitsNeedingPhotos: boolean;
 };
-export type VehicleMediaRequestTurnDecision = { kind: "send_media" | "salesperson_photo_task" | "none" };
+export type VehicleMediaRequestTurnDecision = {
+  kind: "send_media" | "send_and_task" | "salesperson_photo_task" | "none";
+};
 
 export function decideVehicleMediaRequestTurn(input: VehicleMediaRequestTurnInput): VehicleMediaRequestTurnDecision {
   if (!input.parserAccepted) return { kind: "none" };
   if (!input.wantsMedia) return { kind: "none" };
   if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) return { kind: "none" };
-  if (input.hasUnitsWithUrl) return { kind: "send_media" };
-  // Customer clearly wants photos but we have NOTHING to auto-send (e.g. used units with no listing
-  // link or MMS-able photo, like Melanie Castro's 2006 Sportster / Iron 1200, +19518078554). Hand it
-  // to a human — a salesperson task to send real photos + a warm ack — instead of punting to the LLM,
-  // which fabricated "I'll check on that bike in the back" and created NO task (Joe report 2026-07-27).
-  if (input.hasUnits) return { kind: "salesperson_photo_task" };
-  return { kind: "none" }; // no unit context at all => existing handling
+  if (!input.hasUnits) return { kind: "none" }; // no unit context at all => existing handling
+  // Send the REAL photos we have — but NOT when the customer wants MORE than what's posted (they've
+  // seen the site gallery; re-sending it is unhelpful → that's a salesperson task).
+  const sendPart = input.hasUnitsWithRealPhotos && !input.wantsAdditionalPhotos;
+  // A salesperson task is needed when they want additional photos, OR any discussed bike has no real
+  // gallery (no photos or just a stock shot — Joe 2026-07-27: a stock image must become a task).
+  const taskPart = input.wantsAdditionalPhotos || input.hasUnitsNeedingPhotos;
+  if (sendPart && taskPart) return { kind: "send_and_task" }; // send the real ones, task the rest
+  if (sendPart) return { kind: "send_media" };
+  if (taskPart) return { kind: "salesperson_photo_task" };
+  return { kind: "none" };
 }
 
 // --- Inventory unit clarification (2026-07-10; centralized 2026-07-19) --------

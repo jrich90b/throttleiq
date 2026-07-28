@@ -8392,16 +8392,38 @@ export async function parseThumbsDownNoteWithLLM(args: {
 export type VehicleMediaRequestParse = {
   wantsMedia: boolean;
   focus: "photos" | "colors" | "links" | "any";
+  /**
+   * The customer wants MORE / different photos than what's already posted — "any other pics?",
+   * "actual photos of the bike", "more angles", "real pictures not the stock one". Always a
+   * salesperson task (the website gallery isn't enough), even when the unit HAS real photos.
+   */
+  wantsAdditionalPhotos: boolean;
+  /** The specific bike(s) the customer wants to see, resolved from their message + the recent
+   * thread (the dealer may have listed several). Empty when they didn't name/reference a unit. */
+  referencedUnits: { year: string | null; model: string }[];
   confidence: number;
 };
 
 const VEHICLE_MEDIA_REQUEST_JSON_SCHEMA: { [key: string]: unknown } = {
   type: "object",
   additionalProperties: false,
-  required: ["wants_media", "focus", "confidence"],
+  required: ["wants_media", "focus", "wants_additional_photos", "referenced_units", "confidence"],
   properties: {
     wants_media: { type: "boolean" },
     focus: { type: "string", enum: ["photos", "colors", "links", "any"] },
+    wants_additional_photos: { type: "boolean" },
+    referenced_units: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["year", "model"],
+        properties: {
+          year: { type: ["string", "null"] },
+          model: { type: "string" }
+        }
+      }
+    },
     confidence: { type: "number" }
   }
 };
@@ -8432,14 +8454,22 @@ export async function parseVehicleMediaRequestWithLLM(args: {
     "\"what colors do they come in\", \"send the links\", \"got a link?\". focus = photos | colors | links | any.",
     "wants_media = FALSE when they: share their OWN photo, ask specs/compare (engine, weight), ask price,",
     "ask to schedule, or it's a bare reply (\"ok\", \"thanks\").",
+    "wants_additional_photos = true when they want MORE or DIFFERENT photos than what's posted:",
+    "\"any other pics?\", \"more photos\", \"actual/real photos of the bike\", \"other angles\", \"can someone",
+    "take pics\". false for a plain first ask (\"can I see photos\").",
+    "referenced_units = the SPECIFIC bike(s) they want to see, resolved from THIS message AND the recent",
+    "dealer list (the dealer may have named several). year is the 4-digit year or null; model is the",
+    "bike name as the dealer wrote it. Empty [] when they didn't point at a particular bike (\"see the",
+    "bikes\" / \"the pics\" with only one bike in play => [] is fine).",
     "confidence 0..1; >= 0.8 only when clear.",
     "",
     "Examples:",
-    '- "Can I see the pictures and color of the bikes?" -> {"wants_media":true,"focus":"any","confidence":0.95}',
-    '- "send me the links" -> {"wants_media":true,"focus":"links","confidence":0.9}',
-    '- "what colors does the nightster come in" -> {"wants_media":true,"focus":"colors","confidence":0.88}',
-    '- "what\'s the out the door price" -> {"wants_media":false,"focus":"any","confidence":0.9}',
-    '- "ok sure" -> {"wants_media":false,"focus":"any","confidence":0.85}',
+    '- "Can I see the pictures and color of the bikes?" -> {"wants_media":true,"focus":"any","wants_additional_photos":false,"referenced_units":[],"confidence":0.95}',
+    '- "send me the links" -> {"wants_media":true,"focus":"links","wants_additional_photos":false,"referenced_units":[],"confidence":0.9}',
+    '- (dealer listed "2018 Iron 1200" and "2006 Sportster 883 Low") "can i see photos of the 2006 sportster? and the iron 1200" -> {"wants_media":true,"focus":"photos","wants_additional_photos":false,"referenced_units":[{"year":"2006","model":"Sportster 883 Low"},{"year":"2018","model":"Iron 1200"}],"confidence":0.95}',
+    '- "any other pictures of the street glide? the one on the site is just the stock photo" -> {"wants_media":true,"focus":"photos","wants_additional_photos":true,"referenced_units":[{"year":null,"model":"Street Glide"}],"confidence":0.92}',
+    '- "what\'s the out the door price" -> {"wants_media":false,"focus":"any","wants_additional_photos":false,"referenced_units":[],"confidence":0.9}',
+    '- "ok sure" -> {"wants_media":false,"focus":"any","wants_additional_photos":false,"referenced_units":[],"confidence":0.85}',
     "",
     history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
     `Message: ${text}`
@@ -8450,7 +8480,7 @@ export async function parseVehicleMediaRequestWithLLM(args: {
       prompt,
       schemaName: "vehicle_media_request_parser",
       schema: VEHICLE_MEDIA_REQUEST_JSON_SCHEMA,
-      maxOutputTokens: 80,
+      maxOutputTokens: 220,
       debugTag: "llm-vehicle-media-request-parser",
       debug
     });
@@ -8461,9 +8491,19 @@ export async function parseVehicleMediaRequestWithLLM(args: {
   const focusRaw = String(parsed.focus ?? "any").toLowerCase();
   const focus: VehicleMediaRequestParse["focus"] =
     focusRaw === "photos" || focusRaw === "colors" || focusRaw === "links" ? focusRaw : "any";
+  const referencedUnits = Array.isArray(parsed.referenced_units)
+    ? parsed.referenced_units
+        .map((u: any) => ({
+          year: u?.year == null ? null : String(u.year).trim() || null,
+          model: String(u?.model ?? "").trim()
+        }))
+        .filter((u: { model: string }) => u.model)
+    : [];
   return {
     wantsMedia: parsed.wants_media === true,
     focus,
+    wantsAdditionalPhotos: parsed.wants_additional_photos === true,
+    referencedUnits,
     confidence:
       typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
         ? Math.max(0, Math.min(1, parsed.confidence))
