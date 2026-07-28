@@ -42,6 +42,15 @@ function isJunkInbound(t: string): boolean {
   if (s.length < 2) return true;
   if (/^(ok|okay|k|thanks|thank you|thx|yes|no|yep|nope|👍|👌|sounds good)\.?$/i.test(s)) return true;
   if (/WEB LEAD \(ADF\)|WEB TEXT WIDGET|Call initiated to|Voicemail|voice mail|Agent:|forwarded to voice/i.test(s)) return true;
+  // Voicemail / IVR / call-transcript system captures (not real customer messages) — surfaced as noise
+  // in the pilot findings; exclude so they don't pollute the comprehension score.
+  if (
+    /thank you for calling|you'?ve reached|business office mailbox|party'?s extension|enter it at any time|press \d|at the tone|leave a (?:detailed )?message|call transcript|Customer: (?:Thank you|You'?ve reached|Your call)/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
   return false;
 }
 function loadTurns(): Turn[] {
@@ -113,9 +122,9 @@ async function run() {
   const reads = await pool(turns, CONCURRENCY, async t => {
     try {
       const r: any = await parseTurnUnderstandingWithLLM({ text: t.text, history: t.history, lead: t.lead });
-      return { ok: !!r, intent: r?.primaryIntent ?? null, confidence: Number(r?.confidence ?? 0) };
+      return { ok: !!r, intent: r?.primaryIntent ?? null, confidence: Number(r?.confidence ?? 0), text: t.text };
     } catch {
-      return { ok: false, intent: null, confidence: 0 };
+      return { ok: false, intent: null, confidence: 0, text: t.text };
     }
   });
   const elapsedMs = Date.now() - started;
@@ -144,6 +153,21 @@ async function run() {
   console.log(`nightly slice 1,000: ~${fmt$(costPer * 1000)}  ~${((secPer * 1000) / 60).toFixed(1)} min`);
   console.log(`monthly full 5,000:  ~${fmt$(costPer * 5000)}  ~${((secPer * 5000) / 60).toFixed(1)} min`);
   console.log("========================\n");
+
+  // FINDINGS: the low-confidence / no-intent reads — candidate comprehension misses to eyeball
+  // (many are correctly-uncertain small talk; the real fixes are clear messages read wrong).
+  const findings = reads
+    .filter(r => !r.ok || !r.intent || r.intent === "none" || r.confidence < 0.7)
+    .sort((a, b) => a.confidence - b.confidence);
+  console.log(`=== FINDINGS: ${findings.length} low-confidence/no-intent reads (candidate misses) ===`);
+  for (const f of findings.slice(0, 40)) {
+    console.log(`  [${f.intent ?? "PARSE_FAIL"} @${f.confidence.toFixed(2)}] ${String(f.text).replace(/\s+/g, " ").slice(0, 130)}`);
+  }
+  const findingsPath = process.env.PILOT_FINDINGS_PATH || "/tmp/pilot_findings.jsonl";
+  try {
+    fs.writeFileSync(findingsPath, findings.map(f => JSON.stringify({ intent: f.intent, confidence: f.confidence, text: f.text })).join("\n") + "\n");
+    console.log(`\n(full findings written to ${findingsPath})`);
+  } catch {}
 }
 
 await run();
