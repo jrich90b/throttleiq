@@ -75,14 +75,14 @@ Applied inside the vision prompt AND the decision, mirroring the never-fabricate
 One vision call per photo-question turn (only when the parser fires — rare), in the suggest-mode draft
 step, so no customer-facing latency. Pennies each; cache by image+question if a thread re-asks.
 
-## Open decisions for Joe
-1. **Scope of "answer directly" vs "always hand off":** for a clearly-benign visual question ("is that
-   the touring seat?"), let the agent answer? Or, to be maximally safe, have EVERY photo question
-   describe-then-hand-to-a-human at first? — *Recommend: answer benign visual questions directly, hand
-   off anything functional/condition/safety.*
-2. **The functional-question task:** who owns it (lead owner / service) and what's the label? —
-   *Recommend: lead owner, "Tim asked about the <part> in the photo — confirm/verify."*
-3. **Dark-first + canary** (like the photo-realness flip), or straight on once eval-green? —
-   *Recommend: dark-first, review a few real ones, then flip.*
-4. **Which photos are in scope:** only bikes we sent from inventory, or any outbound image (service
-   pics, etc.)? — *Recommend: any outbound image the customer references.*
+## Decisions (Joe ruled 2026-07-28) — design LOCKED
+1. **Answer the easy ones, hand off anything functional.** A clearly-benign visual question ("is that
+   the touring seat?", "what color is it?") the vision can answer confidently → answer directly. Any
+   FUNCTIONAL / condition / "is it broken / working?" / safety question → honest visual read + tech
+   hand-off (never diagnose from a still).
+2. **The functional-question task is owned by the LEAD OWNER**, labeled e.g. "Customer asked about the
+   <part> in the photo we sent — verify/confirm and follow up."
+3. **Dark-first + canary:** ship behind a flag (default off), review a few real ones, then flip — same
+   pattern as the photo-realness vision.
+4. **Any outbound image** the customer references is in scope (inventory bikes AND service/other pics),
+   resolved from the most recent outbound mediaUrls in the thread.
