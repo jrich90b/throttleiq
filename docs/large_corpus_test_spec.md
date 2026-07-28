@@ -105,3 +105,17 @@ tokens/cost/runtime**, then extrapolate before committing to 5,000.
 - Extrapolation (comprehension pass only): **nightly 1,000 ≈ $3.76 / ~6 min; monthly 5,000 ≈ $18.79 / ~29 min.**
   The FULL run (comprehension + trigger-net checks + a judge) is ~2–3× → nightly ~$8–11, monthly ~$40–55.
   → Comfortably within a "monthly pilot" budget. Green-light STEP 2 at this cost.
+
+### STEP 2 — BUILT + first real nightly run (2026-07-28, `npm run large_corpus:nightly`)
+`scripts/large_corpus_run.ts`: comprehension pass → JUDGE the low-confidence candidates (intent-verdict
+LLM judge, capped) so only judge-CONFIRMED misses count → SCORECARD (comprehension %, confirmed-miss
+rate, cost, intent mix) written to `reports/large_corpus/` + a BASELINE DIFF vs the prior run
+(regression flag). `--mode nightly` (N=1000) / `--mode full` (N=5000). First real 1,000-message run:
+**82.5% comprehension confident; 175 low-confidence → judge confirmed only 5 real misses (~4%);
+$3.17, 5.5 min** — matches the pilot estimate. The judge cleanly separated real misses from noise. The
+5 CONFIRMED misses (the actionable fix queue — verify-first, then parser few-shots):
+- "I have both our pay stubs and proof of address" → read `other`, should be **finance** (credit-app docs).
+- "How bout 30..." → read `scheduling`, should be **pricing** (price negotiation).
+- "Thanks for the follow up that never happened" → read `other`, should be **scheduling/callback**.
+- "Hey gm never received pics" → read `parts`, should be **other** (photo follow-up).
+- "Liked an image" (tapback) → read `smalltalk`, thread shows **scheduling** (tapback-echo edge).
