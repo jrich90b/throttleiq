@@ -332,6 +332,11 @@ export function unitHasRealPhotos(unit: RecommendedUnit | null | undefined): boo
   return realPhotoUrls(unit).length >= MIN_REAL_PHOTOS;
 }
 
+/** Phase 3 (Joe 2026-07-28): auto-deliver photos + close the task when real photos land. Default off. */
+export function photoDeliveryOnArrivalEnabled(): boolean {
+  return process.env.PHOTO_DELIVERY_ON_ARRIVAL_ENABLED === "1";
+}
+
 /**
  * Deterministic reply to "show me pics/colors/links" of the units we already suggested. Prefers
  * actually ATTACHING photos over links (links break / get blocked — s R Gurajala, 2026-06-24): up to

@@ -29,7 +29,7 @@ export const WORKER_SCHEDULES: WorkerSchedule[] = [
   {
     queue: "tick-inventory",
     cron: "*/5 * * * *",
-    tasks: ["inventory-watch", "inventory-holds"],
+    tasks: ["inventory-watch", "inventory-holds", "photo-delivery"],
     requestTimeoutMs: 10 * 60_000
   }
 ];

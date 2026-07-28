@@ -17,7 +17,8 @@ export const WORKER_TICK_TASKS = [
   "inventory-watch",
   "inventory-holds",
   "task-escalations",
-  "gate-blocker-digest"
+  "gate-blocker-digest",
+  "photo-delivery"
 ] as const;
 
 export type WorkerTickTask = (typeof WORKER_TICK_TASKS)[number];
