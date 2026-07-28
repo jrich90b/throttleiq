@@ -558,7 +558,7 @@ import { referencesPastDatedEvent } from "./domain/pastEventGuard.js";
 import { stripLeadingVinCodes, stripLeadingMakeName, normalizeWatchModelsVin, modelLabelHasVinCode } from "./domain/watchModelVinCodes.js";
 import { trikeClassConflict, isFamilyOnlyModelLabel, referencesFamilyOnlyInText } from "./domain/modelFamily.js";
 import { decideWatchSiblingScopeAsk } from "./domain/watchSiblingScope.js";
-import { applyWatchFieldHygiene } from "./domain/watchFieldHygiene.js";
+import { applyWatchFieldHygiene, formatWatchYearLabel } from "./domain/watchFieldHygiene.js";
 import {
   conversationWatchAlertBlocked,
   recordConversationWatchAlert,
@@ -30467,11 +30467,8 @@ function buildWatchBudgetText(watch: InventoryWatch): string {
 }
 
 function buildInventoryWatchConfirmation(watch: InventoryWatch): string {
-  const yearText = watch.year
-    ? `${watch.year} `
-    : watch.yearMin && watch.yearMax
-      ? `${watch.yearMin}-${watch.yearMax} `
-      : "";
+  const yearLabel = formatWatchYearLabel(watch);
+  const yearText = yearLabel ? `${yearLabel} ` : "";
   const cleanColor = sanitizeColorPhrase(watch.color) ?? watch.color;
   const trimText = watch.trim ? formatColorLabel(watch.trim) : null;
   const colorText =
@@ -31532,11 +31529,8 @@ function formatTodoCallDueAtLabel(dueAtIso: string, timeZone: string): string | 
 
 function formatInventoryWatchLabelForFollowUp(watch: InventoryWatch | null | undefined): string {
   if (!watch) return "";
-  const yearText = watch.year
-    ? `${watch.year} `
-    : watch.yearMin && watch.yearMax
-      ? `${watch.yearMin}-${watch.yearMax} `
-      : "";
+  const yearLabel = formatWatchYearLabel(watch);
+  const yearText = yearLabel ? `${yearLabel} ` : "";
   const modelText = String(watch.model ?? "").trim();
   const colorText = sanitizeColorPhrase(watch.color) ?? String(watch.color ?? "").trim();
   return [yearText.trim(), colorText, modelText].filter(Boolean).join(" ").trim();
@@ -67298,11 +67292,8 @@ if (authToken && signature) {
             watchCondition
           );
           const updateHint = buildWatchUpdateHint(watchCondition, finishEligible);
-          const yearText = watch.year
-            ? `${watch.year} `
-            : watch.yearMin && watch.yearMax
-              ? `${watch.yearMin}-${watch.yearMax} `
-              : "";
+          const watchYearLabel = formatWatchYearLabel(watch);
+          const yearText = watchYearLabel ? `${watchYearLabel} ` : "";
           const modelText = watch.model ?? "that model";
           const watchColor = sanitizeColorPhrase(watch.color) ?? watch.color;
           const colorText = watchColor ? ` in ${watchColor}` : "";
@@ -67504,11 +67495,8 @@ if (authToken && signature) {
         watchCondition
       );
       const updateHint = buildWatchUpdateHint(watchCondition, finishEligible);
-      const yearText = watch.year
-        ? `${watch.year} `
-        : watch.yearMin && watch.yearMax
-          ? `${watch.yearMin}-${watch.yearMax} `
-          : "";
+      const watchYearLabel = formatWatchYearLabel(watch);
+      const yearText = watchYearLabel ? `${watchYearLabel} ` : "";
       const modelText = watch.model ?? "that model";
       const watchColor = sanitizeColorPhrase(watch.color) ?? watch.color;
       const colorText = watchColor ? ` in ${watchColor}` : "";

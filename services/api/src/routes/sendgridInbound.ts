@@ -158,7 +158,7 @@ import {
   incomingInventoryPurposeConfidenceFloor
 } from "../domain/pendingIncomingInventory.js";
 import { buildOffersLine, resolveOffersUrl } from "../domain/offers.js";
-import { applyWatchFieldHygiene } from "../domain/watchFieldHygiene.js";
+import { applyWatchFieldHygiene, formatWatchYearLabel } from "../domain/watchFieldHygiene.js";
 import {
   buildInternationalShippingUnavailableReply,
   shouldDeclineInternationalShipping
@@ -3770,12 +3770,13 @@ async function buildInitialAdfUnavailableInventoryWatch(args: {
   const hasIdentifiers = !!String(vehicle?.stockId ?? "").trim() || !!String(vehicle?.vin ?? "").trim();
   const customerYearRange = extractYearRangeFromText(args.inquiryText);
   const customerSingleYear = extractSingleYearFromText(args.inquiryText);
-  const customerYearLabel =
-    customerYearRange?.min && customerYearRange?.max
-      ? `${customerYearRange.min}-${customerYearRange.max}`
-      : customerSingleYear
-        ? String(customerSingleYear)
-        : "";
+  // Range still wins over a bare single year, exactly as before — the only change is that a
+  // degenerate {min: 2026, max: 2026} now renders "2026" instead of "2026-2026".
+  const customerRangeLabel = formatWatchYearLabel({
+    yearMin: customerYearRange?.min ?? null,
+    yearMax: customerYearRange?.max ?? null
+  });
+  const customerYearLabel = customerRangeLabel || (customerSingleYear ? String(customerSingleYear) : "");
   const modelForReply = [customerYearLabel, model].filter(Boolean).join(" ").trim() || model;
   const modelOnlyStatus =
     !hasIdentifiers && !customerYearRange && !customerSingleYear
@@ -7298,7 +7299,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const desiredTrim =
       extractTrimFromText(watchSourceText) ??
       (inventoryEntityAccepted ? llmInventoryEntities?.trim ?? undefined : undefined);
-    const rangeLabel = yearRange ? `${yearRange.min}-${yearRange.max} ` : "";
+    const yearRangeLabel = formatWatchYearLabel({
+      yearMin: yearRange?.min ?? null,
+      yearMax: yearRange?.max ?? null
+    });
+    const rangeLabel = yearRangeLabel ? `${yearRangeLabel} ` : "";
     let hasUsedMatch = false;
     let hasNewMatch = false;
     if (modelLabel) {

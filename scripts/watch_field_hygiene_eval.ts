@@ -18,7 +18,8 @@ import fs from "node:fs";
 import {
   sanitizeWatchColorValue,
   foldModelWordTrimIntoModel,
-  applyWatchFieldHygiene
+  applyWatchFieldHygiene,
+  formatWatchYearLabel
 } from "../services/api/src/domain/watchFieldHygiene.ts";
 
 // --- Colour: the production junk, and the colours that must survive it -----------------------
@@ -96,4 +97,54 @@ const sg = fs.readFileSync("services/api/src/routes/sendgridInbound.ts", "utf8")
 assert.match(sg, /const hygienicWalkInWatch = applyWatchFieldHygiene\(watch\);/, "the Traffic Log Pro walk-in path (which produced the reported record) must apply hygiene");
 assert.match(sg, /const hygienicWatch = applyWatchFieldHygiene\(watch\);/, "the semantic/inventory-entity path writes directly too and must apply hygiene");
 
-console.log("PASS watch field hygiene eval — TLP step tags never land in colour; a model word folds into the model label instead of dead-ending the trim slot.");
+// --- Year label: a one-year "range" is one year (2026-07-28 replay sweep) ---------------------
+// `extractYearRangeFromText` returns {min, max} for ANY text carrying two 20xx years, and an ADF
+// repeats its year as a matter of course ("Year: 2026 … 2026 Sportster S"), so {2026, 2026} is the
+// ordinary shape. Printed raw it reached the customer as "a 2026-2026 Sportster S".
+assert.equal(
+  formatWatchYearLabel({ yearMin: 2026, yearMax: 2026 }),
+  "2026",
+  "a range whose ends are equal is ONE year — the production defect (Sanjeev Goms 08610167776, Justin Holmes +16785960725)"
+);
+assert.equal(formatWatchYearLabel({ yearMin: "2026", yearMax: "2026" }), "2026", "…string-typed bounds collapse too");
+assert.equal(
+  formatWatchYearLabel({ yearMin: 2017, yearMax: 2020 }),
+  "2017-2020",
+  "a REAL range still prints as a range — the customer's specificity survives"
+);
+assert.equal(formatWatchYearLabel({ yearMin: 2020, yearMax: 2017 }), "2017-2020", "an inverted range is ordered, never printed backwards");
+assert.equal(formatWatchYearLabel({ year: 2024 }), "2024", "a single year wins when it is set, as before");
+assert.equal(
+  formatWatchYearLabel({ year: 2024, yearMin: 2017, yearMax: 2020 }),
+  "2024",
+  "…and still outranks a range on the watch record itself (unchanged precedence)"
+);
+assert.equal(
+  formatWatchYearLabel({ yearMin: 2019, yearMax: null }),
+  "",
+  "a half-open bound stays UNLABELLED — printing '2019' alone would claim an exact year the watch never asked for"
+);
+assert.equal(formatWatchYearLabel({ yearMin: null, yearMax: 2022 }), "", "…either side");
+assert.equal(formatWatchYearLabel({}), "", "no year constraint, no label");
+
+// --- Wiring: no customer-facing path may hand-roll the range again ---------------------------
+assert.doesNotMatch(
+  idx,
+  /\$\{watch\.yearMin\}-\$\{watch\.yearMax\}/,
+  "index.ts must render watch years through formatWatchYearLabel, never a raw min-max template"
+);
+assert.match(idx, /formatWatchYearLabel/, "…and must actually import/use it");
+assert.doesNotMatch(
+  sg,
+  /\$\{yearRange\.min\}-\$\{yearRange\.max\}/,
+  "the walk-in watch label must go through formatWatchYearLabel"
+);
+assert.doesNotMatch(
+  sg,
+  /\$\{customerYearRange\.min\}-\$\{customerYearRange\.max\}/,
+  "the initial-ADF unavailable-inventory reply (where '2026-2026 Sportster S' shipped) must go through formatWatchYearLabel"
+);
+// The internal watch_fire_miss REPORT is deliberately out of scope: it renders half-open bounds
+// ("2019-") on purpose for triage and is never read by a customer.
+
+console.log("PASS watch field hygiene eval — TLP step tags never land in colour; a model word folds into the model label instead of dead-ending the trim slot; a one-year range prints as one year.");

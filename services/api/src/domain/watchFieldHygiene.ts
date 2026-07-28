@@ -90,6 +90,43 @@ export function foldModelWordTrimIntoModel(input: {
   return { model: folded, trim: undefined };
 }
 
+/**
+ * Render a watch's year constraint as customer-facing text.
+ *
+ * A "range" whose min equals its max is not a range — it is one year that reached the slot twice.
+ * `extractYearRangeFromText` returns `{min, max}` whenever a text mentions two or more 20xx years
+ * (sendgridInbound.ts), and an ADF routinely repeats the same year ("Year: 2026 … 2026 Sportster S"),
+ * so `{min: 2026, max: 2026}` is the ordinary shape. Rendered naively it reaches the customer as
+ * "I'm not seeing a 2026-2026 Sportster S in stock right now" — caught in the 2026-07-28 offline
+ * replay sweep on two ADF test-ride leads (Sanjeev Goms 08610167776, Justin Holmes +16785960725).
+ *
+ * Presentation only: the stored watch keeps its yearMin/yearMax, so matching, `exactness`, and
+ * every fire path are byte-for-byte unchanged. A degenerate range collapses to the single year it
+ * always meant; an inverted one is ordered rather than printed backwards.
+ *
+ * FAIL DIRECTION: worst case this drops a year word from a label the customer reads, never a
+ * constraint the matcher applies — it cannot widen a watch, close a lead, or suppress a send.
+ * Pinned by `watch_field_hygiene:eval`.
+ */
+export function formatWatchYearLabel(watch: {
+  year?: number | string | null;
+  yearMin?: number | string | null;
+  yearMax?: number | string | null;
+}): string {
+  const single = String(watch.year ?? "").trim();
+  if (single) return single;
+  const min = String(watch.yearMin ?? "").trim();
+  const max = String(watch.yearMax ?? "").trim();
+  // A half-open bound ("2019 or newer") is deliberately unlabelled: printing the one end we have
+  // reads to the customer as an EXACT year, which is a stronger claim than the watch makes.
+  if (!min || !max) return "";
+  if (min === max) return min;
+  const lo = Number(min);
+  const hi = Number(max);
+  if (Number.isFinite(lo) && Number.isFinite(hi) && lo > hi) return `${max}-${min}`;
+  return `${min}-${max}`;
+}
+
 /** Apply both repairs to a watch-shaped record in place-safe fashion. */
 export function applyWatchFieldHygiene<T extends { model?: string | null; trim?: string | null; color?: string | null }>(
   watch: T
