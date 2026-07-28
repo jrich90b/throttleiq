@@ -337,6 +337,8 @@ import {
   parseVehicleChoiceConfidenceWithLLM,
   parseVehicleRecommendationRequestWithLLM,
   parseVehicleMediaRequestWithLLM,
+  parsePhotoReferenceQuestionWithLLM,
+  answerPhotoQuestionWithLLM,
   generateDraftWithLLM,
   parseDealStatusCheckWithLLM,
   parseConversationCloseoutWithLLM,
@@ -588,6 +590,12 @@ import {
   photoDeliveryOnArrivalEnabled
 } from "./domain/inventoryRecommender.js";
 import {
+  buildPhotoQuestionVisualReply,
+  buildPhotoQuestionHandoffReply,
+  buildPhotoQuestionCloserLookReply,
+  buildPhotoQuestionTaskSummary
+} from "./domain/photoQuestionVision.js";
+import {
   inventoryEquipmentVisionEnabled,
   equipmentQueryHasFeatures,
   describeEquipmentQuery,
@@ -702,6 +710,7 @@ import {
   decideEquipmentClarifyTurn,
   shouldBowOutRecommenderForNamedModel,
   decideVehicleMediaRequestTurn,
+  decidePhotoQuestionTurn,
   decideInventoryUnitClarificationTurn,
   decideFeedbackRedraftTurn,
   resolveFinanceFollowUpContinuation,
@@ -2706,6 +2715,95 @@ function persistDiscussedUnit(conv: any, item: InventoryFeedItem | null | undefi
 // Parser-first; answers with the REAL listing URLs from the persisted recommended units (deterministic
 // — never a fabricated link). Returns null to fall through when it's not a media ask or we have no
 // units with a usable url. Centralized so live + regenerate stay in sync.
+// Photo-question vision (DARK behind PHOTO_QUESTION_VISION_ENABLED, Joe 2026-07-28). A customer asks
+// about a photo WE sent ("why is that light off?" — Tim Williams, whose OTHER lights were on, so the
+// bike was powered). Resolve the exact photo we sent, read it with vision, and: answer a benign visual
+// question directly; DESCRIBE + hand a functional/condition question to a tech (never diagnose from a
+// still); or take a closer look. Suggest-mode draft; the tech task is LIVE-only + lead-owner-owned.
+function photoQuestionHint(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  const photoRef =
+    /\b(pic|pics|picture|pictures|photo|photos|image|images|the one you sent|you sent me|in the (?:pic|photo|picture|image)|that (?:light|part|scratch|mark|seat|bike|thing|piece)|this (?:light|part|scratch|mark))\b/.test(
+      t
+    );
+  const question = /\?|\b(why|what(?:'?s)?|whats|is that|is it|are (?:those|these)|does it|do you know|how come|supposed to)\b/.test(t);
+  return photoRef && question;
+}
+
+async function resolvePhotoQuestionReply(
+  conv: Conversation | null | undefined,
+  inboundText: string,
+  scope: "live" | "regen"
+): Promise<{ reply: string; mediaUrls: string[] } | null> {
+  const text = String(inboundText ?? "").trim();
+  if (!conv || !text) return null;
+  if (process.env.PHOTO_QUESTION_VISION_ENABLED !== "1") return null; // dark by default
+  if (!photoQuestionHint(text)) return null;
+  // The exact photo(s) we last sent this customer.
+  const msgs = Array.isArray(conv.messages) ? conv.messages : [];
+  let sentPhotos: string[] = [];
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m: any = msgs[i];
+    const dir = String(m?.direction ?? m?.role ?? "");
+    if (dir === "out" && Array.isArray(m?.mediaUrls) && m.mediaUrls.length) {
+      sentPhotos = m.mediaUrls.map((u: any) => String(u ?? "").trim()).filter((u: string) => /^https?:\/\//i.test(u));
+      if (sentPhotos.length) break;
+    }
+  }
+  const hasSentPhoto = sentPhotos.length > 0;
+  const parse = await safeLlmParse("photo_reference_question_parser", () =>
+    parsePhotoReferenceQuestionWithLLM({ text, history: buildHistory(conv, 8) })
+  );
+  if (!parse?.asksAboutSentPhoto) return null;
+  const vision =
+    hasSentPhoto
+      ? await safeLlmParse("photo_question_vision", () =>
+          answerPhotoQuestionWithLLM({ imageUrls: sentPhotos, question: text, focus: parse.focus })
+        )
+      : null;
+  const decision = decidePhotoQuestionTurn({
+    parserAccepted: !!parse,
+    asksAboutSentPhoto: !!parse?.asksAboutSentPhoto,
+    textConfidence: parse?.confidence ?? 0,
+    confidenceMin: vehicleRecommendationConfidenceMin(),
+    hasSentPhoto,
+    visionAccepted: !!vision,
+    isFunctionalQuestion: !!vision?.isFunctionalQuestion,
+    canAnswerVisually: !!vision?.canAnswerVisually,
+    visionConfidence: vision?.confidence ?? 0
+  });
+  if (decision.kind === "none") return null;
+
+  const firstName = normalizeDisplayCase(conv.lead?.firstName);
+  // The tech-check task — LIVE-only side effect (regen never creates tasks), owned by the lead owner
+  // (Joe ruling 2026-07-28), deduped.
+  const createTechTask = () => {
+    if (scope !== "live") return;
+    const already = listOpenTodos().some(
+      t => t.convId === conv.id && t.reason === "other" && /about something in the photo/i.test(String(t.summary ?? ""))
+    );
+    if (already) return;
+    addTodo(conv, "other", buildPhotoQuestionTaskSummary({ focus: parse?.focus, question: text }), undefined, conv.leadOwner);
+  };
+
+  if (decision.kind === "answer_visual" && vision) {
+    const reply = buildPhotoQuestionVisualReply({ firstName, read: vision });
+    if (!reply) return null;
+    recordRouteOutcome(scope, "photo_question_answer_visual", { convId: conv.id, leadKey: conv.leadKey, focus: parse?.focus ?? null });
+    return { reply, mediaUrls: [] };
+  }
+  if (decision.kind === "describe_and_handoff" && vision) {
+    createTechTask();
+    recordRouteOutcome(scope, "photo_question_describe_handoff", { convId: conv.id, leadKey: conv.leadKey, focus: parse?.focus ?? null });
+    return { reply: buildPhotoQuestionHandoffReply({ firstName, read: vision }), mediaUrls: [] };
+  }
+  // closer_look_handoff: couldn't read it confidently => a human takes a closer look.
+  createTechTask();
+  recordRouteOutcome(scope, "photo_question_closer_look", { convId: conv.id, leadKey: conv.leadKey });
+  return { reply: buildPhotoQuestionCloserLookReply({ firstName }), mediaUrls: [] };
+}
+
 async function resolveRecommendedUnitsMediaReply(
   conv: Conversation | null | undefined,
   inboundText: string,
@@ -57366,6 +57464,13 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         });
       }
     }
+    // Photo-question vision (parity with live /webhooks/twilio): a question about the photo we sent.
+    if (channel === "sms" && !regenRoutingIntentOverride) {
+      const photoQuestionReplyForRegen = await resolvePhotoQuestionReply(conv, String(event.body ?? ""), "regen");
+      if (photoQuestionReplyForRegen) {
+        return respondWithSmsRegeneratedDraft(photoQuestionReplyForRegen.reply);
+      }
+    }
     if (channel === "sms" && !regenRoutingIntentOverride) {
       const regenMediaReply = await resolveRecommendedUnitsMediaReply(conv, String(event.body ?? ""), "regen");
       if (regenMediaReply) {
@@ -63149,6 +63254,15 @@ if (authToken && signature) {
     const estimateReply = resolveRecommendedUnitsPaymentEstimateReply(conv, "live");
     if (estimateReply) {
       return publishLiveTwilioReply(estimateReply, { turnFinanceIntent: true, financeContextIntent: true }, { draftOnly: true });
+    }
+  }
+  // Photo-question vision: a customer asking about the photo WE sent takes precedence over a photo
+  // REQUEST (they already have the picture). DARK behind PHOTO_QUESTION_VISION_ENABLED. Same resolver
+  // runs in /conversations/:id/regenerate (route-parity law).
+  if (event.provider === "twilio" && !parserPrecheckBlocksDeterministicShortcut) {
+    const photoQuestionReply = await resolvePhotoQuestionReply(conv, inboundText, "live");
+    if (photoQuestionReply) {
+      return publishLiveTwilioReply(photoQuestionReply.reply, undefined, { draftOnly: true });
     }
   }
   if (event.provider === "twilio" && !parserPrecheckBlocksDeterministicShortcut) {

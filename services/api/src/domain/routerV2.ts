@@ -55,6 +55,7 @@ export {
   decideEquipmentClarifyTurn,
   shouldBowOutRecommenderForNamedModel,
   decideVehicleMediaRequestTurn,
+  decidePhotoQuestionTurn,
   decideInventoryUnitClarificationTurn,
   decideFeedbackRedraftTurn,
   resolveFinanceFollowUpContinuation,

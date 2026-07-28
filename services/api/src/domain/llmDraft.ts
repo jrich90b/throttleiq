@@ -14290,6 +14290,204 @@ export async function describeUnitEquipmentWithLLM(args: {
   }
 }
 
+// === Photo-question vision (DARK behind PHOTO_QUESTION_VISION_ENABLED) ===
+// A customer asks about a photo WE sent them ("why is that light off?" — Tim Williams). Two typed
+// steps: (1) a CHEAP TEXT gate — is this a question about the sent photo, and what are they pointing
+// at; (2) a VISION read of that exact photo that DESCRIBES + REASONS about what's visible but NEVER
+// diagnoses function/condition from a still. Both null on any failure → today's behavior.
+
+export type PhotoReferenceQuestionParse = {
+  asksAboutSentPhoto: boolean;
+  focus: "light" | "part" | "damage" | "color" | "general";
+  confidence: number;
+};
+
+const PHOTO_REFERENCE_QUESTION_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["asks_about_sent_photo", "focus", "confidence"],
+  properties: {
+    asks_about_sent_photo: { type: "boolean" },
+    focus: { type: "string", enum: ["light", "part", "damage", "color", "general"] },
+    confidence: { type: "number" }
+  }
+};
+
+export async function parsePhotoReferenceQuestionWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<PhotoReferenceQuestionParse | null> {
+  if (process.env.PHOTO_QUESTION_VISION_ENABLED !== "1") return null;
+  if (process.env.LLM_ENABLED !== "1" || !process.env.OPENAI_API_KEY) return null;
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+  const model = process.env.OPENAI_MODEL || "gpt-5-mini";
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const prompt = [
+    "In an SMS thread where the dealer SENT the customer a PHOTO of a bike, decide whether the",
+    "customer's latest message is a QUESTION about something they SEE IN that photo, and what they're",
+    "pointing at. Return only JSON for the schema.",
+    "",
+    "asks_about_sent_photo = true for: \"why is that light off?\", \"what's that scratch?\", \"is that the",
+    "touring seat?\", \"what color is the trim in the pic\", \"is that a crack on the tank?\". false for: a",
+    "new/unrelated ask, sharing their OWN photo, scheduling, pricing, or a bare reply.",
+    "focus = light | part | damage | color | general (best fit for what they're asking about).",
+    "confidence 0..1; >= 0.8 only when clear.",
+    "",
+    "Examples:",
+    '- "why is that one light off? the others are on" -> {"asks_about_sent_photo":true,"focus":"light","confidence":0.95}',
+    '- "is that the quick-detach windshield?" -> {"asks_about_sent_photo":true,"focus":"part","confidence":0.9}',
+    '- "whats that mark near the tank" -> {"asks_about_sent_photo":true,"focus":"damage","confidence":0.88}',
+    '- "can you send more pics" -> {"asks_about_sent_photo":false,"focus":"general","confidence":0.9}',
+    '- "what time do you close" -> {"asks_about_sent_photo":false,"focus":"general","confidence":0.95}',
+    "",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+  try {
+    const parsed = await requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "photo_reference_question",
+      schema: PHOTO_REFERENCE_QUESTION_JSON_SCHEMA,
+      maxOutputTokens: 120,
+      debugTag: "llm-photo-reference-question"
+    });
+    if (!parsed || typeof parsed !== "object") return null;
+    const p = parsed as any;
+    const focusRaw = String(p.focus ?? "general").toLowerCase();
+    const focus: PhotoReferenceQuestionParse["focus"] = ["light", "part", "damage", "color"].includes(focusRaw)
+      ? (focusRaw as any)
+      : "general";
+    const confidence = Number(p.confidence);
+    return {
+      asksAboutSentPhoto: p.asks_about_sent_photo === true,
+      focus,
+      confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0
+    };
+  } catch {
+    return null;
+  }
+}
+
+export type PhotoQuestionVisionRead = {
+  /** What is visibly true about the thing they asked about (e.g. "one auxiliary light appears unlit"). */
+  observation: string;
+  /** Scene reasoning (e.g. "the bike appears powered on — the other lights are lit"). */
+  sceneState: string;
+  /** They're asking whether something WORKS / is BROKEN / is a defect / a condition or safety question. */
+  isFunctionalQuestion: boolean;
+  /** A benign VISUAL question (part id / color / presence of a feature) vision can confidently answer. */
+  canAnswerVisually: boolean;
+  /** For a benign visual question: a short helpful answer. For a functional question: the honest visible
+   * observation ONLY — NO working/broken/cause claim (the caller adds the tech hand-off). */
+  answer: string;
+  confidence: number;
+};
+
+const PHOTO_QUESTION_VISION_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["observation", "scene_state", "is_functional_question", "can_answer_visually", "answer", "confidence"],
+  properties: {
+    observation: { type: "string" },
+    scene_state: { type: "string" },
+    is_functional_question: { type: "boolean" },
+    can_answer_visually: { type: "boolean" },
+    answer: { type: "string" },
+    confidence: { type: "number" }
+  }
+};
+
+export async function answerPhotoQuestionWithLLM(args: {
+  imageUrls: string[];
+  question: string;
+  focus?: string | null;
+}): Promise<PhotoQuestionVisionRead | null> {
+  if (process.env.PHOTO_QUESTION_VISION_ENABLED !== "1") return null;
+  if (process.env.LLM_ENABLED !== "1" || !process.env.OPENAI_API_KEY) return null;
+  const question = String(args.question ?? "").trim();
+  const urls = (Array.isArray(args.imageUrls) ? args.imageUrls : [])
+    .map(u => String(u ?? "").trim())
+    .filter(u => /^https?:\/\//i.test(u))
+    .slice(0, 4);
+  if (!question || !urls.length) return null;
+  const model =
+    process.env.OPENAI_INVENTORY_EQUIPMENT_VISION_MODEL ||
+    process.env.OPENAI_VEHICLE_IMAGE_VISION_MODEL ||
+    process.env.OPENAI_MODEL ||
+    "gpt-5-mini";
+  const prompt = [
+    "You are looking at the EXACT photo a Harley-Davidson dealership already texted a customer. The",
+    "customer is now asking about something they see in it. Answer for the schema.",
+    `Customer's question: ${question}`,
+    args.focus ? `They're pointing at: ${args.focus}` : "",
+    "",
+    "- observation: describe what is VISIBLE about the thing they asked about (e.g. 'one auxiliary light",
+    "  is not illuminated').",
+    "- scene_state: reason about the WHOLE scene to give context — e.g. if the OTHER lights are lit, the",
+    "  bike is powered on, so a single dark light IS notable; if the bike is off, that explains dark lights.",
+    "- is_functional_question: TRUE if they're asking whether something WORKS, is BROKEN, defective, a",
+    "  condition/wear/safety issue, or WHY it is that way. FALSE for a plain visual id (which part is this,",
+    "  what color, does it have X).",
+    "- can_answer_visually: TRUE only for a benign visual question you can CONFIDENTLY answer from the",
+    "  photo (identify the part, the color, whether a feature is present). FALSE otherwise.",
+    "",
+    "HARD RULES (never break — a wrong claim about a bike's condition is unsafe):",
+    "- You CANNOT tell from a still photo whether a part WORKS, is BROKEN, is defective, or WHY. NEVER",
+    "  state or imply that anything works, is fine, is broken, is faulty, needs replacing, or its cause.",
+    "- For a FUNCTIONAL question: set answer to the honest VISIBLE observation ONLY (what you see + the",
+    "  scene context), with NO working/broken/cause claim. A human tech will verify — do not preempt it.",
+    "- For a benign VISUAL question you're confident on: answer it briefly and warmly.",
+    "- A bad angle / can't tell: can_answer_visually=false, low confidence, say what you can't see.",
+    "- Reference ONLY what is actually in the photo; never invent a part, mark, or reason.",
+    "- confidence 0..1.",
+    "",
+    'Return only JSON: {"observation","scene_state","is_functional_question","can_answer_visually","answer","confidence"}'
+  ]
+    .filter(Boolean)
+    .join("\n");
+  try {
+    const resp = await client.responses.parse({
+      model,
+      input: [
+        {
+          role: "user",
+          content: [
+            { type: "input_text", text: prompt },
+            ...urls.map(url => ({ type: "input_image", image_url: url, detail: "auto" }))
+          ]
+        }
+      ] as any,
+      ...optionalReasoning(model),
+      max_output_tokens: 500,
+      text: { format: { type: "json_schema", name: "photo_question_vision", schema: PHOTO_QUESTION_VISION_JSON_SCHEMA, strict: true } }
+    });
+    recordOpenAIUsage(resp, {
+      feature: "llm_parser",
+      operation: "photo_question_vision",
+      requestKind: "responses.parse",
+      model,
+      metadata: { debugTag: "photo-question-vision", imageCount: urls.length }
+    });
+    const parsed = (resp as any)?.output_parsed ?? safeParseJson(resp.output_text?.trim() ?? "");
+    if (!parsed || typeof parsed !== "object") return null;
+    const p = parsed as any;
+    const confidence = Number(p.confidence);
+    return {
+      observation: String(p.observation ?? "").trim(),
+      sceneState: String(p.scene_state ?? "").trim(),
+      isFunctionalQuestion: p.is_functional_question === true,
+      canAnswerVisually: p.can_answer_visually === true,
+      answer: String(p.answer ?? "").trim(),
+      confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0
+    };
+  } catch (error) {
+    console.warn("[photo-question-vision] failed", { message: error instanceof Error ? error.message : String(error) });
+    return null;
+  }
+}
+
 export async function parseInventoryStatusWithLLM(args: {
   text: string;
   history?: { direction: "in" | "out"; body: string }[];

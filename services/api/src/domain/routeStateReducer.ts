@@ -1126,6 +1126,39 @@ export function shouldBowOutRecommenderForNamedModel(input: {
 // confident AND we actually have persisted units that carry a listing URL — otherwise fall through
 // (the deterministic reply needs real links; never fabricate one). FAIL DIRECTION: none => existing
 // behavior (commit-to-follow-up), never a made-up link.
+// Photo-question vision (DARK behind PHOTO_QUESTION_VISION_ENABLED, Joe 2026-07-28). A customer asks
+// about a photo WE sent. Centralized route decision (both paths): answer a benign visual question,
+// describe + hand a FUNCTIONAL/condition question to a tech (never diagnose from a still), or take a
+// closer look when we can't read it confidently. Fail direction: any uncertainty → a human/tech, never
+// a fabricated condition claim.
+export type PhotoQuestionTurnInput = {
+  parserAccepted: boolean;
+  asksAboutSentPhoto: boolean;
+  textConfidence: number;
+  confidenceMin: number;
+  hasSentPhoto: boolean;
+  visionAccepted: boolean;
+  isFunctionalQuestion: boolean;
+  canAnswerVisually: boolean;
+  visionConfidence: number;
+};
+export type PhotoQuestionTurnDecision = {
+  kind: "answer_visual" | "describe_and_handoff" | "closer_look_handoff" | "none";
+};
+
+export function decidePhotoQuestionTurn(input: PhotoQuestionTurnInput): PhotoQuestionTurnDecision {
+  if (!input.parserAccepted || !input.asksAboutSentPhoto) return { kind: "none" };
+  if (!Number.isFinite(input.textConfidence) || input.textConfidence < input.confidenceMin) return { kind: "none" };
+  if (!input.hasSentPhoto) return { kind: "none" }; // no photo we sent to reason about => existing handling
+  if (!input.visionAccepted) return { kind: "closer_look_handoff" }; // couldn't read it => a human looks
+  // A functional / condition / "is it broken?" question is NEVER answered from a still — describe what's
+  // visible + the scene context, then hand to a tech (Joe ruling 2026-07-28).
+  if (input.isFunctionalQuestion) return { kind: "describe_and_handoff" };
+  // A benign visual question we can confidently answer from the photo => answer it directly.
+  if (input.canAnswerVisually && input.visionConfidence >= input.confidenceMin) return { kind: "answer_visual" };
+  return { kind: "closer_look_handoff" }; // uncertain => a human takes a closer look
+}
+
 export type VehicleMediaRequestTurnInput = {
   parserAccepted: boolean;
   wantsMedia: boolean;
