@@ -274,11 +274,63 @@ function unitDisplayName(u: RecommendedUnit): string {
   return [String(u.year ?? "").trim(), String(u.model ?? "").trim()].filter(Boolean).join(" ").trim() || "that one";
 }
 
+/**
+ * Warm ack when the customer wants photos we can't auto-send (used units with no link/photo) — the
+ * agent hands it to a salesperson instead of fabricating (Joe report 2026-07-27, Melanie Castro).
+ * Deliberately does NOT name specific units (the parser doesn't reliably resolve WHICH of the
+ * recommended units they meant) — the salesperson task + thread carry the specifics. Never promises
+ * a time.
+ */
+export function buildSalespersonPhotoAckReply(args: { firstName?: string | null }): string {
+  const firstName = String(args.firstName ?? "").trim();
+  const greeting = firstName ? `Happy to help, ${firstName}` : "Happy to help";
+  return `${greeting} — I'll have a salesperson text you photos of those.`;
+}
+
+/** The salesperson task label (Joe: "the task flag should say something like send customer pictures").
+ * References the recommended units + the customer's ask so the rep knows exactly what to send. */
+export function buildSalespersonPhotoTaskSummary(args: {
+  units: RecommendedUnit[];
+  inboundText?: string | null;
+  /** Customer wants MORE than what's posted — the site gallery isn't enough. */
+  additional?: boolean;
+}): string {
+  const names = (args.units ?? []).map(unitDisplayName).filter(n => n && n !== "that one");
+  const unitList = names.length ? ` (${names.join(", ")})` : "";
+  const asked = String(args.inboundText ?? "").replace(/\s+/g, " ").trim().slice(0, 140);
+  const askedPart = asked ? ` Customer asked: "${asked}"` : "";
+  const lead = args.additional
+    ? "Send customer ADDITIONAL/real photos (the posted photos aren't enough) of the bike(s)"
+    : "Send customer photos of the bike(s) they asked to see";
+  return `${lead}${unitList}.${askedPart}`;
+}
+
 // MMS-reliable image formats only — carriers handle jpg/png well but choke on webp/avif (the dealer
 // feed mixes them). A unit whose only images are webp falls back to its listing link.
 const MMS_IMAGE_RE = /\.(jpe?g|png)(\?|$)/i;
 // Keep MMS small/deliverable — a few photos, spread one-per-unit, never the whole gallery.
 const MAX_MMS_PHOTOS = 3;
+
+/**
+ * A unit needs at least this many photos to count as a REAL dealer gallery (Joe 2026-07-27). The
+ * americanharley feed splits cleanly: a bike has either 1 photo (a stock/manufacturer shot) or 4+ (a
+ * real gallery of the actual unit), never 2-3 — so "< 2 photos = stock/none" reliably separates them.
+ * A single stock shot must NOT be texted as if it were the real bike; it becomes a salesperson task.
+ * (Phase 2 will upgrade this count heuristic to the vision viewer's real-vs-stock judgment.)
+ */
+export const MIN_REAL_PHOTOS = 2;
+
+/** MMS-able (jpg/png) image URLs for a unit. */
+export function realPhotoUrls(unit: RecommendedUnit | null | undefined): string[] {
+  return (Array.isArray(unit?.images) ? unit!.images : [])
+    .map(x => String(x ?? "").trim())
+    .filter(x => MMS_IMAGE_RE.test(x));
+}
+
+/** True when the unit has a REAL photo gallery (>= MIN_REAL_PHOTOS dealer photos) — not a stock shot. */
+export function unitHasRealPhotos(unit: RecommendedUnit | null | undefined): boolean {
+  return realPhotoUrls(unit).length >= MIN_REAL_PHOTOS;
+}
 
 /**
  * Deterministic reply to "show me pics/colors/links" of the units we already suggested. Prefers
@@ -290,15 +342,21 @@ const MAX_MMS_PHOTOS = 3;
 export function buildRecommendedUnitsMediaReply(args: {
   firstName?: string | null;
   units: RecommendedUnit[];
+  /** Closing line. Undefined => the default "run numbers" CTA; a string => that line instead
+   * (e.g. the salesperson follow-up on a task turn); null => no closing line. */
+  closingCta?: string | null;
 }): { reply: string; mediaUrls: string[] } | null {
   const units = args.units ?? [];
   const mediaUrls: string[] = [];
   const photographed = new Set<RecommendedUnit>();
   for (const u of units) {
     if (mediaUrls.length >= MAX_MMS_PHOTOS) break;
-    const img = (Array.isArray(u.images) ? u.images : []).find(x => MMS_IMAGE_RE.test(String(x ?? "")));
+    // Only attach a unit's photo when it has a REAL gallery (>= MIN_REAL_PHOTOS) — a single stock
+    // shot is NOT texted as the real bike (Joe 2026-07-27); such a unit is linked + tasked instead.
+    if (!unitHasRealPhotos(u)) continue;
+    const img = realPhotoUrls(u)[0];
     if (img) {
-      mediaUrls.push(String(img).trim());
+      mediaUrls.push(img);
       photographed.add(u);
     }
   }
@@ -310,6 +368,7 @@ export function buildRecommendedUnitsMediaReply(args: {
   const opener = name ? `Here you go, ${name}!` : "Here you go!";
   const parts = [opener];
   if (linkLines.length) parts.push(linkLines.join("\n"));
-  parts.push("Want me to run numbers on one of these?");
+  const closer = args.closingCta === undefined ? "Want me to run numbers on one of these?" : args.closingCta;
+  if (closer) parts.push(closer);
   return { reply: parts.join("\n"), mediaUrls };
 }
