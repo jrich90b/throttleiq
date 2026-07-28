@@ -5201,25 +5201,37 @@ export function parseRequestedDayTime(
 ): { year: number; month: number; day: number; hour24: number; minute: number; dayOfWeek: string } | null {
   const t = text.toLowerCase();
   const dayToken = parseDayToken(t);
+  // A stated WINDOW ("between 4 and 5", "2-3", "10 to 11"). `and` joins the window Terry
+  // Majchrzak used (+17166091289, 2026-07-27: "I could be there today between 4 and 5") — it
+  // was missing here, so that shape only ever resolved by accident through the bare-number
+  // fallback below. Group 2 captures the START's minutes so "4:30 to 5" keeps its :30.
   const timeRange =
     dayToken
       ? t.match(
-          /\b(?:at|for|around|by|close\s+to|near|between)\s*(\d{1,2})(?::\d{2})?\s*(?:\/|-|to)\s*(\d{1,2})(?::\d{2})?(?:\s*(am|pm))?\b/
+          /\b(?:at|for|around|by|close\s+to|near|between)\s*(\d{1,2})(?::(\d{2}))?\s*(?:\/|-|to|and)\s*(\d{1,2})(?::\d{2})?(?:\s*(am|pm))?\b/
         )
       : null;
   const explicitDate = timeRange ? null : (parseExplicitDate(t) ?? parseOrdinalDateInCurrentWindow(t, timeZone));
+  // A window always resolves to its START (Joe ruling 2026-07-28). This has to OUTRANK
+  // parseExactTime, not just backfill it: on "between 4 and 5pm" the meridiem binds to the
+  // range END, so parseExactTime matched "5pm" and returned 17:00 while the identical
+  // un-suffixed "between 4 and 5" returned 16:00. Same sentence, two answers — the customer
+  // means they arrive at 4 in both.
   let time = parseExactTime(t);
-  if (!time && timeRange) {
+  const rangeStart = (() => {
+    if (!timeRange) return null;
     const hourRaw = Number(timeRange[1]);
-    const meridiem = timeRange[3];
-    if (hourRaw >= 1 && hourRaw <= 12) {
-      let hour24 = hourRaw;
-      if (meridiem === "am") hour24 = hourRaw === 12 ? 0 : hourRaw;
-      else if (meridiem === "pm") hour24 = hourRaw === 12 ? 12 : hourRaw + 12;
-      else if (hourRaw !== 12) hour24 = hourRaw <= 7 ? hourRaw + 12 : hourRaw;
-      time = { hour24, minute: 0, timeText: timeRange[0] };
-    }
-  }
+    const minute = Number(timeRange[2] ?? "0");
+    const meridiem = timeRange[4];
+    if (!(hourRaw >= 1 && hourRaw <= 12)) return null;
+    if (!(minute >= 0 && minute <= 59)) return null;
+    let hour24 = hourRaw;
+    if (meridiem === "am") hour24 = hourRaw === 12 ? 0 : hourRaw;
+    else if (meridiem === "pm") hour24 = hourRaw === 12 ? 12 : hourRaw + 12;
+    else if (hourRaw !== 12) hour24 = hourRaw <= 7 ? hourRaw + 12 : hourRaw;
+    return { hour24, minute, timeText: timeRange[0] };
+  })();
+  if (rangeStart) time = rangeStart;
   if (!time && dayToken && !explicitDate) {
     // Support messages like "Tuesday at 3" or "Tue 3?" by inferring AM/PM.
     const compactMatch = t.match(/\b(?:at|for|around|by|close\s+to|near)\s*(\d{3,4})\s*(am|pm)?\b(?!\s*\/)/);

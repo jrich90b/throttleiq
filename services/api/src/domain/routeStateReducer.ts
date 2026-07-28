@@ -358,6 +358,12 @@ export type SchedulingTurnInput = {
   // to check). Recognition miss => today's behavior; over-fire => a warm confirm + task,
   // never a booking.
   dayOnlyVisitCommitment?: boolean;
+  // TIMED visit commitment (Joe ruling 2026-07-28, Terry Majchrzak +17166091289: "I could be
+  // there today between 4 and 5"). Same parser shape as dayOnlyVisitCommitment but the customer
+  // ALSO named a time (isParserTimedVisitCommitment). A named time belongs on the schedule, so
+  // this routes to the SAME book-or-offer resolver a proposed day+time uses instead of the
+  // soft-visit hold that let Terry's 4pm slip (staff-reported the same morning).
+  timedVisitCommitment?: boolean;
   // Context gates available where the decision is computed.
   pricingOrPaymentsIntent: boolean;
   scheduleDialogState: boolean;
@@ -458,6 +464,20 @@ export function decideSchedulingTurn(input: SchedulingTurnInput): SchedulingTurn
     if (input.appointmentTimingIntent === "decline_time") {
       return { kind: "decline_time", visitCommitment };
     }
+  }
+
+  // Block B2 — a visit commitment that NAMED A TIME (Joe ruling 2026-07-28, Terry Majchrzak
+  // +17166091289: "I could be there today between 4 and 5"). It reaches here rather than the
+  // provide_new_time arm because the parser reads a commitment as intent:none, so Block B
+  // never claimed it — and Block C below would file it as a soft "might stop by" and never put
+  // it on the calendar. A stated day AND time is bookable, so send it to the same
+  // book-or-offer resolver as a proposal. Sits BELOW Block A/B (an explicit ack or timing
+  // intent still outranks it) and ABOVE the day-only soft-visit arm.
+  if (input.timedVisitCommitment) {
+    // RANGE-CONSTRAINT VETO (Kody +17163975098, 7/16) applies here too: "I'll be there
+    // tomorrow after 3" names a bound, not a clock time — offer slots honoring it.
+    if (input.appointmentTimingOpenEndedBound) return { kind: "offer_slots_in_bound", visitCommitment };
+    return { kind: "propose_booking", visitCommitment };
   }
 
   // Block C — recognized future-day visit commitment. The handler additionally gates

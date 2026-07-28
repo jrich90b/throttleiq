@@ -89,6 +89,40 @@ const eq = (id: string, actual: unknown, expected: unknown) => {
   eq("suppress_reason_is_stay_quiet", (later as any).reason, "no_value_trigger_stay_quiet");
   eq("boundary_step_3_is_later", (await evaluateProactiveCadenceValueGate({ ...base, stepIndex: 3 })).action, "suppress");
 
+  // --- held/sold unit of interest never gets its numbers pitched (Joe ruling 2026-07-28) ----
+  // Jason Roorda +17165104578: told on 6/20 that his 2021 Street Glide Special was on hold, then
+  // pitched that same bike 7/20, 7/21 and in a 7/26 draft ("qualifies for the used financing
+  // program… want me to run a payment estimate?"). Open-critic: promised_unit_not_in_stock. Both
+  // value kinds are unit-specific, so neither is sayable about a bike we can't sell.
+  const heldUnit = await evaluateProactiveCadenceValueGate({ ...base, leadUnitUnavailable: true });
+  eq("held_unit_suppresses", heldUnit.action, "suppress");
+  eq("held_unit_reason", (heldUnit as any).reason, "lead_unit_unavailable");
+  // …including when a price drop WOULD otherwise have fired — a cheaper held bike is still held.
+  eq(
+    "held_unit_suppresses_price_drop",
+    (await evaluateProactiveCadenceValueGate({ ...base, leadUnitUnavailable: true, priceDropMessage: "Price dropped $1,500" })).action,
+    "suppress"
+  );
+  // A price drop on an AVAILABLE unit is untouched — this gate only silences gone bikes.
+  eq(
+    "available_unit_price_drop_still_fires",
+    (await evaluateProactiveCadenceValueGate({ ...base, priceDropMessage: "Price dropped $1,500" })).action,
+    "replace"
+  );
+  // Ordering: the availability/held-inventory OVERRIDE is the right thing to say about a gone
+  // unit, so when it owns the turn it still wins over this suppression.
+  eq(
+    "value_override_outranks_held_unit",
+    (await evaluateProactiveCadenceValueGate({ ...base, leadUnitUnavailable: true, hasValueOverride: true })).action,
+    "send"
+  );
+  // Early steps are unchanged — this is a later-stage value gate, not a global mute.
+  eq(
+    "held_unit_early_step_unchanged",
+    (await evaluateProactiveCadenceValueGate({ ...base, leadUnitUnavailable: true, stepIndex: 2 })).action,
+    "send"
+  );
+
   // --- engaged-cadence scoping (production pin +17165146963, 2026-07-17): the customer replied
   // 7/15 (stepIndex re-anchored to 0), and two days later the pipeline drafted "If the timing
   // shifted, all good. Shoot me a day that works..." — engaged step ~1, contentless, judge-
@@ -188,6 +222,15 @@ const eq = (id: string, actual: unknown, expected: unknown) => {
   );
   const gateCalls = idx.match(/evaluateProactiveCadenceValueGate\(\{/g) ?? [];
   eq("both_paths_call_shared_applier", gateCalls.length >= 2, true);
+  // Both paths must read the held/sold state through the ONE shared helper (route-parity law),
+  // or the live tick and the regen draft disagree about whether a gone bike is pitchable.
+  const unavailableFeeds = idx.match(/leadUnitUnavailable: await leadUnitUnavailableForValueGate\(conv\)/g) ?? [];
+  eq("both_paths_feed_held_unit_signal", unavailableFeeds.length >= 2, true);
+  eq(
+    "held_unit_helper_is_fail_safe",
+    /async function leadUnitUnavailableForValueGate\(conv: any\): Promise<boolean> \{\s*\n\s*try \{/.test(idx),
+    true
+  );
 
   // live tick: suppress advances the cadence and skips the send
   const tickIdx = idx.indexOf('console.log("[followup][cadence-value-gate] later touch has no value trigger');

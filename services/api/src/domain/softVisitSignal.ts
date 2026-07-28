@@ -19,11 +19,36 @@ import type { AppointmentTimingParse } from "./llmDraft.js";
 const VISIT_COMMITMENT_VERBS =
   /\b(?:commit|visit|see (?:you|ya|y'all)|be back|be there|be in(?!\s+touch)|get there|make it (?:in|out)|stop(?:ping)? (?:by|in)|com(?:e|ing) (?:in|by|out)|rid(?:e|ing) (?:up|in|over)|driv(?:e|ing) (?:up|in|over)|head(?:ing|ed)? (?:up|in|over)|swing(?:ing)? (?:by|in|up)|roll(?:ing)? (?:in|up|by)|pull(?:ing)? (?:in|up)|run(?:ning)? (?:up|in|by))\b/;
 
+/**
+ * The gates shared by the day-only and timed visit-commitment reads: the parser saw a
+ * commitment (intent:none, no explicit request) anchored to a named DAY, and its own
+ * normalizedText carries a visit verb. What separates the two is only whether a concrete
+ * TIME came with it.
+ */
+function isDayAnchoredVisitCommitment(parse: AppointmentTimingParse | null | undefined): boolean {
+  if (!parse) return false;
+  if (parse.intent !== "none") return false; // actionable scheduling intents are handled by their own arms
+  if (parse.explicitRequest) return false;
+  if (!String(parse.requested?.day ?? "").trim()) return false; // must reference a committed day
+  const nt = String(parse.normalizedText ?? "").toLowerCase();
+  return VISIT_COMMITMENT_VERBS.test(nt);
+}
+
+function hasConcreteCommittedTime(parse: AppointmentTimingParse | null | undefined): boolean {
+  return !!String(parse?.requested?.timeText ?? "").trim();
+}
+
 export function isParserSoftVisitCommitment(parse: AppointmentTimingParse | null | undefined): boolean {
   if (!parse) return false;
   if (parse.intent !== "none") return false; // actionable scheduling intents are handled by their own arms
   if (parse.explicitRequest) return false;
   if (!String(parse.requested?.day ?? "").trim()) return false; // must reference a committed day
+  // A commitment that NAMED A TIME is not "soft" — see isParserTimedVisitCommitment. This
+  // function is the DAY-ONLY read (the docblock above says so, and the sibling arrival-window
+  // signal in index.ts already required an empty timeText); Terry Majchrzak +17166091289
+  // ("I could be there today between 4 and 5", 2026-07-27) proved the omission: he was filed
+  // as a loose "might stop by" and never reached the schedule, which staff reported.
+  if (hasConcreteCommittedTime(parse)) return false;
   const nt = String(parse.normalizedText ?? "").toLowerCase();
   // Visit-commitment verbs in the parser's own normalizedText. The gate already requires
   // intent:none + a committed day + !explicitRequest, so an en-route arrival_update ("on my
@@ -35,6 +60,33 @@ export function isParserSoftVisitCommitment(parse: AppointmentTimingParse | null
   // "I'll check that time and follow up" deflection — a day-only commitment is a SOFT
   // APPOINTMENT, never a time-check).
   return VISIT_COMMITMENT_VERBS.test(nt);
+}
+
+/**
+ * TIMED visit commitment (Joe ruling 2026-07-28 — Terry Majchrzak +17166091289,
+ * 2026-07-27 13:33Z: "I could be there today between 4 and 5").
+ *
+ * Same shape as the soft-visit commitment above — the parser reads it as intent:none with a
+ * committed day and a visit verb in its normalizedText — EXCEPT the customer also named a
+ * concrete time. That is a bookable commitment, not a loose "might stop by": Terry's turn drew
+ * a warm "Ok See you then", a cadence hold and an outcome todo, but nothing ever reached the
+ * calendar, and staff filed it as a miss the same morning.
+ *
+ * The caller routes this to the SAME book-or-offer resolver a proposed day+time uses
+ * (`propose_booking`), so there is no new send behavior and no new arm — only the recognition
+ * that a named time belongs on the schedule. The open-ended-bound veto still applies upstream
+ * ("today after 3" offers slots, never books AT the bound — Kody +17163975098).
+ *
+ * Structured extraction over the PARSER's own output (AGENTS.md "comprehend, never regex").
+ *
+ * FAIL DIRECTION: a miss is exactly today's behavior (the soft-visit hold). An over-fire books
+ * a customer who named a day and a time to come in — recoverable, staff-visible, and in suggest
+ * mode a draft either way. Pinned by `soft_visit_commitment:eval` +
+ * `scheduling_turn_decision:eval`.
+ */
+export function isParserTimedVisitCommitment(parse: AppointmentTimingParse | null | undefined): boolean {
+  if (!isDayAnchoredVisitCommitment(parse)) return false;
+  return hasConcreteCommittedTime(parse);
 }
 
 /**

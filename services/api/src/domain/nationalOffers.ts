@@ -384,6 +384,20 @@ export async function evaluateProactiveCadenceValueGate(args: {
   hasTestRideOffer?: boolean;
   /** A fired price drop on their unit of interest (priceDropWatch.resolveInterestUnitPriceDrop). */
   priceDropMessage?: string | null;
+  /**
+   * The lead's exact unit of interest is on HOLD or SOLD (leadUnitUnavailableForValueGate).
+   *
+   * Joe ruling 2026-07-28 — Jason Roorda +17165104578: the agent disclosed on 6/20 that his 2021
+   * Street Glide Special was on hold, and then pitched that same bike's numbers on 7/20, 7/21 and
+   * in a 7/26 draft ("that 2021 Street Glide Special qualifies for the used financing program…
+   * want me to run a payment estimate?"). Open-critic caught it as promised_unit_not_in_stock.
+   *
+   * The disclosure path is not the bug — it correctly says "it's gone" ONCE and then goes quiet so
+   * the customer isn't nagged. The bug is that going quiet about the hold let the VALUE gate go on
+   * pitching the unit as though it were available. A national offer and a price drop are both
+   * unit-specific by construction, so neither is sayable about a bike we can't sell.
+   */
+  leadUnitUnavailable?: boolean;
 }): Promise<CadenceValueGateResult> {
   if (!isCadenceValueGateEnabled()) return { action: "send", reason: "gate_disabled" };
   if (args.isPostSale) return { action: "send", reason: "post_sale_exempt" };
@@ -392,6 +406,11 @@ export async function evaluateProactiveCadenceValueGate(args: {
   const isLaterStage = Number(args.stepIndex ?? 0) >= minStep;
   if (!isLaterStage) return { action: "send", reason: "early_stage_touch" };
   if (args.hasValueOverride) return { action: "send", reason: "existing_value_override" };
+  // A held/sold unit of interest kills BOTH unit-specific value kinds (offer and price drop) —
+  // suppress before the matcher runs, so we also spend no LLM call pricing a bike we can't sell.
+  // Ordered AFTER hasValueOverride on purpose: the availability/held-inventory overrides ARE the
+  // correct thing to say about a gone unit, and they own that turn when they fire.
+  if (args.leadUnitUnavailable) return { action: "suppress", reason: "lead_unit_unavailable" };
   const offer = await findNationalOfferForVehicle(args.vehicleLabel, {
     excludeTitles: args.alreadySentOfferTitles ?? [],
     firstName: args.firstName,

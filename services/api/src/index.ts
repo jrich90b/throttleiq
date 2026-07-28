@@ -848,7 +848,8 @@ import {
 import {
   hasConditionalVisitCommitmentHintText,
   isParserConditionalVisitCommitment,
-  isParserSoftVisitCommitment
+  isParserSoftVisitCommitment,
+  isParserTimedVisitCommitment
 } from "./domain/softVisitSignal.js";
 import { collectRecentStaffCorrections } from "./domain/feedbackSteering.js";
 
@@ -13515,6 +13516,39 @@ async function maybeApplyLeadUnitAvailabilityDisclosure(
   }
 }
 
+/**
+ * Is the lead's EXACT unit of interest on hold or sold? (Joe ruling 2026-07-28 — Jason Roorda
+ * +17165104578.)
+ *
+ * The cadence VALUE GATE pitches unit-specific value — a national offer on their bike, a price
+ * drop on their unit — and neither is sayable about a bike we can't sell. Jason was told on 6/20
+ * that his 2021 Street Glide Special was on hold, then got its payment numbers pitched three more
+ * times, because buildCadenceLeadUnitAvailabilityOverride below deliberately goes quiet after
+ * disclosing the hold ONCE (so the customer isn't nagged) and nothing downstream re-read that
+ * state.
+ *
+ * Same stock#/VIN → holds/solds lookup that builder uses, factored out so the LIVE tick and the
+ * REGENERATE cadence builder read one definition (route-parity law). Deterministic inventory-state
+ * read, not comprehension. Fail direction: any missing identifier or lookup failure returns false =
+ * today's behavior, so this can only ever make the agent quieter about a gone bike, never louder.
+ */
+async function leadUnitUnavailableForValueGate(conv: any): Promise<boolean> {
+  try {
+    const stockId =
+      String(conv?.lead?.vehicle?.stockId ?? conv?.lead?.vehicle?.stock ?? conv?.lead?.stockId ?? "")
+        .trim() || null;
+    const vin = String(conv?.lead?.vehicle?.vin ?? conv?.lead?.vin ?? "").trim() || null;
+    if (!stockId && !vin) return false;
+    const holds = await listInventoryHolds();
+    const solds = await listInventorySolds();
+    const soldKey = normalizeInventorySoldKey(stockId, vin);
+    const holdKey = normalizeInventoryHoldKey(stockId, vin);
+    return !!(soldKey && solds?.[soldKey]) || !!(holdKey && holds?.[holdKey]);
+  } catch {
+    return false;
+  }
+}
+
 async function buildCadenceLeadUnitAvailabilityOverride(args: {
   conv: any;
   name: string;
@@ -15269,7 +15303,10 @@ async function buildCadenceRegeneratedDraft(
       firstName: conv.lead?.firstName,
       alreadySentOfferTitles: (conv.nationalOfferTouches ?? []).map((t: { title: string }) => t.title),
       hasTestRideOffer: regenTestRideValueContext,
-      priceDropMessage: regenInterestPriceDrop?.message ?? null
+      priceDropMessage: regenInterestPriceDrop?.message ?? null,
+      // Never pitch a held/sold unit's numbers (Joe ruling 2026-07-28, Jason Roorda) — same
+      // shared read as the live tick.
+      leadUnitUnavailable: await leadUnitUnavailableForValueGate(conv)
     });
     if (valueGate.action === "replace") {
       return { body: valueGate.message };
@@ -33688,7 +33725,10 @@ async function processDueFollowUpsUnlocked() {
         firstName: conv.lead?.firstName,
         alreadySentOfferTitles: (conv.nationalOfferTouches ?? []).map(t => t.title),
         hasTestRideOffer: testRideValueContext,
-        priceDropMessage: interestPriceDrop?.message ?? null
+        priceDropMessage: interestPriceDrop?.message ?? null,
+        // Never pitch a held/sold unit's numbers (Joe ruling 2026-07-28, Jason Roorda
+        // +17165104578) — same shared read as the regenerate cadence builder.
+        leadUnitUnavailable: await leadUnitUnavailableForValueGate(conv)
       });
       if (valueGate.action === "suppress") {
         console.log("[followup][cadence-value-gate] later touch has no value trigger — staying quiet", {
@@ -55759,6 +55799,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     // Peter Meredith +17168303999); regen's customer-ack block resolves Block A itself, so only
     // the appointment-timing soft-visit read feeds this here.
     dayOnlyVisitCommitment: isParserSoftVisitCommitment(regenAppointmentTimingParse),
+    // TIMED visit commitment (Joe ruling 2026-07-28, Terry Majchrzak +17166091289) — same
+    // parser signal as the live path; regen mirrors it as a DRAFT preview (book:false).
+    timedVisitCommitment: isParserTimedVisitCommitment(regenAppointmentTimingParse),
     pricingOrPaymentsIntent: false,
     scheduleDialogState: isScheduleDialogState(getDialogState(conv)),
     scheduleOfferContext: hasScheduleOfferContext(regenLastOutboundForActionText, getDialogState(conv))
@@ -64430,6 +64473,10 @@ if (authToken && signature) {
     appointmentTimingOpenEndedBound: isOpenEndedTimeBoundParse(appointmentTimingParse?.requested),
     parserScheduleStatusUpdate: inboundParserScheduleStatusUpdate,
     dayOnlyVisitCommitment: dayOnlySoftVisitCommitment,
+    // TIMED visit commitment (Joe ruling 2026-07-28, Terry Majchrzak +17166091289: "I could be
+    // there today between 4 and 5") — a commitment that named a time goes to the book-or-offer
+    // resolver, not the soft-visit hold that let his 4pm slip.
+    timedVisitCommitment: isParserTimedVisitCommitment(appointmentTimingParse),
     pricingOrPaymentsIntent,
     scheduleDialogState: isScheduleDialogState(getDialogState(conv)),
     scheduleOfferContext: hasScheduleOfferContext(lastOutboundText, getDialogState(conv))
