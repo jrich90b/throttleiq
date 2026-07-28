@@ -103,6 +103,7 @@
     "watch_derive_explosion_guard:eval": "npx tsx scripts/watch_derive_explosion_guard_eval.ts",
     "loop_pr_ledger_filter": "npx tsx scripts/loop_pr_ledger_filter.ts",
     "loop_pr_ledger_export": "npx tsx scripts/loop_pr_ledger_export.ts",
+    "large_corpus_pilot": "npx tsx scripts/large_corpus_pilot.ts",
     "campaign_asset_format:eval": "npx tsx scripts/campaign_asset_format_eval.ts",
     "campaign_brief_extraction:eval": "npx tsx scripts/campaign_brief_extraction_eval.ts",
     "campaign_copy_budget:eval": "npx tsx scripts/campaign_copy_budget_eval.ts",

@@ -79,12 +79,29 @@ tokens/cost/runtime**, then extrapolate before committing to 5,000.
    threads.
 4. **Rollout gate:** the full run becomes the per-dealer readiness go/no-go.
 
-## Open decisions for Joe
-1. **Message-level or conversation-level first?** (Message-level is real + feasible now; conversation-
-   level needs synthetic.) — *Recommend: message-level real run first, add synthetic threads after.*
-2. **Budget per run** you're comfortable with (drives corpus size + cadence). — *Recommend: fund the
-   200-turn pilot first (~$3), decide the rest from measured numbers.*
-3. **Realness stance:** OK to lean on synthetic conversations to hit 5,000, or keep it mostly real even
-   if that means starting smaller and growing? — *Recommend: mostly real now, synthetic as a labeled,
-   quality-gated supplement.*
-4. **Cadence:** nightly slice + weekly full, or on-demand only?
+## Decisions (Joe ruled 2026-07-28) — plan LOCKED
+1. **MESSAGES first.** A 5,000-MESSAGE real run on the captured corpus (16,758 real turns) — no synthetic.
+   Conversation-level (synthetic threads) is a later add.
+2. **Pilot first, then a MONTHLY full run.** Fund the ~200-message pilot to MEASURE actual cost/runtime
+   before scaling; the headline 5,000-message scorecard runs MONTHLY.
+3. **MOSTLY REAL.** Lean on the captured real corpus; synthetic only later as a labeled, quality-gated
+   supplement — never the backbone.
+4. **NIGHTLY SLICE + monthly full.** A cheap ~1,000-message nightly slice for the daily trend, plus the
+   monthly full 5,000-message run. Never in per-commit ci:eval.
+
+### Build order (from the decisions)
+- **STEP 1 (now): the pilot** — `scripts/large_corpus_pilot.ts`: sample N real inbound messages, run the
+  live comprehension + trigger-signal checks through the current code, and report a scorecard +
+  **measured runtime, LLM-call count, and estimated cost**. This proves the harness and gives the real
+  cost number to size the nightly slice / monthly full.
+- **STEP 2:** the nightly-slice run (~1,000) + the monthly full 5,000-message scorecard, reusing the
+  pilot harness + the corpus-replay judge + the trigger-net checks, emitting a tracked scorecard + baseline diff.
+- **STEP 3:** synthetic conversation generator (labeled, quality-gated) for conversation-level coverage.
+
+### Pilot results — MEASURED on 200 real messages (2026-07-28, `npm run large_corpus_pilot`)
+- 200/200 parsed OK; **84.5% confident comprehension** (primaryIntent set, conf ≥ 0.7) — a real health number.
+- Intent mix: smalltalk 79, scheduling 32, availability 30, other 23, pricing 13, service 8, finance 4, parts 4, test_ride 3, trade 3, opt-out 1.
+- **REAL cost $0.75 for 200 msgs = $0.0038/msg**; 70s runtime (0.35s/msg), concurrency 8.
+- Extrapolation (comprehension pass only): **nightly 1,000 ≈ $3.76 / ~6 min; monthly 5,000 ≈ $18.79 / ~29 min.**
+  The FULL run (comprehension + trigger-net checks + a judge) is ~2–3× → nightly ~$8–11, monthly ~$40–55.
+  → Comfortably within a "monthly pilot" budget. Green-light STEP 2 at this cost.
