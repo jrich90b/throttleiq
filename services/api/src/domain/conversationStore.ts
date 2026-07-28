@@ -958,6 +958,15 @@ export type Conversation = {
     images?: string[];
   }[];
   recommendedUnitsAt?: string;
+  // Phase 3 (Joe 2026-07-28): a customer asked for photos of bike(s) that had NO real gallery (a
+  // salesperson "send customer photos" task was made). We watch those units; when real dealer photos
+  // land in the feed, auto-DELIVER them (a suggest-mode draft) + close the task. Each unit stores the
+  // image-set fingerprint AT REQUEST TIME so we only fire on a genuine photo UPDATE. Behind
+  // PHOTO_DELIVERY_ON_ARRIVAL_ENABLED (default off).
+  pendingPhotoDelivery?: {
+    units: { stockId?: string | null; model: string; year?: string | null; requestedImageHash: string }[];
+    requestedAt: string;
+  };
   // Offer-once-per-value marker: the down payment we last sent a disclaimed payment ESTIMATE for, so
   // we don't re-fire on later "ok"/"thanks" turns but DO re-estimate if they change it (2026-06-24).
   paymentEstimateSentForDown?: number;

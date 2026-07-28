@@ -581,7 +581,8 @@ import {
   buildRecommendedUnitsMediaReply,
   buildSalespersonPhotoAckReply,
   buildSalespersonPhotoTaskSummary,
-  unitHasRealPhotos
+  unitHasRealPhotos,
+  photoDeliveryOnArrivalEnabled
 } from "./domain/inventoryRecommender.js";
 import {
   inventoryEquipmentVisionEnabled,
@@ -599,6 +600,7 @@ import {
   photoRealnessVisionEnabled,
   profilePhotosLookStock,
   profilePhotosLookReal,
+  imageSetHash,
   type EquipmentCandidate,
   type EquipmentProfile,
   type EquipmentCacheFile,
@@ -2801,17 +2803,36 @@ async function resolveRecommendedUnitsMediaReply(
     );
     if (alreadyHasPhotoTask) return;
     const taskUnits = parse.wantsAdditionalPhotos ? units : units.filter(u => !unitHasSendablePhotos(u));
+    const effectiveTaskUnits = taskUnits.length ? taskUnits : units;
     addTodo(
       conv,
       "other",
       buildSalespersonPhotoTaskSummary({
-        units: taskUnits.length ? taskUnits : units,
+        units: effectiveTaskUnits,
         inboundText: text,
         additional: !!parse.wantsAdditionalPhotos
       }),
       undefined,
       conv.leadOwner
     );
+    // Phase 3 (DARK behind PHOTO_DELIVERY_ON_ARRIVAL_ENABLED): watch these units' photos. Store the
+    // image-set fingerprint AT REQUEST TIME so the background pass fires ONLY when real photos land
+    // (a genuine update), not on a bike that already had a stock shot. NOT for a "wants additional"
+    // ask (they've seen the site gallery — a human owes them new shots, no auto-deliver).
+    if (photoDeliveryOnArrivalEnabled() && !parse.wantsAdditionalPhotos) {
+      const watchUnits = effectiveTaskUnits
+        .filter(u => u.stockId || u.model)
+        .map(u => ({
+          stockId: u.stockId ?? null,
+          model: String(u.model ?? "").trim(),
+          year: u.year ?? null,
+          requestedImageHash: imageSetHash(u.images)
+        }))
+        .filter(u => u.model);
+      if (watchUnits.length) {
+        conv.pendingPhotoDelivery = { units: watchUnits, requestedAt: new Date().toISOString() };
+      }
+    }
   };
 
   if (decision.kind === "send_media") {
@@ -7427,6 +7448,76 @@ function runBackgroundTask(label: string, task: () => Promise<unknown> | unknown
 // function. The worker schedules durable pg-boss jobs and POSTs these names
 // to /internal/worker/tick; execution stays in this process so the
 // single-writer invariant on the conversation store holds.
+// Phase 3 (DARK behind PHOTO_DELIVERY_ON_ARRIVAL_ENABLED, Joe 2026-07-28): a customer asked for photos
+// of a bike that had no real gallery (a "send customer photos" task was made and the units recorded on
+// conv.pendingPhotoDelivery with their image fingerprint AT REQUEST TIME). When REAL dealer photos land
+// in the feed (the image set changes AND now has a real gallery), auto-DELIVER them as a suggest-mode
+// DRAFT and CLOSE the task. Draft-only (staff approve); never for a "wants additional" ask. Fail-safe:
+// only delivers when there are photos to attach; anything closed/opted-out/human-owned is skipped.
+let photoDeliveryRunning = false;
+async function processPendingPhotoDeliveries() {
+  if (!photoDeliveryOnArrivalEnabled()) return;
+  if (photoDeliveryRunning) return;
+  photoDeliveryRunning = true;
+  try {
+    const convs = getAllConversations().filter(c => c?.pendingPhotoDelivery?.units?.length);
+    if (!convs.length) return;
+    let dirty = false;
+    for (const conv of convs) {
+      const pending = conv.pendingPhotoDelivery;
+      if (!pending?.units?.length) continue;
+      const phone = conv.leadKey ?? conv.lead?.phone ?? null;
+      if (conv.status === "closed" || (phone && isSuppressed(phone))) {
+        conv.pendingPhotoDelivery = undefined;
+        dirty = true;
+        continue;
+      }
+      if (conv.mode === "human") continue; // human owns the thread — leave the task to staff
+      const deliverable: import("./domain/inventoryRecommender.js").RecommendedUnit[] = [];
+      for (const wu of pending.units) {
+        let matches = await findInventoryMatches({ year: wu.year ?? null, model: wu.model });
+        if (!matches.length && wu.year) matches = await findInventoryMatches({ year: null, model: wu.model });
+        const scoped = wu.stockId ? matches.filter(m => String(m.stockId ?? "") === wu.stockId) : matches;
+        const mapped = toRecommendedUnits((scoped.length ? scoped : matches).slice(0, 1))[0];
+        if (!mapped) continue;
+        // Fire ONLY on a genuine photo UPDATE since the request (fingerprint changed) that is now a
+        // real gallery — never on a bike that already had a stock shot at request time.
+        if (imageSetHash(mapped.images) !== wu.requestedImageHash && unitHasRealPhotos(mapped)) {
+          deliverable.push(mapped);
+        }
+      }
+      if (!deliverable.length) continue;
+      const built = buildRecommendedUnitsMediaReply({
+        firstName: normalizeDisplayCase(conv.lead?.firstName),
+        units: deliverable,
+        closingCta: null
+      });
+      if (!built || !built.mediaUrls.length) continue; // only deliver when we actually have photos to attach
+      const to = phone ?? "";
+      appendOutbound(conv, "salesperson", to, built.reply, "draft_ai", undefined, built.mediaUrls);
+      // Close the open "send customer photos" task(s) — the objective is now fulfilled.
+      for (const t of listOpenTodos()) {
+        if (t.convId === conv.id && t.reason === "other" && /photos of the bike/i.test(String(t.summary ?? ""))) {
+          markTodoDone(conv.id, t.id);
+        }
+      }
+      conv.pendingPhotoDelivery = undefined;
+      recordRouteOutcome("live", "photo_delivery_on_arrival", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        units: deliverable.length
+      });
+      saveConversation(conv);
+      dirty = true;
+    }
+    if (dirty) await flushConversationStore();
+  } catch (e: any) {
+    console.warn("[photo-delivery] pass failed:", e?.message ?? e);
+  } finally {
+    photoDeliveryRunning = false;
+  }
+}
+
 const WORKER_TICK_DISPATCH: Record<WorkerTickTask, () => Promise<unknown> | unknown> = {
   "follow-ups": () => processDueFollowUps(),
   "appt-confirm": () => processAppointmentConfirmations(),
@@ -7435,7 +7526,8 @@ const WORKER_TICK_DISPATCH: Record<WorkerTickTask, () => Promise<unknown> | unkn
   "inventory-watch": () => processInventoryWatchlist(),
   "inventory-holds": () => processInventoryHolds(),
   "task-escalations": () => processTaskEscalations(),
-  "gate-blocker-digest": () => processGateBlockerDigest()
+  "gate-blocker-digest": () => processGateBlockerDigest(),
+  "photo-delivery": () => processPendingPhotoDeliveries()
 };
 
 function canUseWorkerInternal(req: any) {
@@ -7484,6 +7576,7 @@ if (isWorkerDrivenTicks()) {
     runBackgroundTask("appt-questions", processAppointmentQuestions);
     runBackgroundTask("task-escalations", processTaskEscalations);
     runBackgroundTask("gate-blocker-digest", processGateBlockerDigest);
+    runBackgroundTask("photo-delivery", processPendingPhotoDeliveries);
   }, 60_000);
 
   setTimeout(() => {
