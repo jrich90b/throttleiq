@@ -596,6 +596,10 @@ import {
   watchEquipmentFireGate,
   choloStyleVisionEnabled,
   watchCholoFireGate,
+  photoRealnessVisionEnabled,
+  getCachedUnitEquipmentProfile,
+  profilePhotosLookStock,
+  profilePhotosLookReal,
   type EquipmentCandidate,
   type EquipmentProfile,
   type EquipmentCacheFile,
@@ -2725,8 +2729,28 @@ async function resolveRecommendedUnitsMediaReply(
   if (!units.length) units = Array.isArray(conv.recommendedUnits) ? conv.recommendedUnits : [];
   if (!units.length) return null; // truly no unit context => existing handling
 
-  const hasUnitsWithRealPhotos = units.some(u => unitHasRealPhotos(u));
-  const hasUnitsNeedingPhotos = units.some(u => !unitHasRealPhotos(u));
+  // Phase 2 (DARK behind PHOTO_REALNESS_VISION_ENABLED): when the vision viewer has a CONFIDENT
+  // real-vs-stock verdict for a unit (read cache-only — never a live vision call), it OVERRIDES the
+  // photo-count heuristic — a stock studio image (even a full set) becomes a task, a confirmed real
+  // photo is sendable. Uncached / low-confidence / flag off => the count heuristic stands.
+  let visionCache: EquipmentCacheFile | null = null;
+  if (photoRealnessVisionEnabled()) {
+    try {
+      visionCache = await loadEquipmentCache();
+    } catch {
+      visionCache = null;
+    }
+  }
+  const unitHasSendablePhotos = (u: import("./domain/inventoryRecommender.js").RecommendedUnit): boolean => {
+    if (visionCache) {
+      const profile = getCachedUnitEquipmentProfile({ stockId: u.stockId ?? undefined, vin: undefined, images: u.images }, visionCache);
+      if (profilePhotosLookStock(profile)) return false; // stock studio image => salesperson task
+      if (profilePhotosLookReal(profile)) return true; // confirmed real photos => sendable
+    }
+    return unitHasRealPhotos(u); // fallback: deterministic photo-count heuristic
+  };
+  const hasUnitsWithRealPhotos = units.some(unitHasSendablePhotos);
+  const hasUnitsNeedingPhotos = units.some(u => !unitHasSendablePhotos(u));
   const decision = decideVehicleMediaRequestTurn({
     parserAccepted: !!parse,
     wantsMedia: !!parse.wantsMedia,
@@ -2750,7 +2774,7 @@ async function resolveRecommendedUnitsMediaReply(
       t => t.convId === conv.id && t.reason === "other" && /photos of the bike/i.test(String(t.summary ?? ""))
     );
     if (alreadyHasPhotoTask) return;
-    const taskUnits = parse.wantsAdditionalPhotos ? units : units.filter(u => !unitHasRealPhotos(u));
+    const taskUnits = parse.wantsAdditionalPhotos ? units : units.filter(u => !unitHasSendablePhotos(u));
     addTodo(
       conv,
       "other",
@@ -2765,7 +2789,7 @@ async function resolveRecommendedUnitsMediaReply(
   };
 
   if (decision.kind === "send_media") {
-    const built = buildRecommendedUnitsMediaReply({ firstName, units });
+    const built = buildRecommendedUnitsMediaReply({ firstName, units, attachable: unitHasSendablePhotos });
     if (!built) return null;
     recordRouteOutcome(scope, "vehicle_media_request", {
       convId: conv.id,
@@ -2781,7 +2805,7 @@ async function resolveRecommendedUnitsMediaReply(
     const followLine = parse.wantsAdditionalPhotos
       ? "I'll have a salesperson send you additional photos too."
       : "I'll have a salesperson send you photos of the others too.";
-    const built = buildRecommendedUnitsMediaReply({ firstName, units, closingCta: followLine });
+    const built = buildRecommendedUnitsMediaReply({ firstName, units, closingCta: followLine, attachable: unitHasSendablePhotos });
     const reply = built ? built.reply : buildSalespersonPhotoAckReply({ firstName });
     recordRouteOutcome(scope, "vehicle_media_request_send_and_task", {
       convId: conv.id,
@@ -2796,7 +2820,7 @@ async function resolveRecommendedUnitsMediaReply(
   // SEE the bike) and hand it to a salesperson for real photos.
   createPhotoTask();
   const ack = buildSalespersonPhotoAckReply({ firstName });
-  const built = buildRecommendedUnitsMediaReply({ firstName, units, closingCta: ack });
+  const built = buildRecommendedUnitsMediaReply({ firstName, units, closingCta: ack, attachable: unitHasSendablePhotos });
   recordRouteOutcome(scope, "vehicle_media_request_salesperson_photo_task", {
     convId: conv.id,
     leadKey: conv.leadKey,

@@ -345,15 +345,20 @@ export function buildRecommendedUnitsMediaReply(args: {
   /** Closing line. Undefined => the default "run numbers" CTA; a string => that line instead
    * (e.g. the salesperson follow-up on a task turn); null => no closing line. */
   closingCta?: string | null;
+  /** Whether a unit's photo may be ATTACHED (vs only linked). Defaults to the photo-COUNT heuristic
+   * (>= MIN_REAL_PHOTOS). Phase 2 passes a vision-aware predicate so a stock studio image (even a full
+   * set) is linked, never texted as the real bike. */
+  attachable?: (u: RecommendedUnit) => boolean;
 }): { reply: string; mediaUrls: string[] } | null {
   const units = args.units ?? [];
+  const canAttach = args.attachable ?? unitHasRealPhotos;
   const mediaUrls: string[] = [];
   const photographed = new Set<RecommendedUnit>();
   for (const u of units) {
     if (mediaUrls.length >= MAX_MMS_PHOTOS) break;
-    // Only attach a unit's photo when it has a REAL gallery (>= MIN_REAL_PHOTOS) — a single stock
-    // shot is NOT texted as the real bike (Joe 2026-07-27); such a unit is linked + tasked instead.
-    if (!unitHasRealPhotos(u)) continue;
+    // Only attach a unit's photo when it's a REAL gallery — a single stock shot is NOT texted as the
+    // real bike (Joe 2026-07-27); such a unit is linked + tasked instead.
+    if (!canAttach(u)) continue;
     const img = realPhotoUrls(u)[0];
     if (img) {
       mediaUrls.push(img);
