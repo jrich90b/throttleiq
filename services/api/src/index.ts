@@ -559,6 +559,8 @@ import { stripLeadingVinCodes, stripLeadingMakeName, normalizeWatchModelsVin, mo
 import { trikeClassConflict, isFamilyOnlyModelLabel, referencesFamilyOnlyInText } from "./domain/modelFamily.js";
 import { decideWatchSiblingScopeAsk } from "./domain/watchSiblingScope.js";
 import { applyWatchFieldHygiene, formatWatchYearLabel } from "./domain/watchFieldHygiene.js";
+import { decideWatchPins } from "./domain/watchYearPin.js";
+import { resolveModelDiscontinuation, type DiscontinuationStatus } from "./domain/modelDiscontinuation.js";
 import {
   conversationWatchAlertBlocked,
   recordConversationWatchAlert,
@@ -848,7 +850,8 @@ import {
 import {
   hasConditionalVisitCommitmentHintText,
   isParserConditionalVisitCommitment,
-  isParserSoftVisitCommitment
+  isParserSoftVisitCommitment,
+  isParserTimedVisitCommitment
 } from "./domain/softVisitSignal.js";
 import { collectRecentStaffCorrections } from "./domain/feedbackSteering.js";
 
@@ -13515,6 +13518,39 @@ async function maybeApplyLeadUnitAvailabilityDisclosure(
   }
 }
 
+/**
+ * Is the lead's EXACT unit of interest on hold or sold? (Joe ruling 2026-07-28 — Jason Roorda
+ * +17165104578.)
+ *
+ * The cadence VALUE GATE pitches unit-specific value — a national offer on their bike, a price
+ * drop on their unit — and neither is sayable about a bike we can't sell. Jason was told on 6/20
+ * that his 2021 Street Glide Special was on hold, then got its payment numbers pitched three more
+ * times, because buildCadenceLeadUnitAvailabilityOverride below deliberately goes quiet after
+ * disclosing the hold ONCE (so the customer isn't nagged) and nothing downstream re-read that
+ * state.
+ *
+ * Same stock#/VIN → holds/solds lookup that builder uses, factored out so the LIVE tick and the
+ * REGENERATE cadence builder read one definition (route-parity law). Deterministic inventory-state
+ * read, not comprehension. Fail direction: any missing identifier or lookup failure returns false =
+ * today's behavior, so this can only ever make the agent quieter about a gone bike, never louder.
+ */
+async function leadUnitUnavailableForValueGate(conv: any): Promise<boolean> {
+  try {
+    const stockId =
+      String(conv?.lead?.vehicle?.stockId ?? conv?.lead?.vehicle?.stock ?? conv?.lead?.stockId ?? "")
+        .trim() || null;
+    const vin = String(conv?.lead?.vehicle?.vin ?? conv?.lead?.vin ?? "").trim() || null;
+    if (!stockId && !vin) return false;
+    const holds = await listInventoryHolds();
+    const solds = await listInventorySolds();
+    const soldKey = normalizeInventorySoldKey(stockId, vin);
+    const holdKey = normalizeInventoryHoldKey(stockId, vin);
+    return !!(soldKey && solds?.[soldKey]) || !!(holdKey && holds?.[holdKey]);
+  } catch {
+    return false;
+  }
+}
+
 async function buildCadenceLeadUnitAvailabilityOverride(args: {
   conv: any;
   name: string;
@@ -15269,7 +15305,10 @@ async function buildCadenceRegeneratedDraft(
       firstName: conv.lead?.firstName,
       alreadySentOfferTitles: (conv.nationalOfferTouches ?? []).map((t: { title: string }) => t.title),
       hasTestRideOffer: regenTestRideValueContext,
-      priceDropMessage: regenInterestPriceDrop?.message ?? null
+      priceDropMessage: regenInterestPriceDrop?.message ?? null,
+      // Never pitch a held/sold unit's numbers (Joe ruling 2026-07-28, Jason Roorda) — same
+      // shared read as the live tick.
+      leadUnitUnavailable: await leadUnitUnavailableForValueGate(conv)
     });
     if (valueGate.action === "replace") {
       return { body: valueGate.message };
@@ -25168,6 +25207,26 @@ function hasCreditAppPlanContextCue(text: string): boolean {
   );
 }
 
+/** Model catalog status for the watch pin guards, memoized per note. A resolve failure is
+ *  "unknown", which keeps every pin — the guards only ever act on a CONFIDENT discontinued. */
+async function resolveContextNoteModelStatus(
+  model: string,
+  cache: Map<string, DiscontinuationStatus>
+): Promise<DiscontinuationStatus> {
+  const key = String(model ?? "").trim().toLowerCase();
+  if (!key) return "unknown";
+  const cached = cache.get(key);
+  if (cached) return cached;
+  let status: DiscontinuationStatus = "unknown";
+  try {
+    status = (await resolveModelDiscontinuation(model)).status;
+  } catch (e) {
+    console.warn("[context-note-watch] model status resolve failed:", (e as any)?.message ?? e);
+  }
+  cache.set(key, status);
+  return status;
+}
+
 async function deriveContextNoteWatches(
   conv: any,
   noteText: string,
@@ -25176,6 +25235,9 @@ async function deriveContextNoteWatches(
   const note = String(noteText ?? "").trim();
   if (!note) return [];
   const now = nowIso();
+  // One catalog lookup per distinct model per note — the same model can appear in several
+  // watch segments, and the pin guards below only need the status, not a fresh resolve.
+  const modelStatusCache = new Map<string, DiscontinuationStatus>();
   const sentences = splitContextNoteSentences(note);
   const parserRequestedWatch =
     semanticSlots?.watchAction === "set_watch" &&
@@ -25269,6 +25331,45 @@ async function deriveContextNoteWatches(
         createdAt: now,
         note: "context_note_watch"
       };
+      // PIN GUARDS (parity with the ADF intake path, routes/sendgridInbound.ts). Never pin an
+      // attribute this watch could never match — an un-fireable watch reads to the customer as
+      // "I'll text you when one lands" and then stays silent forever. Production: this site minted
+      // `{ Iron 883, 2022, condition: "new" }` on 7/27 (+19518078554) and 7/17 (+19897006720) —
+      // the Iron 883 has been out of production since 2020, so no NEW one can ever arrive. Resolve
+      // the model's catalog status ONCE per model, and only when there is actually a pin to guard.
+      // Dropping a pin only WIDENS the watch, so this fails toward contacting the customer.
+      if (watch.year || (watch.yearMin && watch.yearMax) || watch.condition) {
+        const modelStatus = await resolveContextNoteModelStatus(model, modelStatusCache);
+        const pins = decideWatchPins({
+          year: watch.year ?? null,
+          yearMin: watch.yearMin ?? null,
+          yearMax: watch.yearMax ?? null,
+          condition: watch.condition ?? null,
+          modelStatus,
+          currentYear: new Date().getFullYear()
+        });
+        // Only ever REMOVE a pin the guard proved un-matchable — a kept pin is left exactly as the
+        // caller built it, so this is a no-op on every watch that was already fireable.
+        if (pins.droppedYearPin) {
+          watch.year = undefined;
+          watch.yearMin = undefined;
+          watch.yearMax = undefined;
+        }
+        if (pins.droppedConditionPin) watch.condition = undefined;
+        if (pins.droppedYearPin || pins.droppedConditionPin) {
+          recordRouteOutcome("live", "context_note_watch_pin_dropped", {
+            convId: conv?.id,
+            leadKey: conv?.leadKey,
+            model,
+            droppedYearPin: pins.droppedYearPin,
+            droppedConditionPin: pins.droppedConditionPin,
+            yearReason: pins.yearReason,
+            conditionReason: pins.conditionReason
+          });
+        }
+      }
+      // exactness is derived AFTER the guards — a dropped year pin turns year_model back into
+      // model_only, and the literal above already defaults to model_only.
       if (watch.yearMin && watch.yearMax) watch.exactness = "model_range";
       else if (watch.year && (watch.color || watch.trim)) watch.exactness = "exact";
       else if (watch.year) watch.exactness = "year_model";
@@ -33688,7 +33789,10 @@ async function processDueFollowUpsUnlocked() {
         firstName: conv.lead?.firstName,
         alreadySentOfferTitles: (conv.nationalOfferTouches ?? []).map(t => t.title),
         hasTestRideOffer: testRideValueContext,
-        priceDropMessage: interestPriceDrop?.message ?? null
+        priceDropMessage: interestPriceDrop?.message ?? null,
+        // Never pitch a held/sold unit's numbers (Joe ruling 2026-07-28, Jason Roorda
+        // +17165104578) — same shared read as the regenerate cadence builder.
+        leadUnitUnavailable: await leadUnitUnavailableForValueGate(conv)
       });
       if (valueGate.action === "suppress") {
         console.log("[followup][cadence-value-gate] later touch has no value trigger — staying quiet", {
@@ -55759,6 +55863,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     // Peter Meredith +17168303999); regen's customer-ack block resolves Block A itself, so only
     // the appointment-timing soft-visit read feeds this here.
     dayOnlyVisitCommitment: isParserSoftVisitCommitment(regenAppointmentTimingParse),
+    // TIMED visit commitment (Joe ruling 2026-07-28, Terry Majchrzak +17166091289) — same
+    // parser signal as the live path; regen mirrors it as a DRAFT preview (book:false).
+    timedVisitCommitment: isParserTimedVisitCommitment(regenAppointmentTimingParse),
     pricingOrPaymentsIntent: false,
     scheduleDialogState: isScheduleDialogState(getDialogState(conv)),
     scheduleOfferContext: hasScheduleOfferContext(regenLastOutboundForActionText, getDialogState(conv))
@@ -64430,6 +64537,10 @@ if (authToken && signature) {
     appointmentTimingOpenEndedBound: isOpenEndedTimeBoundParse(appointmentTimingParse?.requested),
     parserScheduleStatusUpdate: inboundParserScheduleStatusUpdate,
     dayOnlyVisitCommitment: dayOnlySoftVisitCommitment,
+    // TIMED visit commitment (Joe ruling 2026-07-28, Terry Majchrzak +17166091289: "I could be
+    // there today between 4 and 5") — a commitment that named a time goes to the book-or-offer
+    // resolver, not the soft-visit hold that let his 4pm slip.
+    timedVisitCommitment: isParserTimedVisitCommitment(appointmentTimingParse),
     pricingOrPaymentsIntent,
     scheduleDialogState: isScheduleDialogState(getDialogState(conv)),
     scheduleOfferContext: hasScheduleOfferContext(lastOutboundText, getDialogState(conv))

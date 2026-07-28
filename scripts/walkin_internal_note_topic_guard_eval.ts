@@ -9,7 +9,10 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { isInternalNoteFollowUpTopic } from "../services/api/src/domain/walkInFollowUpTopic.ts";
+import {
+  isInternalNoteFollowUpTopic,
+  buildWalkInSpecRecapClause
+} from "../services/api/src/domain/walkInFollowUpTopic.ts";
 
 // The exact production failure topic, and each internal-note tell in isolation → rejected.
 assert.equal(
@@ -47,4 +50,47 @@ assert.ok(
   "extractTrafficLogProFollowUpTopic must call isInternalNoteFollowUpTopic so an internal note can't become the topic"
 );
 
-console.log("PASS walk-in internal-note follow-up topic guard eval");
+// --- Spec recap: say back what the salesperson wrote down (Joe ruling 2026-07-28) ----------
+// Larry Godzich +17164327329, 2026-07-27. Scott's note: "…asking about pre-owned trikes… Is
+// looking for 2017-2020 Tri Glide in the $25,000 range (Step 2)". The whole first text back was
+// "Thanks for stopping in today - I'll follow up about pre-owned trikes." — the day's only tone
+// failure (65, intent_mismatch), fluent and blind to the specifics.
+assert.equal(
+  buildWalkInSpecRecapClause({ modelLabel: "Tri Glide", yearLabel: "2017-2020", condition: "used" }),
+  "Just so I've got it right — you're looking for a pre-owned 2017-2020 Tri Glide.",
+  "Larry's logged spec is repeated back to him"
+);
+assert.equal(
+  buildWalkInSpecRecapClause({ modelLabel: "Street Glide", yearLabel: "", condition: "new" }),
+  "Just so I've got it right — you're looking for a new Street Glide.",
+  "condition alone is enough to be worth confirming"
+);
+assert.equal(
+  buildWalkInSpecRecapClause({ modelLabel: "Road Glide", yearLabel: "2024", condition: null }),
+  "Just so I've got it right — you're looking for a 2024 Road Glide.",
+  "a single year reads as a year, not a range (formatWatchYearLabel feeds this)"
+);
+// Nothing to confirm beyond the model the tail already names → stay silent rather than pad.
+assert.equal(buildWalkInSpecRecapClause({ modelLabel: "Road Glide" }), "", "model alone adds nothing");
+assert.equal(buildWalkInSpecRecapClause({ modelLabel: "", yearLabel: "2017-2020", condition: "used" }), "", "no model => no recap");
+assert.equal(buildWalkInSpecRecapClause({}), "", "no slots => no recap");
+
+// THE POINT OF THIS MODULE: the recap is built from parsed SLOTS, never note prose. A budget
+// figure is deliberately not a slot it accepts — a dollar amount in a walk-in note is as likely
+// to be a trade appraisal as a budget, which is the leak the guard above exists to stop.
+for (const clause of [
+  buildWalkInSpecRecapClause({ modelLabel: "Heritage", yearLabel: "2018", condition: "used" }),
+  buildWalkInSpecRecapClause({ modelLabel: "Tri Glide", yearLabel: "2017-2020", condition: "used" })
+]) {
+  assert.doesNotMatch(clause, /\$\s?\d/, "a recap never carries a dollar figure");
+  assert.doesNotMatch(clause, /\b(?:his|him|her|hers)\b/i, "a recap never carries third-person staff phrasing");
+  assert.equal(isInternalNoteFollowUpTopic(clause), false, "a recap must pass the internal-note guard it sits beside");
+}
+
+// Wiring: the Traffic Log Pro step tail must actually append the recap.
+assert.ok(
+  /buildWalkInSpecRecapClause\(\{/.test(sendgrid),
+  "the TLP walk-in tail must append the spec recap (Larry Godzich)"
+);
+
+console.log("PASS walk-in internal-note follow-up topic guard eval (+ slot-only spec recap)");

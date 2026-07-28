@@ -88,6 +88,48 @@ assert.equal(isOpenEndedTimeBoundParse({ timeWindow: "range", timeText: "before 
 assert.equal(isOpenEndedTimeBoundParse({ timeWindow: "range", timeText: "around 10" }), false, "'around 10' stays a bookable approximate point (Chuck Bailey)");
 assert.equal(isOpenEndedTimeBoundParse({ timeWindow: "exact", timeText: "around 10am" }), false, "an exact-window approximate stays bookable");
 
+// --- A stated WINDOW resolves to its START (Joe ruling 2026-07-28) ------------------------
+// Terry Majchrzak +17166091289, 2026-07-27: "I could be there today between 4 and 5". Two
+// defects met here. `and` was missing from the window separators, so that shape only resolved
+// by accident through the bare-number fallback; and because the meridiem binds to the range
+// END, "between 4 and 5pm" matched "5pm" in parseExactTime and came back 17:00 while the
+// identical un-suffixed sentence came back 16:00. He means 4 o'clock in both.
+const terryWindow = parseRequestedDayTime("I could be there today between 4 and 5", TZ);
+assert.ok(terryWindow, "Terry's window must parse");
+assert.equal(terryWindow!.hour24, 16, "'between 4 and 5' is 4:00 — the START of the window");
+assert.equal(terryWindow!.minute, 0);
+
+const terryWindowPm = parseRequestedDayTime("I could be there today between 4 and 5pm", TZ);
+assert.ok(terryWindowPm, "the pm-suffixed window must parse");
+assert.equal(
+  terryWindowPm!.hour24,
+  16,
+  "'between 4 and 5pm' is ALSO 4:00 — the trailing meridiem qualifies the window, it does not move the start to 5"
+);
+
+// Every window separator lands on the same start.
+for (const [text, expected] of [
+  ["today between 4-5", 16],
+  ["today between 4-5pm", 16],
+  ["today between 4 to 5", 16],
+  ["monday between 10 and 11am", 10]
+] as Array<[string, number]>) {
+  const parsed = parseRequestedDayTime(text, TZ);
+  assert.ok(parsed, `${text} must parse`);
+  assert.equal(parsed!.hour24, expected, `${text} => window start ${expected}`);
+}
+
+// A start with MINUTES keeps them — the window start is a real clock time, not a bare hour.
+const halfPast = parseRequestedDayTime("tuesday between 4:30 and 5", TZ);
+assert.ok(halfPast, "'4:30 and 5' must parse");
+assert.equal(halfPast!.hour24, 16, "start hour 4pm");
+assert.equal(halfPast!.minute, 30, "…and the :30 survives the window read");
+
+// Regression guard: a single stated time is untouched by the window path.
+const plainFour = parseRequestedDayTime("I'll be there today at 4", TZ);
+assert.ok(plainFour, "a plain 'at 4' must still parse");
+assert.equal(plainFour!.hour24, 16, "a single time is unchanged");
+
 // SOURCE GUARDS: the deterministic concrete-time signals must NOT read "after"/"before"
 // as clock times (that regex overriding the parser's range read was the root cause).
 const apiSrc = await fs.readFile(path.resolve("services/api/src/index.ts"), "utf8");
@@ -112,4 +154,4 @@ assert.match(
   "findScheduleSlotsForRequestedWindow offers only slots strictly after an 'after X' bound"
 );
 
-console.log("PASS approximate time booking eval");
+console.log("PASS approximate time booking eval (approximate points + stated windows resolve to their start)");

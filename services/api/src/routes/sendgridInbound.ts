@@ -133,7 +133,7 @@ import {
   shouldForceInitialTestRideSourceScheduleCopy,
   shouldRouteRoom58PriceHandoff
 } from "../domain/adfPolicy.js";
-import { isInternalNoteFollowUpTopic } from "../domain/walkInFollowUpTopic.js";
+import { isInternalNoteFollowUpTopic, buildWalkInSpecRecapClause } from "../domain/walkInFollowUpTopic.js";
 import {
   isDealerLocationQuestionText,
   isFirstTimeRiderGuidanceParserAccepted,
@@ -7618,6 +7618,18 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       });
       if (tlpStepTail) {
         tail = tlpStepTail;
+        // Repeat back what the salesperson actually wrote down (Joe ruling 2026-07-28, Larry
+        // Godzich +17164327329). The step tail names the topic at best ("pre-owned trikes")
+        // and drops the year range the note spelled out, which read as not listening. Built
+        // from the extracted slots only — never the note prose (see the module docblock).
+        const specRecap = buildWalkInSpecRecapClause({
+          modelLabel: modelLabel ? formatWatchModelForMessage(modelLabel) : null,
+          yearLabel: yearRangeLabel,
+          condition: wantsUsed ? "used" : wantsNew ? "new" : null
+        });
+        if (specRecap && !tail.includes(specRecap)) {
+          tail = `${tail} ${specRecap}`;
+        }
       }
     }
     const hasDirectedTestRidePlan = /line up your test ride|reach back when the weather looks better|check back next week/i.test(

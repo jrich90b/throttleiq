@@ -279,6 +279,28 @@ const CASES: Case[] = [
     check: p => (hasSchedule(p) || p?.primaryIntent === "scheduling"
       ? null : `expected a soft scheduling read, got intent=${p?.primaryIntent} schedule=${JSON.stringify(p?.requestedSchedule)}`)
   },
+  // Soft-edge cases the trigger-coverage net surfaced (Joe 2026-07-28): the older orchestrateInbound
+  // path mislabels these (GENERAL / a trade-appraisal misroute), but the LIVE turn-understanding
+  // parser reads them right. Locked in here so that correct comprehension can't regress — and so the
+  // de-tangle fix (route the reply through this parser here) is verifiable when done.
+  {
+    id: "soft_test_ride_take_it_for_a_spin", cat: "scheduling", tier: "scored",
+    text: "I'd love to take it for a spin this weekend",
+    history: [{ direction: "out", body: "The 2021 Street Glide is in stock. Want to come see it?" }],
+    check: p =>
+      p?.primaryIntent === "test_ride" || p?.primaryIntent === "scheduling" || hasSchedule(p)
+        ? null
+        : `"take it for a spin" should read as a test ride, got ${p?.primaryIntent}`
+  },
+  {
+    id: "soft_pricing_how_much_you_looking_to_get", cat: "pricing", tier: "scored",
+    text: "how much you looking to get for it",
+    history: [{ direction: "out", body: "The 2021 Street Glide is in stock. Want to come see it?" }],
+    check: p =>
+      p?.primaryIntent === "pricing"
+        ? null
+        : `customer asking OUR asking price must read as pricing (not trade/appraisal), got ${p?.primaryIntent}`
+  },
   {
     id: "non_motorcycle_trade", cat: "non-moto", tier: "scored",
     text: "can i trade my f150 toward a bike",

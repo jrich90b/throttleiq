@@ -18,6 +18,7 @@ import assert from "node:assert/strict";
 import {
   decideWatchYearPin,
   decideWatchConditionPin,
+  decideWatchPins,
   MAX_MODEL_YEAR_LOOKAHEAD
 } from "../services/api/src/domain/watchYearPin.ts";
 
@@ -142,6 +143,69 @@ assert.equal(
   decideWatchConditionPin({ condition: "NEW", modelStatus: "discontinued" }).pin,
   "none",
   "condition match is case-insensitive"
+);
+
+// ── decideWatchPins — BOTH guards over one watch's requested attributes. This is what every watch
+//    CREATION site calls, so a site can never adopt one guard and silently miss the other.
+//
+//    THE PRODUCTION MISS (2026-07-27 +19518078554 Melanie Castro; the same shape on 2026-07-17,
+//    +19897006720): the SMS context-note path (deriveContextNoteWatches, index.ts) ran NEITHER guard
+//    and minted `{ Iron 883, 2022, condition: "new" }`. The Iron 883 has been out of production
+//    since 2020, so a NEW one can never land — the watch sat active and un-fireable. The 2022 YEAR,
+//    though, is perfectly matchable (a used 2022 arrives on a trade), so only the condition drops.
+const contextNoteRepro = decideWatchPins({
+  year: 2022,
+  condition: "new",
+  modelStatus: "discontinued",
+  currentYear: NOW
+});
+assert.equal(contextNoteRepro.condition, undefined, "the un-fireable `new` pin is dropped");
+assert.equal(contextNoteRepro.droppedConditionPin, true, "the drop is reported to the caller");
+assert.equal(contextNoteRepro.conditionReason, "new_pin_on_discontinued_model");
+assert.equal(contextNoteRepro.year, 2022, "a still-matchable YEAR pin survives the condition drop");
+assert.equal(contextNoteRepro.droppedYearPin, false, "no year pin was dropped");
+
+// Both pins impossible at once => both widen (the 2027-883 year miss carrying a `new` condition).
+const bothDrop = decideWatchPins({ year: 2027, condition: "new", modelStatus: "discontinued", currentYear: NOW });
+assert.equal(bothDrop.year, undefined, "an impossible year pin drops");
+assert.equal(bothDrop.condition, undefined, "an impossible condition pin drops");
+assert.ok(bothDrop.droppedYearPin && bothDrop.droppedConditionPin, "both drops are reported");
+
+// A range survives as a range; `used` always survives.
+const rangeKept = decideWatchPins({
+  yearMin: 2015,
+  yearMax: 2020,
+  condition: "used",
+  modelStatus: "discontinued",
+  currentYear: NOW
+});
+assert.equal(rangeKept.yearMin, 2015, "a matchable range keeps both bounds");
+assert.equal(rangeKept.yearMax, 2020);
+assert.equal(rangeKept.year, undefined, "a range request never resolves to a single-year pin");
+assert.equal(rangeKept.condition, "used", "a used pin on a discontinued model is exactly what we keep");
+assert.ok(!rangeKept.droppedYearPin && !rangeKept.droppedConditionPin, "nothing was dropped");
+
+// NO-OP on an unguarded watch: no year, no condition => nothing pinned, nothing reported dropped.
+const bare = decideWatchPins({ modelStatus: "discontinued", currentYear: NOW });
+assert.equal(bare.year, undefined);
+assert.equal(bare.condition, undefined);
+assert.ok(!bare.droppedYearPin && !bare.droppedConditionPin, "an unpinned watch reports no drops");
+assert.equal(bare.yearReason, "no_year_requested");
+
+// CONSERVATISM: only a confident `discontinued` may drop anything. Every other status is a full
+// pass-through — this is the regression that would quietly narrow live watches.
+for (const status of ["unknown", "current", "available"] as const) {
+  const kept = decideWatchPins({ year: 2027, condition: "new", modelStatus: status, currentYear: NOW });
+  assert.equal(kept.year, 2027, `status "${status}" keeps the year pin`);
+  assert.equal(kept.condition, "new", `status "${status}" keeps the condition pin`);
+  assert.ok(!kept.droppedYearPin && !kept.droppedConditionPin, `status "${status}" drops nothing`);
+}
+
+// Condition normalizes to lower case so the stored watch matches the feed comparison.
+assert.equal(
+  decideWatchPins({ condition: "New", modelStatus: "current", currentYear: NOW }).condition,
+  "new",
+  "a kept condition pin is normalized"
 );
 
 console.log(

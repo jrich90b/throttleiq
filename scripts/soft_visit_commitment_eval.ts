@@ -13,7 +13,8 @@ import path from "node:path";
 import {
   hasConditionalVisitCommitmentHintText,
   isParserConditionalVisitCommitment,
-  isParserSoftVisitCommitment
+  isParserSoftVisitCommitment,
+  isParserTimedVisitCommitment
 } from "../services/api/src/domain/softVisitSignal.ts";
 
 // 1) Behavioral — the parser-derived signal.
@@ -228,4 +229,51 @@ assert.ok(allSetUses >= 4, `all soft-visit/visit-commitment arms must reflect a 
 const dayOnlyFeeds = (idx.match(/dayOnlyVisitCommitment:/g) || []).length;
 assert.ok(dayOnlyFeeds >= 2, `both paths must feed dayOnlyVisitCommitment into decideSchedulingTurn (found ${dayOnlyFeeds})`);
 
-console.log("PASS soft-visit-commitment eval (parser signal + warm ack + both-path parity + dated-task/all-set guards)");
+// --- TIMED visit commitment: a named time is bookable, not "soft" (Joe ruling 2026-07-28) ---
+// Terry Majchrzak +17166091289, 2026-07-27 13:33Z: "I could be there today between 4 and 5".
+// He was filed as a loose "might stop by" — warm ack, cadence hold, outcome todo — and never
+// reached the calendar. Staff reported it the same morning ("Never made it to the schedule").
+const terry: any = {
+  intent: "none",
+  explicitRequest: false,
+  requested: { day: "today", timeText: "between 4 and 5", timeWindow: "range" },
+  normalizedText: "could be there today between 4 and 5",
+  confidence: 0.9
+};
+assert.equal(isParserTimedVisitCommitment(terry), true, "Terry named a day AND a time => bookable commitment");
+assert.equal(
+  isParserSoftVisitCommitment(terry),
+  false,
+  "…and the DAY-ONLY signal must no longer claim him, or he keeps landing in the soft-visit hold"
+);
+// The two reads are mutually exclusive by construction — a commitment is day-only or timed.
+assert.equal(isParserTimedVisitCommitment(todd), false, "Todd named no time => not the timed arm");
+assert.equal(isParserSoftVisitCommitment(todd), true, "…and he stays with the soft-visit arm");
+// Every gate the day-only read applies still applies to the timed read.
+assert.equal(
+  isParserTimedVisitCommitment({ intent: "ask_for_times", explicitRequest: false, requested: { day: "today", timeText: "4" }, normalizedText: "will be there today at 4" }),
+  false,
+  "an actionable timing intent keeps its own arm"
+);
+assert.equal(
+  isParserTimedVisitCommitment({ intent: "none", explicitRequest: true, requested: { day: "today", timeText: "4" }, normalizedText: "will be there today at 4" }),
+  false,
+  "an explicit request keeps its own arm"
+);
+assert.equal(
+  isParserTimedVisitCommitment({ intent: "none", explicitRequest: false, requested: { timeText: "4" }, normalizedText: "will be there at 4" }),
+  false,
+  "no committed day => not this arm"
+);
+assert.equal(
+  isParserTimedVisitCommitment({ intent: "none", explicitRequest: false, requested: { day: "today", timeText: "4" }, normalizedText: "asked what time you close" }),
+  false,
+  "no visit verb in the parser's own normalizedText => not a commitment at all"
+);
+assert.equal(isParserTimedVisitCommitment(null), false, "no parse => false");
+
+// Both paths must feed the timed signal into the centralized decision, or live/regen drift.
+const timedFeeds = (idx.match(/timedVisitCommitment:/g) || []).length;
+assert.ok(timedFeeds >= 2, `both paths must feed timedVisitCommitment into decideSchedulingTurn (found ${timedFeeds})`);
+
+console.log("PASS soft-visit-commitment eval (parser signal + warm ack + both-path parity + dated-task/all-set guards + timed-commitment split)");

@@ -93,6 +93,22 @@ const rows: Row[] = [
   // Pricing/payments suppresses Block B, so a concrete proposal does not book mid-pricing thread.
   { id: "provide_new_time_suppressed_by_pricing", input: { ...base, pricingOrPaymentsIntent: true, appointmentTimingAccepted: true, appointmentTimingIntent: "provide_new_time", appointmentTimingHasConcreteDayTime: true }, kind: "none" },
 
+  // --- TIMED visit commitment (Joe ruling 2026-07-28: Terry Majchrzak +17166091289) ---
+  // "I could be there today between 4 and 5" — the parser reads a COMMITMENT (intent:none), so
+  // Block B never claims it, and the day-only arm below filed it as a loose "might stop by":
+  // warm ack, cadence hold, no calendar. A named day AND time is bookable, so it takes the same
+  // book-or-offer resolver a proposal does.
+  { id: "timed_visit_commitment_books", input: { ...base, timedVisitCommitment: true }, kind: "propose_booking" },
+  // The bound veto still wins: "I'll be there tomorrow after 3" offers slots, never books AT 3.
+  { id: "timed_visit_commitment_open_ended_bound", input: { ...base, timedVisitCommitment: true, appointmentTimingOpenEndedBound: true }, kind: "offer_slots_in_bound" },
+  // Precedence: an explicit ack (A) and an explicit timing intent (B) both still outrank it.
+  { id: "confirm_beats_timed_visit_commitment", input: { ...base, timedVisitCommitment: true, customerAckActionAccepted: true, customerAckAction: "confirm_proposed_appointment", customerAckShouldBook: true }, kind: "confirm_appointment" },
+  { id: "ask_times_beats_timed_visit_commitment", input: { ...base, timedVisitCommitment: true, customerAckActionAccepted: true, customerAckAction: "ask_for_available_times" }, kind: "ask_available_times" },
+  // …and it outranks the DAY-ONLY soft-visit arm when both are somehow set (a named time wins).
+  { id: "timed_visit_commitment_beats_day_only", input: { ...base, timedVisitCommitment: true, dayOnlyVisitCommitment: true }, kind: "propose_booking" },
+  // Day-only alone is untouched — Peter Meredith's "see you Monday" keeps the soft-visit arm.
+  { id: "day_only_visit_commitment_unchanged", input: { ...base, dayOnlyVisitCommitment: true }, kind: "visit_commitment" },
+
   // --- RANGE-CONSTRAINT VETO (production incident: Kody +17163975098, 2026-07-16) ---
   // "are you guys available anytime later on the day? I don't think I'll be out until after 3
   // tomorrow" — appointment_timing read it correctly (ask_for_times, window=range, "after 3"),

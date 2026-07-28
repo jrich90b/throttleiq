@@ -129,3 +129,74 @@ export function decideWatchConditionPin(input: {
   }
   return { pin: "condition", reason: "condition_plausible" };
 }
+
+export type WatchPinsDecision = {
+  year?: number;
+  yearMin?: number;
+  yearMax?: number;
+  condition?: string;
+  droppedYearPin: boolean;
+  droppedConditionPin: boolean;
+  yearReason: string;
+  conditionReason: string;
+};
+
+/**
+ * Both pin guards over one watch's requested attributes — pure. This is the shape every watch
+ * CREATION site needs, so a new site can't accidentally adopt one guard and miss the other.
+ *
+ * The ADF intake path (routes/sendgridInbound.ts) already ran both guards inline; the SMS
+ * context-note path (deriveContextNoteWatches, index.ts) ran neither, and minted the exact watch
+ * the condition guard exists to stop: `{ Iron 883, 2022, condition: "new" }` on 2026-07-27
+ * (+19518078554) and again on 2026-07-17 (+19897006720). The Iron 883 has been out of production
+ * since 2020, so a NEW one can never land — an active watch that reads as "I'll text you when one
+ * comes in" and is silent forever.
+ *
+ * FAIL DIRECTION (both guards): a dropped pin only ever WIDENS the watch, so the failure mode is
+ * "alerted about more units", never "alerted about fewer". Callers keep ownership of `exactness` —
+ * recompute it from the returned pins, since dropping a year pin can turn `year_model` back into
+ * `model_only`.
+ */
+export function decideWatchPins(input: {
+  year?: number | null;
+  yearMin?: number | null;
+  yearMax?: number | null;
+  condition?: string | null;
+  modelStatus: DiscontinuationStatus;
+  currentYear: number;
+}): WatchPinsDecision {
+  const hasRange = !!(input.yearMin && input.yearMax);
+  const hasYear = !!input.year;
+  const yearDecision =
+    hasRange || hasYear
+      ? decideWatchYearPin({
+          year: input.year ?? null,
+          yearMin: input.yearMin ?? null,
+          yearMax: input.yearMax ?? null,
+          modelStatus: input.modelStatus,
+          currentYear: input.currentYear
+        })
+      : { pin: "none" as const, reason: "no_year_requested" };
+  const conditionDecision = decideWatchConditionPin({
+    condition: input.condition,
+    modelStatus: input.modelStatus
+  });
+
+  const out: WatchPinsDecision = {
+    droppedYearPin: (hasRange || hasYear) && yearDecision.pin === "none",
+    droppedConditionPin:
+      !!String(input.condition ?? "").trim() && conditionDecision.pin === "none",
+    yearReason: yearDecision.reason,
+    conditionReason: conditionDecision.reason
+  };
+  if (yearDecision.pin === "range") {
+    out.yearMin = input.yearMin ?? undefined;
+    out.yearMax = input.yearMax ?? undefined;
+  } else if (yearDecision.pin === "year") {
+    out.year = input.year ?? undefined;
+  }
+  if (conditionDecision.pin === "condition") {
+    out.condition = String(input.condition ?? "").trim().toLowerCase();
+  }
+  return out;
+}
