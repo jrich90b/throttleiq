@@ -13973,6 +13973,13 @@ export type VehicleEquipmentDescription = {
   // blackedOut is INFORMATIONAL (finish-agnostic cholo, recalibrated 2026-07-26): a dark/murdered-out
   // finish is NOT a disqualifier — a blacked-out CUSTOM build can be cholo. present:false when flag off.
   blackedOut: EquipmentFeatureRead;
+  /**
+   * Photo-realness (Phase 2, DARK behind PHOTO_REALNESS_VISION_ENABLED): are these ACTUAL dealer
+   * photos of THIS specific used bike, or a generic STOCK/manufacturer studio image? Lets the
+   * photo-request path text real photos but hand a stock-only listing to a salesperson. verdict
+   * "unknown" + confidence 0 when the flag is off (byte-identical to today's read).
+   */
+  photoRealness: { verdict: "real" | "stock" | "unknown"; confidence: number };
   overallConfidence: number;
   notes: string;
 };
@@ -14018,6 +14025,11 @@ export async function describeUnitEquipmentWithLLM(args: {
   // preserved behavior); the cue fields parse to present:false/0 via readFeature(undefined).
   const choloOn =
     process.env.CHOLO_STYLE_VISION_ENABLED === "1" && process.env.INVENTORY_EQUIPMENT_VISION_ENABLED === "1";
+  // Photo-realness read (Phase 2, DARK): adds a "real dealer photos vs stock studio image" judgment.
+  // Phase 2b — INDEPENDENT of the equipment-vision flag so it can be flipped on WITHOUT enabling the
+  // (unreviewed) equipment-shopping feature: gated on its OWN flag only. Off → schema/prompt
+  // byte-identical to today; photo_realness parses to verdict "unknown"/0.
+  const photoRealnessOn = process.env.PHOTO_REALNESS_VISION_ENABLED === "1";
   const CHOLO_CUE_KEYS = [
     "has_whitewalls",
     "has_fat_spoke_wheels",
@@ -14046,6 +14058,7 @@ export async function describeUnitEquipmentWithLLM(args: {
       "has_floorboards",
       "has_crash_bars",
       ...(choloOn ? CHOLO_CUE_KEYS : []),
+      ...(photoRealnessOn ? ["photo_realness"] : []),
       "overall_confidence",
       "notes"
     ],
@@ -14072,6 +14085,19 @@ export async function describeUnitEquipmentWithLLM(args: {
             has_low_stance: EQUIPMENT_FEATURE_SCHEMA,
             has_custom_paint: EQUIPMENT_FEATURE_SCHEMA,
             has_blacked_out: EQUIPMENT_FEATURE_SCHEMA
+          }
+        : {}),
+      ...(photoRealnessOn
+        ? {
+            photo_realness: {
+              type: "object",
+              additionalProperties: false,
+              required: ["verdict", "confidence"],
+              properties: {
+                verdict: { type: "string", enum: ["real", "stock", "unknown"] },
+                confidence: { type: "number" }
+              }
+            }
           }
         : {}),
       overall_confidence: { type: "number" },
@@ -14156,6 +14182,20 @@ export async function describeUnitEquipmentWithLLM(args: {
           "These cues describe a CUSTOM lowrider/Chicano BUILD; report what you see, do not judge the overall style."
         ].join("\n")
       : "",
+    photoRealnessOn
+      ? [
+          "",
+          "PHOTO REALNESS — judge whether these are ACTUAL photos of THIS specific used bike on the dealer's",
+          "lot, or a generic STOCK/manufacturer studio image. photo_realness.verdict:",
+          "- 'real' = real dealer photos: the actual unit in a showroom/lot/outdoors, natural lighting, a",
+          "  background (floor, other bikes, wall), sometimes a plate/reflections/minor wear or a price tag —",
+          "  multiple angles of the SAME real bike.",
+          "- 'stock' = a manufacturer/catalog studio shot: seamless white/gradient studio background, perfect",
+          "  lighting, a pristine press image, often a single 3/4 hero angle — NOT a photo of this actual unit.",
+          "- 'unknown' = can't tell. confidence 0..1 for the verdict.",
+          "This does NOT change the equipment reads above; report it independently."
+        ].join("\n")
+      : "",
     "- is_motorcycle: true if the photos show a motorcycle at all; false for a non-bike photo (then set every",
     "  feature present=false, confidence 0).",
     "- overall_confidence 0..1: how good the photo set is overall for judging equipment (angles/lighting/clarity).",
@@ -14179,7 +14219,7 @@ export async function describeUnitEquipmentWithLLM(args: {
         }
       ] as any,
       ...optionalReasoning(model),
-      max_output_tokens: choloOn ? 800 : 600,
+      max_output_tokens: choloOn ? 800 : photoRealnessOn ? 700 : 600,
       text: {
         format: {
           type: "json_schema",
@@ -14233,6 +14273,12 @@ export async function describeUnitEquipmentWithLLM(args: {
       lowStance: readFeature(parsed.has_low_stance),
       customPaint: readFeature(parsed.has_custom_paint),
       blackedOut: readFeature(parsed.has_blacked_out),
+      photoRealness: {
+        verdict: ["real", "stock", "unknown"].includes(String(parsed.photo_realness?.verdict))
+          ? (String(parsed.photo_realness.verdict) as "real" | "stock" | "unknown")
+          : "unknown",
+        confidence: clamp01(parsed.photo_realness?.confidence)
+      },
       overallConfidence: clamp01(parsed.overall_confidence),
       notes: String(parsed.notes ?? "").trim()
     };

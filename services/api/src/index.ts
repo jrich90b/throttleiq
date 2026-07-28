@@ -596,6 +596,9 @@ import {
   watchEquipmentFireGate,
   choloStyleVisionEnabled,
   watchCholoFireGate,
+  photoRealnessVisionEnabled,
+  profilePhotosLookStock,
+  profilePhotosLookReal,
   type EquipmentCandidate,
   type EquipmentProfile,
   type EquipmentCacheFile,
@@ -2725,8 +2728,55 @@ async function resolveRecommendedUnitsMediaReply(
   if (!units.length) units = Array.isArray(conv.recommendedUnits) ? conv.recommendedUnits : [];
   if (!units.length) return null; // truly no unit context => existing handling
 
-  const hasUnitsWithRealPhotos = units.some(u => unitHasRealPhotos(u));
-  const hasUnitsNeedingPhotos = units.some(u => !unitHasRealPhotos(u));
+  // Phase 2/2b (DARK behind PHOTO_REALNESS_VISION_ENABLED): the vision viewer's CONFIDENT real-vs-stock
+  // verdict OVERRIDES the photo-count heuristic — a stock studio image (even a full set) becomes a task,
+  // a confirmed real photo is sendable. INDEPENDENT of the equipment-shopping flag. The verdict is
+  // computed ON-DEMAND for the few discussed units and CACHED (fingerprinted on the image set), so it
+  // runs in the suggest-mode DRAFT step, not on a customer-facing send, and only once per photo set.
+  // Uncached-then-vision-fails / low-confidence / flag off => the count heuristic stands (fail-safe).
+  const sendableByUnit = new Map<import("./domain/inventoryRecommender.js").RecommendedUnit, boolean>();
+  if (photoRealnessVisionEnabled()) {
+    let cache: EquipmentCacheFile | null = null;
+    try {
+      cache = await loadEquipmentCache();
+    } catch {
+      cache = null;
+    }
+    let cacheDirty = false;
+    for (const u of units) {
+      let sendable = unitHasRealPhotos(u); // fallback
+      try {
+        const { profile, ranVision } = await getUnitEquipmentProfile(
+          {
+            stockId: u.stockId ?? undefined,
+            model: u.model ?? undefined,
+            year: u.year ?? undefined,
+            images: u.images
+          } as any,
+          { cache: cache ?? undefined }
+        );
+        if (ranVision) cacheDirty = true;
+        if (profilePhotosLookStock(profile)) sendable = false;
+        else if (profilePhotosLookReal(profile)) sendable = true;
+      } catch {
+        /* vision failure => keep the count-heuristic fallback */
+      }
+      sendableByUnit.set(u, sendable);
+    }
+    if (cacheDirty && cache) {
+      try {
+        await saveEquipmentCache(cache);
+      } catch {
+        /* best-effort cache persist */
+      }
+    }
+  } else {
+    for (const u of units) sendableByUnit.set(u, unitHasRealPhotos(u));
+  }
+  const unitHasSendablePhotos = (u: import("./domain/inventoryRecommender.js").RecommendedUnit): boolean =>
+    sendableByUnit.get(u) ?? unitHasRealPhotos(u);
+  const hasUnitsWithRealPhotos = units.some(unitHasSendablePhotos);
+  const hasUnitsNeedingPhotos = units.some(u => !unitHasSendablePhotos(u));
   const decision = decideVehicleMediaRequestTurn({
     parserAccepted: !!parse,
     wantsMedia: !!parse.wantsMedia,
@@ -2750,7 +2800,7 @@ async function resolveRecommendedUnitsMediaReply(
       t => t.convId === conv.id && t.reason === "other" && /photos of the bike/i.test(String(t.summary ?? ""))
     );
     if (alreadyHasPhotoTask) return;
-    const taskUnits = parse.wantsAdditionalPhotos ? units : units.filter(u => !unitHasRealPhotos(u));
+    const taskUnits = parse.wantsAdditionalPhotos ? units : units.filter(u => !unitHasSendablePhotos(u));
     addTodo(
       conv,
       "other",
@@ -2765,7 +2815,7 @@ async function resolveRecommendedUnitsMediaReply(
   };
 
   if (decision.kind === "send_media") {
-    const built = buildRecommendedUnitsMediaReply({ firstName, units });
+    const built = buildRecommendedUnitsMediaReply({ firstName, units, attachable: unitHasSendablePhotos });
     if (!built) return null;
     recordRouteOutcome(scope, "vehicle_media_request", {
       convId: conv.id,
@@ -2781,7 +2831,7 @@ async function resolveRecommendedUnitsMediaReply(
     const followLine = parse.wantsAdditionalPhotos
       ? "I'll have a salesperson send you additional photos too."
       : "I'll have a salesperson send you photos of the others too.";
-    const built = buildRecommendedUnitsMediaReply({ firstName, units, closingCta: followLine });
+    const built = buildRecommendedUnitsMediaReply({ firstName, units, closingCta: followLine, attachable: unitHasSendablePhotos });
     const reply = built ? built.reply : buildSalespersonPhotoAckReply({ firstName });
     recordRouteOutcome(scope, "vehicle_media_request_send_and_task", {
       convId: conv.id,
@@ -2796,7 +2846,7 @@ async function resolveRecommendedUnitsMediaReply(
   // SEE the bike) and hand it to a salesperson for real photos.
   createPhotoTask();
   const ack = buildSalespersonPhotoAckReply({ firstName });
-  const built = buildRecommendedUnitsMediaReply({ firstName, units, closingCta: ack });
+  const built = buildRecommendedUnitsMediaReply({ firstName, units, closingCta: ack, attachable: unitHasSendablePhotos });
   recordRouteOutcome(scope, "vehicle_media_request_salesperson_photo_task", {
     convId: conv.id,
     leadKey: conv.leadKey,

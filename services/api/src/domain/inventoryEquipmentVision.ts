@@ -118,6 +118,12 @@ export type EquipmentProfile = {
    * CHOLO_STYLE_VISION_ENABLED populated the cues; otherwise all cues are absent → isCholo:false.
    */
   cholo: CholoBuild;
+  /**
+   * Photo-realness verdict (Phase 2, DARK): whether these are REAL dealer photos of this unit or a
+   * STOCK studio image. "unknown"/0 when PHOTO_REALNESS_VISION_ENABLED is off. The photo-request path
+   * uses this (when confident) to override the photo-count stock heuristic.
+   */
+  photoRealness: { verdict: "real" | "stock" | "unknown"; confidence: number };
 };
 
 /** Result of the cholo build-signature composite (Joe ruling 1, 2026-07-25). */
@@ -418,8 +424,43 @@ export function buildEquipmentProfile(args: {
     priorAgreement: reconciled.agreement,
     priorNote: reconciled.note,
     notes: desc.notes,
-    cholo: deriveCholoBuild({ features, model: item.model ?? null })
+    cholo: deriveCholoBuild({ features, model: item.model ?? null }),
+    photoRealness: desc.photoRealness ?? { verdict: "unknown", confidence: 0 }
   };
+}
+
+// ---------------------------------------------------------------------------
+// Photo-realness (Phase 2, DARK) — the vision viewer's real-vs-stock judgment, used by the
+// photo-request path (index.ts) to override the photo-COUNT stock heuristic when it is confident.
+// Fail-safe: only ASSERTS at/above the threshold; below it (or verdict "unknown", or the flag off →
+// verdict "unknown"/0) the count heuristic stands.
+// ---------------------------------------------------------------------------
+export const PHOTO_REALNESS_CONFIDENCE_MIN = Number(
+  process.env.PHOTO_REALNESS_CONFIDENCE_MIN ?? EQUIPMENT_ASSERTION_CONFIDENCE_MIN
+);
+
+/** Confident that the unit's photos are a STOCK studio image (→ needs a salesperson for real photos). */
+export function profilePhotosLookStock(
+  profile: EquipmentProfile | null | undefined,
+  min: number = PHOTO_REALNESS_CONFIDENCE_MIN
+): boolean {
+  return (
+    !!profile &&
+    profile.photoRealness?.verdict === "stock" &&
+    Number(profile.photoRealness?.confidence ?? 0) >= min
+  );
+}
+
+/** Confident that the unit's photos are REAL dealer photos of this unit (→ safe to text). */
+export function profilePhotosLookReal(
+  profile: EquipmentProfile | null | undefined,
+  min: number = PHOTO_REALNESS_CONFIDENCE_MIN
+): boolean {
+  return (
+    !!profile &&
+    profile.photoRealness?.verdict === "real" &&
+    Number(profile.photoRealness?.confidence ?? 0) >= min
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -517,6 +558,14 @@ export function choloStyleVisionEnabled(): boolean {
   // Cholo tagging/fire rides INSIDE the equipment-vision canary: it requires BOTH its own flag AND the
   // equipment-vision flag (the vision primitive + cache it reuses). Either off → 100% today's behavior.
   return process.env.CHOLO_STYLE_VISION_ENABLED === "1" && inventoryEquipmentVisionEnabled();
+}
+
+export function photoRealnessVisionEnabled(): boolean {
+  // Phase 2b: photo-realness is INDEPENDENT of the equipment-vision flag — flipping it on does NOT
+  // enable the (unreviewed) equipment-shopping feature (that stays gated on INVENTORY_EQUIPMENT_VISION_
+  // ENABLED). Off → the photo-request path uses the deterministic photo-count heuristic. The vision is
+  // computed on-demand for the discussed units (in the suggest-mode draft step) and cached.
+  return process.env.PHOTO_REALNESS_VISION_ENABLED === "1";
 }
 
 // ---------------------------------------------------------------------------
@@ -721,6 +770,20 @@ export async function getUnitEquipmentProfile(
   });
   if (cache) cache.profiles[key] = profile;
   return { profile, cached: false, ranVision: true };
+}
+
+/**
+ * CACHE-ONLY profile lookup (never runs vision) — for the LIVE reply path, which must stay fast. Pass
+ * a cache loaded once (loadEquipmentCache). Returns null on a miss (unprofiled unit / changed photos)
+ * so the caller falls back to the deterministic heuristic. Keyed on stockId + the image-set hash, so a
+ * stock→real photo update is a cache MISS and re-reads on the next background sweep.
+ */
+export function getCachedUnitEquipmentProfile(
+  item: Pick<InventoryFeedItem, "stockId" | "vin" | "images">,
+  cache: EquipmentCacheFile | null | undefined
+): EquipmentProfile | null {
+  if (!cache?.profiles) return null;
+  return cache.profiles[equipmentCacheKey(item)] ?? null;
 }
 
 /**
