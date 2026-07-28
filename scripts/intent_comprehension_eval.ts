@@ -301,6 +301,25 @@ const CASES: Case[] = [
         ? null
         : `customer asking OUR asking price must read as pricing (not trade/appraisal), got ${p?.primaryIntent}`
   },
+  // Confirmed misses surfaced by the large-corpus STEP-2 run (2026-07-28) + fixed via parser few-shots.
+  {
+    id: "corpus_finance_docs", cat: "finance", tier: "scored",
+    text: "Hey Scott I have both our pay stubs and proof of address",
+    history: [{ direction: "out", body: "To get you pre-approved I just need pay stubs and proof of address." }],
+    check: p => (p?.primaryIntent === "finance" ? null : `submitting credit-app docs must read as finance, got ${p?.primaryIntent}`)
+  },
+  {
+    id: "corpus_price_negotiation", cat: "pricing", tier: "scored",
+    text: "How bout 30...",
+    history: [{ direction: "out", body: "The 2022 Street Glide is listed at $28,995." }, { direction: "in", body: "whats your best price" }],
+    check: p => (p?.primaryIntent === "pricing" ? null : `a price negotiation must read as pricing (not scheduling), got ${p?.primaryIntent}`)
+  },
+  {
+    id: "corpus_followup_prompt", cat: "scheduling", tier: "scored",
+    text: "Hi Thanks for the follow up that never happened",
+    history: [{ direction: "out", body: "I'll follow up with you about setting up a time to come in." }],
+    check: p => (p?.primaryIntent === "scheduling" ? null : `prompting for a promised follow-up must read as scheduling, got ${p?.primaryIntent}`)
+  },
   {
     id: "non_motorcycle_trade", cat: "non-moto", tier: "scored",
     text: "can i trade my f150 toward a bike",
