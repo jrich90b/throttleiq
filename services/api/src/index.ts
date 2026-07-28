@@ -559,6 +559,8 @@ import { stripLeadingVinCodes, stripLeadingMakeName, normalizeWatchModelsVin, mo
 import { trikeClassConflict, isFamilyOnlyModelLabel, referencesFamilyOnlyInText } from "./domain/modelFamily.js";
 import { decideWatchSiblingScopeAsk } from "./domain/watchSiblingScope.js";
 import { applyWatchFieldHygiene, formatWatchYearLabel } from "./domain/watchFieldHygiene.js";
+import { decideWatchPins } from "./domain/watchYearPin.js";
+import { resolveModelDiscontinuation, type DiscontinuationStatus } from "./domain/modelDiscontinuation.js";
 import {
   conversationWatchAlertBlocked,
   recordConversationWatchAlert,
@@ -25205,6 +25207,26 @@ function hasCreditAppPlanContextCue(text: string): boolean {
   );
 }
 
+/** Model catalog status for the watch pin guards, memoized per note. A resolve failure is
+ *  "unknown", which keeps every pin — the guards only ever act on a CONFIDENT discontinued. */
+async function resolveContextNoteModelStatus(
+  model: string,
+  cache: Map<string, DiscontinuationStatus>
+): Promise<DiscontinuationStatus> {
+  const key = String(model ?? "").trim().toLowerCase();
+  if (!key) return "unknown";
+  const cached = cache.get(key);
+  if (cached) return cached;
+  let status: DiscontinuationStatus = "unknown";
+  try {
+    status = (await resolveModelDiscontinuation(model)).status;
+  } catch (e) {
+    console.warn("[context-note-watch] model status resolve failed:", (e as any)?.message ?? e);
+  }
+  cache.set(key, status);
+  return status;
+}
+
 async function deriveContextNoteWatches(
   conv: any,
   noteText: string,
@@ -25213,6 +25235,9 @@ async function deriveContextNoteWatches(
   const note = String(noteText ?? "").trim();
   if (!note) return [];
   const now = nowIso();
+  // One catalog lookup per distinct model per note — the same model can appear in several
+  // watch segments, and the pin guards below only need the status, not a fresh resolve.
+  const modelStatusCache = new Map<string, DiscontinuationStatus>();
   const sentences = splitContextNoteSentences(note);
   const parserRequestedWatch =
     semanticSlots?.watchAction === "set_watch" &&
@@ -25306,6 +25331,45 @@ async function deriveContextNoteWatches(
         createdAt: now,
         note: "context_note_watch"
       };
+      // PIN GUARDS (parity with the ADF intake path, routes/sendgridInbound.ts). Never pin an
+      // attribute this watch could never match — an un-fireable watch reads to the customer as
+      // "I'll text you when one lands" and then stays silent forever. Production: this site minted
+      // `{ Iron 883, 2022, condition: "new" }` on 7/27 (+19518078554) and 7/17 (+19897006720) —
+      // the Iron 883 has been out of production since 2020, so no NEW one can ever arrive. Resolve
+      // the model's catalog status ONCE per model, and only when there is actually a pin to guard.
+      // Dropping a pin only WIDENS the watch, so this fails toward contacting the customer.
+      if (watch.year || (watch.yearMin && watch.yearMax) || watch.condition) {
+        const modelStatus = await resolveContextNoteModelStatus(model, modelStatusCache);
+        const pins = decideWatchPins({
+          year: watch.year ?? null,
+          yearMin: watch.yearMin ?? null,
+          yearMax: watch.yearMax ?? null,
+          condition: watch.condition ?? null,
+          modelStatus,
+          currentYear: new Date().getFullYear()
+        });
+        // Only ever REMOVE a pin the guard proved un-matchable — a kept pin is left exactly as the
+        // caller built it, so this is a no-op on every watch that was already fireable.
+        if (pins.droppedYearPin) {
+          watch.year = undefined;
+          watch.yearMin = undefined;
+          watch.yearMax = undefined;
+        }
+        if (pins.droppedConditionPin) watch.condition = undefined;
+        if (pins.droppedYearPin || pins.droppedConditionPin) {
+          recordRouteOutcome("live", "context_note_watch_pin_dropped", {
+            convId: conv?.id,
+            leadKey: conv?.leadKey,
+            model,
+            droppedYearPin: pins.droppedYearPin,
+            droppedConditionPin: pins.droppedConditionPin,
+            yearReason: pins.yearReason,
+            conditionReason: pins.conditionReason
+          });
+        }
+      }
+      // exactness is derived AFTER the guards — a dropped year pin turns year_model back into
+      // model_only, and the literal above already defaults to model_only.
       if (watch.yearMin && watch.yearMax) watch.exactness = "model_range";
       else if (watch.year && (watch.color || watch.trim)) watch.exactness = "exact";
       else if (watch.year) watch.exactness = "year_model";
