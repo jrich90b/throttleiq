@@ -484,18 +484,63 @@ console.log("PASS mdf portal preflight eval");
 
 console.log("PASS mdf portal reliability additions");
 
-// === Windows download guard (2026-07-29): the console must not hand a Windows user the
-// macOS-only installer (a dead .sh — hit live testing the dealer-rollout scenario). ===
+// === Windows runner port (2026-07-29): OS-aware download + the .bat/PowerShell installer +
+// the daemon's cross-platform pieces. Joe hit the dead macOS .sh on a dealership Windows
+// desktop testing the rollout scenario; Windows now gets a real installer. ===
 {
   const fsx = await import("node:fs");
+  const { buildWindowsInstallerBat, buildWindowsInstallerPs1 } = await import(
+    "../services/api/src/domain/mdfRunnerWindowsInstaller.ts"
+  );
+
+  // 1) The console button is OS-aware: Windows gets the .bat, not the macOS .sh.
   const webSrc = fsx.readFileSync("apps/web/src/app/page.tsx", "utf8");
   assert.ok(
-    /Windows/i.test(webSrc) && /requires a Mac/.test(webSrc),
-    "the Download-runner button explains the Mac requirement to Windows users"
+    /if \(\/Windows\/i\.test\(ua\)\) \{[\s\S]{0,700}?install-windows[\s\S]{0,200}?return;/.test(webSrc),
+    "a Windows visitor downloads the Windows installer (install-windows), never the macOS .sh"
   );
+  assert.ok(/SmartScreen/.test(webSrc), "the Windows notice explains the SmartScreen run-anyway step");
+
+  // 2) The installer builder emits a well-formed double-clickable .bat + PowerShell payload.
+  const args = {
+    apiBase: "https://api.example.leadrider.ai",
+    runnerToken: "tok_eval_123",
+    repoUrl: "https://github.com/jrich90b/throttleiq.git",
+    branch: "main"
+  };
+  const bat = buildWindowsInstallerBat(args);
+  assert.ok(bat.startsWith("@echo off"), "bat header first (double-clickable)");
+  assert.ok(bat.includes("::PS1::"), "bat carries the payload marker");
+  assert.ok(bat.includes("-ExecutionPolicy Bypass -File"), "bat runs the extracted payload with Bypass");
+  assert.ok(bat.includes("\r\n"), "bat uses CRLF line endings (cmd.exe requirement)");
+  const ps1 = buildWindowsInstallerPs1(args);
+  assert.ok(ps1.includes("MDF_PORTAL_RUNNER_TOKEN=tok_eval_123"), "payload embeds the runner token in .env");
+  assert.ok(ps1.includes("MDF_PORTAL_API_BASE_URL=https://api.example.leadrider.ai"), "payload embeds the API base");
+  assert.ok(ps1.includes("MDF_PORTAL_CDP_URL=http://127.0.0.1:9222"), "payload configures the CDP url");
+  assert.ok(/Register-ScheduledTask -TaskName "LeadRider MDF Chrome"/.test(ps1), "dedicated CDP Chrome scheduled task");
+  assert.ok(/--remote-debugging-port=9222/.test(ps1), "Chrome starts with the CDP port");
+  assert.ok(/Register-ScheduledTask -TaskName "LeadRider MDF Runner"/.test(ps1), "daemon scheduled task");
+  assert.ok(/Register-ScheduledTask -TaskName "LeadRider MDF Runner Watchdog"/.test(ps1), "5-minute keep-alive watchdog task");
+  assert.ok(/log in there now/.test(ps1), "installer tells the human the one manual step (H-DNet login)");
+  assert.ok(/only ONE runner computer/.test(ps1), "installer surfaces the single-runner rule");
+  assert.ok(!/launchctl/.test(ps1), "no macOS plumbing leaks into the Windows payload");
+  assert.ok(!/—|’|“/.test(ps1), "payload stays ASCII-safe (bat extraction re-encodes)");
+  // PowerShell backticks would be corrupted by the TS template-literal embedding — the builder's
+  // quoting rule is concatenated single-quoted pieces, never backticks.
+  assert.ok(!ps1.includes("`"), "no PowerShell backticks in the payload (TS-template embedding rule)");
+
+  // 3) The API serves the .bat behind the same manager gate as the .sh.
+  const apiSrc = fsx.readFileSync("services/api/src/index.ts", "utf8");
   assert.ok(
-    /if \(\/Windows\/i\.test\(ua\)\) \{[\s\S]{0,400}?return;/.test(webSrc),
-    "a Windows visitor gets the notice INSTEAD of the dead installer download"
+    /app\.get\("\/mdf\/portal-runner\/install\.bat", requireManager/.test(apiSrc),
+    "install.bat endpoint exists and is manager-gated"
   );
+  assert.ok(/buildWindowsInstallerBat\(\{ apiBase, runnerToken, repoUrl, branch \}\)/.test(apiSrc), "endpoint uses the pure builder");
+
+  // 4) Daemon: win32 Chrome-heal branch (start-only, NEVER taskkill chrome.exe) + singleton lock.
+  const daemonSrc = fsx.readFileSync("scripts/mdf_portal_runner_daemon.ts", "utf8");
+  assert.ok(/\["\/Run", "\/TN", "LeadRider MDF Chrome"\]/.test(daemonSrc), "win32 auto-heal starts the Chrome scheduled task");
+  assert.ok(!/spawn\(\s*"taskkill/i.test(daemonSrc), "auto-heal never RUNS taskkill (would nuke a human's own Chrome windows)");
+  assert.ok(/acquireDaemonSingleton\(\)/.test(daemonSrc) && /leadrider-mdf-portal-daemon\.lock/.test(daemonSrc), "daemon singleton lock (watchdog duplicates exit instantly)");
 }
-console.log("PASS mdf runner windows download guard");
+console.log("PASS mdf runner windows port guards");

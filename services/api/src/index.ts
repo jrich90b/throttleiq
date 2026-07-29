@@ -131,6 +131,7 @@ import {
   type AgentTaskStatus
 } from "./domain/agentTaskStore.js";
 import { extractMdfClaimPacket, type MdfUploadedFile } from "./domain/mdfAssistant.js";
+import { buildWindowsInstallerBat } from "./domain/mdfRunnerWindowsInstaller.js";
 import {
   addMdfClaim,
   deleteMdfClaim,
@@ -49818,6 +49819,22 @@ echo "  \${LOG_DIR}/leadrider-mdf-runner.err.log"
 `;
   res.setHeader("Content-Type", "text/x-shellscript; charset=utf-8");
   res.setHeader("Content-Disposition", 'attachment; filename="leadrider-mdf-runner-install.sh"');
+  return res.send(script);
+});
+
+// Windows sibling of install.sh (dealer-rollout, 2026-07-29): a double-clickable .bat carrying a
+// PowerShell payload (builders in domain/mdfRunnerWindowsInstaller.ts — pure, eval-pinned). Same
+// manager gate + token embedding as the Mac installer.
+app.get("/mdf/portal-runner/install.bat", requireManager, async (req, res) => {
+  const runnerToken = String(process.env.MDF_PORTAL_RUNNER_TOKEN ?? process.env.AUTOMATION_RUN_WRITE_TOKEN ?? "").trim();
+  if (!runnerToken) return res.status(500).type("text/plain").send("MDF portal runner token is not configured.");
+  const apiBase = externalApiBase(req);
+  if (!apiBase) return res.status(500).type("text/plain").send("Could not determine API base URL for installer.");
+  const repoUrl = String(process.env.MDF_PORTAL_RUNNER_REPO_URL || "https://github.com/jrich90b/throttleiq.git").trim();
+  const branch = String(process.env.MDF_PORTAL_RUNNER_REPO_BRANCH || "main").trim();
+  const script = buildWindowsInstallerBat({ apiBase, runnerToken, repoUrl, branch });
+  res.setHeader("Content-Type", "application/octet-stream");
+  res.setHeader("Content-Disposition", 'attachment; filename="leadrider-mdf-runner-install.bat"');
   return res.send(script);
 });
 
