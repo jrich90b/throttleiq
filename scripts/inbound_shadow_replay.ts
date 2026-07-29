@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isDealerLeadAppConfirmedDemoRideAdfText } from "../services/api/src/domain/workflowRegressionGuards.ts";
 import { hasDeliveredOrPendingDealerRideThankYou } from "../services/api/src/domain/dealerRideThankYouDedup.ts";
+import { checkReplayFidelity, hasHydrationCompleted } from "../services/api/src/domain/replayFidelity.ts";
 import {
   isBareReactionOnlyInbound,
   isClosingAckNoAction,
@@ -598,6 +599,67 @@ async function waitForHealth(port: number, child: ChildProcessWithoutNullStreams
   throw new Error(`temporary API did not become healthy: ${logs.slice(-20).join("\n")}`);
 }
 
+/**
+ * Wait until the temporary API has the PREPARED thread in memory before replaying the
+ * turn.
+ *
+ * `/health` answers `{ok:true}` as soon as Express is listening — it does NOT await
+ * `whenConversationStoreReady()`. Firing the webhook in that window lands it on an
+ * empty store, which mints a fresh default-"suggest" conversation with no history and
+ * makes the agent draft a first-touch intro; the flywheel then judges that phantom as
+ * a `corpus_replay_regression` (see domain/replayFidelity.ts for the 2026-07-29
+ * reproduction). Gate on the store instead of on the port.
+ *
+ * Preferred signal is semantic: `GET /conversations/:id` returning the prepared thread
+ * with the forced replay mode (auth is disabled for shadow runs). Hydration's own
+ * completion log is accepted as a fallback so a re-keyed conversation id cannot wedge
+ * the harness. Neither within the deadline => throw, so the case surfaces as a visible
+ * error rather than a silent phantom.
+ */
+async function waitForPreparedConversation(args: {
+  port: number;
+  conversationId: string;
+  expectedMode: ReplayMode;
+  child: ChildProcessWithoutNullStreams;
+  logs: string[];
+}): Promise<void> {
+  const deadline = Date.now() + 60_000;
+  let lastObserved = "none";
+  let hydrationSeen = false;
+  while (Date.now() < deadline) {
+    if (args.child.exitCode != null) {
+      throw new Error(
+        `temporary API exited before the prepared thread loaded (${args.child.exitCode}): ${args.logs
+          .slice(-20)
+          .join("\n")}`
+      );
+    }
+    // Latch it: the log buffer is capped and rotates, so a later read can lose the line.
+    hydrationSeen = hydrationSeen || hasHydrationCompleted(args.logs);
+    try {
+      const res = await fetch(
+        `http://127.0.0.1:${args.port}/conversations/${encodeURIComponent(args.conversationId)}`
+      );
+      if (res.ok) {
+        const body: any = await res.json().catch(() => null);
+        const observed = String(body?.conversation?.mode ?? "").trim().toLowerCase();
+        lastObserved = observed || "unset";
+        if (observed === args.expectedMode) return;
+      } else {
+        lastObserved = `http ${res.status}`;
+      }
+    } catch {
+      // keep waiting — the API may still be wiring up routes
+    }
+    if (hydrationSeen) return;
+    await sleep(150);
+  }
+  throw new Error(
+    `prepared conversation never loaded before the replay (conv=${args.conversationId}, expected mode=` +
+      `${args.expectedMode}, last observed=${lastObserved}) — refusing to replay against an unhydrated store`
+  );
+}
+
 function repoRoot(): string {
   return path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 }
@@ -1160,6 +1222,16 @@ async function replayOne(
     child = started.child;
     logs = started.logs;
 
+    // Gate on the STORE, not just the port: a webhook fired before hydration settles
+    // lands on an empty store and manufactures a phantom regression.
+    await waitForPreparedConversation({
+      port,
+      conversationId: candidate.conversationId,
+      expectedMode: mode,
+      child,
+      logs
+    });
+
     const beforeCount = candidate.messageIndex;
     let responseStatus: number | undefined;
     let responseBodySnippet: string | undefined;
@@ -1204,6 +1276,15 @@ async function replayOne(
 
     await sleep(250);
     const convAfter = await readConversation(caseData.dataDir, candidate.conversationId);
+    // Backstop to the readiness gate: if the turn still did not run against the thread
+    // the harness prepared, surface a visible harness error instead of judging a draft
+    // that was produced without the prepared history.
+    const fidelity = checkReplayFidelity({
+      forcedMode: mode,
+      observedMode: (convAfter as any)?.mode ?? null,
+      conversationFound: !!convAfter
+    });
+    if (!fidelity.ok) throw new Error(`replay fidelity: ${fidelity.reason}`);
     if (!draft) {
       const outbound = latestOutboundAfter(convAfter, beforeCount);
       draft = outbound?.body?.trim() || null;
