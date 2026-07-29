@@ -58,6 +58,7 @@ export {
   decidePhotoQuestionTurn,
   decideInventoryUnitClarificationTurn,
   decideFeedbackRedraftTurn,
+  decideDemoRideRedraftGuard,
   resolveFinanceFollowUpContinuation,
   isExplicitSchedulingAskIntent,
   isOpenEndedTimeBoundParse,

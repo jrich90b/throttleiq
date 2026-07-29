@@ -15,7 +15,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
   decideFeedbackRedraftTurn,
-  buildFeedbackRedraftSteering
+  buildFeedbackRedraftSteering,
+  decideDemoRideRedraftGuard
 } from "../services/api/src/domain/routeStateReducer.ts";
 import { isTruncatedDraftBody } from "../services/api/src/domain/draftQualityGate.ts";
 
@@ -117,7 +118,9 @@ assert.match(
 );
 const helperStart = api.indexOf("async function maybeRedraftOnNegativeFeedback");
 assert.ok(helperStart > 0, "the redraft helper must exist");
-const helper = api.slice(helperStart, helperStart + 5400);
+// Window widened 2026-07-29: the GLA demo-ride guard added ~1.6k chars ahead of the LLM compose,
+// which pushed generateDraftWithLLM out of the old 5400-char slice.
+const helper = api.slice(helperStart, helperStart + 8000);
 assert.match(helper, /decideFeedbackRedraftTurn\(/, "redraft must route through the pure gate");
 assert.match(helper, /feedbackDownRedraftEnabled\(\)/, "redraft must be behind the kill switch");
 assert.match(helper, /provider === "draft_ai" && ratedMsg\?\.draftStatus !== "stale"/, "only a still-pending draft redrafts");
@@ -150,4 +153,56 @@ for (const sendToken of [/finalizeDraftAsSent\(/, /\/send\b/]) {
   assert.ok(!sendToken.test(helper), `redraft helper must NEVER send (${sendToken})`);
 }
 
-console.log("PASS feedback redraft eval (decision table + steering + safe-wiring source guard)");
+
+// --- GLA demo-ride guard (Joe ruling 2026-07-29, Braedon Halpin +18455515759) ------------------
+// Joe ruled 2026-07-02 that a corporate/GLA demo-ride lead gets ONE deterministic soft invite: no
+// scheduling push, no dealership visit push, and never a fabricated completed-ride frame (the lead
+// SOURCE does not prove the ride happened). That was only enforced on the arrival paths. On 7/28 a
+// thumbs-down (hadReason: false, no note) sent Braedon's correct invite through the free LLM
+// redraft, which produced "Awesome that you demoed the Low Rider ST with the Stage IV. Swing by
+// American H-D to check out bikes…" — both halves of the ruling broken in one message.
+const demoRows: {
+  id: string;
+  input: Parameters<typeof decideDemoRideRedraftGuard>[0];
+  kind: "soft_invite" | "free_redraft";
+}[] = [
+  // THE TARGET: exactly Braedon's shape — demo-ride lead, no staff instruction.
+  { id: "gla_demo_ride_no_note", input: { bucket: "event_promo", cta: "demo_ride_event" }, kind: "soft_invite" },
+  { id: "gla_demo_ride_case_insensitive", input: { bucket: "EVENT_PROMO", cta: "Demo_Ride_Event" }, kind: "soft_invite" },
+  // A staff INSTRUCTION still wins (Joe's 2026-07-23 obey-the-note ruling): a human deliberately
+  // steering this lead is different in kind from the model inventing a ride.
+  {
+    id: "staff_instruction_outranks",
+    input: { bucket: "event_promo", cta: "demo_ride_event", hasControllingInstruction: true },
+    kind: "free_redraft"
+  },
+  // FAIL DIRECTION: anything that is not this exact lead class redrafts normally.
+  { id: "other_event_promo_cta", input: { bucket: "event_promo", cta: "event_rsvp" }, kind: "free_redraft" },
+  { id: "sales_lead", input: { bucket: "inventory_interest", cta: "check_availability" }, kind: "free_redraft" },
+  { id: "unknown_classification", input: { bucket: null, cta: null }, kind: "free_redraft" },
+  { id: "missing_classification", input: {}, kind: "free_redraft" }
+];
+for (const row of demoRows) {
+  const got = decideDemoRideRedraftGuard(row.input);
+  assert.equal(got.kind, row.kind, `[demo ${row.id}] expected ${row.kind}, got ${got.kind} (${got.reason})`);
+}
+
+// Source guard: the redraft site rebuilds the SAME approved builder (no new copy), publishes as a
+// draft, and still never sends.
+assert.match(helper, /decideDemoRideRedraftGuard\(/, "the redraft helper applies the demo-ride guard");
+assert.match(
+  helper,
+  /buildDemoRideEventSoftInvite\(/,
+  "the guard rebuilds the APPROVED deterministic invite, it does not compose new copy"
+);
+assert.match(
+  helper,
+  /feedback_down_redraft_demo_ride_soft_invite/,
+  "the soft-invite redraft is observable in route outcomes"
+);
+assert.ok(
+  helper.indexOf("decideDemoRideRedraftGuard(") < helper.indexOf("generateDraftWithLLM("),
+  "the guard must run BEFORE the free LLM compose, otherwise it cannot prevent the fabricated frame"
+);
+
+console.log("PASS feedback redraft eval (decision table + steering + GLA demo-ride guard + safe-wiring source guard)");

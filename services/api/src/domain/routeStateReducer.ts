@@ -1323,6 +1323,50 @@ export function decideFeedbackRedraftTurn(input: FeedbackRedraftTurnInput): Feed
   };
 }
 
+/**
+ * A 👎 redraft must not break the GLA demo-ride ruling (Joe ruling 2026-07-29, Braedon Halpin
+ * +18455515759).
+ *
+ * Joe ruled on 2026-07-02 that a corporate/GLA demo-ride lead (bucket=event_promo,
+ * cta=demo_ride_event) gets ONE warm soft invite and nothing else: the ride does not happen at the
+ * dealership, so a scheduling push is wrong, a sweepstakes "good luck!" ack is wrong, and
+ * `buildDemoRideEventSoftInvite` deliberately contains NO appointment offer, NO availability claim
+ * and NO fabricated completed-ride frame ("thanks for your recent demo ride") — the lead SOURCE
+ * alone never proves the ride happened.
+ *
+ * That ruling was only enforced on the arrival paths, which compose the invite deterministically.
+ * The 👎 redraft path re-composes freely with `generateDraftWithLLM`, so on 7/28 staff down-rated
+ * Braedon's (correct) invite and the redraft produced "Awesome that you **demoed** the Low Rider ST
+ * with the Stage IV. Swing by American H-D to check out bikes…" — the fabricated completed-ride
+ * frame AND the dealership visit push, i.e. both halves of the ruling, in one message. Staff filed
+ * it a minute later. The redraft carried `hadReason: false` — no note at all.
+ *
+ * PRECEDENCE — an explicit staff INSTRUCTION still wins. Joe's 2026-07-23 obey-the-note ruling
+ * exists because staff know things the model doesn't; a human deliberately steering this lead is
+ * different in kind from the model inventing a ride that never happened. So: `action_request` note
+ * => free redraft (staff drives); anything else (no note, or a note that only says what was wrong)
+ * => rebuild the deterministic soft invite.
+ *
+ * Pure decision over the structured classification pair, applied at the single redraft site.
+ * FAIL DIRECTION: a missing/unknown bucket or cta falls through to the ordinary redraft, so this
+ * only ever constrains the one lead class Joe ruled on.
+ */
+export function decideDemoRideRedraftGuard(input: {
+  bucket?: string | null;
+  cta?: string | null;
+  hasControllingInstruction?: boolean;
+}): { kind: "soft_invite" | "free_redraft"; reason: string } {
+  const bucket = String(input.bucket ?? "").trim().toLowerCase();
+  const cta = String(input.cta ?? "").trim().toLowerCase();
+  if (bucket !== "event_promo" || cta !== "demo_ride_event") {
+    return { kind: "free_redraft", reason: "not_demo_ride_event_lead" };
+  }
+  if (input.hasControllingInstruction) {
+    return { kind: "free_redraft", reason: "staff_instruction_outranks_guard" };
+  }
+  return { kind: "soft_invite", reason: "demo_ride_event_lead_deterministic_invite" };
+}
+
 // --- Feedback diagnosis action (closed-loop Phase 2, 2026-06-24) -------------
 // Maps a classified thumbs-down (parseFeedbackFailureModeWithLLM) onto the action its LAYER warrants,
 // honoring the de-tangle split: VOICE issues are refined at the generation layer (never a routing

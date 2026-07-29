@@ -17,7 +17,8 @@ import { readFileSync } from "node:fs";
 const {
   isUnitUnavailabilityDisclosureText,
   hasDisclosedUnitUnavailabilityWithoutReply,
-  customerSourcedInterestColor
+  customerSourcedInterestColor,
+  decideBudgetWatchDisclosureSuppression
 } = await import("../services/api/src/domain/cadenceAvailabilityDisclosure.ts");
 
 let passed = 0;
@@ -166,6 +167,139 @@ check("held/sold override builds its unit label from a customer-sourced color on
     /color: item\?\.color \?\? context\.color/,
     "the model-search interest label must not attribute item.color/context.color (non-customer-sourced)"
   );
+});
+
+
+// --- A stated budget outranks the original unit (Joe ruling 2026-07-29, Derek Heath +17162440763) ---
+// He inquired on a 2022 Iron 883 (stock U111-22), was quoted ~$200-210/mo, said he needs ~$100/mo for
+// a first bike; staff armed him a model_only watch with maxPrice $5,000. Four months later the
+// PROACTIVE cadence sent "…the 2022 Iron 883, but that bike has sold. If you want, I can check
+// inventory with you so you can choose another bike." — the exact re-shop his watch already does,
+// on the unit he told us was out of reach. Open-critic: ignored_customer_budget_constraint.
+const budgetWatch = (over: Record<string, unknown> = {}) => ({
+  model: "Sportster 883",
+  status: "active",
+  maxPrice: 5000,
+  monthlyBudget: 200,
+  exactness: "model_only",
+  lastNotifiedStockId: "U117-04",
+  ...over
+});
+const DEREK_UNIT = { unitStockId: "U111-22", unitVin: "1HD4LE211NB407069" };
+
+check("THE TARGET: active budget watch suppresses the sold/hold touch on a different unit", () => {
+  const d = decideBudgetWatchDisclosureSuppression({ watches: [budgetWatch()], ...DEREK_UNIT });
+  assert.equal(d.disclose, false, `expected suppression, got ${JSON.stringify(d)}`);
+  assert.equal(d.reason, "active_budget_watch_covers_reshop");
+});
+
+check("the WATCHED unit's own sold/hold news still goes out (that is what a watch is for)", () => {
+  // by stock#...
+  assert.equal(
+    decideBudgetWatchDisclosureSuppression({
+      watches: [budgetWatch({ stockId: "U111-22" })],
+      ...DEREK_UNIT
+    }).disclose,
+    true
+  );
+  // ...and by VIN
+  assert.equal(
+    decideBudgetWatchDisclosureSuppression({
+      watches: [budgetWatch({ vin: "1HD4LE211NB407069" })],
+      ...DEREK_UNIT
+    }).disclose,
+    true
+  );
+  // lastNotifiedStockId counts as the watch's tracked unit too
+  assert.equal(
+    decideBudgetWatchDisclosureSuppression({
+      watches: [budgetWatch({ lastNotifiedStockId: "U111-22" })],
+      ...DEREK_UNIT
+    }).disclose,
+    true
+  );
+});
+
+check("FAIL DIRECTION: no watch, paused watch, or no stated budget => disclose (today's behavior)", () => {
+  assert.equal(decideBudgetWatchDisclosureSuppression({ watches: [], ...DEREK_UNIT }).disclose, true);
+  assert.equal(decideBudgetWatchDisclosureSuppression({ watches: null, ...DEREK_UNIT }).disclose, true);
+  assert.equal(
+    decideBudgetWatchDisclosureSuppression({ watches: [budgetWatch({ status: "paused" })], ...DEREK_UNIT }).disclose,
+    true,
+    "a paused watch promises nothing, so it cannot justify staying quiet"
+  );
+  assert.equal(
+    decideBudgetWatchDisclosureSuppression({
+      watches: [budgetWatch({ maxPrice: null, monthlyBudget: null })],
+      ...DEREK_UNIT
+    }).disclose,
+    true,
+    "a watch with no stated ceiling is not a budget statement"
+  );
+  assert.equal(
+    decideBudgetWatchDisclosureSuppression({
+      watches: [budgetWatch({ maxPrice: 0, monthlyBudget: 0 })],
+      ...DEREK_UNIT
+    }).disclose,
+    true,
+    "zero/absent budget is not a ceiling"
+  );
+});
+
+check("either ceiling alone is enough (maxPrice OR monthlyBudget)", () => {
+  assert.equal(
+    decideBudgetWatchDisclosureSuppression({
+      watches: [budgetWatch({ monthlyBudget: null })],
+      ...DEREK_UNIT
+    }).disclose,
+    false
+  );
+  assert.equal(
+    decideBudgetWatchDisclosureSuppression({
+      watches: [budgetWatch({ maxPrice: null })],
+      ...DEREK_UNIT
+    }).disclose,
+    false
+  );
+});
+
+check("ADVERSARIAL: one qualifying watch among several is enough; a stale/unbudgeted one is not", () => {
+  assert.equal(
+    decideBudgetWatchDisclosureSuppression({
+      watches: [budgetWatch({ status: "paused" }), budgetWatch({ maxPrice: null, monthlyBudget: null }), budgetWatch()],
+      ...DEREK_UNIT
+    }).disclose,
+    false,
+    "the one active budget watch decides"
+  );
+  assert.equal(
+    decideBudgetWatchDisclosureSuppression({
+      watches: [budgetWatch({ status: "paused" }), budgetWatch({ maxPrice: null, monthlyBudget: null })],
+      ...DEREK_UNIT
+    }).disclose,
+    true
+  );
+});
+
+check("BOTH proactive disclosure builders consult the shared read (route-parity law)", () => {
+  const api = readFileSync("services/api/src/index.ts", "utf8");
+  assert.match(
+    api,
+    /function budgetWatchSuppressesUnitDisclosure\(/,
+    "one shared read feeds both builders"
+  );
+  assert.match(
+    api,
+    /cadence\.lead_unit_disclosure_suppressed_budget_watch/,
+    "buildCadenceLeadUnitAvailabilityOverride applies it"
+  );
+  assert.match(
+    api,
+    /cadence\.exact_unavailable_disclosure_suppressed_budget_watch/,
+    "buildCadenceHeldInventoryOverride applies it"
+  );
+  const hits = api.match(/budgetWatchSuppressesUnitDisclosure\(conv, \{/g) ?? [];
+  assert.equal(hits.length, 2, `both builders must call it, found ${hits.length}`);
 });
 
 console.log(`\nCadence availability disclosure: ${passed} checks passed`);

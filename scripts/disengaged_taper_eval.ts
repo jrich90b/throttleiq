@@ -107,6 +107,27 @@ check("close-out copy is human, names the lead, invites re-engagement, no em-das
   assert.ok(buildDisengagedCadenceCloseout("").includes("there"), "falls back to 'there' with no name");
 });
 
+check("close-out never puts words in a silent customer's mouth (Joe ruling 2026-07-29, Syed John)", () => {
+  const text = buildDisengagedCadenceCloseout("Syed");
+  // This branch fires ONLY when customerEngagedWithCadence is false — nobody here has told us
+  // anything — so any frame implying the customer asked for space/time is fabricated by
+  // construction. Syed had even taken Giovanni's call two days before he got the old copy.
+  for (const fabricated of [
+    /no rush/i,
+    /take your time/i,
+    /whenever you.?re ready/i,
+    /when the time is right/i,
+    /you mentioned/i,
+    /sounds like you/i,
+    /since you.?re not ready/i
+  ]) {
+    assert.ok(!fabricated.test(text), `close-out must not imply the customer asked for space (${fabricated})`);
+  }
+  // It must still say WHY we're stopping (our reason) and keep the door open.
+  assert.ok(/pause|stop/i.test(text), "names that we are backing off");
+  assert.ok(/text me anytime/i.test(text), "door stays open");
+});
+
 check("advanceFollowUpCadence ENDS the cadence after the close-out touch for a silent lead", () => {
   const c = silentConv(8) as any; // about to send step 9 (the 10th touch / close-out)
   advanceFollowUpCadence(c, "America/New_York");

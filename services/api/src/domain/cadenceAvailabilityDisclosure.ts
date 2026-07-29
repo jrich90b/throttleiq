@@ -105,6 +105,77 @@ export function customerSourcedInterestColor(args: {
 }
 
 /**
+ * A stated budget outranks the original unit (Joe ruling 2026-07-29, Derek Heath +17162440763).
+ *
+ * Derek inquired on a 2022 Iron 883 (his lead unit, stock U111-22), learned it runs ~$200-210/mo,
+ * and told us he's after his first bike at **~$100/month**; staff answered honestly that we had
+ * nothing at that price and armed him an inventory watch — `model_only`, **maxPrice $5,000**. Four
+ * months later the proactive cadence sent "I know you were interested in the 2022 Iron 883, but
+ * that bike has sold. If you want, I can check inventory with you so you can choose another bike."
+ * Open-critic: `ignored_customer_budget_constraint`.
+ *
+ * Two things are wrong with that touch, and neither is the disclosure copy itself:
+ *   1. It re-anchors on the unit he explicitly moved OFF because it was out of reach.
+ *   2. Its call to action — "want me to check inventory so you can pick another bike?" — is
+ *      precisely what his armed watch already does automatically, except the watch respects the
+ *      budget and the open-ended re-shop does not.
+ *
+ * So when the customer carries an ACTIVE watch with a STATED budget ceiling, that watch is the
+ * newer and more specific statement of what they're shopping, and a proactive sold/hold touch
+ * about the original unit is not the right thing to send. The watch carries the thread.
+ *
+ * SCOPE — deliberately narrow:
+ *   - PROACTIVE cadence touches only. The RESPONSIVE reply-side disclosure is untouched: if the
+ *     customer asks about that bike we still answer honestly and immediately.
+ *   - Requires an ACTIVE watch AND a stated ceiling (`maxPrice` or `monthlyBudget`). No watch, a
+ *     paused watch, or a watch with no budget => today's behavior.
+ *   - Requires the disclosed unit to be a DIFFERENT unit than the one the watch is tracking. If
+ *     the watched unit itself went sold/held, telling them is the whole point of the watch.
+ *
+ * Deterministic read of structured, customer-sourced fields (watch status + captured budget +
+ * stock#/VIN identity) — a side-effect/state guard per AGENTS.md, not customer comprehension.
+ * FAIL DIRECTION: this can only ever make the agent quieter about a bike that is already gone, on
+ * a lead who still has an armed watch that will fire when something in range lands. It never
+ * suppresses a reply and never silences a lead who has no budget on file.
+ */
+export type BudgetWatchLike = {
+  status?: string | null;
+  maxPrice?: number | null;
+  monthlyBudget?: number | null;
+  stockId?: string | null;
+  vin?: string | null;
+  lastNotifiedStockId?: string | null;
+};
+
+export function decideBudgetWatchDisclosureSuppression(input: {
+  watches: BudgetWatchLike[] | null | undefined;
+  unitStockId?: string | null;
+  unitVin?: string | null;
+}): { disclose: boolean; reason: string } {
+  const watches = Array.isArray(input.watches) ? input.watches : [];
+  const norm = (v: unknown) => String(v ?? "").trim().toLowerCase();
+  const unitStock = norm(input.unitStockId);
+  const unitVin = norm(input.unitVin);
+
+  for (const w of watches) {
+    if (!w) continue;
+    if (norm(w.status) !== "active") continue;
+    const maxPrice = Number(w.maxPrice ?? NaN);
+    const monthlyBudget = Number(w.monthlyBudget ?? NaN);
+    const hasBudget =
+      (Number.isFinite(maxPrice) && maxPrice > 0) || (Number.isFinite(monthlyBudget) && monthlyBudget > 0);
+    if (!hasBudget) continue;
+    // The watch is tracking THIS unit -> its sold/hold news is exactly what the watch is for.
+    const watchStock = norm(w.stockId) || norm(w.lastNotifiedStockId);
+    const watchVin = norm(w.vin);
+    if (unitStock && watchStock && unitStock === watchStock) continue;
+    if (unitVin && watchVin && unitVin === watchVin) continue;
+    return { disclose: false, reason: "active_budget_watch_covers_reshop" };
+  }
+  return { disclose: true, reason: watches.length ? "no_active_budget_watch" : "no_watches" };
+}
+
+/**
  * Extend the customer-sourced-color rule to ALL sold/hold disclosure branches (Joe ruling
  * 2026-07-23, the +17166021492 family; extends the 2026-07-19 William Wittmeyer ruling that
  * already covers the cadence held-inventory override).

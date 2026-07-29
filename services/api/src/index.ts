@@ -14,7 +14,7 @@ import OpenAI, { toFile } from "openai";
 import { google } from "googleapis";
 import sharp from "sharp";
 import { orchestrateInbound, evaluateTestRideInventoryGate, buildBlockedTestRideInventoryDraft } from "./domain/orchestrator.js";
-import { buildAgentIntro, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildWatchAvailableReply, buildCholoWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, hasCustomerReceivedOutbound } from "./domain/agentVoice.js";
+import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildWatchAvailableReply, buildCholoWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, hasCustomerReceivedOutbound } from "./domain/agentVoice.js";
 import {
   postSaleVehicleIsNew,
   postSaleAccessoryOrEnjoyMessage,
@@ -714,6 +714,7 @@ import {
   decidePhotoQuestionTurn,
   decideInventoryUnitClarificationTurn,
   decideFeedbackRedraftTurn,
+  decideDemoRideRedraftGuard,
   resolveFinanceFollowUpContinuation,
   isExplicitSchedulingAskIntent,
   isOpenEndedTimeBoundParse,
@@ -835,7 +836,8 @@ import {
 import {
   hasDisclosedUnitUnavailabilityWithoutReply,
   customerSourcedInterestColor,
-  applyCustomerSourcedColorToUnitLabel
+  applyCustomerSourcedColorToUnitLabel,
+  decideBudgetWatchDisclosureSuppression
 } from "./domain/cadenceAvailabilityDisclosure.js";
 import {
   decideCadenceHoldTtlResume,
@@ -13746,6 +13748,28 @@ async function leadUnitUnavailableForValueGate(conv: any): Promise<boolean> {
   }
 }
 
+/**
+ * Shared read for the budget-watch disclosure suppression (Joe ruling 2026-07-29, Derek Heath
+ * +17162440763). Feeds the pure decision from the conversation's stored watches so BOTH proactive
+ * sold/hold disclosure builders read one definition (route-parity law). True => stay quiet about
+ * this gone unit; the customer's armed budget watch already carries the re-shop.
+ */
+function budgetWatchSuppressesUnitDisclosure(
+  conv: any,
+  unit: { stockId?: string | null; vin?: string | null }
+): boolean {
+  try {
+    const decision = decideBudgetWatchDisclosureSuppression({
+      watches: collectInventoryWatches(conv) as any[],
+      unitStockId: unit.stockId ?? null,
+      unitVin: unit.vin ?? null
+    });
+    return !decision.disclose;
+  } catch {
+    return false; // fail-safe: any read failure keeps today's behavior (disclose)
+  }
+}
+
 async function buildCadenceLeadUnitAvailabilityOverride(args: {
   conv: any;
   name: string;
@@ -13780,6 +13804,21 @@ async function buildCadenceLeadUnitAvailabilityOverride(args: {
   // every cadence step (Lizbeth +18035525355 got it 5×) — the watch armed below on
   // the first disclosure carries the follow-through; let the normal cadence run.
   if (hasDisclosedUnitUnavailabilityWithoutReply(conv?.messages)) return null;
+
+  // A stated budget outranks the original unit (Joe ruling 2026-07-29, Derek Heath). An armed
+  // budget watch already promises "I'll text you when something in your range lands", so a
+  // proactive "your original bike sold — want to browse?" is the wrong touch. Reply-side
+  // disclosure is unaffected. Pinned by cadence_availability_disclosure:eval.
+  if (budgetWatchSuppressesUnitDisclosure(conv, { stockId, vin })) {
+    recordDecisionTrace({
+      scope: "regen",
+      stage: "cadence.lead_unit_disclosure_suppressed_budget_watch",
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      detail: { stockId, vin }
+    });
+    return null;
+  }
 
   // Sold-news staleness cap (Joe ruling 2026-07-23): a months-old sale is not news — never
   // open a proactive cadence touch with a stale "quick update — it's no longer available".
@@ -14668,7 +14707,27 @@ async function buildCadenceHeldInventoryOverride(args: {
         ]
       : [];
   const exactUnavailable = findExactCadenceUnavailableUnit({ conv, holds, solds, extraRefs: parserExactRefs });
-  if (exactUnavailable && cadenceHeldUnitConsistent(exactUnavailable.item, exactUnavailable.ref)) {
+  // A stated budget outranks the original unit (Joe ruling 2026-07-29, Derek Heath +17162440763):
+  // this is the exact branch that sent him "I know you were interested in the 2022 Iron 883, but
+  // that bike has sold. If you want, I can check inventory with you so you can choose another
+  // bike." — a re-shop offer his armed $5,000-ceiling watch already covers, on the unit he told us
+  // was out of reach. Same shared read as the lead-unit builder (route-parity law).
+  const exactSuppressedByBudgetWatch =
+    !!exactUnavailable &&
+    budgetWatchSuppressesUnitDisclosure(conv, {
+      stockId: exactUnavailable.ref?.stockId ?? null,
+      vin: exactUnavailable.ref?.vin ?? null
+    });
+  if (exactSuppressedByBudgetWatch) {
+    recordDecisionTrace({
+      scope: "regen",
+      stage: "cadence.exact_unavailable_disclosure_suppressed_budget_watch",
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      detail: { stockId: exactUnavailable?.ref?.stockId ?? null, vin: exactUnavailable?.ref?.vin ?? null }
+    });
+  }
+  if (!exactSuppressedByBudgetWatch && exactUnavailable && cadenceHeldUnitConsistent(exactUnavailable.item, exactUnavailable.ref)) {
     const firstName = normalizeDisplayCase(args.name || "there");
     const fallbackModel =
       context.model && !isUnknownCadenceModel(context.model)
@@ -40466,6 +40525,39 @@ async function maybeRedraftOnNegativeFeedback(args: {
   try {
     const dealerProfile = await getDealerProfileHot();
     const lead = conv.lead ?? {};
+    // GLA demo-ride guard (Joe ruling 2026-07-29, Braedon Halpin +18455515759): a 👎 redraft on a
+    // corporate demo-ride lead must NOT be a free LLM compose — that is how the redraft produced
+    // "Awesome that you demoed the Low Rider ST … swing by", inventing a completed ride and pushing
+    // a dealership visit, both forbidden by Joe's 2026-07-02 ruling. Rebuild the SAME deterministic
+    // soft invite the arrival paths use (agentVoice.buildDemoRideEventSoftInvite — one builder, now
+    // three call sites). An explicit staff instruction still outranks this.
+    const demoRideGuard = decideDemoRideRedraftGuard({
+      bucket: (conv as any)?.classification?.bucket ?? null,
+      cta: (conv as any)?.classification?.cta ?? null,
+      hasControllingInstruction: !!controllingInstruction
+    });
+    if (demoRideGuard.kind === "soft_invite") {
+      const drAgentName = String((dealerProfile as any)?.agentName ?? "").trim() || "Sales Team";
+      const drDealerName = String((dealerProfile as any)?.dealerName ?? "").trim() || "American Harley-Davidson";
+      const drFirstName =
+        String((lead as any)?.firstName ?? (lead as any)?.name ?? "").trim().split(/\s+/)[0] || null;
+      const drVehicle = (lead as any)?.vehicle ?? {};
+      const drYear = String(drVehicle?.year ?? "").trim();
+      const drModel = String(drVehicle?.model ?? drVehicle?.description ?? "").trim();
+      const drBikeLabel = [drYear, drModel].filter(Boolean).join(" ").trim() || null;
+      const invite = buildDemoRideEventSoftInvite(drFirstName, drAgentName, drDealerName, drBikeLabel);
+      saveOperatorDraft(conv, {
+        body: invite,
+        channel: "sms",
+        actor: { userName: "Auto-redraft (thumbs-down)" }
+      });
+      recordRouteOutcome("manual", "feedback_down_redraft_demo_ride_soft_invite", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        reason: demoRideGuard.reason
+      });
+      return { redrafted: true, draft: invite };
+    }
     const redraft = String(
       (await generateDraftWithLLM({
         channel: "sms",

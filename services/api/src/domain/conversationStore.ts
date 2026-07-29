@@ -4803,9 +4803,17 @@ export function customerEngagedWithCadence(conv: Conversation): boolean {
   );
 }
 
+// Don't put words in a silent customer's mouth (Joe ruling 2026-07-29, Syed John +12065383753).
+// The old copy opened "No rush at all, {name}." — which reads as though the customer ASKED for
+// space. By construction this close-out only ever fires on a lead who never wrote back
+// (shouldSendDisengagedCloseout requires !customerEngagedWithCadence), so that frame is fabricated
+// 100% of the time it is used: nobody in this branch has told us anything. Syed had actually taken
+// Giovanni's call two days earlier and still got it. The honest version names OUR reason — we've
+// reached out plenty and don't want to crowd them — and keeps the door open the same way.
+// Fabricated-frame class: see [[adf-form-vs-question-framing]].
 export function buildDisengagedCadenceCloseout(firstName?: string): string {
   const name = String(firstName ?? "").trim() || "there";
-  return `No rush at all, ${name}. I'll stop reaching out for now, but just text me anytime you're ready and I'll jump right back in to help.`;
+  return `I'll pause my check-ins here so I'm not crowding your phone, ${name}. Text me anytime you're ready and I'll jump right back in to help.`;
 }
 
 // True when the touch about to be sent should be the disengagement close-out:
