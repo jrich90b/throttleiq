@@ -12277,6 +12277,12 @@ output: {"topic":"test_ride_eligibility","explicit_request":true,"confidence":0.
     `EXAMPLE M
 inbound: "Do you have any black Street Glides in stock?"
 output: {"topic":"none","explicit_request":true,"confidence":0.99}`,
+    `EXAMPLE M2
+inbound: "Do any dealers have this bike in stock or do I need to find a used one?"
+output: {"topic":"none","explicit_request":true,"confidence":0.97}`,
+    `EXAMPLE M3
+inbound: "Is this still available anywhere new or is it used only now?"
+output: {"topic":"none","explicit_request":true,"confidence":0.96}`,
     `EXAMPLE N
 inbound: "Run this at 72 months with $5,000 down."
 output: {"topic":"none","explicit_request":true,"confidence":0.99}`,
@@ -12317,6 +12323,7 @@ output: {"topic":"none","explicit_request":true,"confidence":0.99}`
     "Rules:",
     "- If message is a transactional request (specific availability, exact payment calc, scheduling), choose none.",
     "- Current in-stock availability (for example \"in stock right now\") is none; future/incoming availability (for example \"coming in\", \"getting any\", \"on order\") is factory_order_timing.",
+    "- \"Does anyone have this in stock\" / \"do I need to find a used one\" is asking where an EXISTING unit is, not how long an order takes => none. factory_order_timing needs the customer to be asking about a unit the FACTORY still has to build.",
     "- explicit_request=true only when user clearly asks a question/request.",
     "- confidence is 0..1.",
     "",

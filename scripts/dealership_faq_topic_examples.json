@@ -78,5 +78,21 @@
       "topic": "payment_methods",
       "explicit_request": true
     }
+  },
+  {
+    "id": "stock_or_used_hunt_discontinued_1",
+    "text": "Do any dealers have this bike in stock or do I need to find a used one?",
+    "expected": {
+      "topic": "none",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "still_sold_new_or_used_only_1",
+    "text": "Is this still available anywhere new or is it used only now?",
+    "expected": {
+      "topic": "none",
+      "explicit_request": true
+    }
   }
 ]

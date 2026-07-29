@@ -5,7 +5,12 @@ import crypto from "node:crypto";
 import { XMLParser } from "fast-xml-parser";
 import { extractAdfXmlFromEmail, parseAdfXml, stripFeedInventoryTailFromModel } from "../domain/adfParser.js";
 import { parsePreferredAdfDate } from "../domain/preferredAdfDate.js";
-import { resolveModelDiscontinuation } from "../domain/modelDiscontinuation.js";
+import {
+  resolveModelDiscontinuation,
+  decideInitialAdfOrderAnswer,
+  buildDiscontinuedFactoryOrderReply,
+  modelDiscontinuationReplyEnabled
+} from "../domain/modelDiscontinuation.js";
 import { decideWatchYearPin, decideWatchConditionPin } from "../domain/watchYearPin.js";
 import { customerVisitConfirmed, phantomVisitGuardEnabled } from "../domain/visitFraming.js";
 import { hasDeliveredOrPendingDealerRideThankYou } from "../domain/dealerRideThankYouDedup.js";
@@ -3830,6 +3835,28 @@ async function buildInitialAdfUnavailableInventoryWatch(args: {
     }),
     watch
   };
+}
+
+/**
+ * Initial-ADF factory-order guard: never promise a factory order on a model the factory stopped building.
+ *
+ * The SMS/orchestrator path already diverts a confidently-discontinued model to an honest reply
+ * (orchestrator.ts, MODEL_DISCONTINUATION_REPLY_ENABLED, live). The initial-ADF order branches returned
+ * EARLY with a factory-order ack and never reached it — a two-path gap that only had a hardcoded Street
+ * 750 patch. +15416478489 (Mark Griffin, 7/29) was the second instance: a 2023 Fat Bob 114 ADF drew
+ * "factory orders are usually around 6 to 12 weeks". Fat Bob is the very model the discontinuation
+ * heuristic was validated against (0 MSRP entries).
+ *
+ * Same kill switch as the orchestrator path, and the same conservatism — anything short of a CONFIDENT
+ * "discontinued" keeps the ordinary factory-order answer, so this only ever removes a false promise.
+ */
+async function resolveInitialAdfOrderAnswer(conv: {
+  lead?: { vehicle?: { model?: string } };
+}): Promise<"discontinued" | "factory_order"> {
+  const model = String(conv.lead?.vehicle?.model ?? "").trim();
+  if (!model || !modelDiscontinuationReplyEnabled()) return "factory_order";
+  const { status } = await resolveModelDiscontinuation(model);
+  return decideInitialAdfOrderAnswer({ modelStatus: status }).answer;
 }
 
 export async function handleSendgridInbound(req: Request, res: Response) {
@@ -8212,6 +8239,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     if (asksStreet750) {
       ack =
         "Great question — Harley-Davidson no longer sells the Street 750 new, so we can’t factory-order that model. I can help with similar new options or locate pre-owned Street 750s for you. What matters most to you: price, engine size, or style?";
+    } else if ((await resolveInitialAdfOrderAnswer(conv)) === "discontinued") {
+      ack = buildDiscontinuedFactoryOrderReply(String(conv.lead?.vehicle?.model ?? ""));
     }
     ack = await applyInitialAdfPrefix(ack);
     // Every initial-ADF reply must start a re-engagement cadence (unless the
@@ -8268,6 +8297,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     if (asksStreet750) {
       ack =
         "Great question — Harley-Davidson no longer sells the Street 750 new, so we can’t factory-order that model. I can help with similar new options or locate pre-owned Street 750s for you. What matters most to you: price, engine size, or style?";
+    } else if ((await resolveInitialAdfOrderAnswer(conv)) === "discontinued") {
+      ack = buildDiscontinuedFactoryOrderReply(String(conv.lead?.vehicle?.model ?? ""));
     }
     ack = await applyInitialAdfPrefix(ack);
     // Every initial-ADF reply must start a re-engagement cadence (unless the

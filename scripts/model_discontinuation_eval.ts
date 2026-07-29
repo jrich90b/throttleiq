@@ -10,7 +10,10 @@ import {
   decideModelDiscontinuation,
   MSRP_MATCH_MIN_SCORE,
   buildDiscontinuedModelReply,
-  modelDiscontinuationReplyEnabled
+  buildDiscontinuedFactoryOrderReply,
+  decideInitialAdfOrderAnswer,
+  modelDiscontinuationReplyEnabled,
+  type DiscontinuationStatus
 } from "../services/api/src/domain/modelDiscontinuation.ts";
 import { findModelInMsrp, MSRP_SHEET_MODEL_YEAR } from "../services/api/src/domain/msrpPriceList.ts";
 
@@ -66,4 +69,43 @@ assert.ok(/modelDiscontinuationReplyEnabled\(\)/.test(orch), "the guard is gated
 assert.ok(/resolveModelDiscontinuation\(/.test(orch) && /buildDiscontinuedModelReply\(/.test(orch), "orchestrator resolves status + builds the reply");
 assert.ok(/disc\.status === "discontinued"/.test(orch), "only a confident 'discontinued' triggers the reply");
 
-console.log(`PASS model-discontinuation — ${cases.length} decision cases (4 pillars: ${byPillar[1]}/${byPillar[2]}/${byPillar[3]}/${byPillar[4]}) + real-sheet validation + reply builder + dark-flag + orchestrator source guard.`);
+// --- initial-ADF factory-order answer: never promise an order on a model the factory stopped building ---
+// (+15416478489 Mark Griffin 7/29: a 2023 Fat Bob 114 ADF drew "factory orders are usually around 6 to
+// 12 weeks". The SMS path already diverted; the initial-ADF order branch returned early and bypassed it.)
+const orderCases: { id: string; status: DiscontinuationStatus; answer: string }[] = [
+  // THE TARGET — the only status that may divert
+  { id: "discontinued_diverts", status: "discontinued", answer: "discontinued" },
+  // Everything short of confident stays on the ordinary answer — removing this decision is a no-op
+  { id: "current_keeps_order", status: "current", answer: "factory_order" },
+  { id: "available_keeps_order", status: "available", answer: "factory_order" },
+  { id: "unknown_keeps_order", status: "unknown", answer: "factory_order" }
+];
+for (const c of orderCases) {
+  const got = decideInitialAdfOrderAnswer({ modelStatus: c.status });
+  assert.equal(got.answer, c.answer, `[order ${c.id}] expected ${c.answer}, got ${got.answer} (${got.reason})`);
+}
+
+const orderReply = buildDiscontinuedFactoryOrderReply("Harley-Davidson Fat Bob 114");
+assert.ok(/Fat Bob 114/.test(orderReply) && !/Harley-Davidson Fat Bob/.test(orderReply), "names the model, make-prefix stripped");
+assert.ok(/no longer sells/i.test(orderReply) && /can’t factory-order|cannot factory-order/i.test(orderReply), "answers the ORDER question, not just availability");
+assert.ok(/pre-owned/i.test(orderReply), "points at the real path (pre-owned) — the customer's actual out");
+assert.ok(!/6 to 12 weeks|in stock|still available/i.test(orderReply), "must NOT promise order timing or fabricate stock");
+// The Street 750 hardcode this generalizes must still produce the same shape.
+assert.ok(/Street 750/.test(buildDiscontinuedFactoryOrderReply("Street 750")), "generalizes the Street 750 one-off");
+
+// --- source guard: BOTH initial-ADF order branches consult the guard, behind the same kill switch ---
+const adf = fs.readFileSync("services/api/src/routes/sendgridInbound.ts", "utf8");
+assert.ok(/decideInitialAdfOrderAnswer\(/.test(adf), "ADF path uses the pure decision");
+assert.ok(/modelDiscontinuationReplyEnabled\(\)/.test(adf), "ADF path shares the orchestrator's kill switch");
+const orderBranchHits = adf.match(/resolveInitialAdfOrderAnswer\(conv\)\) === "discontinued"/g) ?? [];
+assert.equal(orderBranchHits.length, 2, `both order branches (parser-accepted + lexical fallback) must be guarded, found ${orderBranchHits.length}`);
+assert.ok(/buildDiscontinuedFactoryOrderReply\(/.test(adf), "ADF path builds the order-framed reply");
+
+// --- parser side: the comprehension miss that started it is pinned as a few-shot ---
+const draft = fs.readFileSync("services/api/src/domain/llmDraft.ts", "utf8");
+assert.ok(
+  /Do any dealers have this bike in stock or do I need to find a used one\?/.test(draft),
+  "the Mark Griffin inbound is a faq-topic few-shot (must read as availability, not factory_order_timing)"
+);
+
+console.log(`PASS model-discontinuation — ${cases.length} decision cases (4 pillars: ${byPillar[1]}/${byPillar[2]}/${byPillar[3]}/${byPillar[4]}) + real-sheet validation + reply builder + dark-flag + orchestrator source guard + ${orderCases.length} initial-ADF order cases + ADF branch/parser guards.`);

@@ -80,6 +80,42 @@ export function buildDiscontinuedModelReply(model: string): string {
   return `Heads up — looks like we're not carrying the ${clean} anymore. I can still pull real numbers on the closest current models we've got — want me to send a couple options that fit what you're after?`;
 }
 
+/**
+ * The FACTORY-ORDER variant of the discontinued reply. Same fact, framed as the answer to the question
+ * that was actually asked ("can you order me one / how long does an order take"): you can't factory-order
+ * a model the factory stopped building, and the real path is a pre-owned find.
+ *
+ * This generalizes the one-off Street 750 sentence that lived inline in the initial-ADF order branch
+ * (sendgridInbound.ts) — the hardcode was the first instance of this class (+15416478489 Mark Griffin,
+ * 7/29: a 2023 Fat Bob 114 "do any dealers have this in stock or do I need to find a used one?" drew
+ * "factory orders are usually 6 to 12 weeks", a promise we cannot keep; staff hand-corrected it 50 min
+ * later). Copy is deliberately the Street 750 wording with the model swapped, NOT a new frame.
+ */
+export function buildDiscontinuedFactoryOrderReply(model: string): string {
+  const clean = String(model ?? "").replace(/^harley[-\s]?davidson\s+/i, "").trim() || "that model";
+  return (
+    `Great question — Harley-Davidson no longer sells the ${clean} new, so we can’t factory-order that model. ` +
+    `I can help with similar new options or locate pre-owned ${clean}s for you. ` +
+    "What matters most to you: price, engine size, or style?"
+  );
+}
+
+/**
+ * Pure decision: is a factory-order / order-timing answer safe to send for this model?
+ *
+ * FAIL DIRECTION mirrors the module's contract — a FALSE "discontinued" is the dangerous error (it kills
+ * a live sale), so only a CONFIDENT "discontinued" diverts. "unknown", "current" and "available" all keep
+ * the ordinary factory-order answer, i.e. removing this decision reverts to the previous behavior.
+ */
+export function decideInitialAdfOrderAnswer(input: {
+  modelStatus: DiscontinuationStatus;
+}): { answer: "discontinued" | "factory_order"; reason: string } {
+  if (input.modelStatus === "discontinued") {
+    return { answer: "discontinued", reason: "model_confidently_discontinued" };
+  }
+  return { answer: "factory_order", reason: `model_status_${input.modelStatus}` };
+}
+
 /** Reads MODEL_DISCONTINUATION_REPLY_ENABLED. Default OFF (dark) — the live cutover is approve-first. */
 export function modelDiscontinuationReplyEnabled(): boolean {
   const raw = String(process.env.MODEL_DISCONTINUATION_REPLY_ENABLED ?? "").trim().toLowerCase();
