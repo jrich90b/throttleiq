@@ -21,6 +21,12 @@ import {
   portalFormDidNotExpandSummary,
   portalRunDeadlineSummary,
   sessionExpiredSummary,
+  activityYearFromDates,
+  composeRescueSummary,
+  pruneSessionRetryQueue,
+  upsertSessionRetryEntry,
+  sessionExpiredAutoRetrySummary,
+  type SessionRetryEntry,
   type CdpTargetStats
 } from "./mdf_portal_preflight.ts";
 
@@ -420,7 +426,14 @@ function buildPrompt(task: AgentTask, claim: MdfClaimEntry, options: RunnerOptio
   // mapped from the live form 2026-06-17). Year prefix comes from the activity start date.
   const claimTypeLc = String(claim.packet.claimType ?? "").toLowerCase();
   const activityTypeLc = String(claim.packet.activityType ?? "").toLowerCase();
-  const activityYear = String(fields.activityStartDate ?? "").slice(0, 4) || new Date().getFullYear().toString();
+  // Robust year extraction (2026-07-29): the old slice(0,4) mangled US-format dates
+  // ("06/01/2026" -> "06/0 Media Claim" in the live 7/17 packets). activityYearFromDates
+  // finds the 4-digit year in either date format, in either date field.
+  const activityYear = activityYearFromDates(
+    String(fields.activityStartDate ?? ""),
+    String(fields.activityEndDate ?? ""),
+    new Date().getFullYear()
+  );
   const marketingActivity =
     claimTypeLc.includes("event") || activityTypeLc.includes("event")
       ? `${activityYear} Event Claim`
@@ -1088,8 +1101,16 @@ async function fillInvoiceSection(page: any, index: number, invoice: MdfPortalIn
 
 function portalClaimTypeLabel(claim: MdfClaimEntry): string | null {
   const claimType = String(claim.packet.claimType || "").toLowerCase();
-  if (claimType === "media") return "2026 Media Claim";
-  if (claimType === "event") return "2026 Event Claim";
+  // Year derived from the claim's activity dates (2026-07-29) — the label was HARDCODED
+  // "2026", a silent January-rollover bomb (the option becomes "2027 Media Claim" and
+  // every media/event run would fail the marketing-option preflight until hand-edited).
+  const year = activityYearFromDates(
+    extractedField(claim, ["activityStartDate", "activity_start_date", "startDate"]),
+    extractedField(claim, ["activityEndDate", "activity_end_date", "endDate"]),
+    new Date().getFullYear()
+  );
+  if (claimType === "media") return `${year} Media Claim`;
+  if (claimType === "event") return `${year} Event Claim`;
   if (claimType === "map_only") return "Minimum Advertised Price (MAP) Only";
   return null;
 }
@@ -1448,6 +1469,78 @@ async function checkAnsiraSessionViaCdp(cdpUrl: string): Promise<{ expired: bool
 }
 
 /**
+ * Session-recovery UX (2026-07-29): when the session preflight finds the SSO expired,
+ * open the H-DNet login page in the runner Chrome and bring it to front — the human
+ * just logs in (MFA) in the window that pops up; the retry queue below finishes the
+ * claim automatically afterwards. Opens/reuses a tab, NEVER touches credentials.
+ * Best-effort: any failure here only degrades the UX (the summary still tells the
+ * human what to do), never the run outcome.
+ */
+async function openLoginPageForSessionRecovery(cdpUrl: string, portalUrl: string): Promise<boolean> {
+  let browser: import("playwright").Browser | null = null;
+  try {
+    browser = await connectRunnerBrowser(cdpUrl);
+    const context = browser.contexts()[0];
+    if (!context) return false;
+    const existing = context.pages().find(p => /h-dnet\.com|login\.microsoftonline\.com/i.test(p.url()));
+    const page = existing ?? (await context.newPage());
+    if (!existing) await page.goto(portalUrl, { timeout: 30_000, waitUntil: "domcontentloaded" }).catch(() => {});
+    await page.bringToFront().catch(() => {});
+    return true;
+  } catch {
+    return false;
+  } finally {
+    await browser?.close().catch(() => {});
+  }
+}
+
+// --- Session-retry queue (2026-07-29): preflight-blocked tasks auto-retry after login ---
+const sessionRetryQueuePath = path.join(runsDir, "session_retry_queue.json");
+
+async function loadSessionRetryQueue(): Promise<SessionRetryEntry[]> {
+  const raw = await readJson<SessionRetryEntry[]>(sessionRetryQueuePath, []);
+  return pruneSessionRetryQueue(Array.isArray(raw) ? raw : [], Date.now());
+}
+
+async function saveSessionRetryQueue(entries: SessionRetryEntry[]): Promise<void> {
+  await mkdir(runsDir, { recursive: true }).catch(() => {});
+  await writeJson(sessionRetryQueuePath, entries);
+}
+
+async function recordSessionRetryCandidate(taskId: string, claimId: string): Promise<void> {
+  try {
+    const queue = await loadSessionRetryQueue();
+    await saveSessionRetryQueue(upsertSessionRetryEntry(queue, { taskId, claimId }, Date.now()));
+  } catch {
+    /* queue is a UX enhancement — never fail the run over it */
+  }
+}
+
+/**
+ * Idle-tick hook: if a preflight-blocked task is waiting on a login and the session is
+ * LIVE again, return it for an automatic re-run (attempts bumped + persisted first, so
+ * a crashing retry can't loop). SAFE BY CONSTRUCTION: only session-PREFLIGHT-blocked
+ * tasks enter the queue, and that preflight aborts before ANY portal interaction — a
+ * retry can never duplicate an Ansira draft.
+ */
+async function pickSessionRetryTask(tasks: AgentTask[], options: RunnerOptions): Promise<AgentTask | null> {
+  if (!options.cdpUrl) return null;
+  let queue = await loadSessionRetryQueue().catch(() => [] as SessionRetryEntry[]);
+  if (!queue.length) return null;
+  const alive = queue.filter(entry => tasks.some(t => t.id === entry.taskId && t.status === "blocked"));
+  if (alive.length !== queue.length) await saveSessionRetryQueue(alive).catch(() => {});
+  if (!alive.length) return null;
+  const session = await checkAnsiraSessionViaCdp(options.cdpUrl);
+  if (session.expired) return null; // still logged out — keep waiting
+  const entry = alive[0];
+  entry.attempts = (entry.attempts ?? 0) + 1;
+  await saveSessionRetryQueue(alive).catch(() => {});
+  const task = tasks.find(t => t.id === entry.taskId) ?? null;
+  if (task) console.log(`Session restored — automatically retrying MDF task ${task.id}.`);
+  return task;
+}
+
+/**
  * Run-level watchdog for the portal-draft fill. Playwright's per-action 30s default
  * does NOT cover browser-level CDP calls (newPage/bringToFront), so a hung one wedges
  * the tick forever with no output and no fallback (2026-07-06: the Radio advertising
@@ -1538,6 +1631,16 @@ async function runPlaywrightPortalDraft(claim: MdfClaimEntry, options: RunnerOpt
   }
 
   const browser = await connectRunnerBrowser(options.cdpUrl);
+  // Tab hygiene (2026-07-29): close OUR OWN leftover guided-packet tabs (file://…/
+  // mdf_portal_runs/…) from earlier fallbacks. They accumulate in the always-on runner
+  // Chrome and feed the tab-bloat CDP-attach hangs (the 7/6 119-target class). Only the
+  // runner's packet files are ever touched — never a human's tab. Best-effort.
+  for (const stale of browser.contexts().flatMap(context => context.pages())) {
+    const url = stale.url();
+    if (url.startsWith("file://") && url.includes("mdf_portal_runs")) {
+      await stale.close().catch(() => {});
+    }
+  }
   let page =
     browser
       .contexts()
@@ -1812,10 +1915,16 @@ async function runMain(options: RunnerOptions) {
     return;
   }
 
-  const task = chooseTask(tasks, options);
+  let task = chooseTask(tasks, options);
+  if (!task && options.run && !options.dryRun) {
+    // Auto-retry after login (2026-07-29): a session-preflight-blocked task waits in the
+    // local retry queue; once the human has logged back in, the next idle tick picks it
+    // up and finishes the claim automatically — no re-clicking "Start portal draft".
+    task = await pickSessionRetryTask(tasks, options);
+  }
   if (!task) {
     if (options.idleOk) {
-      console.log("No MDF portal task found.");
+      if (!osFlag("MDF_PORTAL_QUIET_IDLE")) console.log("No MDF portal task found.");
       return;
     }
     throw new Error("No MDF portal task found. Create one from the MDF Assistant first.");
@@ -1931,14 +2040,24 @@ async function runMain(options: RunnerOptions) {
   if (osFlag("MDF_PORTAL_SESSION_PREFLIGHT", true) && options.cdpUrl && cdpOk && (playwrightAvailable || browserUseAvailable)) {
     const sessionCheck = await checkAnsiraSessionViaCdp(options.cdpUrl);
     if (sessionCheck.expired) {
-      const summary = sessionExpiredSummary("session preflight, before any fill");
+      // Session-recovery UX (2026-07-29): open the login page in the runner Chrome so the
+      // human just logs in (MFA) in the window that pops up, and queue this task for an
+      // automatic retry once the session is back. Preflight aborts BEFORE any portal
+      // interaction, so the retry can never duplicate a draft.
+      const loginOpened = await openLoginPageForSessionRecovery(options.cdpUrl, options.portalUrl);
+      await recordSessionRetryCandidate(task.id, claimId);
+      const summary = loginOpened
+        ? sessionExpiredAutoRetrySummary("session preflight, before any fill")
+        : sessionExpiredSummary("session preflight, before any fill");
       updateTask(tasks, task.id, "blocked", summary, [promptPath, htmlPath, options.portalUrl]);
       if (remoteBundles) {
         await updateRemoteTask(options, task.id, "blocked", summary, [promptPath, htmlPath, options.portalUrl]);
       } else {
         await saveTasks(tasks);
       }
-      console.log("MDF session preflight: H-DNet/Ansira session expired — run aborted before any fill.");
+      console.log(
+        "MDF session preflight: H-DNet/Ansira session expired — login page opened in the runner Chrome; will auto-retry after login."
+      );
       return;
     }
   }
@@ -1974,11 +2093,14 @@ async function runMain(options: RunnerOptions) {
     const rescueEnabled = !options.guided && osFlag("MDF_PORTAL_USE_BROWSER_HARNESS_RESCUE", true);
     const rescue = rescueEnabled && cdpOk ? await runBrowserHarnessRescue(promptPath, htmlPath, options, result.summary) : null;
     if (rescue?.code === 0) {
+      // Reliability rule (2026-07-29): the WHY always survives into the task the human
+      // reads. The rescue summary used to REPLACE the failure reason — every blocked 7/17
+      // task read a generic "blocked before completion" with no cause.
       updateTask(
         tasks,
         task.id,
         "needs_approval",
-        rescue.summary,
+        composeRescueSummary(result.summary, rescue.summary),
         [promptPath, htmlPath, options.portalUrl, ...(result.links ?? []), ...rescue.links]
       );
     } else {
