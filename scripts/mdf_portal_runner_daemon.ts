@@ -16,7 +16,8 @@
  *    with chrome state so "alive and healthy" is still visible.
  */
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -87,16 +88,61 @@ async function probeChrome(): Promise<boolean> {
   }
 }
 
-/** Restart the dedicated runner Chrome's LaunchAgent when it's dead (the manual runbook, automated). */
+/**
+ * Restart the dedicated runner Chrome when it's dead (the manual runbook, automated).
+ * macOS: kickstart the LaunchAgent (kills a wedged Chrome too). Windows: start the
+ * "LeadRider MDF Chrome" Scheduled Task (start-only — never taskkill chrome.exe, which
+ * would nuke a human's own Chrome windows; a wedged-but-alive Chrome holding :9222 is
+ * logged and left for a human).
+ */
 async function kickstartChrome(): Promise<void> {
+  const isWindows = process.platform === "win32";
+  const command = isWindows ? "schtasks" : "launchctl";
   const uid = typeof process.getuid === "function" ? process.getuid() : 501;
+  const args = isWindows
+    ? ["/Run", "/TN", "LeadRider MDF Chrome"]
+    : ["kickstart", "-k", `gui/${uid}/ai.leadrider.hdnet-chrome`];
   await new Promise<void>(resolve => {
-    const child = spawn("launchctl", ["kickstart", "-k", `gui/${uid}/ai.leadrider.hdnet-chrome`], {
-      stdio: "ignore"
-    });
+    const child = spawn(command, args, { stdio: "ignore" });
     child.on("close", () => resolve());
     child.on("error", () => resolve());
   });
+}
+
+/**
+ * Daemon singleton lock (cross-platform, 2026-07-29). On Windows the keep-alive is a
+ * 5-minute Scheduled-Task watchdog that re-starts the daemon task; if an instance is
+ * already alive, the new one must exit instantly instead of double-polling. Same guard
+ * protects macOS against an accidental second daemon. Stale/dead-pid locks are reclaimed.
+ */
+const DAEMON_LOCK_PATH = path.join(os.tmpdir(), "leadrider-mdf-portal-daemon.lock");
+function acquireDaemonSingleton(): boolean {
+  try {
+    if (existsSync(DAEMON_LOCK_PATH)) {
+      const info = JSON.parse(readFileSync(DAEMON_LOCK_PATH, "utf8") || "{}");
+      const pid = Number(info?.pid);
+      if (Number.isFinite(pid) && pid > 0) {
+        try {
+          process.kill(pid, 0); // throws if the pid is dead
+          return false; // a live daemon already holds the lock
+        } catch {
+          /* dead pid — reclaim */
+        }
+      }
+    }
+    writeFileSync(DAEMON_LOCK_PATH, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
+    return true;
+  } catch {
+    return true; // fs trouble — fail open (never leave the dealer with no daemon at all)
+  }
+}
+function releaseDaemonSingleton(): void {
+  try {
+    const info = JSON.parse(readFileSync(DAEMON_LOCK_PATH, "utf8") || "{}");
+    if (Number(info?.pid) === process.pid) unlinkSync(DAEMON_LOCK_PATH);
+  } catch {
+    /* nothing to release */
+  }
 }
 
 async function ensureChromeHealthy(): Promise<boolean> {
@@ -201,12 +247,19 @@ async function tick() {
 
 function stop() {
   stopping = true;
+  releaseDaemonSingleton();
   setTimeout(() => process.exit(0), 1000).unref();
 }
 
 process.on("SIGINT", stop);
 process.on("SIGTERM", stop);
+process.on("exit", releaseDaemonSingleton);
 
-log(`polling ${apiBase} every ${Math.round(intervalMs / 1000)}s (chrome auto-heal ${chromeAutohealEnabled && cdpUrl ? "on" : "off"})`);
+if (!acquireDaemonSingleton()) {
+  log("another MDF portal daemon is already running — exiting (singleton lock held).");
+  process.exit(0);
+}
+
+log(`polling ${apiBase} every ${Math.round(intervalMs / 1000)}s (chrome auto-heal ${chromeAutohealEnabled && cdpUrl ? "on" : "off"}, platform ${process.platform})`);
 void tick();
 setInterval(() => void tick(), intervalMs);
