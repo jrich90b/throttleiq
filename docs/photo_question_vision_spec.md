@@ -1,6 +1,10 @@
 # Photo-question vision ("ask about the picture we sent") — spec
 
-**Status:** proposal for Joe's decision (2026-07-28). Not built. No production impact.
+**Status:** **BUILT AND LIVE.** Joe ruled on this 2026-07-28 (see "Decisions" at the bottom) and it
+shipped the same day as **#322**, behind `PHOTO_QUESTION_VISION_ENABLED` — now `=1` in the
+americanharley api.env, so the flag is ON. This file is kept as the DESIGN RECORD (why the Tim
+Williams case forces scene-context reasoning, and where the never-diagnose-from-a-still line sits);
+it is no longer a proposal. Kill switch: set the flag to `0` + `npm run deploy:api`.
 **Grounding case:** Tim Williams (+17163741119) asked why a light was off in a photo we'd sent —
 and, tellingly, **the OTHER lights in the same photo were ON, so the bike was clearly powered up**,
 which makes "that one light is dark" a real, worth-flagging observation, not a nothing.
