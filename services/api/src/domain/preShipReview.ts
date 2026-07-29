@@ -25,19 +25,25 @@ export type PreShipReviewParse = {
   concerns?: string; // specific issues for the human when held
 };
 
+// `reasons`/`concerns` come FIRST on purpose (2026-07-29): the reviewer should articulate its
+// reasoning BEFORE committing to a verdict, and trailing prose fields are the ones a max_tokens
+// truncation eats. `minLength` makes an empty explanation schema-invalid rather than silently
+// falsy — a hold whose reason was "" is exactly how PR #331 got blocked with nothing to act on.
+// Best-effort only (tool schemas are not strictly enforced), which is why decidePreShipGate
+// ALSO derives a deterministic failed-checks summary that cannot go silent.
 const PRE_SHIP_REVIEW_SCHEMA: { [key: string]: unknown } = {
   type: "object",
   additionalProperties: false,
-  required: ["verdict", "risk", "customer_facing", "on_target", "law_ok", "blocking", "reasons", "concerns"],
+  required: ["reasons", "concerns", "verdict", "risk", "customer_facing", "on_target", "law_ok", "blocking"],
   properties: {
+    reasons: { type: "string", minLength: 20 },
+    concerns: { type: "string", minLength: 1 },
     verdict: { type: "string", enum: ["approve", "hold"] },
     risk: { type: "string", enum: ["low", "medium", "high"] },
     customer_facing: { type: "boolean" },
     on_target: { type: "boolean" },
     law_ok: { type: "boolean" },
-    blocking: { type: "boolean" },
-    reasons: { type: "string" },
-    concerns: { type: "string" }
+    blocking: { type: "boolean" }
   }
 };
 
@@ -75,7 +81,15 @@ export async function reviewLoopFixWithLLM(args: {
     "  low if additive + fail-safe.",
     "- blocking: true if there is a concrete defect (wrong logic, missed path, law violation, unsafe).",
     "- verdict: approve ONLY if on_target AND law_ok AND not blocking AND risk is not high. Else hold.",
-    "When unsure, HOLD — a human will look. concerns = the specific thing a human should check.",
+    "When unsure, HOLD — a human will look.",
+    "",
+    "EXPLAIN YOURSELF — a hold with no reason is useless, because the human it escalates to has nothing",
+    "to act on. Mandatory:",
+    "- reasons: 1-3 sentences on WHY you reached this verdict. Never empty.",
+    "- concerns: when you HOLD, name the SPECIFIC thing to check — the file/function at issue and what",
+    "  is wrong or unverified. \"Off-target\" or \"risky\" alone is not acceptable; say off-target HOW.",
+    "  When you approve, put the residual risk to watch (or \"none\").",
+    "- If you mark on_target=false, law_ok=false, or blocking=true, concerns MUST say which one and why.",
     "",
     `Gates already green (tsc + ci:eval): ${args.evalsGreen ? "yes" : "NO"}.`,
     `Title: ${args.title}`,
@@ -91,7 +105,9 @@ export async function reviewLoopFixWithLLM(args: {
       headers: { "content-type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
         model,
-        max_tokens: 700,
+        // Room for real prose in reasons+concerns; at 700 the trailing explanation fields were the
+        // first thing a truncation dropped.
+        max_tokens: 1200,
         temperature: 0,
         tool_choice: { type: "tool", name: "pre_ship_review" },
         tools: [{ name: "pre_ship_review", description: "Return the independent pre-ship review.", input_schema: PRE_SHIP_REVIEW_SCHEMA }],
@@ -111,12 +127,44 @@ export async function reviewLoopFixWithLLM(args: {
       onTarget: p.on_target === true,
       lawOk: p.law_ok === true,
       blocking: p.blocking === true,
-      reasons: typeof p.reasons === "string" ? p.reasons.slice(0, 400) : undefined,
-      concerns: typeof p.concerns === "string" ? p.concerns.slice(0, 400) : undefined
+      // Normalize blank prose to undefined: an empty string satisfies `required` but is falsy, so it
+      // used to slip through as "the reviewer explained itself" and land as a contentless hold.
+      reasons: cleanReviewText(p.reasons),
+      concerns: cleanReviewText(p.concerns)
     };
   } catch {
     return null;
   }
+}
+
+/**
+ * Blank/whitespace prose → undefined, so a falsy-but-present string can never pass as an explanation.
+ * Cap is generous (the point of this field is to be READ) and marks truncation, because a reason cut
+ * off mid-sentence reads as a bug and loses the actionable half.
+ */
+export function cleanReviewText(value: unknown, cap = 900): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  return trimmed.length <= cap ? trimmed : `${trimmed.slice(0, cap).trimEnd()}…[truncated]`;
+}
+
+/**
+ * Which checks actually drove a non-ship, derived from the flags the gate already holds.
+ *
+ * This is the part that CANNOT go silent. The reviewer's prose is best-effort — it can come back
+ * blank or get truncated — but an escalation with no stated cause just moves the guesswork onto the
+ * human (observed on PR #331: `verdict=hold` with empty reasons AND concerns, so the operator was
+ * told only "review withheld approval"). Pure, so `pre_ship_review:eval` pins it.
+ */
+export function summarizePreShipHold(review: PreShipReviewParse): string {
+  const failed: string[] = [];
+  if (!review.onTarget) failed.push("on_target=false (reviewer does not think the diff addresses the finding)");
+  if (!review.lawOk) failed.push("law_ok=false (reviewer flagged a parser-first/both-paths/eval violation)");
+  if (review.blocking) failed.push("blocking=true (reviewer found a concrete defect)");
+  if (review.risk === "high") failed.push("risk=high");
+  if (!failed.length && review.verdict === "hold") failed.push("verdict=hold with no failing check (reviewer was unsure)");
+  return failed.join("; ");
 }
 
 // PURE gate. Ship only on a clean approve with green gates; anything else ESCALATES to a human. The
@@ -130,8 +178,18 @@ export function decidePreShipGate(
   if (review.verdict === "approve" && !review.blocking && review.onTarget && review.lawOk && review.risk !== "high") {
     return { ship: true, escalate: false, reason: `cross-model review approved (risk=${review.risk}, on_target, law_ok)` };
   }
-  const why = review.concerns || review.reasons || "review withheld approval";
-  return { ship: false, escalate: true, reason: `cross-model review HELD: ${why}` };
+  // A hold must always arrive actionable: the reviewer's own words when it gave any, plus the
+  // deterministic list of checks that failed either way.
+  const prose = cleanReviewText(review.concerns) ?? cleanReviewText(review.reasons);
+  const failed = summarizePreShipHold(review);
+  const why = prose ?? "NO REASON GIVEN by the reviewer (prose came back empty — treat the failed checks below as the whole basis)";
+  // `failed` already names risk=high; only append risk when it isn't already in there.
+  const riskSuffix = review.risk === "high" ? "" : ` (risk=${review.risk})`;
+  return {
+    ship: false,
+    escalate: true,
+    reason: `cross-model review HELD: ${why}${failed ? ` — failed checks: ${failed}` : ""}${riskSuffix}`
+  };
 }
 
 /**

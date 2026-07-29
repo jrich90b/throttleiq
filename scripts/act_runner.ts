@@ -298,11 +298,25 @@ if (sub === "review") {
   const review = await reviewLoopFixWithLLM({ title, finding, diff, evalsGreen });
   const gate = decidePreShipGate(review, { evalsGreen });
 
+  // Always show WHICH checks failed — the reviewer's prose is best-effort, this is not.
+  const { summarizePreShipHold } = await import("../services/api/src/domain/preShipReview.ts");
+  const failedChecks = review ? summarizePreShipHold(review) : "";
+  const renderReviewForPr = (r: NonNullable<typeof review>): string =>
+    [
+      `verdict=**${r.verdict}** risk=${r.risk} onTarget=${r.onTarget} lawOk=${r.lawOk} blocking=${r.blocking} customerFacing=${r.customerFacing}`,
+      `reasons: ${r.reasons ?? "_(none given by the reviewer)_"}`,
+      `concerns: ${r.concerns ?? "_(none given by the reviewer)_"}`,
+      failedChecks ? `failed checks: ${failedChecks}` : ""
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+
   console.log("\n=== CROSS-MODEL PRE-SHIP REVIEW ===");
   if (review) {
     console.log(`verdict=${review.verdict} risk=${review.risk} onTarget=${review.onTarget} lawOk=${review.lawOk} blocking=${review.blocking} customerFacing=${review.customerFacing}`);
-    if (review.reasons) console.log(`reasons: ${review.reasons}`);
-    if (review.concerns) console.log(`concerns: ${review.concerns}`);
+    console.log(`reasons: ${review.reasons ?? "(none given)"}`);
+    console.log(`concerns: ${review.concerns ?? "(none given)"}`);
+    if (failedChecks) console.log(`failed checks: ${failedChecks}`);
   } else {
     console.log("no independent review available (no ANTHROPIC_API_KEY / disabled)");
   }
@@ -321,7 +335,7 @@ if (sub === "review") {
   git(["push", "-u", "origin", branch]);
   const body = withFindingKeyMarker(
     (briefFile && fs.existsSync(briefFile) ? fs.readFileSync(briefFile, "utf8") : `Loop-driven fix: ${title}`) +
-      `\n\n## Cross-model pre-ship review\n${review ? `verdict=**${review.verdict}** risk=${review.risk} onTarget=${review.onTarget} lawOk=${review.lawOk}\n${review.reasons ?? ""}${review.concerns ? `\nconcerns: ${review.concerns}` : ""}` : "no independent review available"}\n\nGate: **${gate.ship ? "SHIP" : "ESCALATE"}** — ${gate.reason}\n— self-healing loop ACT runner.\n`,
+      `\n\n## Cross-model pre-ship review\n${review ? renderReviewForPr(review) : "no independent review available"}\n\nGate: **${gate.ship ? "SHIP" : "ESCALATE"}** — ${gate.reason}\n— self-healing loop ACT runner.\n`,
     flag("finding-key")
   );
   const url = execFileSync("gh", ["pr", "create", "--base", "main", "--head", branch, "--title", String(title), "--body", body], { encoding: "utf8" }).trim();
