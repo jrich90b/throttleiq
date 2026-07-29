@@ -8571,8 +8571,17 @@ export async function parseVehicleRecommendationRequestWithLLM(args: {
     "  with the Harley MODEL named \"Low Rider\" / \"Low Rider S\" / \"Low Rider ST\" (that is a specific bike",
     "  the customer would price or watch by name, NOT style_segments). Leave empty when no cholo/lowrider",
     "  style is named.",
-    "- requested_equipment: which physical FEATURES/accessories the customer wants the bike to have.",
+    "- requested_equipment: which physical FEATURES/accessories the customer REQUIRES on the bike.",
     "  Set a key TRUE only when the customer asked for that feature; leave everything else false.",
+    "  CRITICAL — REQUIRED, not merely MENTIONED. Every true key becomes a hard filter: a bike without",
+    "  that feature is never shown and never triggers their arrival alert. So when the customer names a",
+    "  feature but says they are FLEXIBLE or INDIFFERENT about it, leave it FALSE — they said the word,",
+    "  they did not set a requirement. Flexible/indifferent phrasings: \"with or without a tour pack\",",
+    "  \"either way\", \"doesn't matter if it has bags\", \"bags would be nice but not a dealbreaker\", \"open",
+    "  to a windshield or not\", \"with or at least a removable tour pak\". Only a real requirement counts",
+    "  (\"needs to have bags\", \"has to have a backrest\", \"looking for one WITH a tour pack\"). When you",
+    "  cannot tell whether it is required or just mentioned, leave it FALSE — a too-narrow filter silently",
+    "  hides good bikes, while a missing filter only shows a few extra.",
     "  Keys: bags (saddlebags), windshield, fairing, backrest_sissybar, tourpak (top trunk/tour-pak),",
     "  forward_controls, ape_hangers, floorboards, crash_bars. A feature ask ALSO implies",
     "  wants_recommendation=true (they want us to find a bike that has it), even with no budget/style.",
@@ -8591,6 +8600,14 @@ export async function parseVehicleRecommendationRequestWithLLM(args: {
     '- "you got anything with bags and a windshield?" -> {"wants_recommendation":true,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"style_segments":[],"requested_equipment":{"bags":true,"windshield":true},"confidence":0.92}',
     '- "looking for a used bagger with a backrest and floorboards" -> {"wants_recommendation":true,"monthly_budget":null,"condition":"used","exclude_segments":[],"include_segments":[],"style_segments":[],"requested_equipment":{"bags":true,"backrest_sissybar":true,"floorboards":true},"confidence":0.9}',
     '- "something with a batwing fairing and a tour pak" -> {"wants_recommendation":true,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"style_segments":[],"requested_equipment":{"fairing":true,"tourpak":true},"confidence":0.9}',
+    // FLEXIBLE/INDIFFERENT equipment mentions (Jason Marshall, +17165230421, 2026-07-29). His call note
+    // read "a Road Glide (with or without removable tour pack)" and the parser returned tourpak:true —
+    // turning "I don't care either way" into a HARD filter, so the blacked-out Road Glide with no tour
+    // pack (the bike he most wanted) would never have alerted him. Named the feature ≠ required it.
+    '- "a Road Glide, with or without a removable tour pack" -> {"wants_recommendation":true,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":["touring"],"style_segments":[],"requested_equipment":{},"confidence":0.9}',
+    '- "bags would be nice but not a dealbreaker" -> {"wants_recommendation":true,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"style_segments":[],"requested_equipment":{},"confidence":0.85}',
+    '- "doesn\'t matter to me if it has a windshield or not" -> {"wants_recommendation":true,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"style_segments":[],"requested_equipment":{},"confidence":0.85}',
+    '- "it needs to have bags and a backrest" -> {"wants_recommendation":true,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"style_segments":[],"requested_equipment":{"bags":true,"backrest_sissybar":true},"confidence":0.92}',
     '- "let me know if a cholo style bike comes in" -> {"wants_recommendation":true,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"style_segments":["cholo"],"requested_equipment":{},"confidence":0.9}',
     '- "you got any lowriders or viclas? west coast style" -> {"wants_recommendation":true,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"style_segments":["cholo"],"requested_equipment":{},"confidence":0.9}',
     '- "looking for a chicano style softail, that OG lowrider look" -> {"wants_recommendation":true,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"style_segments":["cholo"],"requested_equipment":{},"confidence":0.9}',
