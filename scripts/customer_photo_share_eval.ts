@@ -39,7 +39,8 @@ const {
   buildDocumentPhotoShareReply,
   buildDocumentPhotoShareTodoSummary,
   buildCompetitorQuoteStaffHint,
-  captureDocumentPhotoOnConversation
+  captureDocumentPhotoOnConversation,
+  DOCUMENT_PHOTO_CAPTURE_HISTORY_LIMIT
 } = await import("../services/api/src/domain/customerPhotoShare.ts");
 
 // Detector: production fixture and neighbors.
@@ -658,6 +659,81 @@ assert.equal(compCap.pii, false, "a competitor quote is NOT PII");
 assert.equal(compCap.competitorPrice, 28995, "competitor price captured for staff");
 assert.equal(compCap.competitorModel, "2024 Road Glide", "competitor bike captured for staff");
 assert.equal(compCap.context, "trade");
+
+// (f2) Capture HISTORY: every document photo on a thread is retained, oldest→newest. Regression guard
+// for the original single-slot record, where a second document silently overwrote the first — losing
+// the true count and any earlier competitor-quote price read (Shane Smith +17163852815 sent 4 photos
+// on 2026-07-28 and only the last survived). `documentPhotoCapture` still mirrors the LATEST.
+const histConv: any = {};
+captureDocumentPhotoOnConversation(histConv, {
+  documentType: "competitor_quote",
+  tradeContext: false,
+  competitor: { price: 24500, model: "2023 Street Glide", confidence: 0.9 }
+});
+captureDocumentPhotoOnConversation(histConv, { documentType: "insurance_card", tradeContext: false });
+assert.equal(histConv.documentPhotoCaptures.length, 2, "both documents are retained, not overwritten");
+assert.equal(
+  histConv.documentPhotoCaptures[0].documentType,
+  "competitor_quote",
+  "history is oldest→newest: the earlier competitor quote survives a later document"
+);
+assert.equal(
+  histConv.documentPhotoCaptures[0].competitorPrice,
+  24500,
+  "the earlier competitor-quote price read stays auditable after a later document arrives"
+);
+assert.equal(histConv.documentPhotoCaptures[1].documentType, "insurance_card");
+assert.equal(
+  histConv.documentPhotoCapture.documentType,
+  "insurance_card",
+  "the latest-only field still mirrors the newest document (back-compat)"
+);
+// Governance holds for EVERY record in the history, not just the latest one.
+for (const rec of histConv.documentPhotoCaptures) {
+  if (!rec.pii) continue;
+  assert.equal(rec.competitorPrice, 0, "no PII record in the history carries a price");
+  assert.equal(rec.competitorModel, "", "no PII record in the history carries a model");
+}
+// A pre-fix thread has a latest-only record and no history: it must be seeded, not dropped.
+const legacyConv: any = {
+  documentPhotoCapture: {
+    documentType: "title",
+    context: "trade",
+    capturedAt: "2026-07-26T00:00:00.000Z",
+    pii: true,
+    competitorPrice: 0,
+    competitorModel: ""
+  }
+};
+captureDocumentPhotoOnConversation(legacyConv, { documentType: "drivers_license", tradeContext: false });
+assert.equal(legacyConv.documentPhotoCaptures.length, 2, "a pre-fix latest-only record is seeded into the history");
+assert.equal(legacyConv.documentPhotoCaptures[0].documentType, "title", "the pre-fix document is kept, oldest-first");
+// The history is capped so a document-heavy thread can't grow the store without bound.
+const cappedConv: any = {};
+for (let i = 0; i < DOCUMENT_PHOTO_CAPTURE_HISTORY_LIMIT + 5; i += 1) {
+  captureDocumentPhotoOnConversation(cappedConv, { documentType: "insurance_card", tradeContext: false });
+}
+assert.equal(
+  cappedConv.documentPhotoCaptures.length,
+  DOCUMENT_PHOTO_CAPTURE_HISTORY_LIMIT,
+  "the history is capped at the retention limit"
+);
+// The conversationStore record type is declared structurally (no domain import cycle) — keep the two
+// in sync, and make sure Conversation actually declares the history field the append writes.
+const storeSource = await fs.readFile(path.resolve("services/api/src/domain/conversationStore.ts"), "utf8");
+assert.match(
+  storeSource,
+  /documentPhotoCaptures\?: DocumentPhotoCaptureRecord\[\]/,
+  "Conversation must declare the documentPhotoCaptures history field"
+);
+const storeRecordBlock = storeSource.match(/export type DocumentPhotoCaptureRecord = \{[\s\S]*?\n\};/)?.[0] ?? "";
+assert.ok(storeRecordBlock, "conversationStore must declare DocumentPhotoCaptureRecord");
+for (const field of ["documentType", "context", "capturedAt", "pii", "competitorPrice", "competitorModel"]) {
+  assert.ok(
+    storeRecordBlock.includes(`${field}:`),
+    `DocumentPhotoCaptureRecord must stay in sync with DocumentPhotoCapture (missing ${field})`
+  );
+}
 
 // (g) Source guards — buildPhotoShareReplyWithVision routing (both the general + trade paths):
 //  - the document branch is FLAG-GATED and returns kind:"document";

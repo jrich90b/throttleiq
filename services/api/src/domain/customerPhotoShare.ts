@@ -514,8 +514,16 @@ export type DocumentPhotoCapture = {
   competitorModel: string;
 };
 
+/** Max document photos retained per conversation. A thread that keeps sending documents shouldn't grow
+ *  the store without bound; the oldest records fall off first. Well above any real thread (the busiest
+ *  observed thread sent 4 in one afternoon). */
+export const DOCUMENT_PHOTO_CAPTURE_HISTORY_LIMIT = 20;
+
 export function captureDocumentPhotoOnConversation(
-  conv: { documentPhotoCapture?: DocumentPhotoCapture } | null | undefined,
+  conv:
+    | { documentPhotoCapture?: DocumentPhotoCapture; documentPhotoCaptures?: DocumentPhotoCapture[] }
+    | null
+    | undefined,
   args: { documentType: DocumentPhotoType; tradeContext: boolean; competitor?: CompetitorQuoteRead | null }
 ): DocumentPhotoCapture {
   const route = DOCUMENT_PHOTO_ROUTES[args.documentType];
@@ -529,7 +537,19 @@ export function captureDocumentPhotoOnConversation(
     competitorPrice: isCompetitor ? Number(args.competitor?.price ?? 0) : 0,
     competitorModel: isCompetitor ? String(args.competitor?.model ?? "").trim() : ""
   };
-  if (conv && typeof conv === "object") conv.documentPhotoCapture = capture;
+  if (conv && typeof conv === "object") {
+    // APPEND to the history first, then refresh the latest-only field. `documentPhotoCapture` alone
+    // used to be the whole record, so a second document silently erased the first — losing the count
+    // and any earlier competitor-quote price read. Both are audit breadcrumbs: nothing reads them to
+    // decide behavior, and the per-photo staff task is what actually routes the document.
+    const prior = Array.isArray(conv.documentPhotoCaptures) ? conv.documentPhotoCaptures : [];
+    // Pre-fix threads have a latest-only record and no history: seed it so the first append doesn't
+    // drop the document already on the conversation.
+    const seeded =
+      prior.length === 0 && conv.documentPhotoCapture ? [conv.documentPhotoCapture] : prior;
+    conv.documentPhotoCaptures = [...seeded, capture].slice(-DOCUMENT_PHOTO_CAPTURE_HISTORY_LIMIT);
+    conv.documentPhotoCapture = capture;
+  }
   return capture;
 }
 
@@ -540,7 +560,10 @@ export function captureDocumentPhotoOnConversation(
  * a competitor price to the customer.
  */
 function buildDocumentPhotoShareResult(args: {
-  conv: { documentPhotoCapture?: DocumentPhotoCapture } | null | undefined;
+  conv:
+    | { documentPhotoCapture?: DocumentPhotoCapture; documentPhotoCaptures?: DocumentPhotoCapture[] }
+    | null
+    | undefined;
   firstName?: string | null;
   documentType: DocumentPhotoType;
   competitor?: CompetitorQuoteRead | null;
