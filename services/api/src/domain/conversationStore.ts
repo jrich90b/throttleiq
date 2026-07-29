@@ -759,6 +759,24 @@ export type ConversationSoftTagValue = {
   meta?: Record<string, string | number | boolean | null>;
 };
 
+/** One document photo a customer sent. Declared structurally here (NOT imported from
+ *  domain/customerPhotoShare.ts) to keep conversationStore free of a domain import cycle; it is kept
+ *  identical to `DocumentPhotoCapture` there, and the eval pins the two in sync. */
+export type DocumentPhotoCaptureRecord = {
+  documentType:
+    | "title"
+    | "lien_release"
+    | "insurance_card"
+    | "insurance_binder"
+    | "drivers_license"
+    | "competitor_quote";
+  context: "trade" | "general";
+  capturedAt: string;
+  pii: boolean;
+  competitorPrice: number;
+  competitorModel: string;
+};
+
 export type Conversation = {
   id: string;
   leadKey: string;
@@ -892,21 +910,17 @@ export type Conversation = {
    *  stores the TYPE ONLY — never the contents (no names/DOB/addresses/account or policy numbers/
    *  VIN/license #). `pii` marks those. competitor_quote is NOT PII, so its read price/model are kept
    *  here for staff; for PII types `competitorPrice`/`competitorModel` stay 0/"". Durable so staff
-   *  see what kind of document arrived; the contents live only in the attached image for a human. */
-  documentPhotoCapture?: {
-    documentType:
-      | "title"
-      | "lien_release"
-      | "insurance_card"
-      | "insurance_binder"
-      | "drivers_license"
-      | "competitor_quote";
-    context: "trade" | "general";
-    capturedAt: string;
-    pii: boolean;
-    competitorPrice: number;
-    competitorModel: string;
-  };
+   *  see what kind of document arrived; the contents live only in the attached image for a human.
+   *  This field is the LATEST document only (kept for back-compat); the full per-photo history lives
+   *  in `documentPhotoCaptures` below. Nothing reads either field to make a decision — they are a
+   *  durable audit breadcrumb, and the staff task created per photo is what actually routes it. */
+  documentPhotoCapture?: DocumentPhotoCaptureRecord;
+  /** Append-only history of EVERY document photo on the thread, oldest→newest, capped at
+   *  DOCUMENT_PHOTO_CAPTURE_HISTORY_LIMIT (domain/customerPhotoShare.ts). `documentPhotoCapture` used
+   *  to be the only record, so a second document overwrote the first and the audit trail (how many
+   *  documents arrived, and whether a competitor-quote price read was right) was lost. Same governance
+   *  as above: PII types store the TYPE ONLY, never contents. */
+  documentPhotoCaptures?: DocumentPhotoCaptureRecord[];
   scheduler?: SchedulerMemory;
   followUpCadence?: FollowUpCadence;
   /** Set once when a stale manual-handoff lead is surfaced as a staff follow-up todo, so it is never re-nudged. */
