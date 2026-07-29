@@ -8,7 +8,12 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { decidePreShipGate, prepareDiffForReview } from "../services/api/src/domain/preShipReview.ts";
+import {
+  cleanReviewText,
+  decidePreShipGate,
+  prepareDiffForReview,
+  summarizePreShipHold
+} from "../services/api/src/domain/preShipReview.ts";
 
 const clean = { verdict: "approve", risk: "low", customerFacing: true, onTarget: true, lawOk: true, blocking: false } as const;
 
@@ -32,6 +37,79 @@ noShip({ ...clean, blocking: true }, true, "blocking defect", true);
 noShip({ ...clean, risk: "high" }, true, "high risk", true);
 noShip({ ...clean, onTarget: false }, true, "off-target (fixes the wrong thing)", true);
 noShip({ ...clean, lawOk: false }, true, "law violation (e.g. new free-text regex / one path)", true);
+
+// --- A HOLD MUST ALWAYS BE ACTIONABLE (2026-07-29, PR #331). ---
+// The reviewer blocked a change with verdict=hold and EMPTY reasons AND concerns. An empty string
+// satisfies the schema's `required` but is falsy, so it fell through the `||` chain and the operator
+// was told only "review withheld approval" — a block with nothing to act on just moves the guesswork
+// onto the human. The reviewer's prose is best-effort; the failed-checks summary is not.
+{
+  // blank prose can never masquerade as an explanation
+  assert.equal(cleanReviewText(""), undefined, "empty string => no explanation");
+  assert.equal(cleanReviewText("   \n\t "), undefined, "whitespace-only => no explanation");
+  assert.equal(cleanReviewText(undefined), undefined, "missing => no explanation");
+  assert.equal(cleanReviewText(123 as any), undefined, "non-string => no explanation");
+  assert.equal(cleanReviewText("  real reason  "), "real reason", "prose is trimmed, not dropped");
+  assert.equal(cleanReviewText("x".repeat(900)), "x".repeat(900), "a long-but-reasonable explanation survives intact");
+  const capped = cleanReviewText("y".repeat(2000));
+  assert.ok(capped && capped.endsWith("…[truncated]"), "over-long prose is marked truncated, not silently cut mid-sentence");
+  assert.ok(capped && capped.length < 1000, "and is still bounded");
+}
+{
+  // THE PR #331 CASE: hold with empty prose still names which checks failed.
+  const silent = { ...clean, verdict: "hold", onTarget: false, lawOk: false, blocking: true, risk: "medium", reasons: "", concerns: "" };
+  const g = decidePreShipGate(silent as any, { evalsGreen: true });
+  assert.equal(g.ship, false, "a contentless hold still must not ship");
+  assert.equal(g.escalate, true, "a contentless hold escalates");
+  assert.match(g.reason, /NO REASON GIVEN/, "an unexplained hold must SAY it was unexplained");
+  assert.match(g.reason, /on_target=false/, "the escalation must name the on_target failure");
+  assert.match(g.reason, /law_ok=false/, "the escalation must name the law_ok failure");
+  assert.match(g.reason, /blocking=true/, "the escalation must name the blocking defect");
+  assert.doesNotMatch(g.reason, /review withheld approval/, "the old contentless fallback is gone");
+}
+{
+  // When the reviewer DOES explain, its words lead and the failed checks still follow.
+  const explained = { ...clean, verdict: "hold", onTarget: false, concerns: "watchMatcher.ts drops the year filter", reasons: "off target" };
+  const g = decidePreShipGate(explained as any, { evalsGreen: true });
+  assert.match(g.reason, /watchMatcher\.ts drops the year filter/, "the reviewer's specific concern must reach the human");
+  assert.match(g.reason, /failed checks: .*on_target=false/, "and the deterministic failed-checks summary is still appended");
+  assert.doesNotMatch(g.reason, /NO REASON GIVEN/, "an explained hold is not labelled unexplained");
+}
+{
+  // reasons is used when concerns is blank (concerns preferred, reasons is the fallback).
+  const g = decidePreShipGate({ ...clean, verdict: "hold", concerns: "  ", reasons: "unsure about the cadence timing" } as any, { evalsGreen: true });
+  assert.match(g.reason, /unsure about the cadence timing/, "blank concerns falls back to reasons");
+  assert.doesNotMatch(g.reason, /NO REASON GIVEN/, "reasons counts as an explanation");
+}
+{
+  // risk=high and the unsure-hold case each name themselves.
+  assert.match(summarizePreShipHold({ ...clean, risk: "high" } as any), /risk=high/, "high risk is named");
+  assert.match(
+    summarizePreShipHold({ ...clean, verdict: "hold" } as any),
+    /no failing check/,
+    "a hold with every check passing is reported as reviewer uncertainty, not silence"
+  );
+  assert.equal(summarizePreShipHold({ ...clean } as any), "", "a clean approve has no failed checks to report");
+}
+{
+  // Fail-direction: better explanations must NOT loosen the gate. Every non-ship case above still
+  // does not ship, and a clean approve still ships.
+  assert.equal(decidePreShipGate({ ...clean } as any, { evalsGreen: true }).ship, true, "explanation changes did not break the ship path");
+  assert.equal(
+    decidePreShipGate({ ...clean, verdict: "hold", reasons: "looks fine honestly" } as any, { evalsGreen: true }).ship,
+    false,
+    "reassuring prose can never turn a hold into a ship"
+  );
+}
+
+// --- the reviewer is INSTRUCTED to explain itself, and has room to. ---
+{
+  const s = fs.readFileSync("services/api/src/domain/preShipReview.ts", "utf8");
+  assert.match(s, /reasons: \{ type: "string", minLength: \d+ \}/, "an empty reasons string is schema-invalid");
+  assert.match(s, /required: \["reasons", "concerns"/, "prose fields come FIRST so a truncation cannot eat them");
+  assert.match(s, /EXPLAIN YOURSELF/, "the prompt explicitly demands an explanation");
+  assert.match(s, /max_tokens: 1200/, "enough budget for real prose");
+}
 
 // --- reviewer source guards: independent (Claude), typed, conservative defaults. ---
 const src = fs.readFileSync("services/api/src/domain/preShipReview.ts", "utf8");
