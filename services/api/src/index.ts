@@ -607,6 +607,8 @@ import {
   saveEquipmentCache,
   profileArrivedUnitsForEquipment,
   watchEquipmentFireGate,
+  watchFinishFireGate,
+  type WatchFinishPreference,
   choloStyleVisionEnabled,
   watchCholoFireGate,
   photoRealnessVisionEnabled,
@@ -6798,6 +6800,37 @@ function inventoryWatchGroupAlreadyNotifiedStock(watches: InventoryWatch[], item
 // carry equipment, the unit fires only when its cached profile ASSERTS every requested feature
 // (fail-safe: unprofiled / below-threshold → no fire). Model criteria are matched separately and are
 // unchanged; this only ever SUBTRACTS a fire, never adds one.
+// The customer's chrome-vs-blacked-out preference, READ OFF THE RECORD WE ALREADY WRITE. ~10 writers
+// (formatWatchTrimLabel / splitWatchColorAndTrim and the context-note / ADF / pending builders) already
+// store a finish label in `watch.trim` whenever the customer says "blacked out" / "not a chrome guy" —
+// see the overload note in inventoryItemPassesNonModelCriteria. Deriving from that instead of adding a
+// parallel field means every EXISTING watch (including the two live ones that were silently dead) gets
+// finish filtering with no migration, and every future writer is wired up for free.
+// Deterministic by design: this classifies a value WE wrote, not customer intent — AGENTS.md permits
+// deterministic structured extraction. Returns null when the trim is a genuine MODEL trim ("special").
+function watchFinishPreference(watch: InventoryWatch | null | undefined): WatchFinishPreference | null {
+  const raw = String(watch?.trim ?? "").trim();
+  if (!raw) return null;
+  const token = extractTrimToken(raw); // "black trim" / "chrome trim"
+  if (token) return token;
+  const bare = normalizeModelName(raw); // older/ADF writers store a bare "Black" / "Chrome"
+  if (bare === "black") return "black";
+  if (bare === "chrome") return "chrome";
+  return null; // a real model trim — not a finish
+}
+
+// FINISH gate at the fire sites. Mirrors watchPassesEquipmentGate's shape but NOT its semantics: it
+// suppresses only on a confident OPPOSITE read and never requires a positive assertion (see
+// watchFinishFireGate). Flag off → skipped entirely, so behavior is byte-identical to today.
+function watchPassesFinishGate(item: any, watch: InventoryWatch, cache: EquipmentCacheFile | null): boolean {
+  if (!inventoryEquipmentVisionEnabled()) return true;
+  const pref = watchFinishPreference(watch);
+  if (!pref) return true; // no finish preference → pure no-op
+  const key = equipmentCacheKey(item);
+  const profile = (key && cache?.profiles?.[key]) || null;
+  return watchFinishFireGate(profile, pref);
+}
+
 function watchPassesEquipmentGate(item: any, watch: InventoryWatch, cache: EquipmentCacheFile | null): boolean {
   if (!inventoryEquipmentVisionEnabled()) return true; // flag off → equipment ignored (plain model watch)
   const requested = (watch as any)?.requestedEquipment as EquipmentQuery | undefined;
@@ -7187,6 +7220,10 @@ async function processInventoryWatchlist(targetConvId?: string, opts?: { include
           // Equipment watches: the unit must ALSO assert the requested equipment (fail-safe — an
           // unprofiled/below-threshold unit does not fire). No-op for a model-only watch or flag off.
           if (!watchPassesEquipmentGate(i, watch, equipmentCache)) return false;
+          // FINISH preference (chrome vs blacked-out): suppress ONLY when the unit is confidently the
+          // opposite finish. Never requires an assertion — an unprofiled unit still fires (fail toward
+          // contacting). No-op for a watch with no finish preference.
+          if (!watchPassesFinishGate(i, watch, equipmentCache)) return false;
           // Cholo build watches: the unit's build must ALSO cross the confident cholo bar (fail-safe —
           // unprofiled/below-bar does not fire). No-op for a non-cholo watch.
           return watchPassesCholoGate(i, watch, equipmentCache);
@@ -7439,6 +7476,9 @@ async function notifyInventoryWatchersForAvailableItem(
       // Equipment watches: the released unit must ALSO assert the requested equipment (fail-safe).
       // No-op for a model-only watch or with the flag off.
       if (!watchPassesEquipmentGate(matchedItem, watch, equipmentCache)) return false;
+      // FINISH preference: same gate as the cron path (both fire sites stay in lockstep) — suppress
+      // only on a confident OPPOSITE finish, never require an assertion.
+      if (!watchPassesFinishGate(matchedItem, watch, equipmentCache)) return false;
       // Cholo build watches: the released unit's build must ALSO cross the confident cholo bar
       // (fail-safe). No-op for a non-cholo watch.
       return watchPassesCholoGate(matchedItem, watch, equipmentCache);
