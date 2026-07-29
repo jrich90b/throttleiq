@@ -409,3 +409,77 @@ assert.equal(fallbackFlagged.length, 1, "the in-run expired-session summary stil
 assert.equal(fallbackFlagged[0].dimension, "mdf_assistant_failure", "in-run expired-session summary maps to mdf_assistant_failure");
 
 console.log("PASS mdf portal preflight eval");
+
+// === Reliability rework (2026-07-29): year extraction, rescue reason, session-retry policy ===
+{
+  const {
+    activityYearFromDates,
+    composeRescueSummary,
+    pruneSessionRetryQueue,
+    upsertSessionRetryEntry,
+    sessionExpiredAutoRetrySummary,
+    SESSION_RETRY_MAX_ATTEMPTS
+  } = await import("./mdf_portal_preflight.ts");
+  const fsx = await import("node:fs");
+
+  // 1) Year extraction — the "06/0 Media Claim" bug (US-format packet dates) + rollover safety.
+  assert.equal(activityYearFromDates("2026-06-01", "2026-06-30", 2020), "2026", "ISO date year");
+  assert.equal(activityYearFromDates("06/01/2026", "06/30/2026", 2020), "2026", "US-format date year (the 06/0 bug)");
+  assert.equal(activityYearFromDates("", "12/31/2027", 2020), "2027", "falls to the end date");
+  assert.equal(activityYearFromDates("junk", null, 2025), "2025", "no year anywhere => fallback");
+  // The two consumers no longer mangle/hardcode the year.
+  const runnerSrc = fsx.readFileSync("scripts/mdf_portal_runner.ts", "utf8");
+  assert.ok(!/activityStartDate ?\?\? ""\)\.slice\(0, ?4\)/.test(runnerSrc), "buildPrompt no longer slices the raw date for the year");
+  assert.ok(!/return "2026 Media Claim"/.test(runnerSrc), "portalClaimTypeLabel no longer hardcodes 2026");
+  assert.ok(/const year = activityYearFromDates\(/.test(runnerSrc), "portalClaimTypeLabel derives the year from the claim dates");
+
+  // 2) Rescue keeps the WHY. (Every 7/17 blocked task read a generic summary with no cause.)
+  const composed = composeRescueSummary("Timeout 30000ms exceeded at #app-claim-name", "Guided packet opened for manual completion.");
+  assert.ok(composed.includes("Why automation stopped: Timeout 30000ms exceeded"), "rescue summary carries the failure reason");
+  assert.ok(composed.startsWith("Guided packet opened"), "rescue instructions still lead");
+  assert.equal(composeRescueSummary("", "rescue only"), "rescue only", "no reason => rescue text unchanged");
+  assert.ok(/composeRescueSummary\(result\.summary, rescue\.summary\)/.test(runnerSrc), "the rescue-success task summary includes the failure reason");
+
+  // 3) Session-retry queue policy: prune stale/exhausted; upsert is idempotent.
+  const now = Date.now();
+  const fresh = { taskId: "t1", claimId: "c1", blockedAtMs: now - 60_000, attempts: 0 };
+  const stale = { taskId: "t2", claimId: "c2", blockedAtMs: now - 8 * 24 * 60 * 60 * 1000, attempts: 0 };
+  const exhausted = { taskId: "t3", claimId: "c3", blockedAtMs: now - 60_000, attempts: SESSION_RETRY_MAX_ATTEMPTS };
+  const pruned = pruneSessionRetryQueue([fresh, stale, exhausted], now);
+  assert.deepEqual(pruned.map(e => e.taskId), ["t1"], "stale + attempt-exhausted entries are pruned");
+  const once = upsertSessionRetryEntry([], { taskId: "t9", claimId: "c9" }, now);
+  const twice = upsertSessionRetryEntry(once, { taskId: "t9", claimId: "c9" }, now + 1);
+  assert.equal(twice.length, 1, "upsert is idempotent on taskId");
+
+  // 4) The auto-retry summary keeps the health-detector's expired-session wording AND tells the
+  //    human the retry is automatic (no re-clicking Start portal draft).
+  const autoSummary = sessionExpiredAutoRetrySummary("session preflight, before any fill");
+  assert.ok(/session has expired/.test(autoSummary), "auto-retry summary keeps the load-failure wording");
+  assert.ok(/retry this claim automatically/.test(autoSummary), "auto-retry summary promises the automatic retry");
+  const autoFlagged = findMdfPortalFailures({
+    tasks: [
+      {
+        id: "eval_auto_retry_block",
+        kind: "mdf_portal",
+        status: "blocked",
+        updatedAt: new Date().toISOString(),
+        output: { summary: autoSummary }
+      }
+    ] as any
+  });
+  assert.equal(autoFlagged.length, 1, "the auto-retry blocked summary still trips the mdf-portal-health detector");
+
+  // 5) Wiring invariants: preflight-block opens the login page + queues the retry; the idle tick
+  //    picks the retry up; packet tabs are cleaned; the daemon heals Chrome + backs off + heartbeats.
+  assert.ok(/openLoginPageForSessionRecovery\(options\.cdpUrl, options\.portalUrl\)/.test(runnerSrc), "preflight block auto-opens the login page");
+  assert.ok(/recordSessionRetryCandidate\(task\.id, claimId\)/.test(runnerSrc), "preflight block queues the auto-retry");
+  assert.ok(/pickSessionRetryTask\(tasks, options\)/.test(runnerSrc), "the idle tick picks up a waiting retry");
+  assert.ok(/url\.startsWith\("file:\/\/"\) && url\.includes\("mdf_portal_runs"\)/.test(runnerSrc), "stale guided-packet tabs are closed at attach");
+  const daemonSrc = fsx.readFileSync("scripts/mdf_portal_runner_daemon.ts", "utf8");
+  assert.ok(/kickstart", "-k", `gui\/\$\{uid\}\/ai\.leadrider\.hdnet-chrome`/.test(daemonSrc) || /ai\.leadrider\.hdnet-chrome/.test(daemonSrc), "daemon auto-heals the dead runner Chrome");
+  assert.ok(/backoffUntil = Date\.now\(\) \+ failureBackoffMs/.test(daemonSrc), "daemon backs off after consecutive failures");
+  assert.ok(/MDF_PORTAL_QUIET_IDLE: "1"/.test(daemonSrc), "daemon silences the per-tick idle line");
+  assert.ok(/heartbeat: alive/.test(daemonSrc), "daemon prints an hourly heartbeat");
+}
+
+console.log("PASS mdf portal reliability additions");

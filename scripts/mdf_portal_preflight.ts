@@ -322,3 +322,89 @@ export function pickAccountTileLabel(tileLabels: string[]): string | null {
   if (!dealer.length && candidates.length === 1) return candidates[0];
   return null;
 }
+
+/**
+ * Activity-year extraction (2026-07-29 reliability audit). The old code took
+ * `activityStartDate.slice(0, 4)` — correct for ISO ("2026-06-01") but for a US-format
+ * packet date ("06/01/2026") it produced "06/0", so the guided packet told the human to
+ * pick the marketing activity "06/0 Media Claim" (live 7/17 packets). The Playwright
+ * label was separately HARDCODED to "2026" — a silent January-rollover bomb. One robust
+ * extractor for both: first 4-digit year anywhere in the start/end date, else fallback.
+ */
+export function activityYearFromDates(
+  startDate: string | null | undefined,
+  endDate: string | null | undefined,
+  fallbackYear: number
+): string {
+  for (const value of [startDate, endDate]) {
+    const match = String(value ?? "").match(/\b(19|20)\d{2}\b/);
+    if (match) return match[0];
+  }
+  return String(fallbackYear);
+}
+
+/**
+ * Rescue-summary composition (2026-07-29). When automation fails and the guided-packet
+ * rescue succeeds, the task summary used to be ONLY the rescue text — the actual failure
+ * reason was dropped (every 7/17 blocked task reads a generic "blocked before completion"
+ * with no why). Reliability rule: the WHY always survives into the task the human reads.
+ */
+export function composeRescueSummary(failureReason: string, rescueSummary: string): string {
+  const reason = String(failureReason ?? "").trim();
+  const rescue = String(rescueSummary ?? "").trim();
+  if (!reason) return rescue;
+  return `${rescue}\n\nWhy automation stopped: ${reason}`;
+}
+
+/**
+ * Session-retry queue policy (2026-07-29). When the session preflight blocks a run
+ * (expired H-DNet/Ansira SSO — the dominant failure class), the runner records the task
+ * in a local retry queue and, once a later tick sees the session live again,
+ * automatically re-runs it — the human just logs in; no re-clicking "Start portal
+ * draft". SAFETY: only PREFLIGHT-blocked tasks enter the queue (the preflight aborts
+ * before ANY portal interaction, so a retry can never duplicate a draft). Pure policy
+ * helpers so the eval can pin them.
+ */
+export type SessionRetryEntry = {
+  taskId: string;
+  claimId: string;
+  blockedAtMs: number;
+  attempts: number;
+};
+
+export const SESSION_RETRY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+export const SESSION_RETRY_MAX_ATTEMPTS = 2;
+
+/** Drop stale / exhausted entries. */
+export function pruneSessionRetryQueue(entries: SessionRetryEntry[], nowMs: number): SessionRetryEntry[] {
+  return (entries ?? []).filter(
+    entry =>
+      entry &&
+      typeof entry.taskId === "string" &&
+      entry.taskId.length > 0 &&
+      Number.isFinite(entry.blockedAtMs) &&
+      nowMs - entry.blockedAtMs < SESSION_RETRY_MAX_AGE_MS &&
+      (entry.attempts ?? 0) < SESSION_RETRY_MAX_ATTEMPTS
+  );
+}
+
+/** Add-or-refresh an entry (idempotent on taskId; attempts preserved). */
+export function upsertSessionRetryEntry(
+  entries: SessionRetryEntry[],
+  entry: { taskId: string; claimId: string },
+  nowMs: number
+): SessionRetryEntry[] {
+  const existing = (entries ?? []).find(row => row.taskId === entry.taskId);
+  if (existing) return entries;
+  return [...(entries ?? []), { taskId: entry.taskId, claimId: entry.claimId, blockedAtMs: nowMs, attempts: 0 }];
+}
+
+/** The summary for a preflight-blocked task once the login page has been auto-opened. */
+export function sessionExpiredAutoRetrySummary(where: string): string {
+  return (
+    `The MDF runner hit the Ansira/H-DNet sign-in screen (${where}) — the session has expired. ` +
+    "No draft was created (nothing was saved). " +
+    "The H-DNet login page has been opened in the runner's dedicated Chrome window — log in there (approve MFA if asked). " +
+    "The runner will retry this claim automatically once the session is back; no need to press Start portal draft again."
+  );
+}
