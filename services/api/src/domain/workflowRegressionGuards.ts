@@ -1612,6 +1612,68 @@ export function shouldTreatAdfAsWalkInContext(args: {
   return true;
 }
 
+const ADF_FINANCE_APPLICATION_RE =
+  /\b(hdfs|hdfs\s*coa|coa|credit\s*app(?:lication)?|finance\s*app(?:lication)?|pre[-\s]?qual(?:ify|ified)?)\b/i;
+const ADF_FINANCE_APP_ID_RE = /\bapp\s*id\s*:/i;
+
+/**
+ * Does this ADF carry a genuine FINANCE-APPLICATION context (a real credit app / COA / prequal)?
+ *
+ * Trigger (Brent Marshall +17169941544, operator-reported 2026-07-29 — "Just because credit
+ * application is mentioned in a walk in lead it['s not] considered a credit application lead"): a
+ * Traffic Log Pro lead whose staff-written Inquiry read "Looking for a 2026 Road Glide in Dark
+ * Billiard gray with black motor. Told him we have one coming in but not till late August and we
+ * would need to redo credit application" was classified a CREDIT-APP lead. That set
+ * bucket=finance_prequal / cta=hdfs_coa, a payments_handoff dialog state, an approval todo, a
+ * manual handoff and a STOPPED cadence — and the first draft told him "Thanks — I received your
+ * credit application." He had submitted nothing; he asked about a bike.
+ *
+ * Root cause: the finance-context test read the ADF's free `Inquiry`/comment text. On a Traffic
+ * Log Pro payload that field is the dealership's OWN CRM log, written by STAFF about the customer
+ * ("Told him …", "Robert came in …", "I gave him book values …", "(Step 2)") — an internal note,
+ * not the customer's words. Reading routing intent out of it is the same bug class as the walk-in
+ * budget leak that created buildWalkInSpecRecapClause (Joe ruling 2026-07-28 #4).
+ *
+ * So on a Traffic Log Pro payload, finance context is read ONLY from STRUCTURED evidence:
+ *  - the lead SOURCE — vendor metadata that names a real credit product outright ("HDFS COA
+ *    Online", "Marketplace - Rider to Rider Credit App"); and
+ *  - the TLP `App ID:` field, which exists only when an application actually posted.
+ * Free prose still counts on every NON-TLP ADF (web forms, marketplace, dealer site), where the
+ * inquiry text really is the customer talking. Non-TLP behavior is unchanged.
+ *
+ * BUCKET: deterministic STRUCTURED EXTRACTION (which vendor field is present / what the Source
+ * says) feeding a ROUTING + SIDE-EFFECT gate (handoff, approval todo, cadence stop). It makes no
+ * judgment about what the customer MEANT — that stays with the typed parsers.
+ *
+ * FAIL DIRECTION: toward the normal, live sales thread. A miss now means a lead whose staff note
+ * mentions financing gets an ordinary draft and a running cadence — visible and recoverable. The
+ * old behavior failed the other way: a false "I got your application", a manual handoff and a
+ * stopped cadence silently killed a live bike inquiry. Every genuine application still routes,
+ * because it arrives with its own Source or an `App ID:`.
+ */
+export function hasAdfFinanceApplicationContext(args: {
+  leadSource?: string | null;
+  /** Free-prose fields (comment / inquiry / raw inquiry / raw body) — customer words on non-TLP ADFs. */
+  proseTexts?: (string | null | undefined)[];
+  /** Fields searched for the structured `App ID:` marker (comment / inquiry / raw inquiry). */
+  appIdTexts?: (string | null | undefined)[];
+  trafficLogPayloadHint?: boolean | null;
+  walkInSignalHint?: boolean | null;
+}): boolean {
+  // The Source is vendor metadata on every provider — always trustworthy.
+  if (ADF_FINANCE_APPLICATION_RE.test(String(args.leadSource ?? ""))) return true;
+  const isTrafficLogPayload = !!args.trafficLogPayloadHint;
+  if (!isTrafficLogPayload) {
+    const prose = (args.proseTexts ?? []).filter(Boolean).join(" ");
+    if (ADF_FINANCE_APPLICATION_RE.test(prose)) return true;
+  }
+  if (isTrafficLogPayload && !args.walkInSignalHint) {
+    const appIdText = (args.appIdTexts ?? []).filter(Boolean).join(" ");
+    if (ADF_FINANCE_APP_ID_RE.test(appIdText)) return true;
+  }
+  return false;
+}
+
 function escapeRegexLiteral(value: string): string {
   return String(value ?? "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

@@ -192,7 +192,8 @@ import {
   shouldIgnoreAdfModelMismatchForTradeContext,
   shouldSuppressInitialAvailabilityLineAppend,
   shouldSuppressInitialInventoryPhotoAppend,
-  shouldTreatAdfAsWalkInContext
+  shouldTreatAdfAsWalkInContext,
+  hasAdfFinanceApplicationContext
 } from "../domain/workflowRegressionGuards.js";
 
 function isAdfConversationStateParserAccepted(parsed: ConversationStateParse | null): boolean {
@@ -4727,13 +4728,16 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     walkInSignalHint
   });
   const isInitialTrafficLogWalkIn = isInitialAdf && isTrafficLogWalkInLead;
-  const adfFinanceContextSignal =
-    /\b(hdfs|hdfs\s*coa|coa|credit\s*app(?:lication)?|finance\s*app(?:lication)?|pre[-\s]?qual(?:ify|ified)?)\b/i.test(
-      [leadSource, lead.comment, lead.inquiry, inquiryRaw, event.body].filter(Boolean).join(" ")
-    ) ||
-    (isTrafficLogProPayloadHint &&
-      /\bapp\s*id\s*:/i.test([lead.comment, lead.inquiry, inquiryRaw].filter(Boolean).join(" ")) &&
-      !walkInSignalHint);
+  // On a Traffic Log Pro payload the Inquiry field is the dealership's OWN staff-written CRM log,
+  // so finance context there comes only from the Source or a structured `App ID:` — never from
+  // note prose. See hasAdfFinanceApplicationContext (Brent Marshall +17169941544).
+  const adfFinanceContextSignal = hasAdfFinanceApplicationContext({
+    leadSource,
+    proseTexts: [leadSource, lead.comment, lead.inquiry, inquiryRaw, event.body],
+    appIdTexts: [lead.comment, lead.inquiry, inquiryRaw],
+    trafficLogPayloadHint: isTrafficLogProPayloadHint,
+    walkInSignalHint
+  });
   if (isTlpPhoneLog) {
     if (conv.lead) {
       conv.lead.phoneLog = true;
