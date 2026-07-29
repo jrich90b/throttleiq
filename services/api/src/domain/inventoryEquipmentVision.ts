@@ -909,3 +909,45 @@ export function watchEquipmentFireGate(
   if (!equipmentQueryHasFeatures(requestedEquipment)) return true; // model-only watch → no-op
   return classifyUnitForEquipmentQuery(profile ?? null, requestedEquipment as EquipmentQuery) === "asserted";
 }
+
+/** A customer's chrome-vs-blacked-out FINISH preference. Never a model trim. */
+export type WatchFinishPreference = "black" | "chrome";
+
+/**
+ * The FINISH fire gate (Jason Marshall, +17165230421, 2026-07-29).
+ *
+ * DELIBERATELY THE MIRROR IMAGE of watchEquipmentFireGate, and the asymmetry is the whole point.
+ * The equipment gate REQUIRES a positive assertion (unprofiled → no fire), which is right for
+ * "must have bags": presenting a bagless bike as having bags is a false promise. Finish is the
+ * opposite risk. A customer who says "not a huge chrome guy" has stated a PREFERENCE, not a
+ * requirement — and applying require-the-assertion semantics to it would silence their watch on
+ * every unprofiled or shaky-read unit. That is precisely the failure this whole line of work
+ * exists to kill (a watch that reads as "I'll text you when one lands" and never does; verified
+ * live at 0/2 finish-bearing watches ever firing).
+ *
+ * So: SUPPRESS ONLY ON A CONFIDENT OPPOSITE READ. The unit must be confidently the finish they did
+ * NOT want, and not also the one they did, before we hold an alert back. Everything else fires.
+ *
+ *   no preference                      → true  (no-op; every existing watch is unaffected)
+ *   no profile / unprofiled unit       → true  (fail toward CONTACTING — never toward silence)
+ *   neither finish asserted            → true  (a shaky or absent read is not evidence)
+ *   BOTH finishes asserted             → true  (two-tone / ambiguous build; not confident enough)
+ *   opposite asserted, wanted not      → FALSE (the only suppression)
+ *
+ * Fail direction: at worst a customer hears about a bike whose finish is not their favourite —
+ * recoverable in one text. The alternative failure (silence) loses the sale invisibly.
+ */
+export function watchFinishFireGate(
+  profile: EquipmentProfile | null | undefined,
+  finishPreference: WatchFinishPreference | null | undefined
+): boolean {
+  if (finishPreference !== "black" && finishPreference !== "chrome") return true; // no preference → no-op
+  if (!profile) return true; // unprofiled → fail toward contacting
+  const blackAsserted = !!profile.features?.blackedOut?.asserted;
+  const chromeAsserted = !!profile.features?.heavyChrome?.asserted;
+  const wantedAsserted = finishPreference === "black" ? blackAsserted : chromeAsserted;
+  const oppositeAsserted = finishPreference === "black" ? chromeAsserted : blackAsserted;
+  // Only a CONFIDENT, UNAMBIGUOUS opposite holds the alert back.
+  if (oppositeAsserted && !wantedAsserted) return false;
+  return true;
+}

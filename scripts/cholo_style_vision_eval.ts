@@ -370,12 +370,15 @@ function profileFrom(model: string, desc: VehicleEquipmentDescription): Equipmen
   );
 
   // The gate is ANDed AFTER the base match in BOTH paths (never a replacement).
+  // Windows widened 700 -> 1200 on 2026-07-29: the FINISH gate (watchPassesFinishGate) now sits
+  // between the base match and the cholo gate at both sites. Same structural claim — the cholo gate
+  // still runs after inventoryItemMatchesWatch and is ANDed, never a replacement.
   assert.ok(
-    /if \(!inventoryItemMatchesWatch\(i, watch\)\) return false;[\s\S]{0,700}watchPassesCholoGate\(i, watch, equipmentCache\)/.test(indexSrc),
+    /if \(!inventoryItemMatchesWatch\(i, watch\)\) return false;[\s\S]{0,1200}watchPassesCholoGate\(i, watch, equipmentCache\)/.test(indexSrc),
     "cron: cholo gate runs AFTER inventoryItemMatchesWatch (ANDed)"
   );
   assert.ok(
-    /if \(!inventoryItemMatchesWatch\(matchedItem, watch\)\) return false;[\s\S]{0,700}watchPassesCholoGate\(matchedItem, watch, equipmentCache\)/.test(indexSrc),
+    /if \(!inventoryItemMatchesWatch\(matchedItem, watch\)\) return false;[\s\S]{0,1200}watchPassesCholoGate\(matchedItem, watch, equipmentCache\)/.test(indexSrc),
     "hold-release: cholo gate runs AFTER inventoryItemMatchesWatch (ANDed)"
   );
 

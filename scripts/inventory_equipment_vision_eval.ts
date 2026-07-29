@@ -39,6 +39,8 @@ import {
   equipmentQueryHasFeatures,
   // Equipment WATCHES + profile-on-arrival (this PR).
   watchEquipmentFireGate,
+  // Finish filtering (chrome vs blacked-out) — the deliberate mirror of the equipment gate.
+  watchFinishFireGate,
   profileArrivedUnitsForEquipment,
   type EquipmentProfile,
   type EquipmentCacheFile
@@ -1054,6 +1056,119 @@ function trimHalfPasses(watchTrim: string | undefined, unitModel: string): boole
       llmSrc
     ),
     "a genuine 'needs to have' equipment ask still produces a real filter"
+  );
+}
+
+// ===========================================================================
+// FINISH FILTERING (chrome vs blacked-out) — Jason Marshall, 2026-07-29.
+//
+// The finish gate is the MIRROR IMAGE of the equipment gate and the asymmetry is deliberate:
+//   equipment ("must have bags") REQUIRES a positive assertion — unprofiled → NO fire, because
+//     presenting a bagless bike as having bags is a false promise.
+//   finish ("not a huge chrome guy") SUPPRESSES ONLY on a confident OPPOSITE read — because it is a
+//     PREFERENCE, and require-the-assertion semantics would silence the watch on every unprofiled or
+//     shaky-read unit. That silent-watch failure is the whole reason this work exists.
+// Worst case here: the customer hears about a bike whose finish is not their favourite (one text to
+// recover). The alternative failure loses the sale invisibly.
+// ===========================================================================
+
+// --- (v) the finish gate's fail direction. ---
+{
+  const finishProfile = (black: boolean, chrome: boolean): EquipmentProfile =>
+    ({
+      ...softailWithShield,
+      features: {
+        ...softailWithShield.features,
+        blackedOut: { asserted: black, detected: black, confidence: black ? 0.9 : 0.1 },
+        heavyChrome: { asserted: chrome, detected: chrome, confidence: chrome ? 0.9 : 0.1 }
+      }
+    }) as EquipmentProfile;
+
+  // THE ONLY SUPPRESSION — confidently the opposite finish, and not also the wanted one.
+  assert.equal(
+    watchFinishFireGate(finishProfile(false, true), "black"),
+    false,
+    "a confidently CHROME unit does NOT alert a blacked-out watcher (the Jason case)"
+  );
+  assert.equal(
+    watchFinishFireGate(finishProfile(true, false), "chrome"),
+    false,
+    "a confidently BLACKED-OUT unit does NOT alert a chrome watcher (symmetric)"
+  );
+
+  // EVERYTHING ELSE FIRES — never trade a missed alert for silence.
+  assert.equal(watchFinishFireGate(finishProfile(true, false), "black"), true, "the wanted finish fires");
+  assert.equal(
+    watchFinishFireGate(null, "black"),
+    true,
+    "an UNPROFILED unit still fires — the gate never inherits the equipment gate's no-fire fail-safe"
+  );
+  assert.equal(
+    watchFinishFireGate(undefined, "chrome"),
+    true,
+    "a missing profile still fires (fail toward contacting a waiting customer)"
+  );
+  assert.equal(
+    watchFinishFireGate(finishProfile(false, false), "black"),
+    true,
+    "neither finish asserted (shaky/unseen read) is NOT evidence — still fires"
+  );
+  assert.equal(
+    watchFinishFireGate(finishProfile(true, true), "black"),
+    true,
+    "an ambiguous two-tone build (both asserted) still fires — not confident enough to suppress"
+  );
+
+  // NO PREFERENCE → pure no-op. Every watch that carries no finish is byte-identical to today.
+  assert.equal(watchFinishFireGate(finishProfile(false, true), null), true, "no preference → no-op");
+  assert.equal(watchFinishFireGate(finishProfile(false, true), undefined), true, "absent preference → no-op");
+  assert.equal(watchFinishFireGate(null, null), true, "no preference and no profile → no-op");
+}
+
+// --- (w) the finish gate is derived from the record we already write, and armed in BOTH fire paths. ---
+{
+  const repoRoot = path.resolve(new URL("..", import.meta.url).pathname);
+  const indexSrc = await fsp.readFile(path.join(repoRoot, "services/api/src/index.ts"), "utf8");
+
+  // Derived from watch.trim — so the ~10 existing writers (and the live records that were silently
+  // dead) get finish filtering with NO migration and no parallel field.
+  assert.ok(
+    /function watchFinishPreference\(watch: InventoryWatch \| null \| undefined\): WatchFinishPreference \| null/.test(
+      indexSrc
+    ),
+    "the finish preference is derived from the watch record"
+  );
+  assert.ok(
+    /const token = extractTrimToken\(raw\);[\s\S]{0,400}if \(bare === "black"\) return "black";/.test(indexSrc),
+    "it reads both the 'black trim' label AND the bare 'Black' shape older/ADF writers store"
+  );
+  assert.ok(
+    /return null; \/\/ a real model trim — not a finish/.test(indexSrc),
+    "a genuine MODEL trim ('special') yields NO finish preference — never mistaken for a finish"
+  );
+
+  // BOTH fire sites (cron sweep + hold-release) must apply it — two-path parity or it drifts.
+  const gateCalls = (indexSrc.match(/watchPassesFinishGate\(/g) ?? []).length;
+  assert.ok(
+    gateCalls >= 3,
+    `the finish gate is applied at BOTH fire sites (definition + 2 call sites); found ${gateCalls}`
+  );
+  assert.ok(
+    /if \(!watchPassesEquipmentGate\(i, watch, equipmentCache\)\) return false;[\s\S]{0,400}if \(!watchPassesFinishGate\(i, watch, equipmentCache\)\) return false;/.test(
+      indexSrc
+    ),
+    "cron sweep: the finish gate is ANDed after the equipment gate"
+  );
+  assert.ok(
+    /if \(!watchPassesEquipmentGate\(matchedItem, watch, equipmentCache\)\) return false;[\s\S]{0,320}if \(!watchPassesFinishGate\(matchedItem, watch, equipmentCache\)\) return false;/.test(
+      indexSrc
+    ),
+    "hold-release: the same gate, same order (two-path parity)"
+  );
+  // Flag-gated: with the vision flag off the gate is skipped entirely (behavior preserved).
+  assert.ok(
+    /function watchPassesFinishGate[\s\S]{0,300}if \(!inventoryEquipmentVisionEnabled\(\)\) return true;/.test(indexSrc),
+    "the finish gate is inert when the equipment-vision flag is off"
   );
 }
 
