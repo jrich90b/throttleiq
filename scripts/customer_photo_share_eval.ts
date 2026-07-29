@@ -662,8 +662,10 @@ assert.equal(compCap.context, "trade");
 
 // (f2) Capture HISTORY: every document photo on a thread is retained, oldest→newest. Regression guard
 // for the original single-slot record, where a second document silently overwrote the first — losing
-// the true count and any earlier competitor-quote price read (Shane Smith +17163852815 sent 4 photos
-// on 2026-07-28 and only the last survived). `documentPhotoCapture` still mirrors the LATEST.
+// the true count and any earlier competitor-quote price read. `documentPhotoCapture` still mirrors the
+// LATEST. This was a LATENT defect: at the time of the fix (2026-07-29) exactly one document photo had
+// ever been captured store-wide, so nothing had actually been overwritten yet. It would have bitten on
+// the first thread sending two documents — title + lien release together is the common pairing.
 const histConv: any = {};
 captureDocumentPhotoOnConversation(histConv, {
   documentType: "competitor_quote",
