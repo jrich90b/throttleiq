@@ -800,7 +800,9 @@ function segmentWatchFires(args: {
   );
   // Precedence: a segment watch is only minted when NO concrete model watch already anchored the ask.
   assert.ok(
-    /if \(!watches\.length && wantsWatchIntent\) \{[\s\S]{0,1500}formatSegmentWatchLabel\(segments\)/.test(indexSrc),
+    // Window widened 1500 -> 2800 on 2026-07-29: the finish-capture fix (segTrim) added its
+    // rationale comment between the guard and the label. Same structural claim, unchanged.
+    /if \(!watches\.length && wantsWatchIntent\) \{[\s\S]{0,2800}formatSegmentWatchLabel\(segments\)/.test(indexSrc),
     "a segment watch is minted only when no concrete model watch anchored the ask (model watch wins)"
   );
 }
@@ -912,6 +914,147 @@ function segmentWatchFires(args: {
   // /webhooks/twilio and /conversations/:id/regenerate call (no hand-mirrored regen local).
   const sharedCalls = (indexSrc.match(/resolveVehicleRecommendationReply\(/g) ?? []).length;
   assert.ok(sharedCalls >= 3, "the clarify rides the shared resolver called from BOTH live and regen (>=3 refs)");
+}
+
+// ===========================================================================
+// FINISH PREFERENCE ON A WATCH (Jason Marshall, +17165230421, 2026-07-29).
+//
+// `InventoryWatch.trim` is overloaded. Most writers store a genuine MODEL trim ("special"), which
+// legitimately appears inside the unit's model name — so matching it against item.model is correct.
+// But ~10 writers (formatWatchTrimLabel / splitWatchColorAndTrim and the context-note / ADF / pending
+// builders) store a FINISH label ("black trim", "chrome trim", bare "Black") in the SAME field whenever
+// the customer says "blacked out" / "not a chrome guy". A finish never appears in a model name, so those
+// watches were unsatisfiable BY CONSTRUCTION — silently un-fireable forever. Live evidence at the time
+// of the fix: 0/2 trim-bearing watches in the AH store had ever fired, vs a 22.6% fire rate for plain
+// watches; Jason's own segment watch dropped his blacked-out preference entirely.
+//
+// Fix direction is deliberately UNDER-constraining: a finish label is exempted from the MODEL-token
+// test (so the watch can fire again) and is NOT converted into a hard finish filter. Reason: no
+// confident finish signal exists for any unit. Verified in prod 2026-07-29 — the FLAGS are on
+// (INVENTORY_EQUIPMENT_VISION_ENABLED=1, CHOLO_STYLE_VISION_ENABLED=1), but nothing has ever been
+// profiled (no inventory_equipment_profiles.json exists): profiling is profile-on-ARRIVAL only, and
+// whole-lot profiling was never built. With zero profiles, a hard finish gate would inherit
+// watchEquipmentFireGate's "unprofiled → no fire" fail-safe and silence every finish watch — the exact
+// defect being repaired here. ("Vivid Black" paint is also not the same claim as blacked-out hardware.)
+// Fail direction is therefore toward CONTACTING a waiting customer, never toward a wrong-model alert
+// (model/segment/year/condition criteria are untouched) and never toward silence.
+// ===========================================================================
+
+// Faithful mirror of the trim half of inventoryItemPassesNonModelCriteria (index.ts is not exported —
+// same mirror pattern as segmentWatchFires above; the source assertions below pin that index.ts really
+// composes it this way).
+function trimHalfPasses(watchTrim: string | undefined, unitModel: string): boolean {
+  const normalizeModelNameMirror = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
+  const extractTrimTokenMirror = (s: string): "black" | "chrome" | null => {
+    const clean = normalizeModelNameMirror(s);
+    if (/\bblack\s+trim\b/.test(clean)) return "black";
+    if (/\bchrome\s+trim\b/.test(clean)) return "chrome";
+    return null;
+  };
+  const isFinishLabel = (t: string) => {
+    const n = normalizeModelNameMirror(t);
+    return !!n && (n === "black" || n === "chrome" || extractTrimTokenMirror(n) !== null);
+  };
+  if (!watchTrim) return true;
+  const itemModel = normalizeModelNameMirror(unitModel);
+  const trimToken = normalizeModelNameMirror(watchTrim);
+  if (trimToken && !isFinishLabel(trimToken) && !itemModel.includes(trimToken)) return false;
+  return true;
+}
+
+// --- (t) a FINISH label no longer silently kills the watch. ---
+{
+  // THE REGRESSION: "black trim" against a real unit model. Before the fix this returned false for
+  // every unit that ever existed — the customer waited forever and we never texted.
+  assert.equal(
+    trimHalfPasses("black trim", "Road Glide"),
+    true,
+    "a black-finish watch can fire on a Road Glide (was unsatisfiable — the watch was silently dead)"
+  );
+  assert.equal(
+    trimHalfPasses("chrome trim", "Street Glide Special"),
+    true,
+    "a chrome-finish watch can fire on a real unit"
+  );
+  // The live +17168609533 shape: a BARE "Black" written by an older/ADF writer.
+  assert.equal(
+    trimHalfPasses("Black", "Street Glide Special"),
+    true,
+    "a bare 'Black' finish label (live watch shape) no longer blocks the fire"
+  );
+
+  // GENUINE MODEL TRIMS KEEP FULL STRENGTH (regression pin) — the fix must not widen these.
+  assert.equal(
+    trimHalfPasses("special", "Road Glide Special"),
+    true,
+    "a real model trim still matches the unit that carries it"
+  );
+  assert.equal(
+    trimHalfPasses("special", "Road Glide"),
+    false,
+    "a 'Special' watch still does NOT fire on the base model — model-trim gating is unchanged"
+  );
+  assert.equal(
+    trimHalfPasses("limited", "Street Glide"),
+    false,
+    "a 'Limited' watch still does NOT fire on a base Street Glide"
+  );
+  // No watch trim at all → no-op, exactly as today.
+  assert.equal(trimHalfPasses(undefined, "Fat Boy"), true, "a watch with no trim is unaffected");
+}
+
+// --- (u) the guard, the segment-watch finish capture, and the parser rule are really wired in. ---
+{
+  const repoRoot = path.resolve(new URL("..", import.meta.url).pathname);
+  const indexSrc = await fsp.readFile(path.join(repoRoot, "services/api/src/index.ts"), "utf8");
+  const llmSrc = await fsp.readFile(path.join(repoRoot, "services/api/src/domain/llmDraft.ts"), "utf8");
+
+  // The finish-label exemption is applied inside the SHARED criteria (so model AND segment watches both
+  // get it — one code path, no drift).
+  assert.ok(
+    /function inventoryItemPassesNonModelCriteria[\s\S]{0,4200}if \(trimToken && !watchTrimTokenIsFinishLabel\(trimToken\) && !itemModel\.includes\(trimToken\)\) return false;/.test(
+      indexSrc
+    ),
+    "the shared non-model criteria exempt a FINISH label from the model-token trim test"
+  );
+  assert.ok(
+    /function watchTrimTokenIsFinishLabel\(trimToken: string\): boolean \{[\s\S]{0,400}return t === "black" \|\| t === "chrome" \|\| extractTrimToken\(t\) !== null;/.test(
+      indexSrc
+    ),
+    "the finish-label classifier covers bare black/chrome AND the 'black trim'/'chrome trim' labels"
+  );
+
+  // SEGMENT watches now capture the finish, at parity with the model watch builder.
+  assert.ok(
+    /const segTrim = formatWatchTrimLabel\(extractFinishToken\(segSource\)\);/.test(indexSrc),
+    "the segment watch builder derives the customer's finish preference from the note"
+  );
+  assert.ok(
+    /note: "context_note_segment_watch"/.test(indexSrc) && /\n\s*trim: segTrim,/.test(indexSrc),
+    "the minted segment watch record carries that finish preference"
+  );
+
+  // PARSER (fix C): a merely-MENTIONED feature is not a hard requirement.
+  assert.ok(
+    /REQUIRED, not merely MENTIONED/.test(llmSrc),
+    "the recommendation parser prompt states that requested_equipment means REQUIRED, not mentioned"
+  );
+  assert.ok(
+    /with or without a tour pack/i.test(llmSrc),
+    "the prompt lists the flexible/indifferent phrasings that must NOT become filters"
+  );
+  // The Jason few-shot: an explicitly optional tour pack yields NO equipment filter.
+  assert.ok(
+    /"a Road Glide, with or without a removable tour pack" -> \{[^\n]*"requested_equipment":\{\}/.test(llmSrc),
+    "a with-or-without tour pack few-shot pins requested_equipment to EMPTY (no hard filter)"
+  );
+  // ...while a real requirement still sets the filter (the fix must not gut genuine equipment asks).
+  assert.ok(
+    /"it needs to have bags and a backrest" -> \{[^\n]*"requested_equipment":\{"bags":true,"backrest_sissybar":true\}/.test(
+      llmSrc
+    ),
+    "a genuine 'needs to have' equipment ask still produces a real filter"
+  );
 }
 
 console.log("inventory_equipment_vision:eval PASS");

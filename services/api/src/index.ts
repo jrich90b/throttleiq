@@ -6553,7 +6553,40 @@ function inventoryItemPassesNonModelCriteria(item: any, watch: InventoryWatch): 
   const itemModel = normalizeModelName(String(item?.model ?? ""));
   if (watch.trim) {
     const trimToken = normalizeModelName(String(watch.trim));
-    if (trimToken && !itemModel.includes(trimToken)) return false;
+    // `trim` is OVERLOADED (Jason Marshall, +17165230421, 2026-07-29). Most writers put a genuine MODEL
+    // trim in it ("special", "limited") — a token that legitimately appears in the unit's model name, so
+    // the substring test below is right for those. But ~10 sites (formatWatchTrimLabel /
+    // splitWatchColorAndTrim, the context-note + ADF + pending-watch builders) put a FINISH label in the
+    // SAME field ("black trim", "chrome trim") whenever the customer says "blacked out" / "not a chrome
+    // guy". A finish is a property of the unit's FINISH/COLOR, never of its model name — no Harley is
+    // modeled "Road Glide Black Trim" — so for those watches this test was unsatisfiable by construction
+    // and the watch was silently un-fireable FOREVER. Production confirms it: both trim-bearing watches
+    // in the AH store have never fired (0/2) against a 22.6% fire rate for plain watches, and it is the
+    // exact failure mode the pin guards below already call out ("reads to the customer as 'I'll text you
+    // when one lands' and then stays silent forever").
+    //
+    // FAIL DIRECTION: this only ever REMOVES an unsatisfiable `return false`, so it fails toward
+    // CONTACTING a waiting customer — never toward a wrong-model alert (the model/segment/year/condition
+    // criteria are untouched and still gate the fire). A genuine model trim keeps the substring test at
+    // full strength; only the finish-label case is exempted.
+    //
+    // The finish PREFERENCE is not dropped — it stays on the watch, still sharpens color matching below
+    // (extractTrimToken(watch.trim) → leadTrim), and is what a real chrome-vs-blacked-out FILTER will key
+    // off once the vision finish read (EquipmentProfile.features.blackedOut / heavyChrome) is actually
+    // POPULATED for units. It is not populated today, and the reason is NOT the flag: verified in prod
+    // 2026-07-29, both INVENTORY_EQUIPMENT_VISION_ENABLED and CHOLO_STYLE_VISION_ENABLED are =1, so the
+    // vision schema does ask for the finish cues. The gap is that NOTHING HAS EVER BEEN PROFILED — there
+    // is no inventory_equipment_profiles.json on the box at all, because profiling is profile-on-ARRIVAL
+    // only (bounded to brand-new stockIds, capped at INVENTORY_EQUIPMENT_ARRIVAL_VISION_CAP=8, and only
+    // when a conversation is already waiting via convWaitsForVisionProfile). Whole-lot profiling is still
+    // the documented "follow-up" that was never built.
+    //
+    // So we deliberately do NOT hard-filter on finish: with zero profiles, watchEquipmentFireGate's
+    // fail-safe ("unprofiled → no fire") would silence every finish watch — the exact defect this block
+    // repairs. "Vivid Black" paint is also not the same claim as blacked-out hardware, so paint is not a
+    // stand-in. When finish filtering is built it must SUPPRESS only on a confident OPPOSITE read, never
+    // REQUIRE a positive assertion, or it re-creates the silent-watch failure at scale.
+    if (trimToken && !watchTrimTokenIsFinishLabel(trimToken) && !itemModel.includes(trimToken)) return false;
   }
   if (watch.make) {
     const itemMake = normalizeModelName(String(item.make ?? ""));
@@ -16077,6 +16110,19 @@ function extractTrimToken(s: string | undefined | null): "black" | "chrome" | nu
   if (/\bblack\s+trim\b/.test(clean)) return "black";
   if (/\bchrome\s+trim\b/.test(clean)) return "chrome";
   return null;
+}
+
+// Is a watch's `trim` value a FINISH preference (chrome vs blacked-out) rather than a genuine MODEL
+// trim token? Deterministic on purpose: this is a structural question about a value WE wrote into the
+// record (formatWatchTrimLabel emits exactly "black trim"/"chrome trim"; older/ADF writers emit a bare
+// "Black"/"Chrome"), NOT a read of customer intent — so it is classification of our own stored data,
+// which AGENTS.md allows as deterministic. No Harley model trim is named "black" or "chrome"
+// (Special/Limited/ST/CVO/S/Standard are the real ones), so this can never swallow a real trim token.
+// Used by inventoryItemPassesNonModelCriteria to stop a finish label from being model-token matched.
+function watchTrimTokenIsFinishLabel(trimToken: string): boolean {
+  const t = normalizeModelName(String(trimToken ?? ""));
+  if (!t) return false;
+  return t === "black" || t === "chrome" || extractTrimToken(t) !== null;
 }
 
 const COLOR_ALIASES: Record<string, string[]> = {
@@ -25627,6 +25673,16 @@ async function deriveContextNoteWatches(
             semanticCondition ??
             normalizeWatchCondition(conv?.lead?.vehicle?.condition);
           const segColor = sanitizeColorPhrase(extractColorMention(segSource)) ?? semanticColor;
+          // FINISH parity with the model watch above (Jason Marshall, +17165230421, 2026-07-29). The
+          // model builder has always carried the customer's chrome-vs-blacked-out preference
+          // (extractFinishToken → formatWatchTrimLabel); the segment builder captured color but never
+          // finish, so the single most specific thing Jason said on his 7/29 call — "not a huge chrome
+          // guy, I like more of a blacked-out package" — was dropped on the floor and his watch recorded
+          // only "new touring bike". Recording it keeps the preference ON the record for staff and for
+          // the color-match sharpening, and is what the vision finish filter will key off once unit
+          // equipment profiles actually exist (none do today — see the fail-direction note in
+          // inventoryItemPassesNonModelCriteria). It does NOT narrow firing today.
+          const segTrim = formatWatchTrimLabel(extractFinishToken(segSource));
           const segWatch: InventoryWatch = {
             // Synthetic label for copy/merge/bookkeeping — NEVER model-token matched (the fire engine
             // routes segment watches to the segment matcher via watchIsSegmentWatch).
@@ -25638,6 +25694,7 @@ async function deriveContextNoteWatches(
             make: "Harley-Davidson", // segments are HD taxonomy; never key off a trade vehicle's make
             condition: segCondition ?? undefined,
             color: segColor ?? undefined,
+            trim: segTrim,
             minPrice: segBudget.minPrice,
             maxPrice: segBudget.maxPrice,
             monthlyBudget: segBudget.monthlyBudget,
