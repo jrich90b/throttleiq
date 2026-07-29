@@ -930,10 +930,14 @@ function segmentWatchFires(args: {
 //
 // Fix direction is deliberately UNDER-constraining: a finish label is exempted from the MODEL-token
 // test (so the watch can fire again) and is NOT converted into a hard finish filter. Reason: no
-// confident finish signal exists yet — EquipmentProfile.features.blackedOut / heavyChrome are only
-// populated behind the DARK cholo canary, and "Vivid Black" paint is not the same claim as blacked-out
-// hardware. Fail direction is therefore toward CONTACTING a waiting customer, never toward a wrong-model
-// alert (model/segment/year/condition criteria are untouched) and never toward silence.
+// confident finish signal exists for any unit. Verified in prod 2026-07-29 — the FLAGS are on
+// (INVENTORY_EQUIPMENT_VISION_ENABLED=1, CHOLO_STYLE_VISION_ENABLED=1), but nothing has ever been
+// profiled (no inventory_equipment_profiles.json exists): profiling is profile-on-ARRIVAL only, and
+// whole-lot profiling was never built. With zero profiles, a hard finish gate would inherit
+// watchEquipmentFireGate's "unprofiled → no fire" fail-safe and silence every finish watch — the exact
+// defect being repaired here. ("Vivid Black" paint is also not the same claim as blacked-out hardware.)
+// Fail direction is therefore toward CONTACTING a waiting customer, never toward a wrong-model alert
+// (model/segment/year/condition criteria are untouched) and never toward silence.
 // ===========================================================================
 
 // Faithful mirror of the trim half of inventoryItemPassesNonModelCriteria (index.ts is not exported —
@@ -1008,7 +1012,7 @@ function trimHalfPasses(watchTrim: string | undefined, unitModel: string): boole
   // The finish-label exemption is applied inside the SHARED criteria (so model AND segment watches both
   // get it — one code path, no drift).
   assert.ok(
-    /function inventoryItemPassesNonModelCriteria[\s\S]{0,3000}if \(trimToken && !watchTrimTokenIsFinishLabel\(trimToken\) && !itemModel\.includes\(trimToken\)\) return false;/.test(
+    /function inventoryItemPassesNonModelCriteria[\s\S]{0,4200}if \(trimToken && !watchTrimTokenIsFinishLabel\(trimToken\) && !itemModel\.includes\(trimToken\)\) return false;/.test(
       indexSrc
     ),
     "the shared non-model criteria exempt a FINISH label from the model-token trim test"

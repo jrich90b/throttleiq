@@ -6571,10 +6571,20 @@ function inventoryItemPassesNonModelCriteria(item: any, watch: InventoryWatch): 
     //
     // The finish PREFERENCE is not dropped — it stays on the watch, still sharpens color matching below
     // (extractTrimToken(watch.trim) → leadTrim), and is what a real chrome-vs-blacked-out FILTER will key
-    // off once the vision finish read (EquipmentProfile.features.blackedOut / heavyChrome) is populated
-    // outside the dark cholo canary. Until that signal is live we deliberately do NOT hard-filter on it:
-    // "Vivid Black" paint is not the same claim as blacked-out hardware, and guessing would trade a
-    // missed alert (silence) for the worse of the two outcomes.
+    // off once the vision finish read (EquipmentProfile.features.blackedOut / heavyChrome) is actually
+    // POPULATED for units. It is not populated today, and the reason is NOT the flag: verified in prod
+    // 2026-07-29, both INVENTORY_EQUIPMENT_VISION_ENABLED and CHOLO_STYLE_VISION_ENABLED are =1, so the
+    // vision schema does ask for the finish cues. The gap is that NOTHING HAS EVER BEEN PROFILED — there
+    // is no inventory_equipment_profiles.json on the box at all, because profiling is profile-on-ARRIVAL
+    // only (bounded to brand-new stockIds, capped at INVENTORY_EQUIPMENT_ARRIVAL_VISION_CAP=8, and only
+    // when a conversation is already waiting via convWaitsForVisionProfile). Whole-lot profiling is still
+    // the documented "follow-up" that was never built.
+    //
+    // So we deliberately do NOT hard-filter on finish: with zero profiles, watchEquipmentFireGate's
+    // fail-safe ("unprofiled → no fire") would silence every finish watch — the exact defect this block
+    // repairs. "Vivid Black" paint is also not the same claim as blacked-out hardware, so paint is not a
+    // stand-in. When finish filtering is built it must SUPPRESS only on a confident OPPOSITE read, never
+    // REQUIRE a positive assertion, or it re-creates the silent-watch failure at scale.
     if (trimToken && !watchTrimTokenIsFinishLabel(trimToken) && !itemModel.includes(trimToken)) return false;
   }
   if (watch.make) {
@@ -25668,9 +25678,9 @@ async function deriveContextNoteWatches(
           // finish, so the single most specific thing Jason said on his 7/29 call — "not a huge chrome
           // guy, I like more of a blacked-out package" — was dropped on the floor and his watch recorded
           // only "new touring bike". Recording it keeps the preference ON the record for staff and for
-          // the color-match sharpening, and is what the vision finish filter will key off when
-          // blackedOut/heavyChrome leave the dark cholo canary. It does NOT narrow firing today — see
-          // the fail-direction note in inventoryItemPassesNonModelCriteria.
+          // the color-match sharpening, and is what the vision finish filter will key off once unit
+          // equipment profiles actually exist (none do today — see the fail-direction note in
+          // inventoryItemPassesNonModelCriteria). It does NOT narrow firing today.
           const segTrim = formatWatchTrimLabel(extractFinishToken(segSource));
           const segWatch: InventoryWatch = {
             // Synthetic label for copy/merge/bookkeeping — NEVER model-token matched (the fire engine
