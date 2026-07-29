@@ -8347,6 +8347,17 @@ export default function Home() {
   }
 
   function downloadMdfRunnerInstaller() {
+    // The runner installer is macOS-only today (zsh + LaunchAgents). A Windows user who
+    // downloads it gets a .sh file that does nothing when clicked (hit live 2026-07-29,
+    // testing the dealer-rollout scenario) — tell them plainly instead of handing them a
+    // dead file. Windows support is a dealer-rollout roadmap item.
+    const ua = typeof navigator !== "undefined" ? navigator.userAgent || "" : "";
+    if (/Windows/i.test(ua)) {
+      setMdfPortalTaskNotice(
+        "The MDF runner currently requires a Mac — this computer is running Windows, so the installer would not run here. Download it on the Mac that will act as the runner computer. (Windows support is on the roadmap.)"
+      );
+      return;
+    }
     setMdfPortalTaskNotice("Downloading MDF runner installer. Install it on one trusted computer only.");
     window.location.href = "/api/mdf/portal-runner/install";
   }

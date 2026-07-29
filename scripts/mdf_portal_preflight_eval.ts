@@ -483,3 +483,19 @@ console.log("PASS mdf portal preflight eval");
 }
 
 console.log("PASS mdf portal reliability additions");
+
+// === Windows download guard (2026-07-29): the console must not hand a Windows user the
+// macOS-only installer (a dead .sh — hit live testing the dealer-rollout scenario). ===
+{
+  const fsx = await import("node:fs");
+  const webSrc = fsx.readFileSync("apps/web/src/app/page.tsx", "utf8");
+  assert.ok(
+    /Windows/i.test(webSrc) && /requires a Mac/.test(webSrc),
+    "the Download-runner button explains the Mac requirement to Windows users"
+  );
+  assert.ok(
+    /if \(\/Windows\/i\.test\(ua\)\) \{[\s\S]{0,400}?return;/.test(webSrc),
+    "a Windows visitor gets the notice INSTEAD of the dead installer download"
+  );
+}
+console.log("PASS mdf runner windows download guard");
