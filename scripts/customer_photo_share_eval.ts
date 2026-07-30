@@ -784,4 +784,36 @@ assert.ok(
   "all three photo-share convergence points must re-point the context for a recognized document"
 );
 
+// ── A customer photo task is CUSTOMER-FACING WORK, not an internal note (Joe ruling 2026-07-30).
+//
+// Filed as reason "note" it was excluded from the fulfillment auto-closer
+// (taskFulfillmentAutoClose.ts `if (reason === "note") return false`), from the manager Ping list
+// (staffPing.ts) and from ageing escalation (taskEscalation.ts) — so it could never clear.
+// +17166090270 texted a bike photo 2026-07-17 15:14, staff answered 16:04, and the task was still
+// open 13 days later when the report was filed.
+assert.equal(
+  (apiSource.match(/addTodo\(conv, "other", photoShare\.todoSummary/g) ?? []).length,
+  2,
+  "the photo-share task must be filed as reason 'other' in BOTH paths (live + regenerate)"
+);
+assert.equal(
+  (apiSource.match(/addTodo\(conv, "note", photoShare\.todoSummary/g) ?? []).length,
+  0,
+  "no photo-share task may be filed as an internal note — it would be un-closeable"
+);
+// Prove the reclassification actually buys auto-close eligibility, not just a different label.
+const { isAutoCloseEligibleTask } = await import(
+  "../services/api/src/domain/taskFulfillmentAutoClose.ts"
+);
+assert.equal(
+  isAutoCloseEligibleTask({ status: "open", reason: "other", taskClass: "followup" }),
+  true,
+  "the reclassified photo task is eligible for the fulfillment auto-closer"
+);
+assert.equal(
+  isAutoCloseEligibleTask({ status: "open", reason: "note", taskClass: "followup" }),
+  false,
+  "the old 'note' reason was the exclusion — pinned so a silent revert is visible"
+);
+
 console.log("PASS customer photo share eval");
