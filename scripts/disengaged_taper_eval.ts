@@ -202,6 +202,150 @@ check("a suppressed proactive touch still ENDS the taper (never re-queues the le
   assert.equal(c.followUpCadence.nextDueAt, undefined, "no re-queue — we do not go back to pestering");
 });
 
+// ---------------------------------------------------------------------------
+// A REAL PHONE CONVERSATION COUNTS AS ENGAGEMENT (Joe ruling 2026-07-30, option B).
+//
+// Voice rows are all direction "out" because WE placed the call, so a customer who genuinely
+// talked to a salesperson still read as "never responded" and could be tapered with "I'll pause my
+// check-ins here". Syed John (+12065383753) got that two days after taking Giovanni's call.
+// Measured on the live store before the fix: 35 tapered leads, 26 with call activity, but only 3
+// with a genuine two-way conversation — the widening is deliberately tiny.
+// ---------------------------------------------------------------------------
+const { voiceCallCountsAsEngagement, hasParticipatedVoiceCall, VOICE_PARTICIPATION_MIN_CONFIDENCE } =
+  await import("../services/api/src/domain/conversationStore.ts");
+
+const spokeOnCall = {
+  direction: "out",
+  provider: "voice_transcript",
+  body: "Customer: I'm good. Where are you from?",
+  customerSpokeOnCall: true
+};
+
+check("a parser-confirmed live call marks the lead engaged", () => {
+  const c = silentConv(DISENGAGED_TAPER_AFTER_TOUCHES) as any;
+  c.messages = [adfLead, ourText, spokeOnCall];
+  assert.equal(hasParticipatedVoiceCall(c), true);
+  assert.equal(customerEngagedWithCadence(c), true, "Syed talked to Gio — that is engagement");
+  assert.equal(
+    shouldSendDisengagedCloseout(c, DISENGAGED_TAPER_AFTER_TOUCHES),
+    false,
+    "a lead who actually spoke with us must not get the disengagement close-out"
+  );
+});
+
+check("an unstamped voicemail still tapers (the other 23 of 26)", () => {
+  const c = silentConv(DISENGAGED_TAPER_AFTER_TOUCHES) as any;
+  c.messages = [adfLead, ourText, ourVoicemail];
+  assert.equal(hasParticipatedVoiceCall(c), false);
+  assert.equal(customerEngagedWithCadence(c), false, "a voicemail is not a conversation");
+  assert.equal(shouldSendDisengagedCloseout(c, DISENGAGED_TAPER_AFTER_TOUCHES), true);
+});
+
+check("a stamped call keeps the cadence running instead of completing it", () => {
+  const c = silentConv(8) as any;
+  c.messages.push(spokeOnCall);
+  advanceFollowUpCadence(c, "America/New_York");
+  assert.equal(c.followUpCadence.status, "active", "a lead who spoke with us keeps its cadence");
+  assert.notEqual(c.followUpCadence.stopReason, "disengaged_taper");
+});
+
+// The stamp gate: ONLY a high-confidence, explicitly live two-way conversation qualifies.
+check("voiceCallCountsAsEngagement accepts a confident live conversation", () => {
+  assert.equal(
+    voiceCallCountsAsEngagement({ customerParticipated: true, outcome: "live_conversation", confidence: 0.96 }),
+    true
+  );
+  assert.equal(
+    voiceCallCountsAsEngagement({
+      customerParticipated: true,
+      outcome: "live_conversation",
+      confidence: VOICE_PARTICIPATION_MIN_CONFIDENCE
+    }),
+    true,
+    "the floor is inclusive"
+  );
+});
+
+check("every uncertain or non-conversation read fails toward NOT engaged", () => {
+  // Fail direction: a false positive keeps texting someone who never answered, so anything short
+  // of a confident live conversation must resolve to false — i.e. today's behavior.
+  const cases: [string, any][] = [
+    ["no parse (parser off or errored)", null],
+    ["voicemail", { customerParticipated: false, outcome: "voicemail", confidence: 0.94 }],
+    ["no answer", { customerParticipated: false, outcome: "no_answer", confidence: 0.95 }],
+    ["IVR / hold loop", { customerParticipated: false, outcome: "ivr_or_system", confidence: 0.93 }],
+    ["unclear", { customerParticipated: true, outcome: "unclear", confidence: 0.99 }],
+    ["low confidence", { customerParticipated: true, outcome: "live_conversation", confidence: 0.6 }],
+    ["missing confidence", { customerParticipated: true, outcome: "live_conversation" }],
+    // The answering-machine trap: the transcript labels it "Customer:" and it SOUNDS conversational,
+    // but participated=false. A loose read of participation alone would wrongly engage this lead.
+    [
+      "answering-machine greeting in the customer's own voice",
+      { customerParticipated: false, outcome: "voicemail", confidence: 0.9 }
+    ]
+  ];
+  for (const [label, parse] of cases) {
+    assert.equal(voiceCallCountsAsEngagement(parse), false, `${label} => not engagement`);
+  }
+});
+
+// Source pin: the "was this a real conversation?" call is the PARSER's, never a keyword test, and
+// the sync engagement read only consults the stamped structured state.
+check("participation is parser-decided and stamped at ingest", () => {
+  const apiSrc = fs.readFileSync(path.resolve("services/api/src/index.ts"), "utf8");
+  assert.ok(
+    /parseVoiceCallParticipationWithLLM\(\{/.test(apiSrc),
+    "the voice ingest must ask the typed parser whether the customer took part"
+  );
+  assert.ok(
+    /voiceCallCountsAsEngagement\(voiceParticipation\)/.test(apiSrc),
+    "the pure gate decides whether the parse is strong enough to stamp"
+  );
+  const storeSrc = fs.readFileSync(
+    path.resolve("services/api/src/domain/conversationStore.ts"),
+    "utf8"
+  );
+  const fnIdx = storeSrc.indexOf("export function customerEngagedWithCadence");
+  assert.ok(fnIdx > 0, "the engagement read must exist");
+  const fnBody = storeSrc.slice(fnIdx, storeSrc.indexOf("\n}", fnIdx));
+  assert.ok(
+    /hasParticipatedVoiceCall\(conv\)/.test(fnBody),
+    "engagement reads the stamp, staying pure and sync"
+  );
+  assert.ok(
+    !/voicemail|no answer|transcript/i.test(fnBody),
+    "no keyword test may leak into the engagement read — that judgement belongs to the parser"
+  );
+});
+
+// LLM arm: the whole ruling rests on the parser separating a real conversation from an
+// answering-machine greeting recorded in the customer's OWN voice. Pinned against 8 REAL
+// production call records (scripts/fixtures/voice_participation_fixtures.json), including the
+// three genuine conversations (Faith, Devin, Syed) and the traps that fooled the generated
+// summaries. Runs only with a key + LLM_ENABLED.
+if (process.env.LLM_ENABLED === "1" && process.env.OPENAI_API_KEY) {
+  const { parseVoiceCallParticipationWithLLM } = await import(
+    "../services/api/src/domain/llmDraft.ts"
+  );
+  const fixtures = JSON.parse(
+    fs.readFileSync(path.resolve("scripts/fixtures/voice_participation_fixtures.json"), "utf8")
+  ) as { leadKey: string; expectEngagement: boolean; transcript: string }[];
+  let correct = 0;
+  for (const f of fixtures) {
+    const parse = await parseVoiceCallParticipationWithLLM({ text: f.transcript });
+    const got = voiceCallCountsAsEngagement(parse);
+    check(`voice participation: ${f.leadKey} => ${f.expectEngagement ? "engaged" : "not engaged"}`, () => {
+      assert.equal(
+        got,
+        f.expectEngagement,
+        `expected ${f.expectEngagement}, got ${got} (outcome=${parse?.outcome} conf=${parse?.confidence})`
+      );
+    });
+    if (got === f.expectEngagement) correct += 1;
+  }
+  console.log(`  voice-participation LLM arm: ${correct}/${fixtures.length} real call records correct`);
+}
+
 console.log(`\nDisengaged taper: ${passed} checks passed`);
 if (fail.length) {
   console.error(`\n${fail.length} failures`);

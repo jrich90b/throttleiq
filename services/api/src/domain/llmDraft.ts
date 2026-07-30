@@ -6273,6 +6273,123 @@ export async function parseManualOutboundPromiseWithLLM(args: {
   }
 }
 
+const VOICE_CALL_PARTICIPATION_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["customer_participated", "outcome", "confidence"],
+  properties: {
+    customer_participated: { type: "boolean" },
+    outcome: {
+      type: "string",
+      enum: ["live_conversation", "voicemail", "no_answer", "ivr_or_system", "unclear"]
+    },
+    confidence: { type: "number" }
+  }
+};
+
+export type VoiceCallParticipationParse = {
+  customerParticipated: boolean;
+  outcome: "live_conversation" | "voicemail" | "no_answer" | "ivr_or_system" | "unclear";
+  confidence: number;
+};
+
+/**
+ * Did the CUSTOMER actually take part in this call (Joe ruling, 2026-07-30)?
+ *
+ * `customerEngagedWithCadence` counts only inbound TEXT/EMAIL. Every voice row —
+ * `voice_call` / `voice_summary` / `voice_transcript` — is recorded `direction: "out"`, so a
+ * customer who genuinely talked to a salesperson still reads as "never responded" and can be
+ * tapered off cadence with "I'll pause my check-ins here". Measured on the live store: of 35
+ * tapered leads, 26 had call activity, but only **3** had a real two-way conversation (Faith
+ * +19179384241, Devin +17163921727, Syed John +12065383753 — the case that surfaced this on 7/29).
+ *
+ * Telling those 3 apart from the other 23 is COMPREHENSION, not a keyword hunt for "voicemail":
+ * the transcripts are full of near-misses — an answering machine greeting in the customer's own
+ * voice ("Probably didn't realize you called. As soon as I do, I'll get back to you"), a full
+ * mailbox, and an IVR hold loop ("this call may be monitored and recorded... please hold") that
+ * reads as customer speech but is a phone system. Hence a typed parser, per AGENTS.md.
+ *
+ * The caller stamps a HIGH-confidence `live_conversation` onto the conversation as structured
+ * state, which the pure sync `customerEngagedWithCadence` then reads. Fail direction: parser off,
+ * errored, or anything short of a confident live conversation => no stamp => exactly today's
+ * behavior. Never guess a lead into "engaged" and keep texting someone who never answered.
+ */
+export async function parseVoiceCallParticipationWithLLM(args: {
+  text: string;
+}): Promise<VoiceCallParticipationParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_VOICE_PARTICIPATION_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+  const model =
+    process.env.OPENAI_VOICE_PARTICIPATION_PARSER_MODEL ||
+    process.env.OPENAI_ROUTING_PARSER_MODEL ||
+    process.env.OPENAI_MODEL ||
+    "gpt-5-mini";
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+  const examples = [
+    // Real production transcripts (americanharley store, 2026-07-30).
+    'EXAMPLE A text: "Customer: Hello? Rep: Hey, Devin. Alex here at the dealership. How are you? Customer: Oh, how are you doing? Rep: Good, buddy. Hey. I just wanna let you know, our demo days are coming up."',
+    'EXAMPLE A output: {"customer_participated":true,"outcome":"live_conversation","confidence":0.96}',
+    // The hard one: an ANSWERING MACHINE greeting recorded in the customer's own voice.
+    'EXAMPLE B text: "Customer: Hi. This is Sydney. Customer: Probably didn\'t realize you called. As soon as I do, I\'ll get back to you. See you. Rep: Hey, Vinny. This is Alex at the dealership. Just wanna let you know we are having our test ride days."',
+    'EXAMPLE B output: {"customer_participated":false,"outcome":"voicemail","confidence":0.9}',
+    'EXAMPLE C text: "Customer: To ensure the highest quality service, this call may be monitored and recorded. Customer: Please hold while we connect your call. Customer: While you\'re waiting, here\'s a special offer for you."',
+    'EXAMPLE C output: {"customer_participated":false,"outcome":"ivr_or_system","confidence":0.93}',
+    'EXAMPLE D text: "Customer requested a test drive earlier this month and the rep called to follow up. Customer did not answer; the rep provided contact and dealership numbers."',
+    'EXAMPLE D output: {"customer_participated":false,"outcome":"no_answer","confidence":0.95}',
+    'EXAMPLE E text: "No information was provided; the call indicated the customer\'s mailbox was full and ended without any details."',
+    'EXAMPLE E output: {"customer_participated":false,"outcome":"voicemail","confidence":0.94}',
+    'EXAMPLE F text: "Customer: Yes. Speaking. Rep: This is Alex from the dealership. How are you? Customer: I\'m good. Where are you from? Rep: We are just off the highway."',
+    'EXAMPLE F output: {"customer_participated":true,"outcome":"live_conversation","confidence":0.95}'
+  ];
+  const prompt = [
+    "This is a phone-call record (a transcript or a summary) between a motorcycle dealership and a",
+    "customer. Decide whether the CUSTOMER THEMSELVES actually took part in a live two-way",
+    "conversation. Return only JSON matching the schema.",
+    "",
+    "Guidelines:",
+    "- customer_participated: true ONLY when a real person on the customer's side spoke WITH the rep",
+    "  in a back-and-forth exchange.",
+    "- Transcripts often label ALL non-rep audio as \"Customer:\" even when it is a recording. An",
+    "  answering-machine greeting, an outgoing voicemail message, a carrier notice, hold music, or an",
+    "  IVR menu is NOT participation, however conversational the words sound.",
+    "- A summary saying the customer did not answer, the mailbox was full, or a message was left =>",
+    "  customer_participated:false.",
+    "- outcome: live_conversation, voicemail, no_answer, ivr_or_system, or unclear.",
+    "- When you cannot tell, use unclear with a low confidence rather than guessing true.",
+    "- confidence 0 to 1.",
+    "",
+    ...examples,
+    "",
+    `Call record: ${text.slice(0, 2200)}`
+  ].join("\n");
+  try {
+    const parsed = await requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "voice_call_participation",
+      schema: VOICE_CALL_PARTICIPATION_JSON_SCHEMA,
+      maxOutputTokens: 120,
+      debugTag: "llm-voice-participation"
+    });
+    if (!parsed || typeof parsed !== "object") return null;
+    const outcomeRaw = String(parsed.outcome ?? "unclear").trim().toLowerCase();
+    const outcomes = ["live_conversation", "voicemail", "no_answer", "ivr_or_system", "unclear"] as const;
+    return {
+      customerParticipated: !!parsed.customer_participated,
+      outcome: (outcomes as readonly string[]).includes(outcomeRaw)
+        ? (outcomeRaw as VoiceCallParticipationParse["outcome"])
+        : "unclear",
+      confidence: Number(parsed.confidence ?? 0)
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function parseManualOutboundAppointmentWithLLM(args: {
   text: string;
   history?: { direction: "in" | "out"; body: string }[];

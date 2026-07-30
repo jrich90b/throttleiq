@@ -301,6 +301,7 @@ import {
   parseTurnUnderstandingWithLLM,
   parseManualOutboundAppointmentWithLLM,
   parseManualOutboundPromiseWithLLM,
+  parseVoiceCallParticipationWithLLM,
   parseInventoryEntitiesWithLLM,
   parseInventoryStatusWithLLM,
   parseIntentWithLLM,
@@ -474,6 +475,7 @@ import {
   computePostSaleDueAt,
   buildDisengagedCadenceCloseout,
   customerEngagedWithCadence,
+  voiceCallCountsAsEngagement,
   shouldSendDisengagedCloseout,
   DISENGAGED_TAPER_AFTER_TOUCHES,
   registerMissedContactAttempt,
@@ -70786,6 +70788,22 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
           existingTranscript.at = nowIso();
         }
       } else {
+        // Did the CUSTOMER actually take part (Joe ruling 2026-07-30, option B)? Voice rows are all
+        // direction "out" because WE placed the call, so a real conversation used to read as "never
+        // responded" and the lead could be tapered off cadence. Stamped once here as structured
+        // state; the pure sync customerEngagedWithCadence reads the stamp. Parser-first: the
+        // near-misses are answering-machine greetings in the customer's OWN voice and IVR hold
+        // loops, which no keyword test separates reliably. Any failure => no stamp => prior behavior.
+        // TRANSCRIPT-PREFERRED, and that ordering is load-bearing. The generated SUMMARY is a lossy
+        // secondhand account that demonstrably misreads these calls: on +17169061487 it said
+        // "Customer (Sydney) said she'll call back when she can" — that was an answering-machine
+        // greeting — and on Syed (+12065383753) it flattened a real back-and-forth into "no details
+        // were provided". Feeding summary+transcript together scored 6/8 on the live fixtures (both
+        // a false positive AND the flagship case wrong); transcript-first scored 8/8.
+        const voiceParticipation = await parseVoiceCallParticipationWithLLM({
+          text: String(noteText ?? "").trim() || String(summaryText ?? "").trim()
+        }).catch(() => null);
+        const customerSpokeOnCall = voiceCallCountsAsEngagement(voiceParticipation);
         conv.messages.push({
           id: `msg_${Math.random().toString(16).slice(2)}_${Date.now()}`,
           direction: inboundCall ? "in" : "out",
@@ -70796,7 +70814,8 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
           body: noteText,
           at: nowIso(),
           provider: "voice_transcript",
-          providerMessageId: transcriptProviderId
+          providerMessageId: transcriptProviderId,
+          ...(customerSpokeOnCall ? { customerSpokeOnCall: true } : {})
         });
       }
       saveConversation(conv);
