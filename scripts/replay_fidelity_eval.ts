@@ -20,7 +20,9 @@ import assert from "node:assert/strict";
 import {
   checkReplayFidelity,
   composeReplayCommentLines,
-  hasHydrationCompleted
+  hasHydrationCompleted,
+  isStoredVehicleConsistentWithBody,
+  resolveReplayLead
 } from "../services/api/src/domain/replayFidelity.ts";
 
 // ── hasHydrationCompleted: the store's own load line is the completion signal ──────────
@@ -223,6 +225,107 @@ import {
   );
 }
 
+// ── resolveReplayLead: the NEWEST lead is not necessarily THIS turn's lead ─────────────
+{
+  // THE 2026-07-30 CASE (+17165100025). Replaying message 0 (Ref 11697, a Tri Glide walk-in)
+  // while the thread's latestLead is Ref 11710 (a Road Glide credit app). The body's own Ref
+  // joins to the older record, so the replay must read THAT one.
+  const latestLead = { leadRef: "11710", firstName: "Michael", vehicle: { year: "2026", model: "Road Glide Limited" } };
+  const lead = { leadRef: "11697", firstName: "Mike", vehicle: { year: "2026", model: "Road Glide Limited" } };
+  const resolved = resolveReplayLead({ bodyRef: "11697", candidates: [latestLead, lead] });
+  assert.equal(resolved.matched, true, "a leadRef join is a confirmed match");
+  assert.equal(resolved.lead.leadRef, "11697", "the record matching the body's Ref wins over latestLead");
+}
+
+{
+  // Ambiguous: several distinct leads and none carries the body's Ref (or the body has none).
+  // Keep the caller's precedence but refuse to vouch for it, so body-fallback-less fields drop.
+  const a = { leadRef: "11710" };
+  const b = { leadRef: "11697" };
+  const noRef = resolveReplayLead({ bodyRef: "", candidates: [a, b] });
+  assert.equal(noRef.matched, false, "no body Ref + multiple distinct leads => unconfirmed");
+  assert.equal(noRef.lead.leadRef, "11710", "precedence is preserved (latestLead first)");
+
+  const unknownRef = resolveReplayLead({ bodyRef: "99999", candidates: [a, b] });
+  assert.equal(unknownRef.matched, false, "a Ref matching no stored record is unconfirmed");
+}
+
+{
+  // Unambiguous threads must NOT lose their context: one lead (or several copies of the same
+  // lead) means there is nothing to confuse, so the extras stay even with no body Ref.
+  assert.deepEqual(
+    resolveReplayLead({ bodyRef: "", candidates: [{ leadRef: "11697" }] }).matched,
+    true,
+    "a single stored lead is unambiguous"
+  );
+  assert.equal(
+    resolveReplayLead({ bodyRef: null, candidates: [{ leadRef: "11697" }, { leadRef: "11697" }] }).matched,
+    true,
+    "duplicate records of the same lead are still unambiguous"
+  );
+  assert.equal(
+    resolveReplayLead({ bodyRef: "", candidates: [null, undefined, { leadRef: "1" }] }).matched,
+    true,
+    "absent candidates are skipped, not counted as distinct leads"
+  );
+  assert.equal(
+    resolveReplayLead<any>({ bodyRef: "1", candidates: [] }).matched,
+    false,
+    "no candidates at all => nothing is confirmed"
+  );
+}
+
+// ── isStoredVehicleConsistentWithBody: never describe a different lead's motorcycle ────
+{
+  // The 2026-07-30 contamination: body says a 2019 Tri Glide, the stored lead is a 2026
+  // Road Glide, so its colour/price/make must not reach the synthetic ADF.
+  assert.equal(
+    isStoredVehicleConsistentWithBody({
+      bodyYear: "2019",
+      bodyModel: "Harley-Davidson FLHTCUTG Tri Glide",
+      storedYear: "2026",
+      storedModel: "Road Glide Limited"
+    }),
+    false,
+    "a contradicting year AND model is a different motorcycle"
+  );
+  assert.equal(
+    isStoredVehicleConsistentWithBody({
+      bodyYear: "2019",
+      bodyModel: "Tri Glide",
+      storedYear: "2026",
+      storedModel: "Tri Glide"
+    }),
+    false,
+    "the same model in a different year is still a different unit"
+  );
+  assert.equal(
+    isStoredVehicleConsistentWithBody({
+      bodyYear: "2026",
+      bodyModel: "Harley-Davidson FLHTCUTG Tri Glide",
+      storedYear: "2026",
+      storedModel: "Tri Glide"
+    }),
+    true,
+    "the stored model may be the shorter spelling of the body's"
+  );
+  assert.equal(
+    isStoredVehicleConsistentWithBody({
+      bodyYear: "",
+      bodyModel: "",
+      storedYear: "2026",
+      storedModel: "Road Glide"
+    }),
+    true,
+    "absent body evidence is not contradiction — a Full Line lead keeps its stored vehicle"
+  );
+  assert.equal(
+    isStoredVehicleConsistentWithBody({ bodyYear: "2026", bodyModel: "Road Glide", storedYear: "", storedModel: "" }),
+    true,
+    "an empty stored vehicle contradicts nothing"
+  );
+}
+
 console.log(
-  "PASS replay_fidelity eval — hydration-complete signal + prepared-thread fidelity guard + synthetic-ADF comment dedupe (phantom corpus_replay_regression becomes a visible harness error; takeover/no-baseline never error; a walk-in note never duplicates the inquiry behind a raw label)"
+  "PASS replay_fidelity eval — hydration-complete signal + prepared-thread fidelity guard + synthetic-ADF comment dedupe + per-turn lead resolution (phantom corpus_replay_regression becomes a visible harness error; takeover/no-baseline never error; a walk-in note never duplicates the inquiry behind a raw label)"
 );

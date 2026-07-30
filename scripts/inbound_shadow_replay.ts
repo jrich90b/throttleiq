@@ -9,7 +9,9 @@ import { hasDeliveredOrPendingDealerRideThankYou } from "../services/api/src/dom
 import {
   checkReplayFidelity,
   composeReplayCommentLines,
-  hasHydrationCompleted
+  hasHydrationCompleted,
+  isStoredVehicleConsistentWithBody,
+  resolveReplayLead
 } from "../services/api/src/domain/replayFidelity.ts";
 import {
   isBareReactionOnlyInbound,
@@ -329,34 +331,53 @@ function cdata(text: string): string {
 }
 
 function adfXmlForCandidate(candidate: Candidate, conv: Conversation): string {
-  const lead = conv.latestLead ?? conv.lead ?? {};
-  const vehicle = lead.vehicle ?? {};
   const body = candidate.body;
+  const bodyRef = extractField(body, "Ref");
+  // The NEWEST lead is not necessarily THIS turn's lead — join on the body's own Ref, and when
+  // that cannot be confirmed, refuse to import fields the body does not carry itself.
+  const { lead, matched: leadMatchesBody } = resolveReplayLead<any>({
+    bodyRef,
+    candidates: [conv.latestLead, conv.lead, (conv as any).originalLead]
+  });
+  const vehicle = lead.vehicle ?? {};
   const inquiry = extractInquiry(body) || String(lead.inquiry ?? "");
-  const leadRef = extractField(body, "Ref") || String(lead.leadRef ?? "");
+  const leadRef = bodyRef || String(lead.leadRef ?? "");
   const source = extractField(body, "Source") || String(lead.source ?? "LeadRider shadow replay");
   const name = extractField(body, "Name") || String(lead.name ?? leadDisplayName(conv) ?? "Shadow Customer");
   const [firstFallback, ...lastParts] = name.split(/\s+/);
-  const first = String(lead.firstName ?? firstFallback ?? "Shadow").trim();
-  const last = String(lead.lastName ?? lastParts.join(" ") ?? "Customer").trim();
+  // The body's own Name is what production received for THIS turn — it outranks the stored
+  // record, which may have been rewritten by a later lead ("Michael" from a credit app).
+  const first = String(firstFallback || lead.firstName || "Shadow").trim();
+  const last = String(lastParts.join(" ") || lead.lastName || "Customer").trim();
   const phone = normalizePhone(extractField(body, "Phone") || lead.phone || candidate.from).replace(/^\+1/, "");
   const email = extractField(body, "Email") || String(lead.email ?? "");
   const year = extractField(body, "Year") || String(vehicle.year ?? "");
-  const make = String(vehicle.make ?? "HARLEY-DAVIDSON");
   const model =
     extractField(body, "Vehicle").replace(/^HARLEY-DAVIDSON\s+/i, "").trim() ||
     String(vehicle.model ?? vehicle.description ?? "Full Line");
   const stock = extractField(body, "Stock") || String(vehicle.stockId ?? "");
   const vin = extractField(body, "VIN") || String(vehicle.vin ?? "");
-  const color = String(vehicle.color ?? "");
+  // make / color / price have no body fallback, so they are only safe when the stored vehicle
+  // is the same motorcycle the body names — otherwise they describe a different lead's bike.
+  const storedVehicleTrusted = isStoredVehicleConsistentWithBody({
+    bodyYear: extractField(body, "Year"),
+    bodyModel: extractField(body, "Vehicle"),
+    storedYear: vehicle.year,
+    storedModel: vehicle.model ?? vehicle.description
+  });
+  const make = String((storedVehicleTrusted ? vehicle.make : "") || "HARLEY-DAVIDSON");
+  const color = storedVehicleTrusted ? String(vehicle.color ?? "") : "";
+  const listPrice = storedVehicleTrusted ? vehicle.listPrice : undefined;
   const requestDate = candidate.messageAt || new Date().toISOString();
   // Deduped: a walk-in note that merely repeats the body's own Inquiry section must not be
   // emitted a second time behind a raw field label — see composeReplayCommentLines.
+  // preferredDate/Time and the walk-in note have no body fallback either, so they are only
+  // carried when the stored record is confirmed to be THIS turn's lead.
   const commentLines = composeReplayCommentLines({
     inquiry,
-    preferredDate: lead.preferredDate,
-    preferredTime: lead.preferredTime,
-    walkInComment: lead.walkInComment
+    preferredDate: leadMatchesBody ? lead.preferredDate : undefined,
+    preferredTime: leadMatchesBody ? lead.preferredTime : undefined,
+    walkInComment: leadMatchesBody ? lead.walkInComment : undefined
   });
 
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -371,7 +392,7 @@ function adfXmlForCandidate(candidate: Candidate, conv: Conversation): string {
       <model>${xmlEscape(model)}</model>
       <stock>${xmlEscape(stock)}</stock>
       <vin>${xmlEscape(vin)}</vin>
-      <price currency="USD">${vehicle.listPrice ? xmlEscape(String(vehicle.listPrice)) : "0.00"}</price>
+      <price currency="USD">${listPrice ? xmlEscape(String(listPrice)) : "0.00"}</price>
       <colorcombination><exteriorcolor>${xmlEscape(color)}</exteriorcolor></colorcombination>
     </vehicle>
     <customer>
