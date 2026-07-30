@@ -6474,7 +6474,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         conv,
         buildPendingIncomingInventoryTaskSummary({ pending, customerName }),
         event.providerMessageId,
-        conv.leadOwner
+        conv.leadOwner,
+        // Same arrival-dating contract as the SMS lane (Joe ruling 2026-07-29) — two-path parity.
+        pending.expectedArrivalAt ?? null
       );
       let ack = buildPendingIncomingInventoryInitialAdfReply(pending);
       ack = await applyInitialAdfPrefix(ack);
@@ -7775,7 +7777,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
             conv,
             buildPendingIncomingInventoryTaskSummary({ pending, customerName: spokenForCustomerName }),
             event.providerMessageId,
-            conv.leadOwner
+            conv.leadOwner,
+            // Same arrival-dating contract as the SMS lane (Joe ruling 2026-07-29) — two-path parity.
+            pending.expectedArrivalAt ?? null
           );
           tail = buildSpokenForIncomingHandoffAck(pending);
           walkInSpokenForHandoff = true;
