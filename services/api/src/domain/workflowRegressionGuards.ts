@@ -881,6 +881,48 @@ function titleCaseDealerLeadAppToken(raw: string): string {
   });
 }
 
+/**
+ * Harley's INVENTORY TAXONOMY buckets — not model names. The Dealer Lead App writes its demo-bike
+ * field as `YEAR,CATEGORY,MODEL` ("2026,CRUISER,BREAKOUT"), so the middle token is a shelf label the
+ * dealer's website groups bikes under, never something a person says out loud. Nobody at a dealership
+ * says "the 2026 Touring Street Glide"; they say "the 2026 Street Glide".
+ */
+const DEALER_LEAD_APP_CATEGORY_TOKENS = new Set([
+  "touring",
+  "grand american touring",
+  "cruiser",
+  "trike",
+  "sport",
+  "sportster",
+  "street",
+  "softail",
+  "dyna",
+  "cvo",
+  "adventure",
+  "adventure touring",
+  "electric",
+  "livewire"
+]);
+
+/**
+ * Drop the taxonomy bucket from a demo-bike label, but ONLY when a real model name is left standing.
+ *
+ * The exception that forces the rule: "2015,SPORTSTER,1200 CUSTOM". Here the family word IS the name
+ * — "the 2015 Sportster 1200 Custom" is how a dealer says it, while "the 2015 1200 Custom" is not a
+ * bike. So the bucket stays whenever the model that follows it leads with a number, which is exactly
+ * the displacement-style naming (1200 Custom, 883, 500) that needs the family word to make sense.
+ *
+ * Fail direction is deliberately toward KEEPING the word: a slightly clunky label is a cosmetic
+ * blemish, a label with the model stripped out names the wrong bike (or no bike at all).
+ */
+function stripDealerLeadAppCategoryToken(labelParts: string[]): string[] {
+  if (labelParts.length < 2) return labelParts;
+  const [first, second] = labelParts;
+  if (!DEALER_LEAD_APP_CATEGORY_TOKENS.has(String(first ?? "").trim().toLowerCase())) return labelParts;
+  if (/^\d/.test(String(second ?? "").trim())) return labelParts;
+  return labelParts.slice(1);
+}
+
 export function extractDealerLeadAppDemoBikeLabel(textRaw: string | null | undefined): string | null {
   if (isDealerLeadAppNoDemoRideAdfText(textRaw)) return null;
   const rawValue = extractDealerLeadAppDemoBikesRawValue(textRaw);
@@ -892,7 +934,7 @@ export function extractDealerLeadAppDemoBikeLabel(textRaw: string | null | undef
   if (!parts.length) return null;
   const yearIndex = parts.findIndex(part => /^(?:19|20)\d{2}$/.test(part));
   const year = yearIndex >= 0 ? parts[yearIndex] : "";
-  const labelParts = parts.filter((_, index) => index !== yearIndex);
+  const labelParts = stripDealerLeadAppCategoryToken(parts.filter((_, index) => index !== yearIndex));
   const label = [year, ...labelParts].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
   return label || null;
 }

@@ -13,6 +13,7 @@ import { pathToFileURL } from "node:url";
 import {
   decideFirstTouchAutoSend,
   hasDeliverablePhoneKey,
+  isDuplicateRecentFirstTouchAck,
   isFirstTouchAckAutoSendEnabled,
   buildFirstTouchShadowRecord,
   type FirstTouchAutoSendInput
@@ -26,8 +27,12 @@ const base: FirstTouchAutoSendInput = {
   callOnly: false,
   optedOut: false,
   invariantAllow: true,
-  hasDeliverablePhone: true
+  hasDeliverablePhone: true,
+  alreadyContacted: false,
+  duplicateRecentAck: false
 };
+
+const ACK = "Hey Layla, it's Alexandra over at American Harley-Davidson. Thanks for signing up for this year's ride challenge.";
 
 function run(): void {
   // 1) Dark = exact no-op: flag off ⇒ never send, regardless of everything else.
@@ -50,7 +55,9 @@ function run(): void {
     [{ optedOut: true }, "opted_out"],
     [{ callOnly: true }, "call_only"],
     [{ invariantAllow: false }, "invariant_block"],
-    [{ hasDeliverablePhone: false }, "no_deliverable_phone"]
+    [{ hasDeliverablePhone: false }, "no_deliverable_phone"],
+    [{ alreadyContacted: true }, "already_contacted"],
+    [{ duplicateRecentAck: true }, "duplicate_recent_ack"]
   ];
   for (const [patch, reason] of fails) {
     const d = decideFirstTouchAutoSend({ ...base, ...patch });
@@ -61,6 +68,70 @@ function run(): void {
   // Compliance precedence: suppression / opt-out beat an otherwise-eligible first touch.
   assert.equal(decideFirstTouchAutoSend({ ...base, suppressed: true }).send, false, "suppressed beats eligible");
   assert.equal(decideFirstTouchAutoSend({ ...base, optedOut: true }).send, false, "opted_out beats eligible");
+
+  // --- Duplicate prevention: the two cases the pre-flip shadow review actually caught. -------------
+  // CASE 1 (conv +15126299400, 2026-07-28/29/30): a vendor re-pushes the SAME lead every morning, so
+  // isFirstTouch is true each day. Without alreadyContacted the customer gets the identical greeting
+  // once a day. isFirstTouch alone must NOT be enough to send.
+  const dayTwo = decideFirstTouchAutoSend({ ...base, isFirstTouch: true, alreadyContacted: true });
+  assert.equal(dayTwo.send, false, "a re-pushed lead the customer already heard from must not re-send");
+  assert.equal(dayTwo.reason, "already_contacted");
+
+  // CASE 2 (conv +17163084498): two ADFs 13s apart produced two near-identical acks. The prior SENT
+  // copy carries the STOP footer while the candidate does not — the guard must still match.
+  const sentAt = Date.parse("2026-07-30T11:37:46.000Z");
+  const nowMs = Date.parse("2026-07-30T11:37:59.000Z");
+  const priorSent = [
+    { direction: "out", provider: "twilio", at: new Date(sentAt).toISOString(), body: `${ACK} Reply STOP to opt out.` }
+  ];
+  assert.equal(
+    isDuplicateRecentFirstTouchAck(priorSent, ACK, { nowMs }),
+    true,
+    "a footer-bearing sent copy of the same ack is still a duplicate"
+  );
+
+  // Held DRAFTS are not duplicates — draft_ai was never delivered, so a real send must still go out
+  // (this is the fail-OPEN direction we DO want; the opposite would silence every first touch).
+  assert.equal(
+    isDuplicateRecentFirstTouchAck(
+      [{ direction: "out", provider: "draft_ai", at: new Date(sentAt).toISOString(), body: ACK }],
+      ACK,
+      { nowMs }
+    ),
+    false,
+    "an unsent draft_ai copy must NOT count as already-delivered"
+  );
+  // Inbound echoes of our own text (customer quoting us) are not our outbound.
+  assert.equal(
+    isDuplicateRecentFirstTouchAck(
+      [{ direction: "in", provider: "twilio", at: new Date(sentAt).toISOString(), body: ACK }],
+      ACK,
+      { nowMs }
+    ),
+    false,
+    "an INBOUND message must never be read as our own prior send"
+  );
+  // A different ack to the same lead is not a duplicate.
+  assert.equal(
+    isDuplicateRecentFirstTouchAck(priorSent, "Hey Layla, your bike is ready for pickup.", { nowMs }),
+    false,
+    "different text is not a duplicate"
+  );
+  // Outside the window ⇒ not a recent duplicate (alreadyContacted is what covers the long tail).
+  assert.equal(
+    isDuplicateRecentFirstTouchAck(priorSent, ACK, { nowMs: sentAt + 48 * 60 * 60 * 1000 }),
+    false,
+    "beyond the window the recency guard stands down"
+  );
+  // Fail-SAFE: unreadable candidate text, or an equivalent send with an unparseable timestamp, holds.
+  assert.equal(isDuplicateRecentFirstTouchAck(priorSent, "", { nowMs }), true, "blank candidate ⇒ hold");
+  assert.equal(
+    isDuplicateRecentFirstTouchAck([{ direction: "out", provider: "twilio", at: "not-a-date", body: ACK }], ACK, { nowMs }),
+    true,
+    "equivalent send with an unreadable timestamp ⇒ hold"
+  );
+  // A thread with no history is not a duplicate (the ordinary brand-new lead).
+  assert.equal(isDuplicateRecentFirstTouchAck([], ACK, { nowMs }), false, "empty history ⇒ not a duplicate");
 
   // Both call sites (ADF SMS opener now; any Twilio first-touch later) share ONE
   // decision fn ⇒ identical verdict for identical inputs (parity by construction).
@@ -159,6 +230,43 @@ function run(): void {
     "evidence stream: the main-opener log is first-touch + debug gated and NOT auto-send-eligible"
   );
 
+  // --- BOTH-PATHS / no-silent-skip tripwire (added after the 2026-07-30 cross-model review asked,
+  //     correctly, whether the duplicate guard could be absent on another reply path).
+  // The answer today is that first-touch auto-send is ADF/SendGrid-ONLY: there is no Twilio cold
+  // opener, and regenerate never sends. Rather than leave that as a claim in a PR description, pin
+  // it — every production call site must live in sendgridInbound.ts AND supply both duplicate-guard
+  // fields. If someone later adds a Twilio or regenerate call site, or forgets a guard field at a new
+  // one, this fails instead of shipping a path where duplicates are silently unguarded.
+  const gateCallSitePattern = /decideFirstTouchAutoSend\(/g;
+  const adfCallSites = (adfSrc.match(gateCallSitePattern) ?? []).length;
+  assert.equal(adfCallSites, 3, "the ADF opener has exactly 3 gate call sites (live send + 2 shadow logs)");
+  // Every call site is reached from one of exactly two input objects, and BOTH carry the guards.
+  assert.ok(
+    /alreadyContacted: hasCustomerReceivedOutbound\(conv\?\.messages\)/.test(adfSrc),
+    "duplicate guard: alreadyContacted is wired from the real thread history"
+  );
+  assert.equal(
+    (adfSrc.match(/alreadyContacted: hasCustomerReceivedOutbound\(conv\?\.messages\)/g) ?? []).length,
+    2,
+    "duplicate guard: BOTH gate input objects (live send + main-opener log) wire alreadyContacted"
+  );
+  assert.equal(
+    (adfSrc.match(/duplicateRecentAck: isDuplicateRecentFirstTouchAck\(conv\?\.messages, invariant\.draftText\)/g) ?? []).length,
+    2,
+    "duplicate guard: BOTH gate input objects wire duplicateRecentAck from the real ack text"
+  );
+  // No OTHER production file may call the gate — index.ts hosts /webhooks/twilio and
+  // /conversations/:id/regenerate, and neither has any business auto-sending a first touch.
+  const twilioAndRegeneratePath = fs.readFileSync(path.resolve("services/api/src/index.ts"), "utf8");
+  assert.ok(
+    !gateCallSitePattern.test(twilioAndRegeneratePath),
+    "no first-touch auto-send call site in index.ts (/webhooks/twilio + regenerate) — ADF lane only"
+  );
+  assert.ok(
+    !/FIRST_TOUCH_ACK_AUTOSEND/.test(twilioAndRegeneratePath),
+    "index.ts does not read the auto-send flag — if a Twilio cold opener is ever added it must wire the guards"
+  );
+
   // --- Deliverable-phone key. The check WAS `leadKey.startsWith("+")` inline, but leadKey is
   // stored as BARE DIGITS — so it rejected every SMS lead and the feature could never fire. In the
   // 2026-07-27..30 shadow corpus that was 218 of 218 otherwise-eligible first-touch leads, which
@@ -198,7 +306,7 @@ function run(): void {
     "suppression's normalizePhone is the shared definition of a phone number"
   );
 
-  console.log("PASS first-touch-autosend eval (dark no-op + 1 send case + 7 fail-safes + parity + shadow record + STEP 2 wiring + evidence stream + deliverable-phone key)");
+  console.log("PASS first-touch-autosend eval (dark no-op + 1 send case + 9 fail-safes + duplicate prevention + parity + shadow record + STEP 2 wiring + evidence stream + deliverable-phone key)");
 }
 
 const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;

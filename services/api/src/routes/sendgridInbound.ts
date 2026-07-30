@@ -59,7 +59,7 @@ import {
 import type { InventoryWatch } from "../domain/conversationStore.js";
 import { isSuppressed } from "../domain/suppressionStore.js";
 import { isOptOutKeywordInbound } from "../domain/scoringExclusions.js";
-import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, shouldIntroduceOnAdfTouch, stripAgentIntroPhraseForDealer, stripLeadingAgentGreeting, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, greetingFirstName } from "../domain/agentVoice.js";
+import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, shouldIntroduceOnAdfTouch, stripAgentIntroPhraseForDealer, stripLeadingAgentGreeting, hasCustomerReceivedOutbound, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, greetingFirstName } from "../domain/agentVoice.js";
 import { buildAdfResubmissionAck, detectAdfFormResubmission } from "../domain/adfResubmission.js";
 import { buildMarketplaceRelayFirstTouchReply, buildMarketplaceRelayTaskSummary } from "../domain/marketplaceRelay.js";
 import { isHtmlClientNoticeOnly } from "../domain/inboundMailActionability.js";
@@ -2022,6 +2022,7 @@ import {
   firstTouchAutoSendDebugEnabled,
   hasDeliverablePhoneKey,
   isFirstTouchAckAutoSendEnabled,
+  isDuplicateRecentFirstTouchAck,
   buildFirstTouchShadowRecord,
   appendFirstTouchShadowLog
 } from "../domain/firstTouchAutoSend.js";
@@ -5891,7 +5892,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       optedOut: isOptOutKeywordInbound(event?.body ?? null),
       callOnly: conv?.lead?.preferredContactMethod === "phone",
       invariantAllow: true, // past the invariant.allow gate above
-      hasDeliverablePhone: hasDeliverablePhoneKey(leadKey)
+      hasDeliverablePhone: hasDeliverablePhoneKey(leadKey),
+      // Read BEFORE the appendOutbound below, so "has this customer ever heard from us" reflects the
+      // thread as it was when the ADF landed — not the draft we are about to add.
+      alreadyContacted: hasCustomerReceivedOutbound(conv?.messages),
+      duplicateRecentAck: isDuplicateRecentFirstTouchAck(conv?.messages, invariant.draftText)
     };
     const autoSendDecision = decideFirstTouchAutoSend({
       enabled: isFirstTouchAckAutoSendEnabled(),
@@ -6414,7 +6419,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         optedOut: isOptOutKeywordInbound(event?.body ?? null),
         callOnly: conv?.lead?.preferredContactMethod === "phone",
         invariantAllow: true,
-        hasDeliverablePhone: hasDeliverablePhoneKey(leadKey)
+        hasDeliverablePhone: hasDeliverablePhoneKey(leadKey),
+        alreadyContacted: hasCustomerReceivedOutbound(conv?.messages),
+        duplicateRecentAck: isDuplicateRecentFirstTouchAck(conv?.messages, invariant.draftText)
       });
       appendFirstTouchShadowLog(
         buildFirstTouchShadowRecord({
