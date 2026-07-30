@@ -65,7 +65,9 @@ escalate. The contract (full version in the loop doc):
 - **Tier 2 — split by CHARTER COVERAGE (Joe authorization, 2026-07-30 — "Go" on the Tier-2
   delegation design; `docs/policy_charter.md` is the boundary):**
   - **Tier 2a — charter-covered, may merge WITHOUT pre-approval**: the change implements or
-    corrects toward a SPECIFIC rule in `docs/policy_charter.md` (cited by rule ID). Required,
+    corrects toward a SPECIFIC rule in `docs/policy_charter.md` (cited by rule ID), or clearly
+    serves the charter's North star with the `NS` citation (Standing improvement authority —
+    Joe, 2026-07-30 "You are the expert"; alignment judged adversarially like any citation). Required,
     all of them: cross-model review returns a clean APPROVE **and** confirms the cited rule
     genuinely covers the change (`charter_covered`); `tsc` + `ci:eval` green; a kill switch or
     clean revert path exists. Joe is notified AFTER the merge with a plain-English summary +

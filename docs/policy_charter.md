@@ -36,6 +36,24 @@ already made, in one place. It is the boundary line in the Tier-2 split (AGENTS.
 Amending this file is itself Tier-2b (Joe signs), with one exception: **recording a new
 ruling Joe just made** (with the date and his wording) is Tier-1 doc-work.
 
+### Standing improvement authority (Joe, 2026-07-30 — "You are the expert")
+
+Joe: *"If you notice anything that can be improved or something that is not in line with
+achieving the end goal I want to give you the freedom to make the fix."* Standing grant to
+all sessions and routines:
+
+- **Non-behavioral improvements** (tooling, routines, docs, evals, priorities, refactors,
+  de-duplication, cost/waste removal): fix directly under Tier-1 rules; note it in the run
+  report. Don't ask.
+- **Customer-behavior changes with no covering rule id** that clearly serve the North star:
+  treat as Tier-2a with the citation **`NS`** — the cross-model reviewer is shown the
+  North-star section and judges the alignment claim adversarially, with the same
+  clean-approve + coverage requirement, the same notify-after, the same veto/demotion. A
+  stretched alignment claim must fail coverage exactly like a stretched rule citation.
+- **Never covered by this grant (unchanged):** the always-Tier-2b list below, and ANY
+  expansion of the agent's own authority — authority is granted only by Joe, in his own
+  words, ratified the way this section was.
+
 ### Always Tier-2b, even if a rule below seems to cover it
 Compliance / opt-out behavior; pricing, payment or finance FIGURES the agent may state;
 any brand-new reply class (a kind of message never sent before); flag flips from
