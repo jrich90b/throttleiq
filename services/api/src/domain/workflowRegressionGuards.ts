@@ -508,6 +508,36 @@ export function isBusinessHoursQuestionText(textRaw: string | null | undefined):
   return hasOpeningHoursPhrase || hasCloseTimePhrase || (hasHoursWord && hasQuestionShape) || (hasOpenClose && hasQuestionShape);
 }
 
+/**
+ * Cheap COST hint (not comprehension — parseBusinessHoursQuestionWithLLM owns the verdict, this
+ * only decides whether that parser is worth calling): the customer asking whether WE are around
+ * at some time, phrased without an hours word. Mirrors the sanctioned hasManualPromiseHint
+ * pattern; over-matching costs one parser call and nothing else.
+ *
+ * isBusinessHoursQuestionText is a strict subset by construction, so the hint can never be
+ * narrower than what already routes today.
+ */
+export function hasBusinessHoursQuestionHint(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return false;
+  if (isBusinessHoursQuestionText(textRaw)) return true;
+  const asksSomething =
+    /[?]/.test(String(textRaw ?? "")) ||
+    /\b(what|when|how|are|is|do|does|did|can|could|will|would|any)\b/.test(text);
+  if (!asksSomething) return false;
+  // "you/your" followed closely by an around-ness word. The proximity window is what keeps
+  // "do you have any Road Glides available?" (inventory, 4 words away) from paying for a call,
+  // while "are you guys available weekends?" and "what is your availability like?" both hint.
+  const asksIfWeAreAround =
+    /\b(?:you|u|ya|yall|y'all|your|ur)\b(?:\s+(?:guys|all|folks|team))?\s+(?:[a-z']+\s+){0,2}(?:open|available|availability|around|working|work|there|in)\b/.test(
+      text
+    ) || /\b(?:your|ur)\s+(?:availability|schedule)\b/.test(text);
+  return asksIfWeAreAround;
+}
+
 export function getScheduleDayOptionsLabel(textRaw: string | null | undefined): string | null {
   const text = String(textRaw ?? "");
   if (!text.trim()) return null;

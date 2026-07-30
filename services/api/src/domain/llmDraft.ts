@@ -2575,6 +2575,23 @@ export type FinanceProcessQuestionParse = {
   confidence?: number;
 };
 
+export type BusinessHoursQuestionParse = {
+  // Is the customer asking WHEN someone/something is available at all?
+  isHoursQuestion: boolean;
+  // scope is the discriminator that makes this parser safe to route on:
+  //   "dealership"      -> "are you guys available weekends?" — the STORE's hours. This is the
+  //                        only scope we can answer from scheduler_config.businessHours.
+  //   "staff_person"    -> "is Giovanni working Saturday?" — whether a PERSON is in. Answering
+  //                        with store hours would be a confidently wrong answer.
+  //   "appointment_slot"-> "do you have anything open at 2?" — booking availability, which the
+  //                        scheduling handlers own.
+  //   "none"            -> not an availability question at all.
+  scope: "dealership" | "staff_person" | "appointment_slot" | "none";
+  // The day the customer asked about, verbatim ("weekends", "Saturday"), when they named one.
+  day?: string | null;
+  confidence?: number;
+};
+
 export type FinanceHardshipDisclosureParse = {
   // "distress": the customer signals REAL, CURRENT financial pain where any bot "solution" (a
   //   co-signer nudge, a rate, approval odds) would read as tone-deaf — a fresh/active bankruptcy,
@@ -4012,6 +4029,19 @@ const FINANCE_PROCESS_QUESTION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = 
   properties: {
     intent: { type: "string", enum: ["finance_process_handoff", "none"] },
     explicit_request: { type: "boolean" },
+    confidence: { type: "number" }
+  }
+};
+
+const BUSINESS_HOURS_QUESTION_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["is_hours_question", "scope", "day", "confidence"],
+  properties: {
+    is_hours_question: { type: "boolean" },
+    // See BusinessHoursQuestionParse — only "dealership" is answerable from our hours config.
+    scope: { type: "string", enum: ["dealership", "staff_person", "appointment_slot", "none"] },
+    day: { type: ["string", "null"] },
     confidence: { type: "number" }
   }
 };
@@ -9500,6 +9530,114 @@ export async function parseFinanceProcessQuestionWithLLM(args: {
       ? Math.max(0, Math.min(1, parsed.confidence))
       : undefined;
   return { intent, explicitRequest, confidence };
+}
+
+/**
+ * Reads whether the customer is asking when the DEALERSHIP is open, including the phrasings that
+ * carry no hours word at all ("are you guys available weekends?", "what is your availability
+ * like?"). Production miss it fixes: Dustin Jordan +17163277383, 2026-07-29 — two consecutive
+ * hours questions were punted to the lead owner ("let me double-check with Giovanni") because
+ * isBusinessHoursQuestionText requires open/close/hours wording.
+ *
+ * scope carries the whole risk: store hours are the wrong answer to "is Giovanni working
+ * Saturday?" (staff_person) or "anything open at 2?" (appointment_slot), so only "dealership"
+ * routes. Fail direction: null / unsure / any other scope => the caller falls back to exactly
+ * today's regex behavior, so this parser can only ever ADD an answered turn.
+ */
+export async function parseBusinessHoursQuestionWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<BusinessHoursQuestionParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_BUSINESS_HOURS_QUESTION_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_BUSINESS_HOURS_QUESTION_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_BUSINESS_HOURS_QUESTION_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_BUSINESS_HOURS_QUESTION_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const prompt = [
+    "You read SMS in a Harley dealership sales thread and decide whether the customer is asking",
+    "WHEN THE DEALERSHIP IS OPEN — its business hours — however they phrase it. Many customers",
+    "never say the word 'hours': they ask if we are 'available', 'around', 'there', or 'working'.",
+    "Return only JSON that matches the provided schema.",
+    "",
+    "scope (this is the important field):",
+    '- "dealership": the STORE\'s hours / whether the store is open at some time. Answerable from',
+    "  our posted hours.",
+    '- "staff_person": whether a NAMED PERSON (or "you" meaning the individual rep they have been',
+    "  texting) is working / in that day. Store hours would be a wrong answer.",
+    '- "appointment_slot": whether a specific APPOINTMENT time is free ("anything open at 2?",',
+    '  "do you have a slot Thursday?"). The scheduling handler owns these.',
+    '- "none": not an availability question (inventory, pricing, trade, photos, chit-chat).',
+    "",
+    "Hard rules:",
+    '- "are you guys ..." / "are you open ..." / "your availability" with no person named = dealership.',
+    "  A dealership 'we' question is about the store even when it says 'you'.",
+    "- A named rep, or 'is he/she in', or a question that only makes sense about one person =",
+    "  staff_person.",
+    '- Asking to BOOK or whether a TIME is free = appointment_slot, even though it sounds similar.',
+    '- "any Road Glides available?" is inventory = none. "Available" alone is not an hours word.',
+    "- is_hours_question is true whenever scope is dealership, staff_person, or appointment_slot.",
+    "- confidence is 0..1; use >= 0.7 only when the scope read is clear.",
+    "- day: the day/window the customer named, verbatim, else null.",
+    "",
+    "Examples:",
+    '- "Are you guys available weekends?" -> {"is_hours_question":true,"scope":"dealership","day":"weekends","confidence":0.93}',
+    '- "I do work days what is your availability like?" -> {"is_hours_question":true,"scope":"dealership","day":null,"confidence":0.85}',
+    '- "you guys around on Sunday?" -> {"is_hours_question":true,"scope":"dealership","day":"Sunday","confidence":0.9}',
+    '- "what time do you close today?" -> {"is_hours_question":true,"scope":"dealership","day":"today","confidence":0.95}',
+    '- "is Giovanni working Saturday?" -> {"is_hours_question":true,"scope":"staff_person","day":"Saturday","confidence":0.9}',
+    '- "are you in tomorrow? wanted to see you specifically" -> {"is_hours_question":true,"scope":"staff_person","day":"tomorrow","confidence":0.82}',
+    '- "do you have anything open at 2 on Thursday?" -> {"is_hours_question":true,"scope":"appointment_slot","day":"Thursday","confidence":0.9}',
+    '- "any Road Glides available?" -> {"is_hours_question":false,"scope":"none","day":null,"confidence":0.92}',
+    '- "what would my payment be?" -> {"is_hours_question":false,"scope":"none","day":null,"confidence":0.95}',
+    "",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "business_hours_question_parser",
+      schema: BUSINESS_HOURS_QUESTION_JSON_SCHEMA,
+      maxOutputTokens: 80,
+      debugTag: "llm-business-hours-question-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const rawScope = String(parsed.scope ?? "").toLowerCase();
+  const scope: BusinessHoursQuestionParse["scope"] =
+    rawScope === "dealership" || rawScope === "staff_person" || rawScope === "appointment_slot"
+      ? rawScope
+      : "none";
+  const dayRaw = typeof parsed.day === "string" ? parsed.day.trim() : "";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return {
+    isHoursQuestion: parsed.is_hours_question === true,
+    scope,
+    day: dayRaw || null,
+    confidence
+  };
 }
 
 // Detects a customer DISCLOSING a personal credit/financing hardship (no/bad credit, prior
