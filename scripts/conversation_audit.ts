@@ -1,8 +1,55 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isEnthusiasmAckNoAction, isShortAckNoAction } from "../services/api/src/domain/scoringExclusions.ts";
+import { businessMinutesBetween, type BusinessWeekHours } from "../services/api/src/domain/staffFollowUpTiming.ts";
 
 type AnyObj = Record<string, any>;
+
+/**
+ * Draft staleness is measured in BUSINESS minutes (Joe ruling, 2026-07-30).
+ *
+ * Wall-clock made this alarm permanently un-clearable: production runs in suggest mode, so every
+ * lead that arrives overnight has a draft "waiting" 8+ hours by the morning audit — no matter how
+ * fast staff actually are. That held the agent-manager P1 open forever and, through it, the
+ * readiness bar's operability section. Business time makes the alarm mean what it says: staff are
+ * behind DURING HOURS.
+ *
+ * FAIL-SAFE: if the dealer's hours aren't configured, fall back to wall-clock. An unconfigured
+ * dealer should get a noisy alarm, never a silent one.
+ */
+function loadBusinessHours(): { hours: BusinessWeekHours; timeZone: string } | null {
+  const candidates = [
+    process.env.SCHEDULER_CONFIG_PATH,
+    path.join(process.env.DATA_DIR || "data", "scheduler_config.json")
+  ].filter(Boolean) as string[];
+  for (const file of candidates) {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(file, "utf8"));
+      if (cfg?.businessHours) {
+        return { hours: cfg.businessHours as BusinessWeekHours, timeZone: cfg.timezone || "America/New_York" };
+      }
+    } catch {
+      /* try the next candidate */
+    }
+  }
+  return null;
+}
+
+const BUSINESS_HOURS = loadBusinessHours();
+
+/** Age of a draft in business minutes, falling back to wall-clock when hours are unknown. */
+function draftAgeBusinessMinutes(at: unknown, wallClockMinutes: number | null): number | null {
+  if (!BUSINESS_HOURS) return wallClockMinutes;
+  const iso = toIso(at);
+  if (!iso) return wallClockMinutes;
+  const business = businessMinutesBetween({
+    hours: BUSINESS_HOURS.hours,
+    timeZone: BUSINESS_HOURS.timeZone,
+    fromMs: Date.parse(iso),
+    toMs: Date.now()
+  });
+  return business ?? wallClockMinutes;
+}
 
 function normPhone(input: unknown): string {
   return String(input ?? "").replace(/\D/g, "");
@@ -176,7 +223,9 @@ function run() {
     if (pendingDrafts.length > 0) {
       issuePush(issues, "pending_draft");
       const newestDraft = pendingDrafts[pendingDrafts.length - 1];
-      const draftAge = ageMinutes(newestDraft?.at);
+      // 30 BUSINESS minutes — an overnight draft is not staff being slow. Issue key kept stable
+      // so agent_manager_report's existing filter keeps working.
+      const draftAge = draftAgeBusinessMinutes(newestDraft?.at, ageMinutes(newestDraft?.at));
       if (draftAge != null && draftAge > 30) issuePush(issues, "pending_draft_older_than_30m");
     }
 

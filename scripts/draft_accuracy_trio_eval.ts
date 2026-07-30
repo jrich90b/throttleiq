@@ -156,4 +156,49 @@ for (const safe of [
   assert.equal(normalizeSalesToneBase(safe), safe, `must not rewrite: ${safe}`);
 }
 
-console.log("PASS draft accuracy trio — walk-in day claim, after-hours finance timing, double self-intro");
+// ---- (4) businessMinutesBetween — draft staleness measured in OPEN time (Joe ruling 2026-07-30).
+//      Wall-clock made the stale-draft P1 permanently unclearable in suggest mode: anything that
+//      lands overnight reads 8h+ "waiting" by the morning audit, however fast staff actually are.
+{
+  const { businessMinutesBetween } = await import("../services/api/src/domain/staffFollowUpTiming.ts");
+  // Mon-Fri 9-5, Sat 9-3, closed Sunday. UTC so the fixtures are unambiguous.
+  const HOURS = {
+    monday: { open: "09:00", close: "17:00" },
+    tuesday: { open: "09:00", close: "17:00" },
+    wednesday: { open: "09:00", close: "17:00" },
+    thursday: { open: "09:00", close: "17:00" },
+    friday: { open: "09:00", close: "17:00" },
+    saturday: { open: "09:00", close: "15:00" },
+    sunday: { open: null, close: null }
+  } as any;
+  const bm = (fromIso: string, toIso: string, hours: any = HOURS) =>
+    businessMinutesBetween({ hours, timeZone: "UTC", fromMs: Date.parse(fromIso), toMs: Date.parse(toIso) });
+
+  // The production case: Robert Spencer's service ADF landed 00:53 Thu, audit ran 08:15 Thu.
+  // Wall-clock says 442 minutes "stale"; the dealership had not opened yet.
+  assert.equal(bm("2026-07-30T00:53:00Z", "2026-07-30T08:15:00Z"), 0, "overnight wait is not staff being slow");
+  assert.ok(
+    (Date.parse("2026-07-30T08:15:00Z") - Date.parse("2026-07-30T00:53:00Z")) / 60000 > 30,
+    "…even though wall-clock would have flagged it"
+  );
+
+  // Real lateness during open hours still counts, so the alarm keeps its teeth.
+  assert.equal(bm("2026-07-30T09:00:00Z", "2026-07-30T10:00:00Z"), 60, "an hour of open time counts");
+  assert.equal(bm("2026-07-30T08:00:00Z", "2026-07-30T09:31:00Z"), 31, "only the open portion counts");
+
+  // Spans a closed Sunday: Fri 16:50-17:00 (10) + Sat 9-3 (360) + Sun (0) + Mon 9:00-9:10 (10).
+  assert.equal(bm("2026-07-31T16:50:00Z", "2026-08-03T09:10:00Z"), 380, "weekend closure is excluded");
+
+  // Degenerate + fail-safe behaviour.
+  assert.equal(bm("2026-07-30T10:00:00Z", "2026-07-30T10:00:00Z"), 0, "zero-length span is zero");
+  assert.equal(bm("2026-07-30T11:00:00Z", "2026-07-30T10:00:00Z"), 0, "reversed span never goes negative");
+  assert.equal(bm("2026-07-30T09:00:00Z", "2026-07-30T10:00:00Z", {}), null, "unconfigured hours => null (caller falls back)");
+  assert.equal(bm("2026-08-02T09:00:00Z", "2026-08-02T14:00:00Z"), 0, "a fully closed Sunday is zero, not null");
+
+  // The audit must actually USE business minutes, and must fall back rather than go silent.
+  const auditSrc = await fs.readFile(path.join(process.cwd(), "scripts/conversation_audit.ts"), "utf8");
+  assert.match(auditSrc, /draftAgeBusinessMinutes/, "the stale-draft rule uses business minutes");
+  assert.match(auditSrc, /return wallClockMinutes/, "unconfigured hours fall back to wall-clock, never to silence");
+}
+
+console.log("PASS draft accuracy trio — walk-in day claim, after-hours finance timing, double self-intro, business-hours draft staleness");

@@ -104,6 +104,58 @@ export function buildStaffFollowUpTimingPhrase(args: {
   return `when we open ${titleCase(dayName)}`;
 }
 
+/**
+ * Minutes the dealership was actually OPEN between two instants (Joe ruling, 2026-07-30).
+ *
+ * "This draft has been waiting 7 hours" is a false alarm when 6 of those hours were the middle
+ * of the night. A service ADF landed 2026-07-30 00:53 and was flagged stale by the 08:15 audit —
+ * nobody is at the dealership at 1am, so the wall-clock rule made the stale-draft P1 permanently
+ * unclearable in suggest mode, and with it the readiness bar's operability section. Measuring in
+ * business time makes the alarm mean "staff are behind", which is the thing worth paging about.
+ *
+ * Walks forward one local day-segment at a time and intersects each with that weekday's configured
+ * open window, so closures and a short Saturday are respected without hardcoding any dealer's hours.
+ * Returns 0 when the span is entirely outside business hours, and null when hours are unconfigured
+ * (callers FAIL SAFE by falling back to wall-clock rather than silently suppressing an alarm).
+ *
+ * DST is approximated: a spring-forward/fall-back day is treated as 24h, so twice a year the count
+ * can be off by up to an hour. Immaterial against a 30-minute threshold, and deliberately not worth
+ * a timezone library here.
+ */
+export function businessMinutesBetween(args: {
+  hours: BusinessWeekHours | null | undefined;
+  timeZone: string;
+  fromMs: number;
+  toMs: number;
+  /** Safety valve: stop walking after this many days (a very old draft is stale either way). */
+  maxDays?: number;
+}): number | null {
+  const hasAnyConfiguredDay = WEEKDAY_NAMES.some((_, i) => dayHours(args.hours, i));
+  if (!hasAnyConfiguredDay) return null;
+  if (!Number.isFinite(args.fromMs) || !Number.isFinite(args.toMs)) return null;
+  if (args.toMs <= args.fromMs) return 0;
+
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const maxDays = args.maxDays ?? 30;
+  const hardStop = Math.min(args.toMs, args.fromMs + maxDays * DAY_MS);
+
+  let total = 0;
+  let cursor = args.fromMs;
+  // Bounded by maxDays segments — one per local day — so a bad clock can't spin here.
+  for (let guard = 0; guard <= maxDays + 1 && cursor < hardStop; guard += 1) {
+    const { dayIndex, minutesSinceMidnight } = localClockParts(new Date(cursor), args.timeZone);
+    const segmentEnd = Math.min(hardStop, cursor + (24 * 60 - minutesSinceMidnight) * 60_000);
+    const today = dayHours(args.hours, dayIndex);
+    if (today) {
+      const startMin = minutesSinceMidnight;
+      const endMin = startMin + (segmentEnd - cursor) / 60_000;
+      total += Math.max(0, Math.min(today.close, endMin) - Math.max(today.open, startMin));
+    }
+    cursor = segmentEnd;
+  }
+  return Math.round(total);
+}
+
 /** Local weekday index (0=Sunday) + minutes since midnight for a timezone. */
 export function localClockParts(now: Date, timeZone: string): { dayIndex: number; minutesSinceMidnight: number } {
   const fmt = new Intl.DateTimeFormat("en-US", {

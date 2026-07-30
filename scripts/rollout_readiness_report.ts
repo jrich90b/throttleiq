@@ -59,13 +59,21 @@ export const READINESS_TARGETS = {
   pitch: {
     /**
      * The pre-LeadRider close rate, from Joe (2026-07-30): "last year we were closing around
-     * 6%" — sold ÷ sales leads worked. This is the ONLY number that turns section 5 from a
-     * boast into a claim, because a lift needs something to lift FROM.
+     * 6%" — and, on his follow-up, that 6% was **ONLINE leads specifically**, not showroom or
+     * phone-up traffic. That scoping makes it the RIGHT comparable rather than a rough one:
+     * online leads are the only population LeadRider touches, so like is measured against like.
+     * This is the ONLY number that turns section 5 from a boast into a claim, because a lift
+     * needs something to lift FROM.
      *
      * Note it is a CLOSE rate, not the booking rate section 1 grades — do not compare the two.
-     * The comparable measure is wins ÷ sales-intent leads over the same window.
+     * The comparable measure is wins / sales-intent online leads over the same window.
+     *
+     * Reading it honestly UNDERSTATES us: a 30-day window counts leads that arrived in the last
+     * fortnight in the denominator without the sales they have not had time to close yet.
      */
-    preLeadRiderCloseRatePct: 6
+    preLeadRiderCloseRatePct: 6,
+    /** What the 6% is scoped to — kept explicit so nobody re-reads it as all dealership traffic. */
+    preLeadRiderCloseRateScope: "online leads"
   }
 } as const;
 
