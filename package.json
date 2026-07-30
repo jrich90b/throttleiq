@@ -388,6 +388,7 @@
     "customer_disposition:eval": "bash scripts/retry_llm_eval.sh env LLM_ENABLED=1 LLM_CUSTOMER_DISPOSITION_PARSER_ENABLED=1 npx tsx scripts/customer_disposition_eval.ts",
     "pipeline_funnel:eval": "npx tsx scripts/pipeline_funnel_eval.ts",
     "booking_funnel:audit": "npx tsx scripts/booking_funnel_audit.ts",
+    "booking_funnel:audit30": "npx tsx scripts/booking_funnel_audit.ts --since-days 30 --out-dir \"${REPORT_ROOT:-reports}/booking_funnel_30d\"",
     "watch_fire_miss:audit": "npx tsx scripts/watch_fire_miss_audit.ts",
     "watch_fire_miss:eval": "npx tsx scripts/watch_fire_miss_audit.ts --self-test",
     "mdf_portal_health:eval": "npx tsx scripts/mdf_portal_health_eval.ts",

@@ -18,11 +18,13 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 
 import {
+  FUNNEL_SNAPSHOT_DIRS,
   READINESS_TARGETS,
   countAhHardcodes,
   evaluateReadiness,
   formatReadinessLine,
   parseChecklistRows,
+  pickWidestFunnelWindow,
   type ReadinessInput
 } from "./rollout_readiness_report.ts";
 
@@ -337,6 +339,52 @@ check("the scorecard is read-only (no sends, no store writes)", () => {
   for (const banned of ["sendEmail", "sendSms", "twilio", "conversations.json"]) {
     assert.ok(!src.includes(banned), `rollout_readiness_report must not reference ${banned}`);
   }
+});
+
+// --- The funnel is graded on the WIDEST window on disk, never on whichever writer ran last.
+//     The hourly loop writes a 1-day snapshot over the same filename; before this, that
+//     1-day window (6 engaged) held the funnel section at NOT_MEASURED permanently. ---
+check("the funnel grades the widest window available", () => {
+  const oneDay = { sinceDays: 1, summary: { engaged: 6, offeredRatePct: 50, bookRatePct: 33.3 } };
+  const thirtyDay = { sinceDays: 30, summary: { engaged: 231, offeredRatePct: 57.6, bookRatePct: 19 } };
+  // Order must not matter — the widest wins either way.
+  assert.equal(pickWidestFunnelWindow([oneDay, thirtyDay])?.sinceDays, 30, "30d beats 1d");
+  assert.equal(pickWidestFunnelWindow([thirtyDay, oneDay])?.sinceDays, 30, "order-independent");
+  assert.equal(pickWidestFunnelWindow([oneDay])?.sinceDays, 1, "a lone narrow window is still read");
+  assert.equal(pickWidestFunnelWindow([]), null, "no snapshots => null, not a fabricated window");
+  assert.equal(pickWidestFunnelWindow([null, undefined as any]), null, "unreadable snapshots => null");
+  // A snapshot without a parsed summary is not a measurement, however wide it claims to be.
+  assert.equal(pickWidestFunnelWindow([{ sinceDays: 90 } as any, thirtyDay])?.sinceDays, 30, "no summary => not usable");
+  assert.ok(FUNNEL_SNAPSHOT_DIRS.includes("booking_funnel_30d"), "the 30-day snapshot dir is searched");
+  assert.ok(FUNNEL_SNAPSHOT_DIRS.includes("booking_funnel"), "the legacy hourly snapshot stays a fallback");
+});
+
+check("a wide window with a real sample actually grades the funnel", () => {
+  // The live 30-day reading (2026-07-30): the sample clears the floor, so the section must
+  // produce a verdict instead of hiding behind NOT_MEASURED.
+  const s = evaluateReadiness({
+    ...(ALL_GREEN as ReadinessInput),
+    bookingFunnel: { engaged: 231, offeredRatePct: 57.6, bookRatePct: 19, offerToBookPct: 33.1, showed: 8, sinceDays: 30 }
+  });
+  const funnel = s.sections.find(x => x.id === "funnel");
+  assert.notEqual(funnel?.status, "NOT_MEASURED", "231 engaged over 30d is a measurement");
+  assert.equal(funnel?.status, "OPEN", "19% booked is below the 25% target — OPEN, not MET");
+});
+
+// --- Joe's pre-LeadRider baseline is the anchor for every pitch claim; losing it would make
+//     section 5 unmeasurable no matter how much data we collect. ---
+check("the pre-LeadRider close-rate baseline is recorded", () => {
+  assert.equal(READINESS_TARGETS.pitch.preLeadRiderCloseRatePct, 6, "Joe, 2026-07-30: ~6% last year");
+  const src = fs.readFileSync("scripts/rollout_readiness_report.ts", "utf8");
+  assert.match(src, /CLOSE rate, not the booking rate/, "the close-vs-booking distinction stays documented");
+});
+
+// --- The 30-day snapshot must actually get generated, or the widest window stays 1 day. ---
+check("a 30-day funnel snapshot is wired to be produced", () => {
+  const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+  const cmd = String(pkg?.scripts?.["booking_funnel:audit30"] ?? "");
+  assert.match(cmd, /--since-days 30/, "audit30 runs a 30-day window");
+  assert.match(cmd, /booking_funnel_30d/, "audit30 writes the snapshot dir the scorecard reads");
 });
 
 if (failures) {

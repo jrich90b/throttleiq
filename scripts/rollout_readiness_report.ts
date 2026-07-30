@@ -55,6 +55,17 @@ export const READINESS_TARGETS = {
   operability: {
     cleanStreakDays: 7,
     maxOpenP0P1: 0
+  },
+  pitch: {
+    /**
+     * The pre-LeadRider close rate, from Joe (2026-07-30): "last year we were closing around
+     * 6%" — sold ÷ sales leads worked. This is the ONLY number that turns section 5 from a
+     * boast into a claim, because a lift needs something to lift FROM.
+     *
+     * Note it is a CLOSE rate, not the booking rate section 1 grades — do not compare the two.
+     * The comparable measure is wins ÷ sales-intent leads over the same window.
+     */
+    preLeadRiderCloseRatePct: 6
   }
 } as const;
 
@@ -399,6 +410,33 @@ function readJson(file: string): any | null {
   }
 }
 
+/** Every booking-funnel snapshot on disk, newest-window-first. Exported for the eval. */
+export const FUNNEL_SNAPSHOT_DIRS = ["booking_funnel_30d", "booking_funnel"] as const;
+
+/**
+ * Grade the funnel on the WIDEST window available, not whichever writer ran last.
+ *
+ * `feedback_loop_hourly.sh` writes reports/booking_funnel with `--since-days 1` — correct for
+ * its own job (catching fresh offer->book misses hourly), fatally wrong for the bar: a 1-day
+ * window held 6 engaged leads, below the min-sample floor, so the funnel section read
+ * NOT_MEASURED forever. Rather than fight over one directory, the scorecard reads every
+ * snapshot and picks the largest `sinceDays`. Self-describing, so a new writer or a renamed
+ * directory can never silently narrow the bar — and the min-sample floor still guards the rest.
+ */
+export function pickWidestFunnelWindow(snapshots: Array<{ sinceDays?: unknown } | null>): any | null {
+  const usable = snapshots.filter(s => s && typeof (s as any).summary === "object");
+  if (!usable.length) return null;
+  return usable.reduce((best, cur) =>
+    (Number((cur as any)?.sinceDays) || 0) > (Number((best as any)?.sinceDays) || 0) ? cur : best
+  );
+}
+
+function readWidestFunnelWindow(reportRoot: string): any | null {
+  return pickWidestFunnelWindow(
+    FUNNEL_SNAPSHOT_DIRS.map(dir => readJson(path.join(reportRoot, dir, "booking_funnel_summary.json")))
+  );
+}
+
 /**
  * Count AH-specific literals left in the API source — the portability debt, as a ratchet.
  *
@@ -442,7 +480,7 @@ async function main() {
   const checklistRows = fs.existsSync(checklistPath) ? parseChecklistRows(fs.readFileSync(checklistPath, "utf8")) : [];
   const releaseGate = readJson(path.join(reportRoot, "release_gate", "release_gate_report.json"));
   const agentManager = readJson(path.join(reportRoot, "agent_manager", "agent_manager_report.json"));
-  const funnel = readJson(path.join(reportRoot, "booking_funnel", "booking_funnel_summary.json"));
+  const funnel = readWidestFunnelWindow(reportRoot);
   const latency = readJson(path.join(reportRoot, "response_latency", "response_latency_summary.json"));
   const strangerTest = readJson(path.join(reportRoot, "stranger_test", "latest.json"));
   const pitchNumbers = readJson(path.join(reportRoot, "pitch_numbers", "latest.json"));
