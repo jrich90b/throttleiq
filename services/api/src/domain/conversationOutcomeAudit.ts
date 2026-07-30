@@ -299,7 +299,15 @@ export function auditConversationOutcome(conv: AuditableConv, opts: { now?: Date
         dimension: "cadence_quality_suppressed",
         severity: "P2",
         healed: false,
-        detail: `proactive cadence message judged ${cqs.overall} (${cqs.cadenceKind ?? "?"})${cqs.reason ? ` — ${String(cqs.reason).slice(0, 120)}` : ""}`
+        detail: `proactive cadence message judged ${cqs.overall} (${cqs.cadenceKind ?? "?"})${cqs.reason ? ` — ${String(cqs.reason).slice(0, 120)}` : ""}`,
+        // The judged send's own timestamp IS the triggering event, so stamp it (mirrors 5d above and
+        // the 👎 block below). Without it these rows carried NO event time — and they are the single
+        // largest block in the work order (55 of 189 on 2026-07-30) — so THREE of the staleness passes
+        // (stale-cutover, already-shipped echo, and the disposition ledger's code-state path) were
+        // structurally blind to them and a fixed cadence bug re-fired forever once its 14-day
+        // PR-ledger window lapsed. Same fail-direction as its siblings: the flagged send is at/before
+        // this, so a fix commit that postdates it provably postdates the send.
+        occurredAt: new Date(cqsAtMs).toISOString()
       });
     }
   }

@@ -147,6 +147,10 @@ eq(dims({ id: "c5e", humanCorrection: { at: "2026-05-01T00:00:00.000Z", category
   const a = auditConversationOutcome({ id: "c5g", cadenceQualityShadow: { at: "2026-06-25T01:00:00.000Z", overall: "suppress", reason: "nagging on a closed deal", cadenceKind: "standard" } }, { now: NOW });
   eq(a.map(x => x.dimension), ["cadence_quality_suppressed"], "recent suppress/hold cadence verdict => surfaced");
   eq(a[0].category, "comprehension", "cadence_quality_suppressed is comprehension");
+  // occurredAt = the judged send's time. These rows are the largest block in the work order, and
+  // without an event time three staleness passes (stale-cutover, already-shipped echo, disposition
+  // ledger code-state) cannot reason about them at all — a fixed cadence bug then re-fires forever.
+  eq(a[0].occurredAt, "2026-06-25T01:00:00.000Z", "cadence_quality_suppressed carries occurredAt = the judged send time");
 }
 eq(dims({ id: "c5h", cadenceQualityShadow: { at: "2026-06-25T01:00:00.000Z", overall: "good" } }), [], "a GOOD cadence verdict => not surfaced");
 eq(dims({ id: "c5i", cadenceQualityShadow: { at: "2026-05-01T00:00:00.000Z", overall: "hold" } }), [], "cadence verdict older than 21d => aged out");
