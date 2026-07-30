@@ -19,6 +19,7 @@
 import assert from "node:assert/strict";
 import {
   checkReplayFidelity,
+  composeReplayCommentLines,
   hasHydrationCompleted
 } from "../services/api/src/domain/replayFidelity.ts";
 
@@ -128,6 +129,100 @@ import {
   );
 }
 
+// ── composeReplayCommentLines: the synthetic ADF must not duplicate the inquiry ────────
+{
+  // THE 2026-07-30 PRODUCTION TURN (+17165100025, msg_295d1c55e08da). The stored lead carried
+  // the walk-in note in BOTH fields, so the harness emitted it twice and the agent echoed the
+  // raw label: "I'll follow up about new and pre-owned Customer Comments: Looking for trike
+  // models." The real send for this turn was clean — production never re-serializes a lead.
+  const inquiry =
+    "Looking for trike models. Was going to wait until spring of 2027 but saw the 2019 we had " +
+    "in back. Wants to take a test ride on new and pre-owned (Step 2)";
+  const lines = composeReplayCommentLines({ inquiry, walkInComment: inquiry });
+  assert.deepEqual(lines, [inquiry], "an identical walk-in note must not be emitted a second time");
+  assert.equal(
+    lines.join("\n").match(/Customer Comments:/g),
+    null,
+    "no raw field label may be manufactured when the note adds nothing"
+  );
+  assert.equal(
+    lines.join("\n").match(/Looking for trike models/g)?.length,
+    1,
+    "the inquiry text must appear exactly ONCE in the synthetic ADF comment"
+  );
+}
+
+{
+  // A genuinely different walk-in note is real context production had — never drop it.
+  // 23 of the 45 corpus leads with a walkInComment are this shape.
+  const lines = composeReplayCommentLines({
+    inquiry: "Came in and showed him the bike (2022 XL1200X)",
+    walkInComment: "App ID: 1013890736, Model Year: 2022, Model: Forty-Eight"
+  });
+  assert.equal(lines.length, 2, "a distinct walk-in note is kept");
+  assert.ok(
+    lines[1].startsWith("Customer Comments: App ID: 1013890736"),
+    "the distinct note keeps its label so the replay sees what production saw"
+  );
+}
+
+{
+  // Markup is not semantic content: the same note stored with HTML must still dedupe.
+  const lines = composeReplayCommentLines({
+    inquiry: "Tom stopped in and is looking for a 2014-2016 Road King. Joe Hartrich",
+    walkInComment: "Tom stopped in and is looking for a 2014-2016 Road King. <strong>Joe Hartrich</strong>"
+  });
+  assert.deepEqual(
+    lines.length,
+    1,
+    "an HTML-marked duplicate of the inquiry is still a duplicate"
+  );
+}
+
+{
+  // Fail direction: the BODY's inquiry is authoritative. A walk-in note that is a strict
+  // SUPERSET may come from a LATER lead on the thread, so it is kept as its own labeled line
+  // and may never override or extend the inquiry the turn actually arrived with.
+  const lines = composeReplayCommentLines({
+    inquiry: "H-D1 Dealer Portal URL",
+    walkInComment: "H-D1 Dealer Portal URL: https://hdnetportal.sharepoint.com/sites/us"
+  });
+  assert.equal(lines.length, 2, "a superset note is kept separately, never merged over the inquiry");
+  assert.equal(lines[0], "H-D1 Dealer Portal URL", "the body-derived inquiry stays first and intact");
+}
+
+{
+  // The date/time lines are deliberately NOT deduped — short structured values whose label
+  // carries the meaning — and ordering stays inquiry → date → time → comments.
+  const lines = composeReplayCommentLines({
+    inquiry: "Wants a test ride on 2026-08-02",
+    preferredDate: "2026-08-02",
+    preferredTime: "10:00",
+    walkInComment: "Prefers the morning"
+  });
+  assert.deepEqual(lines, [
+    "Wants a test ride on 2026-08-02",
+    "Preferred date: 2026-08-02",
+    "Preferred time: 10:00",
+    "Customer Comments: Prefers the morning"
+  ]);
+}
+
+{
+  // Empty / missing parts never manufacture a blank labeled line.
+  assert.deepEqual(composeReplayCommentLines({}), [], "nothing in => nothing out");
+  assert.deepEqual(
+    composeReplayCommentLines({ inquiry: "Just the inquiry", walkInComment: "   " }),
+    ["Just the inquiry"],
+    "a whitespace-only note is not a comment"
+  );
+  assert.deepEqual(
+    composeReplayCommentLines({ inquiry: "", walkInComment: "Walk-in only" }),
+    ["Customer Comments: Walk-in only"],
+    "a walk-in note with no inquiry is still emitted"
+  );
+}
+
 console.log(
-  "PASS replay_fidelity eval — hydration-complete signal + prepared-thread fidelity guard (phantom corpus_replay_regression becomes a visible harness error; takeover/no-baseline never error)"
+  "PASS replay_fidelity eval — hydration-complete signal + prepared-thread fidelity guard + synthetic-ADF comment dedupe (phantom corpus_replay_regression becomes a visible harness error; takeover/no-baseline never error; a walk-in note never duplicates the inquiry behind a raw label)"
 );
