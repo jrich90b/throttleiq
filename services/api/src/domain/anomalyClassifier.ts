@@ -268,6 +268,27 @@ export function classifyOutcomeAnomaly(
     };
   }
 
+  // Google credential expiry (calendar / support mail / personal mail). Like the MDF and CRM cases this
+  // is an INTEGRATION/ops action — re-consent, and then publish the OAuth app (or move to a service
+  // account with domain-wide delegation) so 7-day refresh tokens stop killing it weekly. It CANNOT be
+  // auto-fixed: re-consent requires a human signed into Google, so an auto-merge could never resolve it.
+  // Always Tier 2. Worth surfacing loudly — these sat dead for ~8 weeks precisely because nothing did.
+  if (
+    anomaly.dimension === "google_integration_expired" ||
+    anomaly.dimension === "google_integration_expiring" ||
+    anomaly.dimension === "google_integration_disconnected"
+  ) {
+    return {
+      tier: 2,
+      action: "escalate",
+      workOrder: true,
+      autoMergeEligible: false,
+      notify: true,
+      rationale:
+        "Google credentials expired/expiring → a human must re-consent (/integrations/google/start); permanent fix is publishing the OAuth app or a service account with domain-wide delegation. Approve-first, never auto-merge"
+    };
+  }
+
   // A `healed` dimension that re-appears across runs means the reconcile heal isn't actually fixing it —
   // a gap in the heal logic (e.g. the single/array inventory-watch leak the loop caught 6/25). That's a
   // reviewed code fix, not a transient → escalate. Seen once, it's just the tick that hasn't run yet.
