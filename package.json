@@ -419,7 +419,7 @@
     "tone_quality:fixture_eval": "npx tsx scripts/tone_quality_fixture_eval.ts",
     "inbound_reply_coverage:intake": "npx tsx scripts/inbound_reply_coverage_intake.ts",
     "web_text_widget:eval": "npx tsx scripts/web_text_widget_eval.ts",
-    "disengaged_taper:eval": "npx tsx scripts/disengaged_taper_eval.ts",
+    "disengaged_taper:eval": "bash scripts/retry_llm_eval.sh env LLM_ENABLED=1 LLM_VOICE_PARTICIPATION_PARSER_ENABLED=1 npx tsx scripts/disengaged_taper_eval.ts",
     "cadence_availability_disclosure:eval": "npx tsx scripts/cadence_availability_disclosure_eval.ts",
     "call_attempt_cadence:eval": "npx tsx scripts/call_attempt_cadence_eval.ts",
     "web_fallback:eval": "npx tsx scripts/web_fallback_eval.ts",

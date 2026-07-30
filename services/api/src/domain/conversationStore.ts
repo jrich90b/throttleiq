@@ -740,6 +740,12 @@ export type Message = {
   actorUserName?: string;
   callMethod?: "cell" | "extension";
   draftStatus?: "pending" | "stale";
+  /**
+   * Voice rows only. Parser-confirmed (high confidence) that the CUSTOMER took part in a live
+   * two-way call, so this thread counts as engaged — see customerEngagedWithCadence. Stamped once
+   * at ingest; absent means "not confirmed", never "confirmed false".
+   */
+  customerSpokeOnCall?: boolean;
   feedback?: MessageFeedback;
 };
 
@@ -4938,11 +4944,54 @@ export function closeConversation(conv: Conversation, reason?: string) {
 // one graceful close-out and then ends. Joe set the threshold at 9 touches.
 export const DISENGAGED_TAPER_AFTER_TOUCHES = 9;
 
-// A lead counts as engaged only when the CUSTOMER reached back: an inbound
-// message that isn't the originating web-lead form (sendgrid_adf) or a debug
-// event. Our own outbound — texts, emails, even an outbound call/voicemail —
-// never marks a silent lead engaged.
+/** Minimum parser confidence to let a phone call count as engagement. */
+export const VOICE_PARTICIPATION_MIN_CONFIDENCE = 0.85;
+
+/**
+ * Pure. Should this call record stamp the lead as ENGAGED?
+ *
+ * Only a HIGH-confidence, explicitly live two-way conversation qualifies. `customerParticipated`
+ * alone is not enough — the outcome must also say `live_conversation`, because the near-misses
+ * (an answering-machine greeting in the customer's own voice, an IVR hold loop) are exactly the
+ * cases a loose read gets wrong.
+ *
+ * FAIL DIRECTION: no parse, low confidence, or any other outcome => false => today's behavior.
+ * A false positive keeps texting someone who never actually answered, so uncertainty must resolve
+ * toward NOT marking engagement.
+ */
+export function voiceCallCountsAsEngagement(parse?: {
+  customerParticipated?: boolean | null;
+  outcome?: string | null;
+  confidence?: number | null;
+} | null): boolean {
+  if (!parse) return false;
+  if (parse.customerParticipated !== true) return false;
+  if (String(parse.outcome ?? "").trim().toLowerCase() !== "live_conversation") return false;
+  const confidence = Number(parse.confidence);
+  return Number.isFinite(confidence) && confidence >= VOICE_PARTICIPATION_MIN_CONFIDENCE;
+}
+
+/** True when any call on this thread was parser-confirmed as a live two-way conversation. */
+export function hasParticipatedVoiceCall(conv: Conversation): boolean {
+  return (conv?.messages ?? []).some(m => (m as any)?.customerSpokeOnCall === true);
+}
+
+// A lead counts as engaged when the CUSTOMER reached back — an inbound message that isn't the
+// originating web-lead form (sendgrid_adf) or a debug event — OR when they actually TALKED to us
+// on the phone (Joe ruling 2026-07-30, option B).
+//
+// Voice rows (`voice_call`/`voice_summary`/`voice_transcript`) are all recorded `direction: "out"`
+// because WE placed the call, so a customer who had a real conversation with a salesperson still
+// read as "never responded" and could be tapered off cadence with "I'll pause my check-ins here".
+// Syed John (+12065383753) got that message two days after taking Giovanni's call. Measured before
+// the fix: 35 tapered leads, 26 with call activity, but only 3 with a genuine two-way conversation
+// — so this widens cadence for very few leads, which is why it is safe to widen at all.
+//
+// The "was this a real conversation?" judgement is COMPREHENSION and belongs to
+// parseVoiceCallParticipationWithLLM; it is stamped onto the message at ingest as structured
+// state. This function stays PURE and SYNC and only reads that stamp.
 export function customerEngagedWithCadence(conv: Conversation): boolean {
+  if (hasParticipatedVoiceCall(conv)) return true;
   return (conv.messages ?? []).some(
     m =>
       m?.direction === "in" &&
