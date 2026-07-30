@@ -56948,7 +56948,13 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       dataDir: getDataDir(),
       contextText: event.body ?? ""
     });
-    addTodo(conv, "note", photoShare.todoSummary, event.providerMessageId, undefined, undefined, "followup");
+    // reason "other", NOT "note" (Joe ruling 2026-07-30). A customer photo is real customer-facing
+    // work — someone has to open the image and reply. Filing it as an internal note excluded it from
+    // the fulfillment auto-closer (taskFulfillmentAutoClose.ts: `if (reason === "note") return false`),
+    // from the manager Ping list (staffPing.ts) and from ageing escalation (taskEscalation.ts), so
+    // these tasks could never clear: +17166090270 was answered 2026-07-17 16:04 and was still open
+    // 13 days later. Applied at BOTH convergence points (live + regenerate).
+    addTodo(conv, "other", photoShare.todoSummary, event.providerMessageId, undefined, undefined, "followup");
     if (photoShare.kind === "part") {
       // A part photo isn't a bike to match — re-point the next turn to parts/service.
       setAgentContext(conv, { text: CUSTOMER_PHOTO_SHARE_PART_AGENT_CONTEXT, mode: "persistent" });
@@ -60677,7 +60683,13 @@ if (authToken && signature) {
       dataDir: getDataDir(),
       contextText: event.body ?? ""
     });
-    addTodo(conv, "note", photoShare.todoSummary, event.providerMessageId, undefined, undefined, "followup");
+    // reason "other", NOT "note" (Joe ruling 2026-07-30). A customer photo is real customer-facing
+    // work — someone has to open the image and reply. Filing it as an internal note excluded it from
+    // the fulfillment auto-closer (taskFulfillmentAutoClose.ts: `if (reason === "note") return false`),
+    // from the manager Ping list (staffPing.ts) and from ageing escalation (taskEscalation.ts), so
+    // these tasks could never clear: +17166090270 was answered 2026-07-17 16:04 and was still open
+    // 13 days later. Applied at BOTH convergence points (live + regenerate).
+    addTodo(conv, "other", photoShare.todoSummary, event.providerMessageId, undefined, undefined, "followup");
     if (photoShare.kind === "part") {
       // A part photo isn't a bike to match — re-point the next turn to parts/service.
       setAgentContext(conv, { text: CUSTOMER_PHOTO_SHARE_PART_AGENT_CONTEXT, mode: "persistent" });

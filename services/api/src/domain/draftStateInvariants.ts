@@ -11,6 +11,23 @@ export type DraftStateInvariantInput = {
   turnSchedulingIntent?: boolean | null;
   financeContextIntent?: boolean | null;
   shortAckIntent?: boolean | null;
+  /**
+   * This draft is a DETERMINISTIC, human-approved template — not LLM-composed prose.
+   *
+   * Exempts ONLY `finance_priority_schedule_prompt_guard`. That guard exists to stop the MODEL from
+   * pushing "let's book a time" at a lead whose finance question is still hanging; it has no
+   * business overruling a template Joe explicitly ruled should carry a booking link. The credit-app
+   * / prequal arrival email (creditLeadEmail.ts, Joe 2026-07-25) says "you can book here: <url>",
+   * the bare word "book" trips looksLikeSchedulingPromptDraft, and on any ADF whose body literally
+   * contains "credit application" the whole email was killed and converted into a "Review ADF reply
+   * before sending" todo — the approved message never reached the customer (+17169941544,
+   * 2026-07-28; roughly 1 in 6 credit leads).
+   *
+   * Deliberately narrow: every other invariant still applies, and this can never widen the model's
+   * latitude because it is passed at ONE call site for ONE deterministic builder — never on a path
+   * that carries LLM-composed text.
+   */
+  approvedDeterministicTemplate?: boolean | null;
 };
 
 export type DraftStateInvariantResult = {
@@ -544,7 +561,14 @@ export function applyDraftStateInvariants(
     };
   }
 
-  if (financePriority && !schedulingSignal && schedulingPrompt) {
+  // An approved deterministic template is exempt HERE ONLY — see approvedDeterministicTemplate.
+  // The guard's target is model-composed scheduling pressure, not a booking link Joe ruled in.
+  if (
+    financePriority &&
+    !schedulingSignal &&
+    schedulingPrompt &&
+    input.approvedDeterministicTemplate !== true
+  ) {
     return {
       allow: false,
       draftText: "",

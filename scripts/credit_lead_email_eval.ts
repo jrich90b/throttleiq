@@ -98,4 +98,105 @@ assert.match(
   "regen credit email must carry a booking link too (two-path parity)"
 );
 
-console.log("PASS credit_lead_email eval — credit-app/prequal leads get a booking-link email (email format), fail-safe on no URL, both paths in parity.");
+// ── The approved email must actually SURVIVE the draft-state invariants.
+//
+// +17169941544 (2026-07-28): that ADF body literally contained "credit application", which sets
+// hasExplicitFinanceActionSignal => financePriority. The email's own booking line ("you can book
+// here: <url>") trips looksLikeSchedulingPromptDraft on the bare word "book", so
+// finance_priority_schedule_prompt_guard killed the whole email and converted it into a "Review ADF
+// reply before sending" todo — the approved message never reached the customer, on roughly 1 in 6
+// credit leads. That guard's target is MODEL-composed scheduling pressure, not a booking link Joe
+// ruled in on 2026-07-25.
+{
+  const { applyDraftStateInvariants } = await import(
+    "../services/api/src/domain/draftStateInvariants.ts"
+  );
+  const FINANCE_ADF_BODY =
+    "WEB LEAD (ADF) Source: HDFS COA Online Inquiry: submitted a credit application";
+  const approvedEmail = buildCreditLeadEmailDraft({
+    firstName: "Donald",
+    dealerName: "American Harley-Davidson",
+    agentName: "Alexandra",
+    bookingUrl: BOOKING,
+    isPrequal: false
+  });
+
+  const blocked = applyDraftStateInvariants({
+    inboundText: FINANCE_ADF_BODY,
+    draftText: approvedEmail,
+    // Exact live state read off the box for +17169941544: dialogState "payments_handoff" satisfies
+    // hasFinanceContext(), and the ADF body supplies hasExplicitFinanceActionSignal() — together
+    // financePriority. The inbound carries no scheduling language, so schedulingSignal is false.
+    dialogState: "payments_handoff",
+    classificationBucket: "finance_prequal",
+    classificationCta: "hdfs_coa"
+  });
+  assert.equal(
+    blocked.allow,
+    false,
+    "regression pin: without the exemption the approved credit email IS blocked (this was the live bug)"
+  );
+  assert.equal(blocked.reason, "finance_priority_schedule_prompt_guard");
+
+  const allowed = applyDraftStateInvariants({
+    inboundText: FINANCE_ADF_BODY,
+    draftText: approvedEmail,
+    // Exact live state read off the box for +17169941544: dialogState "payments_handoff" satisfies
+    // hasFinanceContext(), and the ADF body supplies hasExplicitFinanceActionSignal() — together
+    // financePriority. The inbound carries no scheduling language, so schedulingSignal is false.
+    dialogState: "payments_handoff",
+    classificationBucket: "finance_prequal",
+    classificationCta: "hdfs_coa",
+    approvedDeterministicTemplate: true
+  });
+  assert.equal(
+    allowed.allow,
+    true,
+    "the approved deterministic credit-lead template must publish despite the finance scheduling guard"
+  );
+  assert.match(allowed.draftText, /book/i, "the booking line survives intact");
+
+  // The exemption is NARROW — every other invariant still applies with the flag set.
+  const emptyDraft = applyDraftStateInvariants({
+    inboundText: FINANCE_ADF_BODY,
+    draftText: "   ",
+    // Exact live state read off the box for +17169941544: dialogState "payments_handoff" satisfies
+    // hasFinanceContext(), and the ADF body supplies hasExplicitFinanceActionSignal() — together
+    // financePriority. The inbound carries no scheduling language, so schedulingSignal is false.
+    dialogState: "payments_handoff",
+    classificationBucket: "finance_prequal",
+    classificationCta: "hdfs_coa",
+    approvedDeterministicTemplate: true
+  });
+  assert.equal(emptyDraft.allow, false, "the exemption does not disable the other invariants");
+  assert.equal(emptyDraft.reason, "empty_draft");
+}
+
+// Source pins: exactly ONE invariant consults the flag, and it is passed on the credit-lead email
+// publish call. If it ever appears on an LLM-composed path, the count assertion fails.
+{
+  const invariantSrc = fs.readFileSync(
+    path.join(process.cwd(), "services/api/src/domain/draftStateInvariants.ts"),
+    "utf8"
+  );
+  assert.equal(
+    (invariantSrc.match(/approvedDeterministicTemplate !== true/g) ?? []).length,
+    1,
+    "exactly one invariant may be exempted by the approved-template flag"
+  );
+  assert.ok(
+    /finance_priority_schedule_prompt_guard/.test(
+      invariantSrc.slice(
+        invariantSrc.indexOf("approvedDeterministicTemplate !== true"),
+        invariantSrc.indexOf("approvedDeterministicTemplate !== true") + 260
+      )
+    ),
+    "the exempted invariant is finance_priority_schedule_prompt_guard specifically"
+  );
+  assert.ok(
+    /buildCreditLeadEmailDraft\(\{[\s\S]{0,600}\}\),[\s\S]{0,400}\btrue\b/.test(live),
+    "the approved-template flag is passed on the credit-lead email publish call"
+  );
+}
+
+console.log("PASS credit_lead_email eval — credit-app/prequal leads get a booking-link email (email format), fail-safe on no URL, both paths in parity, and the approved template survives the finance scheduling guard.");

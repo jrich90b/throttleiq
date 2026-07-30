@@ -6337,7 +6337,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (prefersPhoneOnly) {
     setContactPreference(conv, "call_only");
   }
-  const applyAdfReplyInvariant = (text: string) =>
+  const applyAdfReplyInvariant = (text: string, approvedDeterministicTemplate = false) =>
     applyDraftStateInvariants({
       inboundText: event.body ?? "",
       draftText: text,
@@ -6345,7 +6345,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       followUpReason: conv.followUp?.reason ?? null,
       dialogState: conv.dialogState?.name ?? null,
       classificationBucket: conv.classification?.bucket ?? null,
-      classificationCta: conv.classification?.cta ?? null
+      classificationCta: conv.classification?.cta ?? null,
+      approvedDeterministicTemplate
     });
   const blockAdfDraftForInvariant = (reason: string) => {
     addTodo(
@@ -6357,8 +6358,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     setFollowUpMode(conv, "manual_handoff", "draft_guard_blocked");
     stopFollowUpCadence(conv, "manual_handoff");
   };
-  const publishAdfEmailDraft = (text: string): { ok: boolean; draft?: string; reason?: string } => {
-    const invariant = applyAdfReplyInvariant(text);
+  const publishAdfEmailDraft = (
+    text: string,
+    approvedDeterministicTemplate = false
+  ): { ok: boolean; draft?: string; reason?: string } => {
+    const invariant = applyAdfReplyInvariant(text, approvedDeterministicTemplate);
     if (!invariant.allow) {
       const reason = invariant.reason ?? "draft_invariant_blocked";
       blockAdfDraftForInvariant(reason);
@@ -7093,7 +7097,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
           agentName: creditProfile?.agentName,
           bookingUrl: buildBookingUrlForLead(creditProfile?.bookingUrl, conv),
           isPrequal: isPrequalLead
-        })
+        }),
+        // Approved deterministic template — exempt from finance_priority_schedule_prompt_guard only.
+        // Its booking link IS the 2026-07-25 ruling; the guard was killing the approved email on any
+        // ADF whose body literally says "credit application" (+17169941544, ~1 in 6 credit leads).
+        true
       );
     }
     maybeAddInitialCallTodo();
