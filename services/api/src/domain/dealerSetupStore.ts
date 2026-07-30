@@ -652,8 +652,22 @@ function buildLaunchChecklist(setup: DealerSetup): DealerLaunchChecklistItem[] {
     item("google", "Google mail/calendar", "google", "OAuth credentials and support/calendar token paths are configured for this dealer."),
     item("twilio", "Twilio messaging", "twilio", "Phone number, webhook URLs, compliance, and routing are configured."),
     item("sendgrid", "SendGrid email", "sendgrid", "Sender/domain, inbound parse, and reply-to fields are configured."),
-    item("inventory", "Inventory/export URL", "inventory", "Dealer inventory feed or export URL is captured and validated."),
-    item("crm", "CRM/ADF/Twilio routing", "crm", "ADF source mappings, lead source rules, and SMS routing are configured."),
+    // "Validated" used to be a judgement call. It is now a command: the intake-shape harness
+    // grades THIS dealer's real artifacts and names every field we will not be able to read.
+    // Different website vendors disagree on field names and row containers, and the failure is
+    // silent — an unreadable feed just means the agent never mentions a bike.
+    item(
+      "inventory",
+      "Inventory/export URL",
+      "inventory",
+      "Dealer inventory feed or export URL is captured AND graded: `npm run dealer_intake_shape:test -- --feed <their feed URL>`. Every required field (stock number, year, make, model) must be present in the rows; a field reported missing is a field replies will silently omit."
+    ),
+    item(
+      "crm",
+      "CRM/ADF/Twilio routing",
+      "crm",
+      "ADF source mappings, lead source rules, and SMS routing are configured, and ONE real sample lead from this provider has been graded: `npm run dealer_intake_shape:test -- --adf <their-sample-lead.xml>`. Providers differ in ADF dialect; grading the sample is what turns a go-live surprise into a checklist item."
+    ),
     item("profile", "Profile, tone, and features", "profile", "Dealer tone, rules, features, compliance language, and profile fields are confirmed."),
     item("manual", "Deployment manual", "manual", "Dealer deployment manual is generated and reviewed."),
     item("smoke", "Launch smoke test", "smoke", "Web app, API health, inventory, conversation, and provider routes have been checked."),
