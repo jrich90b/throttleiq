@@ -241,20 +241,45 @@ function run(): void {
   const adfCallSites = (adfSrc.match(gateCallSitePattern) ?? []).length;
   assert.equal(adfCallSites, 3, "the ADF opener has exactly 3 gate call sites (live send + 2 shadow logs)");
   // Every call site is reached from one of exactly two input objects, and BOTH carry the guards.
-  assert.ok(
-    /alreadyContacted: hasCustomerReceivedOutbound\(conv\?\.messages\)/.test(adfSrc),
-    "duplicate guard: alreadyContacted is wired from the real thread history"
-  );
+  //
+  // Scoped to the gate's own INPUT OBJECTS rather than counting the guard strings file-wide. A
+  // file-wide count conflates this gate with any UNRELATED decision in the same file that
+  // legitimately reads the same thread-history helper — the phone-log recap gate does exactly that,
+  // and a bare count would have failed on it while proving nothing about first-touch. The two input
+  // objects are the shared `firstTouchGateInputs` literal (used by the live send and its shadow log
+  // via spread) and the inline literal at the main-opener shadow log.
+  const gateInputBlocks: string[] = [];
+  {
+    const sharedIdx = adfSrc.indexOf("const firstTouchGateInputs = {");
+    assert.ok(sharedIdx > 0, "the shared first-touch gate input object must exist");
+    const sharedEnd = adfSrc.indexOf("\n    };", sharedIdx);
+    assert.ok(sharedEnd > sharedIdx, "the shared gate input object must be terminated");
+    gateInputBlocks.push(adfSrc.slice(sharedIdx, sharedEnd));
+    const inlineRe = /decideFirstTouchAutoSend\(\{([\s\S]{0,1500}?)\n\s*\}\)/g;
+    let match: RegExpExecArray | null;
+    while ((match = inlineRe.exec(adfSrc)) !== null) {
+      // The spread form reuses the shared object already captured above.
+      if (match[1].includes("...firstTouchGateInputs")) continue;
+      gateInputBlocks.push(match[1]);
+    }
+  }
   assert.equal(
-    (adfSrc.match(/alreadyContacted: hasCustomerReceivedOutbound\(conv\?\.messages\)/g) ?? []).length,
+    gateInputBlocks.length,
     2,
-    "duplicate guard: BOTH gate input objects (live send + main-opener log) wire alreadyContacted"
+    "the gate is fed by exactly 2 input objects (shared live-send literal + main-opener inline literal)"
   );
-  assert.equal(
-    (adfSrc.match(/duplicateRecentAck: isDuplicateRecentFirstTouchAck\(conv\?\.messages, invariant\.draftText\)/g) ?? []).length,
-    2,
-    "duplicate guard: BOTH gate input objects wire duplicateRecentAck from the real ack text"
-  );
+  for (const block of gateInputBlocks) {
+    assert.match(
+      block,
+      /alreadyContacted: hasCustomerReceivedOutbound\(conv\?\.messages\)/,
+      "duplicate guard: every gate input object wires alreadyContacted from the real thread history"
+    );
+    assert.match(
+      block,
+      /duplicateRecentAck: isDuplicateRecentFirstTouchAck\(conv\?\.messages, invariant\.draftText\)/,
+      "duplicate guard: every gate input object wires duplicateRecentAck from the real ack text"
+    );
+  }
   // No OTHER production file may call the gate — index.ts hosts /webhooks/twilio and
   // /conversations/:id/regenerate, and neither has any business auto-sending a first touch.
   const twilioAndRegeneratePath = fs.readFileSync(path.resolve("services/api/src/index.ts"), "utf8");
@@ -291,11 +316,15 @@ function run(): void {
     !/leadKey\.startsWith\("\+"\)/.test(adfSrc),
     "the raw startsWith('+') deliverability test must not come back — it rejects bare-digit leadKeys"
   );
-  assert.strictEqual(
-    (adfSrc.match(/hasDeliverablePhone: hasDeliverablePhoneKey\(leadKey\)/g) ?? []).length,
-    2,
-    "both first-touch gate call sites must use the shared deliverable-phone helper"
-  );
+  // Scoped to the gate's own input objects (see gateInputBlocks above) — a file-wide count would
+  // also catch unrelated gates in this file that correctly reuse the same shared helper.
+  for (const block of gateInputBlocks) {
+    assert.match(
+      block,
+      /hasDeliverablePhone: hasDeliverablePhoneKey\(leadKey\)/,
+      "every first-touch gate input object must use the shared deliverable-phone helper"
+    );
+  }
   // Deliverability and suppression must agree on what a phone IS — they gate the same send.
   const suppressionSrc = fs.readFileSync(
     path.join(process.cwd(), "services/api/src/domain/suppressionStore.ts"),
