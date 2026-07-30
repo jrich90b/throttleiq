@@ -283,6 +283,12 @@ export type FollowUpCadence = {
   usedVariants?: Record<string, string[]>;
   scheduleInviteCount?: number;
   scheduleMuted?: boolean;
+  // When a DEFER-class close ("not at this time", or staff archiving as not-interested) becomes
+  // re-engageable (Joe ruling 2026-07-29, "soft pause"). A RECORD only — nothing reads this to
+  // send. It exists so a deferred lead is not parked forever with nextDueAt cleared, and so any
+  // future value-gated re-engagement has an honest earliest date to respect.
+  // See resolveDeferCloseSoftPause.
+  deferResumeEligibleAt?: string;
 };
 
 export type ManualContextState = {
@@ -2172,6 +2178,82 @@ export function isDeclineCloseoutReason(reason: string | null | undefined): bool
     r === "customer_keep_current_bike" ||
     r === "customer_stepping_back"
   );
+}
+
+/**
+ * A DEFER-class close is a soft pause, not a rejection (Joe ruling 2026-07-29, "soft pause",
+ * Donald Schuler +17166220132 and Tony Mooradian +17165236994).
+ *
+ * Both operator reports ("I don't think this one should have been closed"; "this customer said
+ * 'not at this time' i don't know how follow ups should be handled") turned out to be STAFF
+ * archiving the lead from the console, not the agent closing it. Donald had just been quoted
+ * $12,995 and replied "Not at this time thank you" — a "not right now", not a "never".
+ *
+ * Two things were wrong with how that landed, and neither is the archive itself:
+ *  1. DISHONEST STATE. The console close stopped the cadence with `not_interested` but left
+ *     `followUp.mode = "active"` (reason `manual_quote_delivered`) — the record simultaneously
+ *     claimed the lead was being actively worked AND had been rejected. The agent's own defer path
+ *     (applyCustomerDispositionCloseout) has always set `paused_indefinite`; the console path never
+ *     did. Same discipline both ways now.
+ *  2. NO RESUME ELIGIBILITY. `closeConversation` clears `nextDueAt`, so a deferred lead is parked
+ *     forever unless the customer texts first. Recording WHEN a defer becomes re-engageable lets a
+ *     later value-gated touch exist at all.
+ *
+ * What is deliberately NOT changed here: the thread still archives out of the working inbox, and a
+ * real inbound still reopens it (`isDeclineCloseoutReason` already covers `not_interested`, so only
+ * a bare content-free ack leaves it archived — see appendInbound). This function adds no sends and
+ * arms no cadence; `resumeEligibleAt` is a RECORD, and nothing reads it to send yet. Turning a
+ * deferred lead back into outreach is a separate, customer-facing decision.
+ *
+ * BUCKET: deterministic state/side-effect gate over OUR OWN closedReason vocabulary — never
+ * customer prose. The comprehension that produced the defer already happened upstream (the typed
+ * disposition parser's `defer_no_window` / `stepping_back`, or a human clicking archive).
+ *
+ * FAIL DIRECTION: today's behavior. A reason this does not recognize returns `softPause: false` and
+ * the caller closes exactly as it does now. Honest state can only help staff; it never sends.
+ */
+export const DEFER_SOFT_PAUSE_RESUME_DAYS = 45;
+
+export function resolveDeferCloseSoftPause(args: {
+  reason?: string | null;
+  nowMs: number;
+}): { softPause: boolean; followUpReason: string; resumeEligibleAt: string | null } {
+  const reason = String(args.reason ?? "").trim().toLowerCase();
+  if (!isDeclineCloseoutReason(reason)) {
+    return { softPause: false, followUpReason: reason, resumeEligibleAt: null };
+  }
+  if (!Number.isFinite(args.nowMs)) {
+    return { softPause: true, followUpReason: reason, resumeEligibleAt: null };
+  }
+  const resumeMs = args.nowMs + DEFER_SOFT_PAUSE_RESUME_DAYS * 24 * 60 * 60 * 1000;
+  return {
+    softPause: true,
+    followUpReason: reason,
+    resumeEligibleAt: new Date(resumeMs).toISOString()
+  };
+}
+
+/**
+ * Apply the defer soft pause. Called by BOTH the console archive endpoint and the agent's
+ * disposition closeout so a "not right now" lead lands in the same honest state either way.
+ * Returns true when the soft pause applied (i.e. the reason was a defer/decline).
+ */
+export function applyDeferCloseSoftPause(conv: Conversation, reason?: string | null): boolean {
+  const plan = resolveDeferCloseSoftPause({ reason, nowMs: Date.now() });
+  if (!plan.softPause) return false;
+  const prior = conv.followUp;
+  conv.followUp = {
+    mode: "paused_indefinite",
+    reason: plan.followUpReason,
+    updatedAt: nowIso(),
+    ...(prior?.skipNextCheckin ? { skipNextCheckin: true } : {})
+  };
+  if (conv.followUpCadence) {
+    conv.followUpCadence.deferResumeEligibleAt = plan.resumeEligibleAt ?? undefined;
+  }
+  conv.updatedAt = nowIso();
+  scheduleSave();
+  return true;
 }
 
 export function appendInbound(conv: Conversation, evt: InboundMessageEvent) {

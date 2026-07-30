@@ -954,6 +954,7 @@ import {
   markPricingEscalated,
   getPricingAttempts,
   closeConversation,
+  applyDeferCloseSoftPause,
   mergeConversationLead,
   setConversationMode,
   setContactPreference,
@@ -27314,6 +27315,9 @@ function applyCustomerDispositionCloseout(conv: any, decision: CustomerDispositi
   pauseInventoryWatches(conv); // a customer stepping back is off the watch alerts too
   closeConversation(conv, decision.reason);
   stopRelatedCadences(conv, decision.reason, { close: true });
+  // Same soft-pause record the console archive now writes (Joe ruling 2026-07-29) — a customer who
+  // deferred is re-engageable, not rejected. AFTER closeConversation so it is not overwritten.
+  applyDeferCloseSoftPause(conv, decision.reason);
 }
 
 type CustomerFollowUpDeferralDecision = {
@@ -41229,6 +41233,13 @@ app.post("/conversations/:id/close", async (req, res) => {
   }
   closeConversation(conv, reason);
   stopRelatedCadences(conv, reason, { close: true });
+  // A DEFER-class archive is a soft pause, not a rejection (Joe ruling 2026-07-29). Staff archiving
+  // "not interested" on a lead who only said "not at this time" left the record claiming the lead
+  // was BOTH actively worked (followUp.mode "active") and rejected — Donald Schuler +17166220132.
+  // Runs AFTER closeConversation so the honest paused_indefinite state and the resume-eligible date
+  // survive that call's cadence stop. Adds no sends; the thread still archives and still reopens on
+  // a real inbound.
+  applyDeferCloseSoftPause(conv, reason);
   return res.json({ ok: true, conversation: conv });
 });
 

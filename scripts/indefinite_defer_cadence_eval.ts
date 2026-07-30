@@ -25,6 +25,11 @@ import {
   decideIndefiniteDeferTurn,
   INDEFINITE_DEFER_PAUSE_DAYS
 } from "../services/api/src/domain/routeStateReducer.ts";
+import {
+  DEFER_SOFT_PAUSE_RESUME_DAYS,
+  isDeclineCloseoutReason,
+  resolveDeferCloseSoftPause
+} from "../services/api/src/domain/conversationStore.ts";
 
 // --- 1) Decision table (pure). ---
 type Row = {
@@ -73,6 +78,7 @@ assert.ok(
 // --- 2) Wiring guard — the shared resolver consults the centralized decision (both paths flow
 //        through resolveCustomerFollowUpDeferralDecision, so live/regen stay in parity). ---
 const index = fs.readFileSync("services/api/src/index.ts", "utf8");
+const store = fs.readFileSync("services/api/src/domain/conversationStore.ts", "utf8");
 const resolverBody = index.slice(
   index.indexOf("function resolveCustomerFollowUpDeferralDecision"),
   index.indexOf("async function applyCustomerFollowUpDeferral")
@@ -114,6 +120,77 @@ assert.ok(
 const liveCalls = index.split("resolveCustomerFollowUpDeferralDecision(").length - 1;
 assert.ok(liveCalls >= 3, "both call sites (live + regen) plus the definition must reference the shared resolver");
 
+// --- 3) A DEFER-class close is a SOFT PAUSE, not a rejection (Joe ruling 2026-07-29) -----------
+// Donald Schuler +17166220132: quoted $12,995 on a 2013 Electra Glide Ultra Limited, asked to
+// schedule, replied "Not at this time thank you". Staff archived him "not interested" from the
+// console, which stopped the cadence but left followUp.mode = "active" (reason
+// manual_quote_delivered) — the record claimed the lead was BOTH actively worked AND rejected.
+// Joe: soft pause, both paths (the console archive AND the agent's own defer closeout).
+const softPauseNow = Date.parse("2026-07-25T16:19:17.303Z");
+
+// Every DEFER/DECLINE reason in our own vocabulary soft-pauses and gets a resume-eligible date.
+for (const reason of [
+  "not_interested",
+  "customer_stepping_back",
+  "customer_sell_on_own",
+  "customer_keep_current_bike"
+]) {
+  const plan = resolveDeferCloseSoftPause({ reason, nowMs: softPauseNow });
+  assert.equal(plan.softPause, true, `${reason} is a defer-class close`);
+  assert.equal(plan.followUpReason, reason, `${reason} carries through as the followUp reason`);
+  assert.equal(
+    plan.resumeEligibleAt,
+    new Date(softPauseNow + DEFER_SOFT_PAUSE_RESUME_DAYS * 24 * 60 * 60 * 1000).toISOString(),
+    `${reason} records a resume-eligible date ${DEFER_SOFT_PAUSE_RESUME_DAYS} days out`
+  );
+}
+
+// FAIL DIRECTION: a reason we do not recognize as a defer changes NOTHING — the caller closes
+// exactly as it does today. SOLD especially must never be softened into a re-engageable lead.
+for (const reason of ["sold", "manual_archive", "opt_out", "wrong_number", "international", "", null]) {
+  const plan = resolveDeferCloseSoftPause({ reason: reason as any, nowMs: softPauseNow });
+  assert.equal(plan.softPause, false, `${String(reason) || "(empty)"} must NOT soft-pause`);
+  assert.equal(plan.resumeEligibleAt, null, `${String(reason) || "(empty)"} records no resume date`);
+}
+// A non-finite clock still soft-pauses (honest state matters more than the date) but records none.
+const badClock = resolveDeferCloseSoftPause({ reason: "not_interested", nowMs: Number.NaN });
+assert.equal(badClock.softPause, true, "a bad clock still yields the honest paused state");
+assert.equal(badClock.resumeEligibleAt, null, "a bad clock never invents a resume date");
+
+// Wiring: BOTH close paths apply it — the console archive endpoint and the agent's disposition
+// closeout — and BOTH must run it AFTER closeConversation, which clears nextDueAt and would
+// otherwise overwrite the honest state.
+assert.equal(
+  (index.match(/applyDeferCloseSoftPause\(/g) ?? []).length,
+  2,
+  "both the console archive and the agent disposition closeout must apply the defer soft pause"
+);
+const dispositionCloseout =
+  index.split("function applyCustomerDispositionCloseout(")[1]?.split("\n}")[0] ?? "";
+assert.ok(
+  dispositionCloseout.indexOf("closeConversation(") <
+    dispositionCloseout.indexOf("applyDeferCloseSoftPause("),
+  "the disposition closeout must soft-pause AFTER closeConversation, not before"
+);
+
+// The archive + reopen contract is UNCHANGED: not_interested was already a decline reason, so a
+// real inbound still reopens the thread and only a bare ack leaves it archived. This build adds
+// honest state and a resume-eligible RECORD — it does not send, and must not arm a cadence.
+assert.equal(
+  isDeclineCloseoutReason("not_interested"),
+  true,
+  "not_interested stays a decline reason, so a real customer text still reopens the thread"
+);
+const softPauseSrc =
+  store.split("export function applyDeferCloseSoftPause(")[1]?.split("\n}")[0] ?? "";
+assert.ok(softPauseSrc.length > 0, "applyDeferCloseSoftPause must exist");
+for (const banned of ["publish", "sendSms", "queueDraft", "resumeFollowUpCadence", "nextDueAt ="]) {
+  assert.ok(
+    !softPauseSrc.includes(banned),
+    `the soft pause must not ${banned} — it records state, it never re-arms outreach`
+  );
+}
+
 console.log(
-  `PASS indefinite-defer cadence eval — ${rows.length} decision cases (1 pause / ${rows.length - 1} untouched), ${INDEFINITE_DEFER_PAUSE_DAYS}-day default window, shared-resolver wiring`
+  `PASS indefinite-defer cadence eval — ${rows.length} decision cases (1 pause / ${rows.length - 1} untouched), ${INDEFINITE_DEFER_PAUSE_DAYS}-day default window, shared-resolver wiring, defer-close soft pause (${DEFER_SOFT_PAUSE_RESUME_DAYS}d resume-eligible, both paths)`
 );
