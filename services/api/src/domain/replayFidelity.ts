@@ -105,6 +105,100 @@ export function composeReplayCommentLines(parts: ReplayCommentParts): string[] {
   return lines;
 }
 
+/**
+ * Pick the stored lead record that belongs to the message being replayed.
+ *
+ * WHY (2026-07-30): `adfXmlForCandidate` read `conv.latestLead ?? conv.lead`, i.e. the NEWEST
+ * lead on the thread, even when replaying an OLDER message. Fields with no message-body
+ * fallback (name, vehicle make/color/price, preferredDate/Time, walkInComment) were therefore
+ * imported from a lead that arrived AFTER the turn — the harness showed the agent information
+ * production could not have had. Measured across the 872 replayable ADF messages on the
+ * 2026-07-30 store: 156 picked a lead whose `leadRef` differs from the body's `Ref:`, 96 carried
+ * a vehicle contradicting the body's own Year/Vehicle, and 29 a different first name
+ * ("Michael" from a later credit app vs the "Mike" production actually received).
+ *
+ * There is no time-scoped lead to select: the store keeps a single evolving `lead` (mutated in
+ * place — `conv.lead.leadRef` can still be the FIRST ref while its `vehicle` has been
+ * overwritten by a later one) plus optional `latestLead`/`originalLead`, and NONE of them carry
+ * a timestamp. The only usable join key is `leadRef`, which the ADF body also carries as `Ref:`.
+ *
+ * Fail direction: when the right record cannot be CONFIRMED, the caller must fall back to the
+ * message body alone rather than import a possibly-later lead's values. A missing colour is
+ * honest; a colour from a different motorcycle is contamination that produces phantom findings.
+ * This matches the precedent set by the feed-alias work: prefer missing over wrong.
+ */
+export type ReplayLeadResolution<TLead> = {
+  /** The record to read from — always defined when any candidate was supplied. */
+  lead: TLead;
+  /**
+   * True when this record is CONFIRMED to be the one the replayed message belongs to, either
+   * by a `leadRef` match or because the thread is unambiguous (one distinct lead). Callers
+   * must not import body-fallback-less fields when this is false.
+   */
+  matched: boolean;
+};
+
+export function resolveReplayLead<TLead extends { leadRef?: unknown }>(input: {
+  /** `Ref:` extracted from the replayed message body. */
+  bodyRef?: string | null;
+  /** Stored records in the caller's current precedence order (latestLead, lead, originalLead). */
+  candidates: ReadonlyArray<TLead | null | undefined>;
+}): ReplayLeadResolution<TLead> {
+  const present = input.candidates.filter((c): c is TLead => Boolean(c));
+  if (present.length === 0) return { lead: {} as TLead, matched: false };
+
+  const refOf = (lead: TLead): string => String((lead as any)?.leadRef ?? "").trim();
+  const bodyRef = String(input.bodyRef ?? "").trim();
+
+  // 1. The body names a lead ref and a stored record carries it — an exact join.
+  if (bodyRef) {
+    const exact = present.find(lead => refOf(lead) === bodyRef);
+    if (exact) return { lead: exact, matched: true };
+  }
+
+  // 2. Every stored record describes the same lead, so there is nothing to confuse.
+  const distinctRefs = new Set(present.map(refOf));
+  if (distinctRefs.size <= 1) return { lead: present[0], matched: true };
+
+  // 3. Ambiguous: keep the caller's existing precedence but refuse to vouch for it.
+  return { lead: present[0], matched: false };
+}
+
+/**
+ * Is the stored lead's vehicle the same motorcycle the replayed message is about?
+ *
+ * Guards the vehicle attributes the synthetic ADF has no body fallback for (make, colour,
+ * list price). The body's own `Year:` / `Vehicle:` fields are authoritative for the turn, so a
+ * stored vehicle that contradicts either one belongs to a different lead and must not be read.
+ * Absent evidence is not contradiction: when the body names no vehicle, or the stored record
+ * has none, there is nothing to disagree with and the stored value is allowed through.
+ */
+export function isStoredVehicleConsistentWithBody(input: {
+  bodyYear?: string | null;
+  bodyModel?: string | null;
+  storedYear?: unknown;
+  storedModel?: unknown;
+}): boolean {
+  const bodyYear = String(input.bodyYear ?? "").trim();
+  const storedYear = String(input.storedYear ?? "").trim();
+  if (bodyYear && storedYear && bodyYear !== storedYear) return false;
+
+  const normModel = (value: unknown): string =>
+    String(value ?? "")
+      .replace(/harley-?davidson/gi, " ")
+      .replace(/[^a-z0-9]+/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+
+  const bodyModel = normModel(input.bodyModel);
+  const storedModel = normModel(input.storedModel);
+  if (!bodyModel || !storedModel) return true;
+
+  // Either may be the fuller spelling ("FLHTCUTG Tri Glide" vs "Tri Glide").
+  return bodyModel.includes(storedModel) || storedModel.includes(bodyModel);
+}
+
 export type ReplayFidelityInput = {
   /** `conv.mode` that `prepareCaseData` forced into the prepared snapshot. */
   forcedMode: string | null | undefined;
