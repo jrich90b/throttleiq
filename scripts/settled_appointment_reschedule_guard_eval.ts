@@ -36,9 +36,8 @@ import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-const { isSettledPastAppointment, pendingRescheduleCarriesTurnIntent } = await import(
-  "../services/api/src/domain/routeStateReducer.ts"
-);
+const { isSettledPastAppointment, pendingRescheduleCarriesTurnIntent, canAssertMissedAppointment } =
+  await import("../services/api/src/domain/routeStateReducer.ts");
 const { parseRequestedDayTime } = await import(
   "../services/api/src/domain/conversationStore.ts"
 );
@@ -252,7 +251,7 @@ assert.ok(
 // hand-mirrored local is exactly the drift surface route_parity_guard:eval ratchets against.)
 const regenIdx = apiSource.indexOf("const regenAppointmentOutcomeRescheduleReply =");
 assert.ok(regenIdx > 0, "the regen outcome-reschedule gate must exist");
-const regenGate = apiSource.slice(regenIdx, regenIdx + 1400);
+const regenGate = apiSource.slice(regenIdx, regenIdx + 2200);
 assert.ok(
   /!isSettledPastAppointment\(\{/.test(regenGate),
   "the regen outcome-reschedule gate must be vetoed by isSettledPastAppointment"
@@ -260,6 +259,129 @@ assert.ok(
 assert.ok(
   !/conv\.appointment\.reschedulePending = false/.test(regenGate),
   "regenerate must not mutate the reschedulePending latch"
+);
+
+// ── Guard C: we may not TELL a customer they missed the appointment without a recorded outcome.
+//
+// Production fixture: +17167506588 (Sudheer Gurajala), appointment Sat 2026-06-27 1:00 PM ET.
+// 18:06:08Z inbound "Sorry I had a flat tire" (running late — NOT a cancellation); 18:29:10Z we
+// replied "Hey s R, I see you were not able to make it in for the appointment." The outcome field
+// was absent at that moment and was written as `showed`/`hold` at 18:42 — he arrived and left a
+// deposit. The regen gate fired on the bare `reschedulePending` latch; the builder's FALLBACK
+// branch asserted the no-show for a blank primaryStatus.
+const MISSED_NOW_MS = Date.parse("2026-06-27T18:29:10.961Z");
+const MISSED_WHEN_ISO = "2026-06-27T17:00:00.000Z";
+
+assert.equal(
+  canAssertMissedAppointment({
+    whenIso: MISSED_WHEN_ISO,
+    nowMs: MISSED_NOW_MS,
+    outcomePrimaryStatus: null,
+    outcomeLegacyStatus: null
+  }),
+  false,
+  "+17167506588: NO recorded outcome — we may never assert the customer failed to appear"
+);
+
+// The legitimate no-show keeps its copy: +13463990700 (Aaron Smith). Staff clicked "Did not show"
+// at 17:13:22.689Z and the send went out 8 seconds later — grounded, correct, must not regress.
+assert.equal(
+  canAssertMissedAppointment({
+    whenIso: "2026-07-25T18:00:00.000Z",
+    nowMs: Date.parse("2026-07-29T17:13:30.000Z"),
+    outcomePrimaryStatus: "did_not_show",
+    outcomeLegacyStatus: "no_show"
+  }),
+  true,
+  "+13463990700: a recorded did_not_show on a past appointment is grounded — keep the no-show copy"
+);
+assert.equal(
+  canAssertMissedAppointment({
+    whenIso: "2026-06-18T14:00:00.000Z",
+    nowMs: MISSED_NOW_MS,
+    outcomePrimaryStatus: "cancelled",
+    outcomeLegacyStatus: "cancelled"
+  }),
+  true,
+  "a recorded cancellation is grounded"
+);
+// SAME-DAY no-show is the common case and must keep its copy (this is why the guard compares start
+// TIME, not isStaleBookedAppointmentDay, which treats same-day as not-stale).
+assert.equal(
+  canAssertMissedAppointment({
+    whenIso: "2026-06-27T17:00:00.000Z",
+    nowMs: Date.parse("2026-06-27T19:30:00.000Z"),
+    outcomePrimaryStatus: "did_not_show",
+    outcomeLegacyStatus: null
+  }),
+  true,
+  "same-day no-show recorded after the slot is grounded"
+);
+// Mis-click before the slot begins (+17165350411 pattern: outcome logged 21s before the text, later
+// corrected to `showed`) must not produce the assertion.
+assert.equal(
+  canAssertMissedAppointment({
+    whenIso: "2026-06-27T17:00:00.000Z",
+    nowMs: Date.parse("2026-06-27T16:17:43.000Z"),
+    outcomePrimaryStatus: "did_not_show",
+    outcomeLegacyStatus: null
+  }),
+  false,
+  "an appointment that has not started yet can never be a missed appointment"
+);
+// A recorded SHOWED never licenses the no-show sentence.
+assert.equal(
+  canAssertMissedAppointment({
+    whenIso: MISSED_WHEN_ISO,
+    nowMs: Date.parse("2026-06-27T19:00:00.000Z"),
+    outcomePrimaryStatus: "showed",
+    outcomeLegacyStatus: "hold"
+  }),
+  false,
+  "a recorded 'showed' outcome must never assert a miss"
+);
+// Legacy-only records still resolve; absent whenIso trusts the explicit human click.
+assert.equal(
+  canAssertMissedAppointment({
+    whenIso: null,
+    nowMs: MISSED_NOW_MS,
+    outcomePrimaryStatus: null,
+    outcomeLegacyStatus: "no_show"
+  }),
+  true,
+  "legacy 'no_show' with no parseable whenIso trusts the explicit staff outcome"
+);
+
+// ── Source pins for guard C: applied in BOTH paths, and the assertion is no longer the default.
+assert.equal(
+  (apiSource.match(/canAssertMissedAppointment\(\{/g) ?? []).length,
+  2,
+  "canAssertMissedAppointment must be applied in BOTH the console-outcome and regen paths"
+);
+assert.ok(
+  /outcomeGrounded: canAssertMissedAppointment\(\{/.test(regenGate),
+  "the regen outcome-reschedule reply must be grounded by canAssertMissedAppointment"
+);
+// The builder must bail to neutral copy BEFORE composing any no-show wording.
+const builderIdx = apiSource.indexOf("function buildAppointmentOutcomeRescheduleReply");
+assert.ok(builderIdx > 0, "the outcome-reschedule builder must exist");
+// Slice to the next top-level declaration — the args TYPE literal also ends in a column-0 "}",
+// so a naive indexOf("\n}") would stop at the signature and pin nothing.
+const builderEnd = apiSource.indexOf("\ntype OutcomeUnitInput", builderIdx);
+assert.ok(builderEnd > builderIdx, "the builder must be followed by the OutcomeUnitInput type");
+const builderBody = apiSource.slice(builderIdx, builderEnd);
+const guardIdx = builderBody.indexOf("if (!args.outcomeGrounded)");
+const firstAssertIdx = builderBody.indexOf("not able to make it in");
+assert.ok(guardIdx > 0, "the builder must take an outcomeGrounded gate");
+assert.ok(
+  guardIdx < firstAssertIdx,
+  "the outcomeGrounded bail-out must come BEFORE any 'not able to make it in' wording"
+);
+assert.ok(
+  /if \(!args\.outcomeGrounded\)[\s\S]{0,260}buildAppointmentRescheduleBookingLinkReply\(/.test(
+    builderBody
+  ),
+  "an ungrounded outcome must fall back to the neutral rebook copy, not a no-show claim"
 );
 
 console.log("settled_appointment_reschedule_guard:eval OK");

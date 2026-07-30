@@ -708,6 +708,7 @@ import {
   tentativeWindowNeedsOwnerFollowUp,
   isStaleBookedAppointmentDay,
   isSettledPastAppointment,
+  canAssertMissedAppointment,
   pendingRescheduleCarriesTurnIntent,
   decideVehicleChoiceConfidenceTurn,
   decideVehicleRecommendationTurn,
@@ -19875,7 +19876,16 @@ async function maybeQueueAppointmentOutcomeRescheduleDraft(args: {
   const reply = buildAppointmentOutcomeRescheduleReply({
     conv,
     bookingUrl: rescheduleUrl,
-    primaryStatus
+    primaryStatus,
+    // Console path: staff explicitly recorded did_not_show/cancelled above, so this is normally
+    // true — proved through the same shared predicate rather than hardcoded, so the two paths
+    // cannot drift apart.
+    outcomeGrounded: canAssertMissedAppointment({
+      whenIso: conv?.appointment?.whenIso ?? null,
+      nowMs: Date.now(),
+      outcomePrimaryStatus: primaryStatus,
+      outcomeLegacyStatus: conv?.appointment?.staffNotify?.outcome?.status ?? null
+    })
   });
 
   if (
@@ -20102,15 +20112,28 @@ async function activateAppointmentOutcomeFollowUp(args: {
   return { activated: true, nextDueAt };
 }
 
+// `outcomeGrounded` decides whether we may ASSERT the customer missed the appointment. It comes
+// from canAssertMissedAppointment() (routeStateReducer) — a recorded missed-family outcome plus a
+// start time that has actually arrived. When it is false we still offer the rebook, but we claim
+// nothing about what happened: +17167506588 texted "Sorry I had a flat tire" with NO outcome on
+// record and got "I see you were not able to make it in" — he was en route, and left a deposit.
 function buildAppointmentOutcomeRescheduleReply(args: {
   conv?: any;
   bookingUrl?: string | null;
   primaryStatus?: AppointmentPrimaryOutcome | null;
+  outcomeGrounded: boolean;
 }): string {
   const conv = args.conv;
   const bookingUrl = String(args.bookingUrl ?? "").trim();
   const primaryStatus = args.primaryStatus ?? null;
   const firstName = normalizeDisplayCase(conv?.lead?.firstName);
+  if (!args.outcomeGrounded) {
+    // Neutral rebook — mirrors buildAppointmentRescheduleBookingLinkReply's framing, asserts nothing.
+    return buildAppointmentRescheduleBookingLinkReply({
+      bookingUrl,
+      firstName
+    });
+  }
   const appointmentType = String(
     conv?.appointment?.appointmentType ?? conv?.scheduler?.pendingSlot?.appointmentType ?? ""
   )
@@ -55362,7 +55385,16 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       ? buildAppointmentOutcomeRescheduleReply({
           conv,
           bookingUrl: buildBookingUrlForLead(dealerProfile?.bookingUrl, conv),
-          primaryStatus: conv.appointment?.staffNotify?.outcome?.primaryStatus ?? null
+          primaryStatus: conv.appointment?.staffNotify?.outcome?.primaryStatus ?? null,
+          // The defect this guard exists for: regen fires on the bare `reschedulePending` latch and
+          // asserted a no-show with NOTHING recorded (+17167506588). Called inline through the shared
+          // reducer — same convention as the isSettledPastAppointment veto above.
+          outcomeGrounded: canAssertMissedAppointment({
+            whenIso: conv.appointment?.whenIso ?? null,
+            nowMs: Date.now(),
+            outcomePrimaryStatus: conv.appointment?.staffNotify?.outcome?.primaryStatus ?? null,
+            outcomeLegacyStatus: conv.appointment?.staffNotify?.outcome?.status ?? null
+          })
         })
       : null;
   if (regenAppointmentOutcomeRescheduleReply) {
