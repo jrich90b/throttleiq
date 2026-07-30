@@ -66,12 +66,32 @@ export function isAutoCloseEligibleTask(task: {
 // the costly one.
 // ---------------------------------------------------------------------------
 
-/** Marker substring carried by BOTH "needs YOUR reply" task summaries produced in index.ts. */
+/**
+ * Marker substrings for the reply-owed family. There are FOUR generators in index.ts, not two:
+ *   "… replied while you have this thread: \"X\" — needs YOUR reply."            (index.ts ~61499)
+ *   "… replied to your thread (addressed you by name): \"X\" — needs YOUR reply" (index.ts ~60107)
+ *   "Deal in process — <name> replied: \"X\" — needs your answer."               (index.ts ~60014)
+ *   "Deal in process (<signal>) — <name> said: \"X\" — needs your answer."       (index.ts ~60066)
+ *
+ * The original constant matched only the first two, so the in-process-deal pair never reached the
+ * deterministic closer and fell through to the LLM fulfillment judge — which keeps saying
+ * "not fulfilled" on an ordinary human reply, exactly the Curtis Samuel failure this closer exists
+ * to prevent. Tim Williams (+17163741119): task open, Joe replied 2026-07-29T19:56:06Z, task still
+ * nagging at 20:08 when he filed the report; it only cleared at 21:11. Live counts at the time of
+ * this fix: `needs YOUR reply` 43 ever / 0 open (median close 2.7 min), `needs your answer`
+ * 11 ever / 2 STILL OPEN.
+ *
+ * Matched here rather than by renaming the copy: the operator-visible "needs your answer" wording
+ * is pinned by in_process_deal:eval, and the two phrasings say different things to staff.
+ */
 export const REPLY_OWED_TODO_MARKER = "needs YOUR reply";
+/** The in-process-deal phrasing of the same "staff owes this customer a reply" task. */
+export const REPLY_OWED_TODO_MARKER_DEAL = "needs your answer";
 
 export function isReplyOwedTask(task: { status?: string | null; summary?: string | null }): boolean {
   if (String(task?.status ?? "") !== "open") return false;
-  return String(task?.summary ?? "").includes(REPLY_OWED_TODO_MARKER);
+  const summary = String(task?.summary ?? "");
+  return summary.includes(REPLY_OWED_TODO_MARKER) || summary.includes(REPLY_OWED_TODO_MARKER_DEAL);
 }
 
 export type ReplyOwedCloseDecision = { close: boolean; reason: string };

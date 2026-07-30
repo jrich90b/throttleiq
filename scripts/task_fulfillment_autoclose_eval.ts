@@ -11,11 +11,14 @@
  * must bias hard toward NOT closing — flag-off and any uncertainty => no close.
  */
 import assert from "node:assert/strict";
+import { promises as fs } from "node:fs";
+import path from "node:path";
 import {
   isAutoCloseEligibleTask,
   decideTaskAutoClose,
   TASK_AUTO_CLOSE_MIN_CONFIDENCE,
   REPLY_OWED_TODO_MARKER,
+  REPLY_OWED_TODO_MARKER_DEAL,
   isReplyOwedTask,
   decideReplyOwedTaskClose,
   describeOutboundMedia,
@@ -132,9 +135,19 @@ const STEP_BACK_SUMMARY = `Curtis replied to your thread (addressed you by name)
 const TASK_CREATED = "2026-07-23T17:46:46.026Z";
 const REPLY_SENT_MS = Date.parse("2026-07-23T17:47:41.832Z");
 
+// Tim Williams (+17163741119, 2026-07-29): the in-process-deal generators phrase the SAME
+// "staff owes this customer a reply" task as "needs your answer", so the marker missed them and
+// they fell through to the LLM judge — which kept the task nagging after Joe had already replied
+// at 19:56:06Z ("i follow up but the task did not clear", filed 20:08). Live at fix time:
+// `needs YOUR reply` 43 ever / 0 open; `needs your answer` 11 ever / 2 still open.
+const DEAL_REPLY_SUMMARY = `Deal in process — Tim replied: "Sounds good" — ${REPLY_OWED_TODO_MARKER_DEAL}.`;
+const DEAL_SIGNAL_SUMMARY = `Deal in process (paperwork) — Tim said: "See you Friday" — ${REPLY_OWED_TODO_MARKER_DEAL}.`;
+
 for (const [label, summary] of [
   ["human-mode re-engagement", CURTIS_SUMMARY],
-  ["owner-thread step-back", STEP_BACK_SUMMARY]
+  ["owner-thread step-back", STEP_BACK_SUMMARY],
+  ["in-process-deal reply", DEAL_REPLY_SUMMARY],
+  ["in-process-deal signal", DEAL_SIGNAL_SUMMARY]
 ] as const) {
   assert.equal(
     isReplyOwedTask({ status: "open", summary }),
@@ -152,6 +165,38 @@ assert.equal(
   false,
   "a closed reply-owed task is not re-closed"
 );
+assert.equal(
+  isReplyOwedTask({ status: "done", summary: DEAL_REPLY_SUMMARY }),
+  false,
+  "a closed in-process-deal reply-owed task is not re-closed"
+);
+
+// COVERAGE PIN: every generator of a "staff owes this customer a reply" task must be matched by
+// one of the two markers. This is the drift surface that caused the bug — a third phrasing added
+// in index.ts without a marker would silently fall back to the LLM judge again.
+{
+  const apiSrc = await fs.readFile(path.resolve("services/api/src/index.ts"), "utf8");
+  const generatorLines = apiSrc
+    .split("\n")
+    // Code only — a comment mentioning the phrase is documentation, not a task generator.
+    .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+    .filter((line) => /needs YOUR reply|needs your answer/i.test(line))
+    // The context-fidelity held-draft task ("Needs your reply — the AI couldn't answer this in
+    // context…") is deliberately OUT of this family: it carries its own marker and its own
+    // clear-on-send closer in conversationStore.ts (three call sites keyed on
+    // CONTEXT_FIDELITY_HELD_TODO_MARKER). It must not be routed through the reply-owed closer.
+    .filter((line) => !line.includes("CONTEXT_FIDELITY_HELD_TODO_MARKER"));
+  assert.ok(
+    generatorLines.length >= 4,
+    `expected at least 4 reply-owed task generators in index.ts, found ${generatorLines.length}`
+  );
+  for (const line of generatorLines) {
+    assert.ok(
+      line.includes(REPLY_OWED_TODO_MARKER) || line.includes(REPLY_OWED_TODO_MARKER_DEAL),
+      `a reply-owed task summary in index.ts carries neither marker (would miss the deterministic closer): ${line.trim()}`
+    );
+  }
+}
 
 assert.deepEqual(
   decideReplyOwedTaskClose({
