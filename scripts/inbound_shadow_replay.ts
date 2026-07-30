@@ -6,7 +6,11 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isDealerLeadAppConfirmedDemoRideAdfText } from "../services/api/src/domain/workflowRegressionGuards.ts";
 import { hasDeliveredOrPendingDealerRideThankYou } from "../services/api/src/domain/dealerRideThankYouDedup.ts";
-import { checkReplayFidelity, hasHydrationCompleted } from "../services/api/src/domain/replayFidelity.ts";
+import {
+  checkReplayFidelity,
+  composeReplayCommentLines,
+  hasHydrationCompleted
+} from "../services/api/src/domain/replayFidelity.ts";
 import {
   isBareReactionOnlyInbound,
   isClosingAckNoAction,
@@ -346,12 +350,14 @@ function adfXmlForCandidate(candidate: Candidate, conv: Conversation): string {
   const vin = extractField(body, "VIN") || String(vehicle.vin ?? "");
   const color = String(vehicle.color ?? "");
   const requestDate = candidate.messageAt || new Date().toISOString();
-  const commentLines = [
+  // Deduped: a walk-in note that merely repeats the body's own Inquiry section must not be
+  // emitted a second time behind a raw field label — see composeReplayCommentLines.
+  const commentLines = composeReplayCommentLines({
     inquiry,
-    lead.preferredDate ? `Preferred date: ${lead.preferredDate}` : "",
-    lead.preferredTime ? `Preferred time: ${lead.preferredTime}` : "",
-    lead.walkInComment ? `Customer Comments: ${lead.walkInComment}` : ""
-  ].filter(Boolean);
+    preferredDate: lead.preferredDate,
+    preferredTime: lead.preferredTime,
+    walkInComment: lead.walkInComment
+  });
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <?adf version="1.0"?>

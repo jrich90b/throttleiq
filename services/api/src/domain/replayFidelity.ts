@@ -40,6 +40,71 @@ export function hasHydrationCompleted(logs: readonly string[] | null | undefined
   return logs.some(line => HYDRATION_COMPLETE_LINE.test(String(line ?? "")));
 }
 
+/**
+ * Compose the `<comment>` lines for the synthetic ADF the harness rebuilds for a candidate.
+ *
+ * WHY (2026-07-30): `adfXmlForCandidate` appended `Customer Comments: ${lead.walkInComment}`
+ * unconditionally. For a walk-in ADF the stored lead carries the SAME text in both
+ * `lead.inquiry` and `lead.walkInComment`, so the comment was emitted TWICE — the second copy
+ * carrying a raw field label. `parseAdfXml` then read that doubled blob back as the inquiry and
+ * the agent echoed the label into customer-facing prose. Measured on the 2026-07-30 corpus:
+ * 21 of 45 leads with a `walkInComment` duplicate their inquiry exactly, 12 of 700 replay cases
+ * were fed the corrupted input, and one draft reached the judge reading
+ * "I'll follow up about new and pre-owned Customer Comments: Looking for trike models."
+ * Production never re-serializes a lead, so this text could not occur live — the real send for
+ * that turn was clean. The corpus replay is the safety net that grades every behavior change,
+ * so an input production cannot produce manufactures phantom findings (same failure class as
+ * the hydration race above).
+ *
+ * Fail direction, deliberately one-way: the message BODY's own Inquiry section is authoritative
+ * (it is what production actually received for THIS turn), while `walkInComment` is a stored
+ * field read off `latestLead` and may belong to a LATER lead on the thread. So the walk-in line
+ * is dropped only when it adds NOTHING over the inquiry, and it may never override or extend it.
+ * Anything genuinely distinct is kept — 23 of those 45 leads carry a real, different comment,
+ * and dropping one would starve the replay of context production had.
+ *
+ * `preferredDate` / `preferredTime` are deliberately NOT deduped: they are short structured
+ * values that could appear coincidentally inside the inquiry prose, and their label is what
+ * makes them meaningful.
+ */
+export type ReplayCommentParts = {
+  /** Inquiry section extracted from the replayed message body (authoritative). */
+  inquiry?: string | null;
+  preferredDate?: string | null;
+  preferredTime?: string | null;
+  /** Stored walk-in note; may be a duplicate of `inquiry`, or from a later lead. */
+  walkInComment?: string | null;
+};
+
+/** Lowercase, strip markup, collapse whitespace — CDATA markup is not semantic content. */
+function normalizeCommentText(value: string | null | undefined): string {
+  return String(value ?? "")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+export function composeReplayCommentLines(parts: ReplayCommentParts): string[] {
+  const inquiry = String(parts.inquiry ?? "").trim();
+  const walkIn = String(parts.walkInComment ?? "").trim();
+
+  const lines: string[] = [];
+  if (inquiry) lines.push(inquiry);
+  if (parts.preferredDate) lines.push(`Preferred date: ${String(parts.preferredDate).trim()}`);
+  if (parts.preferredTime) lines.push(`Preferred time: ${String(parts.preferredTime).trim()}`);
+
+  if (walkIn) {
+    const normWalkIn = normalizeCommentText(walkIn);
+    const normInquiry = normalizeCommentText(inquiry);
+    // Drop only when the walk-in note is fully represented by the authoritative inquiry.
+    const redundant = normWalkIn.length > 0 && normInquiry.includes(normWalkIn);
+    if (!redundant) lines.push(`Customer Comments: ${walkIn}`);
+  }
+
+  return lines;
+}
+
 export type ReplayFidelityInput = {
   /** `conv.mode` that `prepareCaseData` forced into the prepared snapshot. */
   forcedMode: string | null | undefined;
