@@ -76,24 +76,26 @@ function parsePrice(raw?: string): number | null {
 }
 
 function extractPrice(item: Record<string, any>): number | null {
-  const candidates = [
-    text(item?.price),
-    text(item?.list),
-    text(item?.listprice),
-    text(item?.list_price),
-    text(item?.msrp),
-    text(item?.msrpprice),
-    text(item?.saleprice),
-    text(item?.sale_price),
-    text(item?.internetprice),
-    text(item?.internet_price),
-    text(item?.specialprice),
-    text(item?.special_price),
-    text(item?.ourprice),
-    text(item?.askingprice)
+  // Same order as before ("price" first), now also reachable as an attribute or a
+  // name/value entry via field().
+  const PRICE_KEYS = [
+    "price",
+    "list",
+    "listprice",
+    "list_price",
+    "msrp",
+    "msrpprice",
+    "saleprice",
+    "sale_price",
+    "internetprice",
+    "internet_price",
+    "specialprice",
+    "special_price",
+    "ourprice",
+    "askingprice"
   ];
-  for (const raw of candidates) {
-    const parsed = parsePrice(raw);
+  for (const key of PRICE_KEYS) {
+    const parsed = parsePrice(field(item, key));
     if (parsed != null) return parsed;
   }
   return null;
@@ -111,10 +113,11 @@ function priceForItem(item: Record<string, any> | null | undefined): number | nu
 export function mileageForItem(item: Record<string, any> | null | undefined): number | null {
   if (!item || typeof item !== "object") return null;
   const candidates = [
-    text((item as any).mileage), // already-normalized snapshot items carry `mileage`
-    text((item as any).miles),
-    text((item as any).odometer),
-    text((item as any).odometer_reading)
+    // `mileage` first: already-normalized snapshot items carry it.
+    field(item as any, "mileage"),
+    field(item as any, "miles"),
+    field(item as any, "odometer"),
+    field(item as any, "odometer_reading")
   ];
   for (const raw of candidates) {
     if (!raw) continue;
@@ -122,6 +125,106 @@ export function mileageForItem(item: Record<string, any> | null | undefined): nu
     if (Number.isFinite(n) && n > 0) return Math.round(n);
   }
   return null;
+}
+
+/**
+ * Vendor-feed field tolerance (dealer-portability, 2026-07-30). The intake-shape harness
+ * measured this surface at 3 of 7 real-world feed shapes: only colour, price and mileage
+ * tried alternative spellings, so `<stock_number>` lost the stock number outright and
+ * attribute-style rows, generic name/value rows, and `<vehicles><vehicle>` containers each
+ * lost EVERYTHING. That failure is silent — no inventory just means the agent never
+ * mentions a bike, with no error for a health check to catch.
+ *
+ * SAFETY PROPERTY, load-bearing: the CANONICAL name for each field is listed FIRST and is
+ * resolved as a child element before any alias, attribute, or name/value entry is even
+ * considered, so an existing dealer's feed parses exactly as it did. Two separate pieces of
+ * evidence, because one alone would be weak: `inventory_feed_shape:eval` pins the PRECEDENCE
+ * RULE on fixtures (a canonical child element beats an alias and beats an attribute), and at
+ * build time the live 72-row americanharley feed was parsed before and after this change and
+ * the output was byte-for-byte identical (recorded in the PR — the feed itself is dealer data
+ * and deliberately not committed as a fixture).
+ *
+ * DELIBERATE EXCLUSIONS, each one a way this could go wrong:
+ *   - `id` is NOT a stock-number alias. The live americanharley feed carries `<id>` as the
+ *     vendor's own row id; treating it as a stock number would invent stock numbers for the
+ *     13 rows that legitimately have none, and a reply citing a meaningless number is worse
+ *     than one citing none.
+ *   - `title`, `description` and `category` are NOT model aliases. They hold prose; a long
+ *     string landing in `model` would corrupt watch matching (see modelMatches below).
+ *   - `type`, `status` and `certified` are NOT condition aliases. A feed with
+ *     `<type>Motorcycle</type>` would set condition to "Motorcycle" instead of new/used, and
+ *     a WRONG value is worse than a missing one.
+ */
+export const FEED_FIELD_ALIASES = {
+  stockId: [
+    "stocknumber",
+    "stock_number",
+    "stocknum",
+    "stockno",
+    "stockid",
+    "stock_id",
+    "stock",
+    "dealerstocknumber"
+  ],
+  vin: ["vin", "vinnumber", "vin_number", "serialnumber", "serial_number"],
+  year: ["year", "modelyear", "model_year", "yearmodel"],
+  make: ["make", "manufacturer", "brand", "makename", "make_name"],
+  model: ["model", "modelname", "model_name"],
+  condition: ["condition", "newused", "new_used", "neworused"],
+  url: ["url", "link", "detailurl", "detail_url", "vdpurl", "vdp_url", "permalink", "weburl", "web_url"]
+} as const;
+
+/**
+ * Read one logical field from a feed row, tolerating the three ways vendors express it:
+ *   1. a child element        <year>2026</year>
+ *   2. an XML attribute       <item year="2026">   (fast-xml-parser exposes this as "@_year")
+ *   3. a name/value entry     <attribute name="year">2026</attribute>
+ * Every listed name is tried as a child element before any attribute is considered, so
+ * precedence never changes for a feed that already worked.
+ */
+export function field(item: Record<string, any> | null | undefined, ...names: string[]): string | undefined {
+  if (!item || typeof item !== "object") return undefined;
+  for (const name of names) {
+    const direct = text(item[name]);
+    if (direct) return direct;
+  }
+  for (const name of names) {
+    const asAttribute = text(item[`@_${name}`]);
+    if (asAttribute) return asAttribute;
+  }
+  const pairs = [...asArray(item.attribute), ...asArray(item.attributes?.attribute)];
+  if (!pairs.length) return undefined;
+  for (const name of names) {
+    for (const pair of pairs) {
+      const key = String(text(pair?.["@_name"]) ?? text(pair?.name) ?? "").toLowerCase();
+      if (key !== name.toLowerCase()) continue;
+      const value = text(pair?.["#text"]) ?? text(pair?.value) ?? text(pair);
+      if (value) return value;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The row list, whatever the vendor calls it. The three original shapes stay first so an
+ * existing feed resolves exactly as before; a feed calling its rows `vehicle`, `unit` or
+ * `listing` used to yield ZERO rows and read as an empty store.
+ */
+export function pickFeedRows(doc: any): any {
+  return (
+    doc?.inventory?.item ??
+    doc?.items?.item ??
+    doc?.item ??
+    doc?.inventory?.vehicle ??
+    doc?.vehicles?.vehicle ??
+    doc?.vehicle ??
+    doc?.inventory?.unit ??
+    doc?.units?.unit ??
+    doc?.unit ??
+    doc?.listings?.listing ??
+    doc?.listing ??
+    []
+  );
 }
 
 /**
@@ -133,16 +236,16 @@ export function mileageForItem(item: Record<string, any> | null | undefined): nu
 export function parseFeed(xml: string): InventoryFeedItem[] {
   const parser = new XMLParser({ ignoreAttributes: false });
   const doc = parser.parse(xml);
-  const items = asArray(doc?.inventory?.item ?? doc?.items?.item ?? doc?.item ?? []);
+  const items = asArray(pickFeedRows(doc));
   return items.map((it: any) => ({
-    stockId: text(it?.stocknumber),
-    vin: text(it?.vin),
-    year: text(it?.year),
-    make: text(it?.make),
-    model: text(it?.model),
+    stockId: field(it, ...FEED_FIELD_ALIASES.stockId),
+    vin: field(it, ...FEED_FIELD_ALIASES.vin),
+    year: field(it, ...FEED_FIELD_ALIASES.year),
+    make: field(it, ...FEED_FIELD_ALIASES.make),
+    model: field(it, ...FEED_FIELD_ALIASES.model),
     color: extractColor(it),
-    condition: text(it?.condition),
-    url: text(it?.url),
+    condition: field(it, ...FEED_FIELD_ALIASES.condition),
+    url: field(it, ...FEED_FIELD_ALIASES.url),
     price: extractPrice(it),
     mileage: mileageForItem(it),
     images: extractImageUrls(it)
@@ -188,23 +291,25 @@ function extractImageUrls(item: Record<string, any>): string[] {
 }
 
 function extractColor(item: Record<string, any>): string | undefined {
-  const keys = [
+  // "colour" variants included for non-US feeds; "color" stays first so precedence is
+  // unchanged for feeds that already worked.
+  return field(
+    item,
     "color",
     "colorname",
     "color_name",
+    "colour",
+    "colourname",
+    "colour_name",
     "exteriorcolor",
     "exterior_color",
+    "exteriorcolour",
     "extcolor",
     "ext_color",
     "primarycolor",
     "primary_color",
     "paint"
-  ];
-  for (const key of keys) {
-    const val = text(item?.[key]);
-    if (val) return val;
-  }
-  return undefined;
+  );
 }
 
 export function normalizeModel(s: string): string {
