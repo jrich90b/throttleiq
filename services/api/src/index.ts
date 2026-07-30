@@ -985,6 +985,7 @@ import {
   buildPendingIncomingInventoryCustomerAck,
   buildPendingIncomingInventoryFromConversation,
   buildPendingIncomingInventoryTaskSummary,
+  resolvePendingIncomingNotifyDueAt,
   hasPendingIncomingInventoryContext,
   hasPendingIncomingInventorySignal,
   hasPartsInquirySignal,
@@ -31120,6 +31121,13 @@ async function applyPendingIncomingInventoryState(
   if (priorAllocation && priorAllocation !== "unclear") {
     pending.allocation = priorAllocation;
   }
+  // The expected ARRIVAL carries forward exactly like purpose/allocation: it is read once off the
+  // establishing context by the SAME parser call (no extra round trip — see the consolidation
+  // direction in CLAUDE.md) and then reused on every later ack turn.
+  const priorArrivalText = String(conv.pendingIncomingInventory?.expectedArrivalText ?? "").trim();
+  const priorArrivalAt = String(conv.pendingIncomingInventory?.expectedArrivalAt ?? "").trim();
+  if (priorArrivalText) pending.expectedArrivalText = priorArrivalText;
+  if (priorArrivalAt) pending.expectedArrivalAt = priorArrivalAt;
   if (priorPurpose && priorPurpose !== "unclear") {
     pending.purpose = priorPurpose;
   } else {
@@ -31142,6 +31150,19 @@ async function applyPendingIncomingInventoryState(
     if (!pending.allocation && purposeDecision.allocation !== "unclear") {
       pending.allocation = purposeDecision.allocation;
     }
+    // Arrival wording is COMPREHENDED by the parser above (`expected_arrival_text`), then resolved
+    // to a calendar day by the same resolver the staff-promise tasks use. Never regexed from prose.
+    const arrivalText = String(purposeParse?.expectedArrivalText ?? "").trim();
+    if (arrivalText && !pending.expectedArrivalText) {
+      pending.expectedArrivalText = arrivalText;
+      const tz = (await getSchedulerConfigHot()).timezone || "America/New_York";
+      const arrivalDay = parseRequestedDateOnly(arrivalText, tz);
+      const resolved = resolvePendingIncomingNotifyDueAt({
+        expectedArrivalDay: arrivalDay,
+        nowMs: Date.parse(nowIsoValue)
+      });
+      if (resolved.dueAt) pending.expectedArrivalAt = resolved.dueAt;
+    }
   }
   if (opts?.acknowledged) pending.acknowledgedAt = nowIsoValue;
   conv.pendingIncomingInventory = pending;
@@ -31162,7 +31183,10 @@ async function applyPendingIncomingInventoryState(
       customerName: customerNameForPendingIncomingInventory(conv)
     }),
     opts?.sourceMessageId ?? undefined,
-    conv.leadOwner
+    conv.leadOwner,
+    // Dated off the ARRIVAL when we know it, so the task stops reading as due TODAY for the weeks
+    // the bike is still in transit (Joe ruling 2026-07-29). Undated when the arrival is unknown.
+    pending.expectedArrivalAt ?? null
   );
   return true;
 }

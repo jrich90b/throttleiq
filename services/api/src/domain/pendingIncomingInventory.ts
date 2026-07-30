@@ -366,3 +366,59 @@ export function planPendingIncomingNotifyDedup(
   }
   return { keepId: keep.id, retireIds: retirees.map(t => t.id), adoptDueAt };
 }
+
+/**
+ * WHEN should the "Notify {customer} when the {unit} arrives" staff task come due?
+ *
+ * Trigger (Mohamed Ahmed +17164258647, operator-reported 2026-07-29 — "this should not create a
+ * task that starts right away. its a watch and should only create the task when the motorcycle
+ * arrives and the watch fires"; Joe ruled "task off the arrival date"): the task was created with
+ * NO dueAt, so a bike Joe had just told the customer was "scheduled to come in around 8/21" left a
+ * task screaming DUE NOW in the inbox for three weeks. The same complaint arrived earlier from
+ * Nicholas Braun +17166286477 ("probably next week but the call task is for tomorrow") — one root
+ * cause: the task's date ignored the ARRIVAL.
+ *
+ * We deliberately do NOT delete the task. It is the safety net the watch depends on: `watch_fire_miss`
+ * findings prove watches do miss, and the task is how staff catch that. So the task always exists —
+ * it just comes due when the promise does.
+ *
+ * BUCKET: a pure side-effect/state decision over an ALREADY-COMPREHENDED slot. The arrival wording
+ * ("around 8/21") is read by parseIncomingInventoryPurposeWithLLM's `expected_arrival_text` and
+ * resolved to a calendar day by the caller's existing `parseRequestedDateOnly` — this function only
+ * decides the resulting dueAt. No prose is inspected here.
+ *
+ * FAIL DIRECTION: today's behavior. No stated timing, an unresolvable date, or a date already behind
+ * us => `dueAt: null`, i.e. the undated task staff get now. We never push a task PAST a known
+ * arrival, and never invent a date. Over-dating would hide a real follow-through; leaving it undated
+ * is merely noisy, which is the state we are improving from.
+ */
+export function resolvePendingIncomingNotifyDueAt(args: {
+  /** `expected_arrival_text` resolved by the caller via parseRequestedDateOnly; null when absent/unparsable. */
+  expectedArrivalDay?: { year: number; month: number; day: number } | null;
+  /** Now, as epoch ms — compared against the resolved day so a stale arrival never dates a task backwards. */
+  nowMs: number;
+}): { dueAt: string | null; reason: string } {
+  const day = args.expectedArrivalDay;
+  if (!day) return { dueAt: null, reason: "no_expected_arrival" };
+  const { year, month, day: dayOfMonth } = day;
+  if (
+    !Number.isFinite(year) ||
+    !Number.isFinite(month) ||
+    !Number.isFinite(dayOfMonth) ||
+    month < 1 ||
+    month > 12 ||
+    dayOfMonth < 1 ||
+    dayOfMonth > 31
+  ) {
+    return { dueAt: null, reason: "invalid_expected_arrival" };
+  }
+  // Morning of the arrival day, dealership-local — staff should see it the day the bike lands, not
+  // at midnight. 13:00Z ~= 9am ET, matching the other dated staff tasks.
+  const dueMs = Date.UTC(year, month - 1, dayOfMonth, 13, 0, 0, 0);
+  if (!Number.isFinite(dueMs)) return { dueAt: null, reason: "invalid_expected_arrival" };
+  if (!Number.isFinite(args.nowMs)) return { dueAt: null, reason: "invalid_now" };
+  // An arrival already behind us means the bike is late or the note was stale — surface it NOW
+  // (undated) rather than dating a task into the past, where the inbox would bury it.
+  if (dueMs <= args.nowMs) return { dueAt: null, reason: "arrival_not_in_future" };
+  return { dueAt: new Date(dueMs).toISOString(), reason: "expected_arrival" };
+}

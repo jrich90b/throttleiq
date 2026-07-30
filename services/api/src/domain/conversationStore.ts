@@ -682,6 +682,14 @@ export type PendingIncomingInventory = {
   createdAt: string;
   updatedAt: string;
   acknowledgedAt?: string;
+  // WHEN the unit is expected (Joe ruling 2026-07-29, Mohamed Ahmed +17164258647: "task off the
+  // arrival date"). `expectedArrivalText` is the timing verbatim as staff/the thread stated it
+  // ("around 8/21"), comprehended by parseIncomingInventoryPurposeWithLLM — never regexed out of
+  // prose. `expectedArrivalAt` is that text resolved to a calendar day, and it dates the "notify
+  // them when it arrives" staff task so the task stops reading as due TODAY until the bike lands.
+  // Both unset when no timing was stated; the task then keeps today's undated behavior.
+  expectedArrivalText?: string;
+  expectedArrivalAt?: string;
 };
 
 export type FinanceDocsState = {
@@ -5722,7 +5730,16 @@ export function upsertPendingIncomingInventoryNotifyTodo(
   conv: Conversation,
   summary: string,
   sourceMessageId?: string,
-  owner?: { id?: string | null; name?: string | null }
+  owner?: { id?: string | null; name?: string | null },
+  /**
+   * Due date for the notify task — the unit's EXPECTED ARRIVAL when we know it (Joe ruling
+   * 2026-07-29, Mohamed Ahmed +17164258647: "task off the arrival date"). Undefined/null keeps the
+   * previous undated behavior, which is the fail-safe: an undated task is merely noisy, whereas
+   * dating one wrongly could hide a real follow-through. On an existing task we only ever FILL a
+   * missing date or pull it EARLIER — a later re-read must never push a task staff can already see
+   * further out.
+   */
+  dueAt?: string | null
 ): TodoTask | null {
   healPendingIncomingNotifyTodoDuplicates(conv);
   const survivor = todos.find(
@@ -5731,6 +5748,9 @@ export function upsertPendingIncomingInventoryNotifyTodo(
       t.status === "open" &&
       isPendingIncomingInventoryNotifyTodoSummary(t.summary)
   );
+  const dueAtIso = String(dueAt ?? "").trim();
+  const dueAtMs = dueAtIso ? Date.parse(dueAtIso) : NaN;
+  const dueAtUsable = !!dueAtIso && Number.isFinite(dueAtMs);
   if (survivor) {
     survivor.reason = "call";
     survivor.taskClass = "followup";
@@ -5739,11 +5759,23 @@ export function upsertPendingIncomingInventoryNotifyTodo(
     const ownerName = String(owner?.name ?? conv?.leadOwner?.name ?? "").trim();
     if (ownerId) survivor.ownerId = ownerId;
     if (ownerName) survivor.ownerName = ownerName;
+    if (dueAtUsable) {
+      const existingMs = Date.parse(String(survivor.dueAt ?? ""));
+      if (!Number.isFinite(existingMs) || dueAtMs < existingMs) survivor.dueAt = dueAtIso;
+    }
     conv.updatedAt = nowIso();
     scheduleSave();
     return survivor;
   }
-  return addTodo(conv, "call", summary, sourceMessageId, owner, undefined, "followup");
+  return addTodo(
+    conv,
+    "call",
+    summary,
+    sourceMessageId,
+    owner,
+    dueAtUsable ? { dueAt: dueAtIso } : undefined,
+    "followup"
+  );
 }
 
 /**

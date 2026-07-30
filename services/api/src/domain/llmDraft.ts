@@ -2613,6 +2613,12 @@ export type IncomingInventoryPurposeParse = {
   //   "for_this_customer" — the incoming unit is coming in for THIS customer.
   //   "unclear"           — can't tell. Fails to today's behavior (watch + generic ack).
   allocation: "spoken_for_other" | "for_this_customer" | "unclear";
+  // WHEN the unit is expected, verbatim from the context that established it ("around 8/21",
+  // "next week", "projected ship date 7/29"); "" when no timing was stated. The caller resolves
+  // this to a calendar day with the existing date resolver and dates the "notify them when it
+  // arrives" staff task off it, so that task stops reading as due TODAY for three weeks
+  // (Mohamed Ahmed +17164258647, Joe ruling 2026-07-29: "task off the arrival date").
+  expectedArrivalText: string;
   confidence?: number;
 };
 
@@ -4028,7 +4034,7 @@ const FINANCE_HARDSHIP_DISCLOSURE_PARSER_JSON_SCHEMA: { [key: string]: unknown }
 const INCOMING_INVENTORY_PURPOSE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   type: "object",
   additionalProperties: false,
-  required: ["purpose", "allocation", "confidence"],
+  required: ["purpose", "allocation", "expected_arrival_text", "confidence"],
   properties: {
     purpose: {
       type: "string",
@@ -4038,6 +4044,10 @@ const INCOMING_INVENTORY_PURPOSE_PARSER_JSON_SCHEMA: { [key: string]: unknown } 
       type: "string",
       enum: ["spoken_for_other", "for_this_customer", "unclear"]
     },
+    // WHEN the unit is expected, exactly as the context stated it ("around 8/21", "next week",
+    // "projected ship date 7/29"). Empty when the context names no timing. Comprehended here, then
+    // resolved to a calendar day by the caller's existing date resolver — never regexed out of prose.
+    expected_arrival_text: { type: "string" },
     confidence: { type: "number" }
   }
 };
@@ -9616,14 +9626,29 @@ export async function parseIncomingInventoryPurposeWithLLM(args: {
     "- confidence 0..1; use >= 0.7 only when the side is clear.",
     "",
     "Examples:",
-    '- "Customer is trading in his 2015 Road King, we are taking it in next week" -> {"purpose":"trade_in","allocation":"for_this_customer","confidence":0.95}',
-    '- "We have a 2015 Road King coming in from the auction for him to look at" -> {"purpose":"sourced_for_purchase","allocation":"for_this_customer","confidence":0.93}',
-    '- "Getting a used Street Glide in for this customer to buy, will let him know when it lands" -> {"purpose":"sourced_for_purchase","allocation":"for_this_customer","confidence":0.94}',
-    '- "He wants to be notified when the 2015 Road King gets here so he can see it" -> {"purpose":"sourced_for_purchase","allocation":"unclear","confidence":0.8}',
-    '- "New 2026 Street Glide on order from the factory for this customer" -> {"purpose":"factory_order","allocation":"for_this_customer","confidence":0.95}',
-    '- "Wants to see new Super Glide and told him we would reach out once the next one we have coming in arrives which is spoken for, projected ship date 7/29." -> {"purpose":"sourced_for_purchase","allocation":"spoken_for_other","confidence":0.9}',
-    '- "Waiting on a Fat Boy — the one in transit is sold, next allocation is his" -> {"purpose":"sourced_for_purchase","allocation":"spoken_for_other","confidence":0.85}',
-    '- "2015 Road King" -> {"purpose":"unclear","allocation":"unclear","confidence":0.5}',
+    '- "Customer is trading in his 2015 Road King, we are taking it in next week" -> {"purpose":"trade_in","allocation":"for_this_customer","expected_arrival_text":"next week","confidence":0.95}',
+    '- "We have a 2015 Road King coming in from the auction for him to look at" -> {"purpose":"sourced_for_purchase","allocation":"for_this_customer","expected_arrival_text":"","confidence":0.93}',
+    '- "Getting a used Street Glide in for this customer to buy, will let him know when it lands" -> {"purpose":"sourced_for_purchase","allocation":"for_this_customer","expected_arrival_text":"","confidence":0.94}',
+    '- "He wants to be notified when the 2015 Road King gets here so he can see it" -> {"purpose":"sourced_for_purchase","allocation":"unclear","expected_arrival_text":"","confidence":0.8}',
+    '- "New 2026 Street Glide on order from the factory for this customer" -> {"purpose":"factory_order","allocation":"for_this_customer","expected_arrival_text":"","confidence":0.95}',
+    '- "Wants to see new Super Glide and told him we would reach out once the next one we have coming in arrives which is spoken for, projected ship date 7/29." -> {"purpose":"sourced_for_purchase","allocation":"spoken_for_other","expected_arrival_text":"projected ship date 7/29","confidence":0.9}',
+    '- "Waiting on a Fat Boy — the one in transit is sold, next allocation is his" -> {"purpose":"sourced_for_purchase","allocation":"spoken_for_other","expected_arrival_text":"","confidence":0.85}',
+    '- "2015 Road King" -> {"purpose":"unclear","allocation":"unclear","expected_arrival_text":"","confidence":0.5}',
+    "",
+    "expected_arrival_text — WHEN the unit is expected, copied VERBATIM from the context:",
+    '- Copy the stated timing exactly as written: "around 8/21", "next week", "late August",',
+    '  "projected ship date 7/29", "in about 3 weeks". Do NOT convert it to a date or reword it.',
+    "- Empty string when the context states no timing at all. Never guess or invent a date.",
+    "- Only the INCOMING unit's timing counts. Ignore when the CUSTOMER says they'll visit",
+    '  ("I\'ll stop by Saturday") and ignore past dates describing when the deal happened.',
+    "",
+    "Arrival-timing examples:",
+    '- "I just checked our incoming inventory. Looks like the next available Deadwood is scheduled to come in around 8/21" -> {"purpose":"factory_order","allocation":"for_this_customer","expected_arrival_text":"around 8/21","confidence":0.9}',
+    '- "I\'ll give you a call when that trade with the backrest comes in — probably next week." -> {"purpose":"trade_in","allocation":"for_this_customer","expected_arrival_text":"next week","confidence":0.9}',
+    '- "Told him we have one coming in but not till late August" -> {"purpose":"sourced_for_purchase","allocation":"for_this_customer","expected_arrival_text":"late August","confidence":0.85}',
+    '- "the next one we have coming in ... projected ship date 7/29." -> {"purpose":"sourced_for_purchase","allocation":"spoken_for_other","expected_arrival_text":"projected ship date 7/29","confidence":0.9}',
+    '- "I\'ll watch the Deadwood and text you when it lands at the dealership." -> {"purpose":"unclear","allocation":"unclear","expected_arrival_text":"","confidence":0.6}',
+    '- "We have a Road King coming in for him to look at. He said he\'ll stop by Saturday." -> {"purpose":"sourced_for_purchase","allocation":"for_this_customer","expected_arrival_text":"","confidence":0.85}',
     "",
     condition ? `Unit condition field: ${condition}` : "Unit condition field: (unknown)",
     vehicle ? `Unit: ${vehicle}` : "Unit: (unknown)",
@@ -9659,7 +9684,11 @@ export async function parseIncomingInventoryPurposeWithLLM(args: {
     typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
       ? Math.max(0, Math.min(1, parsed.confidence))
       : undefined;
-  return { purpose, allocation, confidence };
+  const expectedArrivalText = String(parsed.expected_arrival_text ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+  return { purpose, allocation, expectedArrivalText, confidence };
 }
 
 // Detects a customer wanting to trade in / apply a NON-motorcycle item toward the deal —

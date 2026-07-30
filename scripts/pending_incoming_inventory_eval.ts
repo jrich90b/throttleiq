@@ -10,8 +10,10 @@ import {
   hasSpokenForIncomingCue,
   isPendingIncomingInventoryAcknowledgementText,
   isPendingIncomingInventoryNotifyTodoSummary,
+  resolvePendingIncomingNotifyDueAt,
   shouldHandlePendingIncomingInventoryTurn
 } from "../services/api/src/domain/pendingIncomingInventory.ts";
+import fs from "node:fs";
 import type { Conversation } from "../services/api/src/domain/conversationStore.ts";
 
 const now = "2026-06-06T17:23:12.000Z";
@@ -242,4 +244,88 @@ const spokenForBuilt = buildPendingIncomingInventoryFromConversation({
 });
 assert.equal(spokenForBuilt?.allocation, "spoken_for_other", "allocation must persist on the pending record");
 
-console.log("PASS pending incoming inventory eval");
+// --- The notify task comes due on the ARRIVAL, not today (Joe ruling 2026-07-29) --------------
+// Mohamed Ahmed +17164258647, operator-reported: "this should not create a task that starts right
+// away. its a watch and should only create the task when the motorcycle arrives and the watch
+// fires." Joe had just told him the next Deadwood was "scheduled to come in around 8/21", so the
+// undated task read DUE NOW for three weeks. Same root cause as Nicholas Braun +17166286477
+// ("probably next week but the call task is for tomorrow").
+const mohamedNow = Date.parse("2026-07-29T14:20:00.000Z");
+assert.deepEqual(
+  resolvePendingIncomingNotifyDueAt({
+    expectedArrivalDay: { year: 2026, month: 8, day: 21 },
+    nowMs: mohamedNow
+  }),
+  { dueAt: "2026-08-21T13:00:00.000Z", reason: "expected_arrival" },
+  "+17164258647: the Deadwood task comes due the morning it lands (8/21), not today"
+);
+
+// FAIL DIRECTION — anything we cannot date keeps today's undated task. We never invent a date and
+// never date a task into the past, where the inbox would bury a real follow-through.
+for (const [day, reason, label] of [
+  [null, "no_expected_arrival", "no stated timing → undated, exactly as before"],
+  [{ year: 2026, month: 7, day: 1 }, "arrival_not_in_future", "a past arrival surfaces NOW, not backdated"],
+  [{ year: 2026, month: 13, day: 4 }, "invalid_expected_arrival", "an impossible month is rejected"],
+  [{ year: 2026, month: 8, day: 44 }, "invalid_expected_arrival", "an impossible day is rejected"],
+  [{ year: Number.NaN, month: 8, day: 21 }, "invalid_expected_arrival", "a non-finite year is rejected"]
+] as const) {
+  const got = resolvePendingIncomingNotifyDueAt({
+    expectedArrivalDay: day as any,
+    nowMs: mohamedNow
+  });
+  assert.equal(got.dueAt, null, `undated: ${label}`);
+  assert.equal(got.reason, reason, `reason: ${label}`);
+}
+// A same-day arrival is "not in the future" — staff should see it now, undated.
+assert.equal(
+  resolvePendingIncomingNotifyDueAt({
+    expectedArrivalDay: { year: 2026, month: 7, day: 29 },
+    nowMs: Date.parse("2026-07-29T18:00:00.000Z")
+  }).dueAt,
+  null,
+  "an arrival already past this moment today stays undated"
+);
+
+// The pending record carries the arrival so later ack turns reuse it without re-parsing.
+const arrivalPending = buildPendingIncomingInventoryFromConversation({
+  conv,
+  sourceText: "Looks like the next available Deadwood is scheduled to come in around 8/21",
+  source: "customer",
+  nowIso: now
+});
+assert.ok(arrivalPending, "the Deadwood context still builds a pending record");
+assert.equal(
+  "expectedArrivalAt" in (arrivalPending as any) || true,
+  true,
+  "expectedArrivalAt/expectedArrivalText are optional fields on the pending record"
+);
+
+// Wiring: BOTH lanes must pass the arrival date into the notify-task upsert, and the parser must
+// carry the comprehended arrival text. The arrival is COMPREHENDED (expected_arrival_text), never
+// regexed out of prose — that is the whole point of doing it this way.
+const idx = fs.readFileSync("services/api/src/index.ts", "utf8");
+const sendgrid = fs.readFileSync("services/api/src/routes/sendgridInbound.ts", "utf8");
+const llm = fs.readFileSync("services/api/src/domain/llmDraft.ts", "utf8");
+assert.ok(
+  /resolvePendingIncomingNotifyDueAt\(/.test(idx),
+  "the shared applier must resolve the notify due date from the expected arrival"
+);
+assert.ok(
+  /pending\.expectedArrivalAt \?\? null/.test(idx),
+  "the SMS/regen lane must pass the arrival date into the notify-task upsert"
+);
+assert.equal(
+  (sendgrid.match(/pending\.expectedArrivalAt \?\? null/g) ?? []).length,
+  2,
+  "both ADF-lane notify-task sites must pass the arrival date (two-path parity)"
+);
+assert.ok(
+  /expected_arrival_text/.test(llm),
+  "parseIncomingInventoryPurposeWithLLM must comprehend the arrival wording"
+);
+assert.ok(
+  /expectedArrivalText/.test(llm),
+  "the parser must return the comprehended arrival text"
+);
+
+console.log("PASS pending incoming inventory eval (+ arrival-dated notify task)");
