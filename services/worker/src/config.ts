@@ -23,13 +23,28 @@ export const WORKER_SCHEDULES: WorkerSchedule[] = [
   {
     queue: "tick-followups",
     cron: "* * * * *",
-    tasks: ["follow-ups", "appt-confirm", "staff-appt-notify", "appt-questions", "task-escalations", "gate-blocker-digest"],
+    // photo-delivery belongs on the MINUTE lane, not with the inventory jobs (Joe, 2026-07-30).
+    // The API's in-process intervals have always run it every 60s; grouping it with inventory
+    // here would have quietly made the worker cutover a customer-visible change — someone who
+    // asked to see a bike waiting up to 5 minutes instead of 1. It is grouped by subject
+    // ("photos of a bike") rather than by urgency, which reads like an oversight. Keeping it
+    // here makes WORKER_DRIVEN_TICKS=1 a true no-op: same nine jobs, same cadences, only the
+    // clock moves. It also keeps the flip clean to judge if anything looks wrong afterwards.
+    tasks: [
+      "follow-ups",
+      "appt-confirm",
+      "staff-appt-notify",
+      "appt-questions",
+      "task-escalations",
+      "gate-blocker-digest",
+      "photo-delivery"
+    ],
     requestTimeoutMs: 5 * 60_000
   },
   {
     queue: "tick-inventory",
     cron: "*/5 * * * *",
-    tasks: ["inventory-watch", "inventory-holds", "photo-delivery"],
+    tasks: ["inventory-watch", "inventory-holds"],
     requestTimeoutMs: 10 * 60_000
   }
 ];

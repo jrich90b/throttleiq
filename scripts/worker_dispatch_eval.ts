@@ -106,6 +106,30 @@ async function main() {
   assert.ok(indexSource.includes("isWorkerDrivenTicks()"), "WORKER_DRIVEN_TICKS gate missing");
   console.log("api wiring guards ok");
 
+  // CADENCE PARITY (Joe, 2026-07-30) — flipping WORKER_DRIVEN_TICKS=1 must be a NO-OP for
+  // customers, not just for coverage. Task-set parity was already checked above; this pins the
+  // FREQUENCY too. `photo-delivery` had drifted onto the 5-minute inventory queue while the API
+  // ran it every 60s, so the cutover would have quietly made someone who asked to see a bike wait
+  // up to 5 minutes instead of 1 — grouped by subject ("photos of a bike") rather than by urgency.
+  // A task the API runs every minute must be on an every-minute worker queue.
+  const everyMinuteBlock = indexSource.slice(
+    indexSource.indexOf("isWorkerDrivenTicks()"),
+    indexSource.indexOf("app.get(\"/health\"")
+  );
+  const apiEveryMinuteTasks = [...everyMinuteBlock.matchAll(/runBackgroundTask\("([\w-]+)"/g)].map(m => m[1]);
+  assert.ok(apiEveryMinuteTasks.length > 0, "could not read the API's every-minute tick group");
+  const minuteQueueTasks = new Set(
+    WORKER_SCHEDULES.filter(s => s.cron.trim() === "* * * * *").flatMap(s => s.tasks)
+  );
+  for (const task of apiEveryMinuteTasks) {
+    assert.ok(
+      minuteQueueTasks.has(task),
+      `cadence drift: the API runs '${task}' every minute, but no every-minute worker queue schedules it — ` +
+        `flipping WORKER_DRIVEN_TICKS would silently slow it down`
+    );
+  }
+  console.log(`cadence parity ok (${apiEveryMinuteTasks.length} every-minute tasks match)`);
+
   console.log("PASS worker dispatch eval");
 }
 
