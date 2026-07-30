@@ -237,4 +237,35 @@ assert.match(runner, /decidePreShipGate/, "runner gates on the pure decision");
 assert.match(runner, /if \(gate\.ship\) \{[\s\S]*?pr", "merge"/, "runner merges ONLY when the gate says ship");
 assert.match(runner, /ESCALATED — PR left OPEN for a human/, "non-approve => PR left open + escalate (not merged)");
 
-console.log("PASS pre-ship review eval — ships only on clean approve + green gates; all doubt escalates; reviewer is cross-model + conservative; runner merges only on SHIP.");
+// --- The `NS` (North-star) citation is judged HARDER than a rule id, and gets no gate relief. ---
+// A rule citation asks "is this a faithful implementation of THIS rule?". NS has no rule to be
+// faithful to, so the prompt must demand direct advancement of the goal and reject mere consistency
+// with it — otherwise NS becomes a rubber stamp for any change that isn't obviously off-goal.
+{
+  const s = fs.readFileSync("services/api/src/domain/preShipReview.ts", "utf8");
+  assert.match(s, /args\.charterCitation\.id === "NS"/, "the reviewer prompt has a distinct NS branch");
+  assert.match(s, /WEAKEST citation available, so judge it the HARDEST/, "NS is explicitly held to the strictest bar");
+  assert.match(
+    s,
+    /Merely being consistent with, adjacent to, or not-in-conflict-with the goal is/,
+    "NS coverage rejects mere consistency with the goal — it requires direct advancement"
+  );
+  assert.match(
+    s,
+    /threshold\/figure, or resolves a judgment call the goal does not resolve is charter_covered=false/,
+    "NS explicitly fails when the change makes a decision the goal does not make"
+  );
+  // The gate is citation-agnostic: NS must flow through the SAME requireCharterCovered path.
+  const nsLike = decidePreShipGate({ ...clean, charterCovered: false } as any, {
+    evalsGreen: true,
+    requireCharterCovered: true
+  });
+  assert.equal(nsLike.ship, false, "an unconfirmed NS alignment claim escalates exactly like a rejected rule citation");
+  assert.equal(
+    decidePreShipGate({ ...clean, charterCovered: true } as any, { evalsGreen: false, requireCharterCovered: true }).ship,
+    false,
+    "NS never ships on a red gate"
+  );
+}
+
+console.log("PASS pre-ship review eval — ships only on clean approve + green gates; all doubt escalates; reviewer is cross-model + conservative; NS alignment claims are judged hardest and get no gate relief; runner merges only on SHIP.");

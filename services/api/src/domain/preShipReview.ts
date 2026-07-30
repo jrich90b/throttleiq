@@ -102,18 +102,32 @@ export async function reviewLoopFixWithLLM(args: {
     "- If you mark on_target=false, law_ok=false, or blocking=true, concerns MUST say which one and why.",
     "",
     ...(args.charterCitation
-      ? [
-          "CHARTER COVERAGE (charter_covered) — this change claims Tier-2a delegation: it says it merely",
-          "implements a policy the owner (Joe) has ALREADY ruled, quoted below from docs/policy_charter.md.",
-          "Judge the citation ADVERSARIALLY: charter_covered=true ONLY if the change is a faithful",
-          "implementation/correction toward that specific rule with no new judgment call smuggled in.",
-          "A stretched citation — the rule is adjacent, the change goes beyond it, or 'correct' here",
-          "requires a decision the rule does not make — is charter_covered=false. When false, concerns",
-          "must say what the change decides that the cited rule does not.",
-          `Cited rule ${args.charterCitation.id}:`,
-          args.charterCitation.excerpt,
-          ""
-        ]
+      ? args.charterCitation.id === "NS"
+        ? [
+            "NORTH-STAR ALIGNMENT (charter_covered) — this change claims Tier-2a WITHOUT a specific rule",
+            "id: it cites only the owner's (Joe's) stated goal, quoted below from docs/policy_charter.md.",
+            "This is the WEAKEST citation available, so judge it the HARDEST. charter_covered=true ONLY if",
+            "the change plainly and directly advances that goal as written, and decides nothing Joe has not",
+            "already decided. Merely being consistent with, adjacent to, or not-in-conflict-with the goal is",
+            "NOT coverage — that is charter_covered=false. Any change that picks a new product policy, sets a",
+            "threshold/figure, or resolves a judgment call the goal does not resolve is charter_covered=false.",
+            "When false, concerns must say what the change decides that the goal does not.",
+            "Cited goal (North star):",
+            args.charterCitation.excerpt,
+            ""
+          ]
+        : [
+            "CHARTER COVERAGE (charter_covered) — this change claims Tier-2a delegation: it says it merely",
+            "implements a policy the owner (Joe) has ALREADY ruled, quoted below from docs/policy_charter.md.",
+            "Judge the citation ADVERSARIALLY: charter_covered=true ONLY if the change is a faithful",
+            "implementation/correction toward that specific rule with no new judgment call smuggled in.",
+            "A stretched citation — the rule is adjacent, the change goes beyond it, or 'correct' here",
+            "requires a decision the rule does not make — is charter_covered=false. When false, concerns",
+            "must say what the change decides that the cited rule does not.",
+            `Cited rule ${args.charterCitation.id}:`,
+            args.charterCitation.excerpt,
+            ""
+          ]
       : ["No charter citation was supplied — set charter_covered=false (it is not being claimed).", ""]),
     `Gates already green (tsc + ci:eval): ${args.evalsGreen ? "yes" : "NO"}.`,
     `Title: ${args.title}`,
