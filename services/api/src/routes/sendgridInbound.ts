@@ -8401,7 +8401,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       emailGreeting,
       "",
       "Thanks for your H-D Meta promo offer request.",
-      `This is ${agentName} at ${dealerName}.`,
+      // Email keeps its composed "Hi {name}," salutation, so the identity line is the standalone
+      // capitalized form — same shape buildInitialEmailDraft already uses (~1937). Migrated off
+      // "This is {agent} at {dealer}" per Joe's 2026-07-29 "over at" ruling.
+      `It's ${agentName} over at ${dealerName}.`,
       "I can help with pricing and availability.",
       ...(offersLine ? [offersLine] : []),
       "Which model are you interested in, and do you have a preferred trim or color?"

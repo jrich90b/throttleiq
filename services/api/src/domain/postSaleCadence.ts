@@ -10,6 +10,7 @@
  */
 
 import { isPlaceholderModel } from "./modelDeflection.js";
+import { buildAgentIntro } from "./agentVoice.js";
 
 const USED_HINT = /\b(used|pre[\s-]?owned|cpo|certified\s+pre)\b/i;
 
@@ -113,11 +114,15 @@ export function postSaleAccessoryOrEnjoyMessage(args: {
 }): string {
   const { firstName, repName, dealerName, bikeModel, isNewBike } = args;
   // Charter: a post-sale follow-up is NOT a first touch, so the full dealer brand name
-  // must be framed as a light re-intro ("this is {rep} at {dealer}") — a bare
-  // "{rep} at {dealer}" trips the voice-charter long_brand_repeat check. The re-intro also
-  // reads naturally weeks after purchase, when the customer may not have the rep saved.
+  // must be framed as a light re-intro — a bare "{rep} at {dealer}" trips the voice-charter
+  // long_brand_repeat check. The re-intro also reads naturally weeks after purchase, when the
+  // customer may not have the rep saved. Wording is the canonical softened intro
+  // (buildAgentIntro → "Hey {name}, it's {rep} over at {dealer}."): this cadence was the single
+  // biggest remaining source of the OLD "this is {rep} at {dealer}" form reaching customers
+  // (~24 sends in July 2026), and Joe ruled 2026-07-29 that "over at" is the wording he wants.
+  const intro = buildAgentIntro(firstName, repName, dealerName);
   if (isNewBike) {
-    return `Hi ${firstName} — this is ${repName} at ${dealerName}. Quick reminder about Custom Coverage. Any Harley-Davidson accessory we install will go under your full factory warranty on the bike. If you have questions, just let me know.`;
+    return `${intro}Quick reminder about Custom Coverage. Any Harley-Davidson accessory we install will go under your full factory warranty on the bike. If you have questions, just let me know.`;
   }
-  return `Hi ${firstName} — this is ${repName} at ${dealerName}. Hope you're enjoying the ${bikeModel}! If there's anything you need for it, just let me know.`;
+  return `${intro}Hope you're enjoying the ${bikeModel}! If there's anything you need for it, just let me know.`;
 }
