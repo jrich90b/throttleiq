@@ -794,6 +794,66 @@ function isShowedAppointmentOutcome(
   );
 }
 
+// May we TELL a customer they missed their appointment?
+//
+// Production fixture: +17167506588 (Sudheer Gurajala, appointment Sat 2026-06-27 1:00 PM ET). At
+// 18:06:08Z he texted "Sorry I had a flat tire" — a running-late note, not a cancellation. At
+// 18:29:10Z we answered "Hey s R, I see you were not able to make it in for the appointment."
+// At that moment `appointment.staffNotify.outcome` was ABSENT: nobody had recorded anything. He
+// then showed up and left a deposit; the outcome was written as `showed`/`hold` at 18:42.
+//
+// Two defects stacked. `buildAppointmentOutcomeRescheduleReply` asserted the no-show in its
+// FALLBACK branch, so a blank `primaryStatus` produced the strongest possible factual claim. And
+// the regen gate (`regenAppointmentOutcomeRescheduleReply`) fired on the bare `reschedulePending`
+// latch: `isSettledPastAppointment` only vetoes past-day + `showed`, so a blank outcome sails
+// through. Regen requires `!isRegenerateInboundActionableForRouting`, i.e. it fires precisely when
+// the turn carries NO signal — "Sorry I had a flat tire" has no model/price/day/time token.
+//
+// This guard answers only the narrow question the copy depends on: is there a RECORDED
+// missed-family outcome, and has the appointment time actually arrived? Staff clicking
+// "Did not show" in the console is the ground truth (that click is what legitimately produced
+// Aaron Smith's +13463990700 send 8 seconds later). We never infer a no-show from elapsed time.
+//
+// FAIL DIRECTION: reads ONLY structured state (`whenIso`, the recorded outcome), never customer
+// text — a state/copy invariant guard, deterministic per AGENTS.md rule 2. A false negative drops
+// the no-show SENTENCE and still offers the rebook (neutral copy), so the customer keeps every
+// path forward; a false positive is today's bug — telling a customer who is on his way, or who
+// already arrived, that he failed to appear. Unknown/blank outcome => false.
+//
+// The time check is start-time based, NOT `isStaleBookedAppointmentDay` (which keeps same-day as
+// "not stale"): a same-day no-show recorded at 3pm for a 1pm slot is the COMMON case and must keep
+// its copy. It exists only to block asserting a no-show before the slot has begun — the
+// +17165350411 mis-click pattern (outcome logged 21s before the text, corrected to `showed` later).
+export function canAssertMissedAppointment(input: {
+  whenIso: string | null | undefined;
+  nowMs: number;
+  outcomePrimaryStatus?: string | null;
+  outcomeLegacyStatus?: string | null;
+}): boolean {
+  if (!isMissedAppointmentOutcome(input.outcomePrimaryStatus, input.outcomeLegacyStatus)) {
+    return false;
+  }
+  const startMs = Date.parse(String(input.whenIso ?? ""));
+  // No parseable start time: a human explicitly recorded the miss, so trust the click.
+  if (!Number.isFinite(startMs)) return true;
+  return startMs <= input.nowMs;
+}
+
+// Normalizes the two outcome fields to "did the customer fail to appear?". Mirrors the showed-family
+// helper above; `primaryStatus` is the modern field and an explicit primary wins outright, with the
+// legacy `status` consulted only when primary is blank. Unknown/blank => false (never assert).
+function isMissedAppointmentOutcome(
+  primaryStatusRaw: string | null | undefined,
+  legacyStatusRaw: string | null | undefined
+): boolean {
+  const primary = String(primaryStatusRaw ?? "").trim().toLowerCase();
+  if (primary) {
+    return primary === "did_not_show" || primary === "no_show" || primary === "cancelled";
+  }
+  const legacy = String(legacyStatusRaw ?? "").trim().toLowerCase();
+  return legacy === "did_not_show" || legacy === "no_show" || legacy === "cancelled";
+}
+
 // The scheduling cluster — may a PENDING-RESCHEDULE latch stand in for this turn's intent?
 //
 // `appointment.reschedulePending` is STATE, not something the customer said. Treating it as a

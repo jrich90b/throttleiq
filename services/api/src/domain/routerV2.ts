@@ -49,6 +49,7 @@ export {
   tentativeWindowNeedsOwnerFollowUp,
   isStaleBookedAppointmentDay,
   isSettledPastAppointment,
+  canAssertMissedAppointment,
   pendingRescheduleCarriesTurnIntent,
   decideVehicleChoiceConfidenceTurn,
   decideVehicleRecommendationTurn,
