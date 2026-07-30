@@ -62,9 +62,22 @@ escalate. The contract (full version in the loop doc):
   extraction/centralization (eval-proven equivalent), or test/eval/doc-only changes. Required before any
   merge: `tsc` + `ci:eval` green + a NEW deterministic eval pinning the case (+ a shadow replay for
   parser/reply changes showing no net regression).
-- **Tier 2 — escalate (PR + notify Joe), NEVER auto-merge**: new customer-facing behavior, a routing
-  cutover, a new reply class, a flag shadow→enforce flip, ANY change to an already-accepted parser/decision
-  case, or anything where "correct" is a judgment call. **Conservative default: when unsure, Tier 2.**
+- **Tier 2 — split by CHARTER COVERAGE (Joe authorization, 2026-07-30 — "Go" on the Tier-2
+  delegation design; `docs/policy_charter.md` is the boundary):**
+  - **Tier 2a — charter-covered, may merge WITHOUT pre-approval**: the change implements or
+    corrects toward a SPECIFIC rule in `docs/policy_charter.md` (cited by rule ID). Required,
+    all of them: cross-model review returns a clean APPROVE **and** confirms the cited rule
+    genuinely covers the change (`charter_covered`); `tsc` + `ci:eval` green; a kill switch or
+    clean revert path exists. Joe is notified AFTER the merge with a plain-English summary +
+    the revert path. **A Joe veto demotes that category back to ask-first.**
+  - **Tier 2b — ping Joe and WAIT (never auto-merge)**: no covering charter rule; compliance/
+    opt-out; pricing/payment/finance FIGURES the agent may state; a brand-new reply class; a
+    flag shadow/draft/dark→enforce/live flip; core-comprehension / model-authority /
+    parser-consolidation cutovers (the de-tangle endgame stays ask-first); legal exposure;
+    changes to the charter's boundary rules; or anything where "correct" is a NEW judgment
+    call. **Conservative default: unsure whether the charter covers it ⇒ it doesn't ⇒ Tier 2b.**
+  - Stretching a charter rule to cover a new judgment call is the failure mode the split
+    exists to prevent — the reviewer judges the citation adversarially.
 - **De-tangle constraint (hard):** a patch that would ADD an inline `parser || regex` precedence gate is
   Tier 2 by definition. Prefer extending a `decide*Turn` reducer / a typed parser over a new inline gate;
   centralization-preserving refactors are favored Tier-1 work.
