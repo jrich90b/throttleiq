@@ -377,11 +377,17 @@ if (sub === "review") {
   // Joe already made in docs/policy_charter.md. The cited rule's VERBATIM text goes to the reviewer,
   // which must confirm coverage (charter_covered) before an auto-merge is allowed. A bogus/missing
   // rule id is a hard error — a citation that can't be read can't be judged.
+  // `NS` is the one non-rule citation (charter "Standing improvement authority", Joe 2026-07-30):
+  // a change with no covering rule id that clearly serves the North star. It resolves to the whole
+  // North-star SECTION and is judged by the same adversarial coverage bar — a stretched alignment
+  // claim must fail exactly like a stretched rule citation. It does NOT widen what may auto-merge:
+  // the always-Tier-2b list is unchanged, and a clean approve is still required.
   const charterId = flag("charter");
   const charterCitation = (() => {
     if (!charterId) return null;
-    if (!/^C\d+\.\d+$/.test(charterId)) {
-      console.error(`--charter must be a rule id like C3.2 (got "${charterId}")`);
+    const isNorthStar = charterId === "NS";
+    if (!isNorthStar && !/^C\d+\.\d+$/.test(charterId)) {
+      console.error(`--charter must be a rule id like C3.2, or NS for the North star (got "${charterId}")`);
       process.exit(2);
     }
     const charterPath = "docs/policy_charter.md";
@@ -390,6 +396,21 @@ if (sub === "review") {
       process.exit(2);
     }
     const lines = fs.readFileSync(charterPath, "utf8").split(/\r?\n/);
+    if (isNorthStar) {
+      // The North star is a SECTION, not a bullet: take it whole, up to the next H2, so the
+      // reviewer sees the goal AND the five tests it is scored by.
+      const start = lines.findIndex(l => /^## North star\b/.test(l));
+      if (start < 0) {
+        console.error(`--charter NS: no "## North star" section found in ${charterPath}`);
+        process.exit(2);
+      }
+      const excerpt: string[] = [lines[start]];
+      for (let i = start + 1; i < lines.length; i += 1) {
+        if (/^## /.test(lines[i])) break;
+        excerpt.push(lines[i]);
+      }
+      return { id: "NS", excerpt: excerpt.join("\n").trim() };
+    }
     const start = lines.findIndex(l => l.includes(`**${charterId}**`));
     if (start < 0) {
       console.error(`--charter ${charterId}: rule not found in ${charterPath}`);
@@ -488,11 +509,15 @@ if (sub === "review") {
       await notifyOperator(
         `loop merged a charter-covered change — ${title}`,
         [
-          `The self-healing loop merged this WITHOUT pre-approval under the Tier-2a delegation (charter rule ${charterCitation.id}).`,
+          charterCitation.id === "NS"
+            ? `The self-healing loop merged this WITHOUT pre-approval under the Tier-2a delegation. It cited NO specific rule — only that the change serves the North star (your stated goal), and the reviewer agreed.`
+            : `The self-healing loop merged this WITHOUT pre-approval under the Tier-2a delegation (charter rule ${charterCitation.id}).`,
           ``,
           `PR: ${url}`,
           `What changed: ${cleanForNotify(review?.reasons) || String(title)}`,
-          `Cited rule: ${charterCitation.excerpt.split("\n")[0]}`,
+          charterCitation.id === "NS"
+            ? `Cited: the charter's North star section (no rule id) — the weakest citation, so read this one closely.`
+            : `Cited rule: ${charterCitation.excerpt.split("\n")[0]}`,
           `Reviewer confirmed coverage; gates were green.`,
           ``,
           `To undo: revert the PR from GitHub (Revert button) — a veto also demotes this category back to ask-first.`
@@ -515,5 +540,5 @@ function cleanForNotify(text: string | null | undefined): string {
   return String(text ?? "").replace(/[`*_]/g, "").trim().slice(0, 600);
 }
 
-console.error("Usage: act_runner.ts <list | prep --id <key>|--top | check-open-pr --key <convId::dimension> | dispose --key <convId::dimension> --as <fixed|stale-echo|no-action|joe-ruled> [--by <routine>] [--deploy-ts <iso>] [--note <s>] | open-pr --title <t> [--finding-key <k>] [--eval-verified] | review [--ship --title <t>] [--finding-key <k>] [--eval-verified] [--finding <s>] [--charter <rule-id, e.g. C3.2 — Tier-2a: auto-merge only if the reviewer confirms the cited docs/policy_charter.md rule covers the change; notify-after>]>");
+console.error("Usage: act_runner.ts <list | prep --id <key>|--top | check-open-pr --key <convId::dimension> | dispose --key <convId::dimension> --as <fixed|stale-echo|no-action|joe-ruled> [--by <routine>] [--deploy-ts <iso>] [--note <s>] | open-pr --title <t> [--finding-key <k>] [--eval-verified] | review [--ship --title <t>] [--finding-key <k>] [--eval-verified] [--finding <s>] [--charter <rule-id, e.g. C3.2, or NS for the North star when no rule covers it — Tier-2a: auto-merge only if the reviewer confirms the citation covers the change; notify-after>]>");
 process.exit(2);

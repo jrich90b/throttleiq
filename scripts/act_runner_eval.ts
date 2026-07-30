@@ -138,4 +138,55 @@ assert.match(src, /process\.exit\(3\)/, "a duplicate-skip uses a distinct exit c
   );
 }
 
-console.log("PASS act runner eval — PR-only (never merges), refuses main, gate-enforced; prep brief carries the parser-first contract; cross-routine PR dedup (marker + skip); list/prep run.");
+// --- Tier-2a citations: rule ids AND the `NS` North-star citation (Joe, 2026-07-30). ---
+// `NS` is the escape hatch for a change that serves the stated goal but matches no rule id. It is the
+// WEAKEST citation, so the things worth pinning are: it is accepted at all, it resolves the WHOLE
+// North-star section (goal + the five tests, not just the heading), and it buys NO gate relief.
+{
+  assert.ok(
+    /const isNorthStar = charterId === "NS"/.test(src),
+    "--charter accepts the literal NS alongside C<n>.<m> rule ids"
+  );
+  assert.ok(
+    /--charter must be a rule id like C3\.2, or NS for the North star/.test(src),
+    "a bogus citation still hard-errors, and the message names both accepted forms"
+  );
+  assert.ok(
+    /\/\^## North star\\b\/\.test\(l\)/.test(src),
+    "NS resolves against the charter's '## North star' section heading"
+  );
+  // The rule-id resolver stops at ANY heading (`^#{1,3} `); NS must NOT, or the excerpt would be cut
+  // at the '### The bar, as five tests' subsection and the reviewer would never see the targets.
+  assert.ok(
+    /if \(isNorthStar\) \{[\s\S]*?if \(\/\^## \/\.test\(lines\[i\]\)\) break;/.test(src),
+    "the NS excerpt terminates at the next H2 — subsections stay INSIDE the excerpt"
+  );
+  assert.ok(
+    /requireCharterCovered: !!charterCitation/.test(src),
+    "NS is gated exactly like a rule id — coverage is still required, it is not a bypass"
+  );
+
+  // Pin the DATA the resolver depends on: the charter must actually carry a North-star section with a
+  // following H2, else NS would silently excerpt to end-of-file.
+  const charterMd = fs.readFileSync("docs/policy_charter.md", "utf8").split(/\r?\n/);
+  const nsStart = charterMd.findIndex(l => /^## North star\b/.test(l));
+  assert.ok(nsStart >= 0, "docs/policy_charter.md still has a '## North star' section for NS to cite");
+  const excerpt: string[] = [charterMd[nsStart]];
+  for (let i = nsStart + 1; i < charterMd.length; i += 1) {
+    if (/^## /.test(charterMd[i])) break;
+    excerpt.push(charterMd[i]);
+  }
+  assert.ok(
+    excerpt.length < charterMd.length - nsStart,
+    "the North-star section is followed by another H2 — the NS excerpt is bounded, not the whole file"
+  );
+  const nsText = excerpt.join("\n");
+  assert.match(nsText, /READINESS BAR/, "the NS excerpt carries the goal itself (the readiness bar)");
+  assert.match(nsText, /Stranger test/i, "the NS excerpt carries the five tests, not just the heading");
+  assert.ok(
+    !/^- \*\*C\d+\.\d+\*\*/m.test(nsText),
+    "the NS excerpt stops before the numbered rule sections (it cites the goal, not a rule)"
+  );
+}
+
+console.log("PASS act runner eval — PR-only (never merges), refuses main, gate-enforced; prep brief carries the parser-first contract; cross-routine PR dedup (marker + skip); NS citation resolves the bounded North-star section and buys no gate relief; list/prep run.");
