@@ -40,6 +40,25 @@ export type FirstTouchAutoSendInput = {
   invariantAllow: boolean;
   /** Resolved customer destination is a valid E.164 phone (SMS-deliverable; guards email-only leads). */
   hasDeliverablePhone: boolean;
+  /**
+   * The customer has ALREADY received a real message in this thread (any prior customer-facing
+   * outbound — see CUSTOMER_FACING_OUTBOUND_PROVIDERS / hasCustomerReceivedOutbound). A first-touch
+   * ack by definition happens ONCE, so this is the durable "have we ever greeted this lead" check.
+   *
+   * Why it is REQUIRED and not defaulted: `isFirstTouch` (isInitialAdf) is a property of the INBOUND
+   * DOCUMENT, not of the thread — a vendor that re-pushes the same lead daily produces a fresh
+   * "initial ADF" every morning. Observed in the 2026-07-28..30 shadow corpus: conv +15126299400
+   * logged the IDENTICAL ride-challenge ack on three consecutive days, isFirstTouch true each time.
+   * Without this the flip would have texted that customer the same greeting once a day.
+   */
+  alreadyContacted: boolean;
+  /**
+   * An equivalent ack is already sitting in this thread's recent outbound history — the same-batch
+   * race `alreadyContacted` can miss when two ADFs for one lead land seconds apart (observed: conv
+   * +17163084498 produced two near-identical acks 13s apart, and NO dedup guard existed on this
+   * path at all despite the STEP-2 design calling for one).
+   */
+  duplicateRecentAck: boolean;
 };
 
 export type FirstTouchAutoSendDecision = { send: boolean; reason: string };
@@ -57,9 +76,75 @@ export function decideFirstTouchAutoSend(input: FirstTouchAutoSendInput): FirstT
   if (input.suppressed) return { send: false, reason: "suppressed" };
   if (input.optedOut) return { send: false, reason: "opted_out" };
   if (input.callOnly) return { send: false, reason: "call_only" };
+  // Duplicate prevention sits with the compliance checks on purpose: texting a brand-new lead the
+  // same greeting twice is the failure mode most likely to embarrass the dealer, and it is the one
+  // the pre-flip shadow review actually caught (both cases documented on the input fields above).
+  if (input.alreadyContacted) return { send: false, reason: "already_contacted" };
+  if (input.duplicateRecentAck) return { send: false, reason: "duplicate_recent_ack" };
   if (!input.invariantAllow) return { send: false, reason: "invariant_block" };
   if (!input.hasDeliverablePhone) return { send: false, reason: "no_deliverable_phone" };
   return { send: true, reason: "first_touch_deterministic_ack" };
+}
+
+/**
+ * Pure near-duplicate check over a conversation's own outbound history: has an equivalent ack
+ * already gone to this customer inside the window?
+ *
+ * Deliberately deterministic (AGENTS.md: side-effect/safety gates are the deterministic lane) and
+ * fail-SAFE — anything it cannot read confidently returns TRUE (hold the draft). That direction is
+ * the whole point: a held draft costs a staff click, a duplicate text costs the dealer's credibility.
+ *
+ * The window is generous (24h default) because a genuine first-touch ack happens exactly once per
+ * lead, so there is no legitimate repeat for it to suppress.
+ */
+export function isDuplicateRecentFirstTouchAck(
+  messages: unknown,
+  candidateText: unknown,
+  opts?: { nowMs?: number; windowMs?: number }
+): boolean {
+  const candidate = normalizeAckForDedup(candidateText);
+  // No readable candidate text ⇒ we cannot prove it is NOT a duplicate ⇒ hold.
+  if (!candidate) return true;
+  if (!Array.isArray(messages)) return false;
+  const windowMs = Number(opts?.windowMs ?? 24 * 60 * 60 * 1000);
+  const nowMs = Number(opts?.nowMs ?? Date.now());
+  for (const msg of messages) {
+    const provider = String((msg as any)?.provider ?? "").trim();
+    if (!CUSTOMER_FACING_OUTBOUND_PROVIDERS_FOR_DEDUP.has(provider)) continue;
+    if (String((msg as any)?.direction ?? "") !== "out") continue;
+    if (!acksAreEquivalent(normalizeAckForDedup((msg as any)?.body), candidate)) continue;
+    const at = Date.parse(String((msg as any)?.at ?? (msg as any)?.createdAt ?? ""));
+    // An equivalent customer-facing message with an UNREADABLE timestamp still counts as a
+    // duplicate — fail-safe beats assuming it was long ago.
+    if (!Number.isFinite(at)) return true;
+    if (Number.isFinite(nowMs) && nowMs - at <= windowMs) return true;
+  }
+  return false;
+}
+
+/** Mirrors agentVoice's CUSTOMER_FACING_OUTBOUND_PROVIDERS — providers that mean the customer really got it. */
+const CUSTOMER_FACING_OUTBOUND_PROVIDERS_FOR_DEDUP = new Set(["twilio", "sendgrid", "human", "web_widget"]);
+
+/** Collapse whitespace/punctuation/case so "Hey Joe, it's Alex." and "Hey Joe it's Alex" compare equal. */
+function normalizeAckForDedup(value: unknown): string {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+/**
+ * Footer-insensitive equivalence. An ack that was actually SENT carries the STOP footer
+ * (`ensureInitialSmsOptOutFooter` runs before the send for send/record parity), while the candidate
+ * we are about to send does not have it yet — so strict equality would miss the very duplicate this
+ * guard exists to catch. Prefix containment in either direction handles that, with a length floor so
+ * two short fragments can't collide by accident.
+ */
+function acksAreEquivalent(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
+  if (shorter.length < 24) return shorter === longer;
+  return longer.startsWith(shorter);
 }
 
 /**

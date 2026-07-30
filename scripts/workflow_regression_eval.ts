@@ -1029,6 +1029,55 @@ const cases: Case[] = [
     ),
     expected: null
   },
+  // The Dealer Lead App writes its demo-bike field as YEAR,CATEGORY,MODEL. The middle token is an
+  // inventory shelf label, not a name anyone says: 34 of the 71 would-send first-touch acks in the
+  // 2026-07-30 shadow corpus read "the 2026 Touring Street Glide". Strip the bucket — but only when a
+  // real model survives (see stripDealerLeadAppCategoryToken).
+  {
+    id: "demo_bike_label_drops_touring_category",
+    actual: extractDealerLeadAppDemoBikeLabel(
+      "Source: Dealer Lead App\nLead App - Type: Y\nDemo Bikes Ridden:2026,TOURING,STREET GLIDE Email Opt-In:No-"
+    ),
+    expected: "2026 Street Glide"
+  },
+  {
+    id: "demo_bike_label_drops_cruiser_category",
+    actual: extractDealerLeadAppDemoBikeLabel(
+      "Source: Dealer Lead App\nLead App - Type: Y\nDemo Bikes Ridden:2026,CRUISER,BREAKOUT Email Opt-In:Yes-"
+    ),
+    expected: "2026 Breakout"
+  },
+  {
+    id: "demo_bike_label_drops_trike_category",
+    actual: extractDealerLeadAppDemoBikeLabel(
+      "Source: Dealer Lead App\nLead App - Type: Y\nDemo Bikes Ridden:2015,TRIKE,TRI GLIDE ULTRA CLASSIC Email Opt-In:Yes-"
+    ),
+    expected: "2015 Tri Glide Ultra Classic"
+  },
+  {
+    // The exception that defines the rule: "the 2015 1200 Custom" is not a bike. When the model leads
+    // with a number the family word IS part of the name, so it must survive.
+    id: "demo_bike_label_keeps_family_word_for_displacement_model",
+    actual: extractDealerLeadAppDemoBikeLabel(
+      "Source: Dealer Lead App\nLead App - Type: Y\nDemo Bikes Ridden:2015,SPORTSTER,1200 CUSTOM Email Opt-In:Yes-"
+    ),
+    expected: "2015 Sportster 1200 Custom"
+  },
+  {
+    // Portability: a vendor whose middle token is NOT a category must not lose its model.
+    id: "demo_bike_label_keeps_non_category_middle_token",
+    actual: extractDealerLeadAppDemoBikeLabel(
+      "Source: Dealer Lead App\nLead App - Type: Y\nDemo Bikes Ridden:2026,BREAKOUT,BLACK Email Opt-In:Yes-"
+    ),
+    expected: "2026 Breakout Black"
+  },
+  {
+    id: "demo_bike_label_year_model_only_unchanged",
+    actual: extractDealerLeadAppDemoBikeLabel(
+      "Source: Dealer Lead App\nLead App - Type: Y\nDemo Bikes Ridden:2026,STREET GLIDE Email Opt-In:Yes-"
+    ),
+    expected: "2026 Street Glide"
+  },
   {
     id: "normal_inventory_watch_request_not_demo_day_question",
     actual: isDemoDayEventQuestionText("Let me know if you get a Road Glide in black"),
