@@ -5672,6 +5672,50 @@ export function applyTurnUnderstandingEtaGuard(
   if (ETA_DELAY_SHAPED_TIME_RE.test(time)) return null; // delay/ETA — not a schedule
   return schedule;
 }
+
+/**
+ * Booked-sign-off guard (deterministic, same class as applyMergedWatchRelevanceGuard /
+ * passesModelRelevanceGuard): drop a schedule ECHOED off our own confirmation.
+ *
+ * Two exchanges use identical customer words and demand opposite answers:
+ *   agent "Does Saturday at 2 work?"      + "perfect see you then" -> a BOOKING (capture it)
+ *   agent "You're all set for Saturday at 2." + "perfect see you then" -> already booked (NULL)
+ * The only thing separating them is what the AGENT said, so that is what this reads.
+ *
+ * Why deterministic and not another few-shot: the second exchange is ALREADY a verbatim example
+ * in the turn-understanding prompt and the parser still echoes "Saturday at 2" onto the sign-off
+ * in roughly 1 run in 3 (measured 2026-07-30, 2/6 across main and branch). The prompt lever is
+ * spent; the ambiguity is resolved by classifying OUR OWN copy, which we generate and control,
+ * rather than the customer's free-form words.
+ *
+ * applyTurnUnderstandingEtaGuard cannot catch this: it returns early on any named day
+ * ("a named day is a real proposal — never blank"), and the echoed phantom carries one.
+ *
+ * Fail direction: blanking here fails toward "no NEW time requested" on a turn where the customer
+ * proposed no day or time of their own — the appointment they are acknowledging already exists.
+ * Leaving it fails toward re-capturing a booked slot as a fresh request. Narrow by construction:
+ * ANY day/time token in the customer's own turn keeps the schedule, and an agent OFFER (a question,
+ * not a confirmation) keeps it too, so an acceptance is never swallowed.
+ */
+const CUSTOMER_OWN_TIME_EVIDENCE_RE =
+  /(\d\s*(?::|am|pm)|o'?clock|morning|afternoon|evening|noon|tonight|today|tomorrow|weekend|next week|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\bmon\b|\btues?\b|\bweds?\b|\bthur?s?\b|\bfri\b|\bsat\b|\bsun\b|\d{1,2}\s*\/\s*\d{1,2}|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d{1,2})/i;
+/** Our own "it is booked" copy — a CONFIRMATION, never a question/offer. */
+const AGENT_ALREADY_BOOKED_RE =
+  /(you'?re all set|you are all set|all set for|you'?re booked|you are booked|got you (?:down|booked|scheduled)|confirmed for|see you (?:on\s+)?(?:mon|tues?|wed|thur?s?|fri|sat|sun))/i;
+
+export function applyTurnUnderstandingBookedSignoffGuard(
+  schedule: TurnUnderstandingSchedule | null,
+  args: { text: string; history?: { direction: "in" | "out"; body: string }[] }
+): TurnUnderstandingSchedule | null {
+  if (!schedule) return null;
+  // The customer named a day or time themselves — a real proposal, never blank it.
+  if (CUSTOMER_OWN_TIME_EVIDENCE_RE.test(String(args.text ?? ""))) return schedule;
+  const lastAgent = [...(args.history ?? [])].reverse().find(m => m?.direction === "out");
+  if (!lastAgent) return schedule;
+  // An agent OFFER ("does Saturday work?") is not a confirmation — an acceptance still captures.
+  if (!AGENT_ALREADY_BOOKED_RE.test(String(lastAgent.body ?? ""))) return schedule;
+  return null;
+}
 // Model-evidence guard (deterministic, same class as applyMergedWatchRelevanceGuard /
 // passesModelRelevanceGuard): the parser has a strong prior that resolves bare specs
 // ("hold the 117", "that cvo i saw") — and sometimes even spec-less pronouns ("don't
@@ -6045,18 +6089,21 @@ export async function parseTurnUnderstandingWithLLM(args: {
   const schedRaw = parsed.requested_schedule ?? {};
   const dayLabel = String(schedRaw?.day_label ?? "").trim();
   const timeText = String(schedRaw?.time_text ?? "").trim();
-  const requestedSchedule: TurnUnderstandingSchedule | null = applyTurnUnderstandingEtaGuard(
-    dayLabel || timeText
-      ? {
-          dayLabel: dayLabel || null,
-          timeText: timeText || null,
-          window: ["exact", "range", "unknown"].includes(String(schedRaw?.window))
-            ? (String(schedRaw?.window) as "exact" | "range" | "unknown")
-            : "unknown",
-          isCommitment: !!schedRaw?.is_commitment,
-          isEvent: !!schedRaw?.is_event
-        }
-      : null
+  const requestedSchedule: TurnUnderstandingSchedule | null = applyTurnUnderstandingBookedSignoffGuard(
+    applyTurnUnderstandingEtaGuard(
+      dayLabel || timeText
+        ? {
+            dayLabel: dayLabel || null,
+            timeText: timeText || null,
+            window: ["exact", "range", "unknown"].includes(String(schedRaw?.window))
+              ? (String(schedRaw?.window) as "exact" | "range" | "unknown")
+              : "unknown",
+            isCommitment: !!schedRaw?.is_commitment,
+            isEvent: !!schedRaw?.is_event
+          }
+        : null
+    ),
+    { text, history: args.history }
   );
   const primaryIntent = TURN_UNDERSTANDING_PRIMARY_INTENTS.includes(String(parsed.primary_intent))
     ? String(parsed.primary_intent)

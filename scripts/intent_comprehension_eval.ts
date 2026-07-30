@@ -36,7 +36,7 @@ if (!apiKey || apiKey.trim().length < 20 || apiKey.trim() === "...") {
 process.env.LLM_ENABLED = "1";
 process.env.LLM_TURN_UNDERSTANDING_PARSER_ENABLED = "1";
 
-const { parseTurnUnderstandingWithLLM, applyTurnUnderstandingEtaGuard, turnModelEvidenceInText } = await import("../services/api/src/domain/llmDraft.ts");
+const { parseTurnUnderstandingWithLLM, applyTurnUnderstandingEtaGuard, applyTurnUnderstandingBookedSignoffGuard, turnModelEvidenceInText } = await import("../services/api/src/domain/llmDraft.ts");
 
 // ---- Deterministic pin of the model-evidence guard (no LLM) ----
 // Drops fabricated models (the LLM's "hold the 117 -> Street Glide" prior) while keeping every
@@ -92,6 +92,46 @@ const { parseTurnUnderstandingWithLLM, applyTurnUnderstandingEtaGuard, turnModel
       console.error(`ETA guard WRONGLY blanked a real proposal: day=${d} time=${t}`);
       process.exit(1);
     }
+  }
+
+  // Booked-sign-off guard. The ETA guard cannot reach this case (it returns early on any named
+  // day), and the prompt already carries the exact exchange as a few-shot yet still echoes it
+  // ~1 run in 3. The offer-vs-already-booked distinction lives in OUR message, so that is what
+  // this reads. Joe, 2026-07-30: an accepted OFFER must still become a booking.
+  const booked = sched("Saturday", "2", true);
+  const agent = (body: string) => [{ direction: "out" as const, body }];
+  const blanks: Array<[string, string]> = [
+    ["perfect see you then", "Great, you're all set for Saturday at 2."],
+    ["Perfect. See you then.", "You're all set for Saturday at 2."],
+    ["sounds good", "Got you down for Saturday at 2."],
+    ["ok great thanks", "You're booked for Saturday at 2."]
+  ];
+  for (const [text, agentBody] of blanks) {
+    if (applyTurnUnderstandingBookedSignoffGuard(booked, { text, history: agent(agentBody) }) !== null) {
+      console.error(`booked-sign-off guard FAILED to blank an echoed schedule: "${text}" after "${agentBody}"`);
+      process.exit(1);
+    }
+  }
+  // MUST KEEP — accepting an OFFER is a real booking, and so is any turn where the customer
+  // names a day/time themselves. These are the regressions the guard must never cause.
+  const keeps: Array<[string, string | null]> = [
+    ["perfect see you then", "Does Saturday at 2 work for you?"], // an offer, not a confirmation
+    ["perfect see you then", "I can have our sales team meet you Saturday. Mornings or afternoons?"],
+    ["saturday at 2 works", "You're all set for Saturday at 2."], // customer named it themselves
+    ["can we do 4pm instead", "You're all set for Saturday at 2."], // a reschedule is a new request
+    ["how about tomorrow", "You're all set for Saturday at 2."],
+    ["perfect see you then", null] // no agent history at all => never blank on a guess
+  ];
+  for (const [text, agentBody] of keeps) {
+    const history = agentBody === null ? undefined : agent(agentBody);
+    if (applyTurnUnderstandingBookedSignoffGuard(booked, { text, history }) === null) {
+      console.error(`booked-sign-off guard WRONGLY blanked a real schedule: "${text}" after "${agentBody}"`);
+      process.exit(1);
+    }
+  }
+  if (applyTurnUnderstandingBookedSignoffGuard(null, { text: "hi", history: agent("You're all set.") }) !== null) {
+    console.error("booked-sign-off guard must pass null through unchanged");
+    process.exit(1);
   }
 }
 
