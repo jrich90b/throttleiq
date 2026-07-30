@@ -124,7 +124,13 @@ export function mileageForItem(item: Record<string, any> | null | undefined): nu
   return null;
 }
 
-function parseFeed(xml: string): InventoryFeedItem[] {
+/**
+ * Exported ONLY so the intake-shape harness (scripts/dealer_intake_shape_test.ts) can
+ * drive the real parser with synthetic vendor feeds instead of a copy that would drift
+ * out of sync with this one. Behavior unchanged; no caller inside services/api uses the
+ * export.
+ */
+export function parseFeed(xml: string): InventoryFeedItem[] {
   const parser = new XMLParser({ ignoreAttributes: false });
   const doc = parser.parse(xml);
   const items = asArray(doc?.inventory?.item ?? doc?.items?.item ?? doc?.item ?? []);
