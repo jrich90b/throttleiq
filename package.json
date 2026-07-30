@@ -201,7 +201,7 @@
     "adf_policy:eval": "npx tsx scripts/adf_policy_eval.ts",
     "walkin_internal_note_topic_guard:eval": "npx tsx scripts/walkin_internal_note_topic_guard_eval.ts",
     "adf:smoke": "npx tsx scripts/adf_smoke_eval.ts",
-    "tlp_phone_log:eval": "npx tsx scripts/tlp_phone_log_eval.ts",
+    "tlp_phone_log:eval": "bash scripts/retry_llm_eval.sh env LLM_ENABLED=1 LLM_MANUAL_OUTBOUND_PROMISE_PARSER_ENABLED=1 npx tsx scripts/tlp_phone_log_eval.ts",
     "tlp_lead_ref_resolution:eval": "npx tsx scripts/tlp_lead_ref_resolution_eval.ts",
     "tlp_browser_use_rescue:eval": "npx tsx scripts/tlp_browser_use_rescue_eval.ts",
     "internal_outbound_guard:eval": "npx tsx scripts/internal_outbound_guard_eval.ts",

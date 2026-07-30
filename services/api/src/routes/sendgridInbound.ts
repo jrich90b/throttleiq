@@ -59,7 +59,7 @@ import {
 import type { InventoryWatch } from "../domain/conversationStore.js";
 import { isSuppressed } from "../domain/suppressionStore.js";
 import { isOptOutKeywordInbound } from "../domain/scoringExclusions.js";
-import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, shouldIntroduceOnAdfTouch, stripAgentIntroPhraseForDealer, stripLeadingAgentGreeting, hasCustomerReceivedOutbound, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, greetingFirstName } from "../domain/agentVoice.js";
+import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, shouldIntroduceOnAdfTouch, stripAgentIntroPhraseForDealer, stripLeadingAgentGreeting, hasCustomerReceivedOutbound, GENERIC_AGENT_DISPLAY_NAME, GENERIC_DEALER_DISPLAY_NAME, resolveDealerAgentName, greetingFirstName } from "../domain/agentVoice.js";
 import { buildAdfResubmissionAck, detectAdfFormResubmission } from "../domain/adfResubmission.js";
 import { buildMarketplaceRelayFirstTouchReply, buildMarketplaceRelayTaskSummary } from "../domain/marketplaceRelay.js";
 import { isHtmlClientNoticeOnly } from "../domain/inboundMailActionability.js";
@@ -100,8 +100,14 @@ import {
   parseAdfDepartmentInterestWithLLM,
   parseDealerLeadSurveyWithLLM,
   hasDealerLeadSurveyHint,
-  parseIncomingInventoryPurposeWithLLM
+  parseIncomingInventoryPurposeWithLLM,
+  parseManualOutboundPromiseWithLLM
 } from "../domain/llmDraft.js";
+import {
+  buildPhoneLogRecapDraft,
+  decidePhoneLogRecapDraft,
+  phoneLogRecapUnitLabel
+} from "../domain/phoneLogRecap.js";
 import type {
   CompositeSalesInquiryParse,
   ConversationStateParse,
@@ -4776,6 +4782,44 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       `Phone log follow-up for ${customerName}${note ? `: ${note}` : "."}`,
       event.providerMessageId
     );
+    // RECAP DRAFT (Joe ruling 2026-07-30). When the write-up records something the DEALERSHIP owes
+    // the customer, queue a short recap for staff to approve. Scott flagged the silence here as
+    // "did not generate a response" (+17168640008) and then hand-typed that exact message himself
+    // three hours later — the message was wanted, we were just making a person write it.
+    //
+    // Parser-first: whether third-person staff shorthand records a dealership promise ("told her I
+    // would send her photos") versus a CUSTOMER commitment ("Says he will stop in") is
+    // comprehension, so it goes to the typed staff-promise parser — the same one the manual
+    // outbound arm uses. No keyword matching, and the internal note text never reaches the
+    // customer: only the parser's KIND enum plus structured lead fields feed the deterministic
+    // builder. Every uncertain path (parser off/errored, no promise, low confidence) falls through
+    // to today's behavior: the task above and the handoff below, no message.
+    if (note) {
+      const promiseParse = await parseManualOutboundPromiseWithLLM({ text: note }).catch(() => null);
+      const recap = decidePhoneLogRecapDraft({
+        parse: promiseParse,
+        hasDeliverablePhone: hasDeliverablePhoneKey(leadKey),
+        alreadyContacted: hasCustomerReceivedOutbound(conv?.messages)
+      });
+      if (recap.draft && recap.kind) {
+        const recapProfile = await getDealerProfile();
+        appendOutbound(
+          conv,
+          "dealership",
+          leadKey,
+          buildPhoneLogRecapDraft({
+            firstName: normalizeDisplayCase(conv.lead?.firstName),
+            agentName: resolveDealerAgentName(recapProfile),
+            // Neutral generic on a missing profile, never a dealership literal — this ships to
+            // dealer #2 (portability ratchet, countAhHardcodes).
+            dealerName: recapProfile?.dealerName ?? GENERIC_DEALER_DISPLAY_NAME,
+            unitLabel: phoneLogRecapUnitLabel(conv.lead?.vehicle),
+            kind: recap.kind
+          }),
+          "draft_ai"
+        );
+      }
+    }
     // A duplicate/late phone-log re-sync must not downgrade a more-specific
     // active finance/credit handoff reason (e.g. credit_app_needs_info) to the
     // generic phone-log reason — that erases the finance-handoff context the
