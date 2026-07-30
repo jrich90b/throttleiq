@@ -282,12 +282,25 @@ if (sub === "review") {
     evalsGreen = false;
   }
 
+  // Review the change against the REMOTE base, not the local `main` ref.
+  // Local `main` goes stale the moment another author merges (2026-07-29, PR #336): the branch was
+  // cut from a newer origin/main than the local ref, so `git diff main...HEAD` handed the reviewer
+  // two unrelated already-merged commits as if they were part of this change — it spent its review
+  // budget and its "concerns" on someone else's code. GitHub computes the PR diff against the remote
+  // base, so the merge stayed clean; only the REVIEW was polluted. Fetch, then diff against
+  // origin/main; fall back to the local ref only if the fetch/diff fails.
   const diff = (() => {
-    try {
-      return execFileSync("git", ["diff", "main...HEAD"], { encoding: "utf8" });
-    } catch {
-      return "";
+    for (const base of ["origin/main", "main"]) {
+      try {
+        if (base === "origin/main") execFileSync("git", ["fetch", "-q", "origin", "main"], { stdio: "ignore" });
+        const out = execFileSync("git", ["diff", `${base}...HEAD`], { encoding: "utf8" });
+        if (base === "main") console.warn("[act_runner] WARNING: reviewed diff is against the LOCAL main ref (origin/main unavailable) — it may include other authors' merged commits");
+        return out;
+      } catch {
+        // try the next base
+      }
     }
+    return "";
   })();
   const title = flag("title") || git(["log", "-1", "--pretty=%s"]);
   const briefDir = path.join(reportRoot, "act");
