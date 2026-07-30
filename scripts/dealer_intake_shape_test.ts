@@ -330,6 +330,15 @@ const FEED_VARIANTS: { id: string; label: string; realWorld: string; xml: string
   <stocknumber>U1234</stocknumber><year>2026</year><make>Harley-Davidson</make><model>Road Glide</model>
   <color>Vivid Black</color><price>28999</price>
 </vehicle></vehicles>`
+  },
+  {
+    id: "unknown_container",
+    label: "A row element we've never seen (<catalog><product>)",
+    realWorld:
+      "The permanent tail: no alias list is ever complete. This variant exists so the harness always has one shape it genuinely cannot read — that is what keeps 'reports a gap as a gap' testable after every round of tolerance work, instead of quietly asserting that some real feed stays broken.",
+    xml: `<catalog><product>
+  <stocknumber>U1234</stocknumber><year>2026</year><make>Harley-Davidson</make><model>Road Glide</model>
+</product></catalog>`
   }
 ];
 
