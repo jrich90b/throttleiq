@@ -108,6 +108,31 @@ assert.match(src, /process\.exit\(3\)/, "a duplicate-skip uses a distinct exit c
   const runner = fs2.readFileSync("scripts/act_runner.ts", "utf8");
   assert.ok(/findMergedPrForFindingKey\(listRecentlyMergedLoopPrs\(\)/.test(runner), "act_runner consults merged PRs in check-open-pr AND the build path");
   assert.ok(/process\.exit\(4\)/.test(runner), "merged coverage exits with its own distinct code (4)");
+
+  // The reviewed diff must be taken against the REMOTE base. Local `main` goes stale as soon as
+  // another author merges, and a stale base hands the reviewer other people's already-merged
+  // commits as if they were part of this change (observed on PR #336: the review spent its
+  // concerns on an unrelated documentPhotoCaptures change).
+  assert.ok(
+    /execFileSync\("git", \["fetch", "-q", "origin", "main"\]/.test(runner),
+    "act_runner refreshes origin/main before computing the reviewed diff"
+  );
+  assert.ok(
+    /"origin\/main", "main"/.test(runner),
+    "origin/main is the PREFERRED diff base, with the local ref only as a fallback"
+  );
+  assert.ok(
+    /\$\{base\}\.\.\.HEAD/.test(runner),
+    "the diff is three-dot against the resolved base (merge-base), not a raw two-dot compare"
+  );
+  assert.ok(
+    /WARNING: reviewed diff is against the LOCAL main ref/.test(runner),
+    "falling back to the stale local ref is announced, never silent"
+  );
+  assert.ok(
+    !/execFileSync\("git", \["diff", "main\.\.\.HEAD"\]/.test(runner),
+    "the old unconditional local-main diff is gone"
+  );
 }
 
 console.log("PASS act runner eval — PR-only (never merges), refuses main, gate-enforced; prep brief carries the parser-first contract; cross-routine PR dedup (marker + skip); list/prep run.");
