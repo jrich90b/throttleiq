@@ -367,10 +367,18 @@ Loop" law is the binding short form; this is the working detail):
   - test / eval / doc-only changes.
   Gate (all required): tsc + `ci:eval` green + a NEW deterministic eval pinning the repro + (parser/reply)
   a shadow replay over recent live traffic showing no net regression.
-- **Tier 2 — ESCALATE (open a PR + notify Joe), never auto-merge:**
-  new customer-facing behavior, a routing cutover, a new reply class, a flag shadow→enforce flip, ANY
-  change to an already-accepted parser/decision case, or any "what should it say / do" judgment call.
-  **Conservative default: unsure ⇒ Tier 2.** The PR carries the repro + shadow data + before/after.
+- **Tier 2 — split by charter coverage (Joe, 2026-07-30; `docs/policy_charter.md` is the boundary):**
+  - **2a — charter-covered:** the change implements/corrects toward a SPECIFIC cited charter rule.
+    May merge WITHOUT pre-approval when the cross-model review cleanly approves AND confirms the
+    citation (`charter_covered`), gates are green, and a revert path exists
+    (`act_runner review --ship --charter <rule-id>`). Joe is notified AFTER with a plain-English
+    summary + revert path; a veto demotes the category to ask-first.
+  - **2b — ask-first (never auto-merge):** no covering rule; compliance/opt-out; finance/pricing
+    figures; a new reply class; flag shadow→enforce flips; comprehension/model-authority/
+    consolidation cutovers; legal exposure; charter boundary changes; any NEW "what should it
+    say / do" judgment call. The PR carries the repro + shadow data + before/after.
+  **Conservative default: unsure ⇒ 2b.** The reviewer judges a charter citation adversarially —
+  stretching a rule to cover a new judgment call must fail the coverage check.
 - **De-tangle is an optimization constraint, not just a hope:** a patch that would add an inline
   `parser || regex` precedence gate is Tier 2 by construction; the loop prefers extending a `decide*Turn`
   reducer or a typed parser. Source-string `assert.match` guards are a smell — prefer a behavioral eval on

@@ -15,7 +15,7 @@ import {
   summarizePreShipHold
 } from "../services/api/src/domain/preShipReview.ts";
 
-const clean = { verdict: "approve", risk: "low", customerFacing: true, onTarget: true, lawOk: true, blocking: false } as const;
+const clean = { verdict: "approve", risk: "low", customerFacing: true, onTarget: true, lawOk: true, blocking: false, charterCovered: false } as const;
 
 // --- the one path that ships: clean approve + green gates. ---
 {
@@ -100,6 +100,64 @@ noShip({ ...clean, lawOk: false }, true, "law violation (e.g. new free-text rege
     false,
     "reassuring prose can never turn a hold into a ship"
   );
+}
+
+// --- TIER-2a CHARTER GATE (Joe delegation, 2026-07-30). ---
+// A Tier-2 change may auto-merge ONLY when it implements policy Joe already ruled
+// (docs/policy_charter.md) and the reviewer CONFIRMS the citation. The confirmation is a separate
+// question from "is this a good change": an approve without coverage still escalates.
+{
+  // The delegated path: clean approve + confirmed coverage => ship.
+  const g = decidePreShipGate({ ...clean, charterCovered: true } as any, { evalsGreen: true, requireCharterCovered: true });
+  assert.equal(g.ship, true, "clean approve + confirmed charter coverage => SHIP");
+  assert.match(g.reason, /charter_covered/, "the ship reason records that coverage was confirmed");
+}
+{
+  // THE LOAD-BEARING CASE: the reviewer LIKES the change but says the citation doesn't cover it.
+  const g = decidePreShipGate(
+    { ...clean, charterCovered: false, concerns: "the cited rule is about cadence copy; this changes WHO gets texted" } as any,
+    { evalsGreen: true, requireCharterCovered: true }
+  );
+  assert.equal(g.ship, false, "approve WITHOUT confirmed coverage must NOT auto-merge");
+  assert.equal(g.escalate, true, "it escalates to Joe as a NEW judgment call");
+  assert.match(g.reason, /REJECTED the charter citation/, "the reason names the citation rejection");
+  assert.match(g.reason, /WHO gets texted/, "and carries the reviewer's specific objection");
+}
+{
+  // Coverage can never RESCUE a bad review: hold/blocking/off-target/high-risk still never ship.
+  for (const bad of [
+    { ...clean, charterCovered: true, verdict: "hold" },
+    { ...clean, charterCovered: true, blocking: true },
+    { ...clean, charterCovered: true, onTarget: false },
+    { ...clean, charterCovered: true, risk: "high" }
+  ]) {
+    const g = decidePreShipGate(bad as any, { evalsGreen: true, requireCharterCovered: true });
+    assert.equal(g.ship, false, "charter coverage never overrides a failing check");
+  }
+  // And red gates still block everything, coverage or not.
+  const g = decidePreShipGate({ ...clean, charterCovered: true } as any, { evalsGreen: false, requireCharterCovered: true });
+  assert.equal(g.ship, false, "red gates still block a covered change");
+}
+{
+  // Back-compat: when coverage is NOT required (Tier-1 lane), charterCovered is ignored entirely.
+  assert.equal(decidePreShipGate({ ...clean } as any, { evalsGreen: true }).ship, true, "no-charter lane unchanged");
+  assert.equal(
+    decidePreShipGate({ ...clean, charterCovered: true } as any, { evalsGreen: true }).ship,
+    true,
+    "a stray coverage flag changes nothing when not required"
+  );
+}
+{
+  // Source guards: fail-safe parse (only explicit true counts) + adversarial prompt contract.
+  const s = fs.readFileSync("services/api/src/domain/preShipReview.ts", "utf8");
+  assert.match(s, /charterCovered: p\.charter_covered === true/, "anything but explicit true parses as NOT covered");
+  assert.match(s, /ADVERSARIALLY/, "the prompt demands adversarial citation judgment");
+  assert.match(s, /set charter_covered=false \(it is not being claimed\)/, "no citation => the model is told coverage is not claimed");
+  const runner2 = fs.readFileSync("scripts/act_runner.ts", "utf8");
+  assert.match(runner2, /requireCharterCovered: !!charterCitation/, "the runner requires coverage exactly when a citation is claimed");
+  assert.match(runner2, /\^C\\d\+\\\.\\d\+\$/, "charter ids are validated before use");
+  assert.match(runner2, /loop merged a charter-covered change/, "a Tier-2a merge notifies Joe AFTER, by design");
+  assert.match(runner2, /gh", \["pr", "comment"/, "notification has a durable PR-comment fallback (the 7/29 silent-skip gap)");
 }
 
 // --- the reviewer is INSTRUCTED to explain itself, and has room to. ---

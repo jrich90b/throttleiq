@@ -97,11 +97,16 @@ So:
   active** (watch `answer_correctness` `owned_bike_offered`=0). The broad taxonomy/clarify/
   slot-fill rewrite is RULED OUT (sub-5% ceiling); gate cutovers on customer-facing
   correctness, not shadow-disagreement.
-Make it evidence-led. A core-comprehension cutover is **Tier 2** under the autonomous-loop
-auto-patch contract (AGENTS.md "Autonomous Self-Healing Loop") = approve-first: open a PR +
-notify, never auto-merge. Eval-gated **Tier 1** work (additive parser fixtures, fail-safe
-reconcile heals, behavior-preserving de-tangle refactors) may auto-merge once its category
-has graduated — see `docs/autonomous_coding_loop.md`. When unsure which tier, it's Tier 2.
+Make it evidence-led. A core-comprehension cutover is **Tier 2b** under the autonomous-loop
+auto-patch contract (AGENTS.md "Autonomous Self-Healing Loop") = ask-first: open a PR +
+notify, never auto-merge — the 2026-07-30 Tier-2 split does NOT cover cutovers. Since
+2026-07-30 (Joe's delegation), Tier 2 splits on `docs/policy_charter.md` coverage: **2a**
+(implements a cited charter rule; cross-model review approves AND confirms coverage; gates
+green; revert path) may merge with notify-AFTER; **2b** (no covering rule, compliance/opt-out,
+finance figures, new reply class, flag flips, cutovers) still pings Joe and waits. Eval-gated
+**Tier 1** work (additive parser fixtures, fail-safe reconcile heals, behavior-preserving
+de-tangle refactors) may auto-merge once its category has graduated — see
+`docs/autonomous_coding_loop.md`. When unsure which tier or sub-tier: the more conservative one.
 
 ## Before you ship
 - Gates (must be green): `(cd services/api && node ../../node_modules/typescript/bin/tsc -p

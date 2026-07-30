@@ -21,6 +21,13 @@ export type PreShipReviewParse = {
   onTarget: boolean; // does the diff actually address the stated finding?
   lawOk: boolean; // parser-first / both-paths / eval present (per the diff)
   blocking: boolean; // a concrete defect that must block the merge
+  /**
+   * Tier-2a delegation (Joe, 2026-07-30): when a charter citation was supplied, does the cited
+   * `docs/policy_charter.md` rule GENUINELY cover this change? Judged adversarially — stretching a
+   * rule to cover a new judgment call must come back false. Meaningless (false) when no citation
+   * was provided; only consulted when the gate is asked to require it.
+   */
+  charterCovered: boolean;
   reasons?: string;
   concerns?: string; // specific issues for the human when held
 };
@@ -34,7 +41,7 @@ export type PreShipReviewParse = {
 const PRE_SHIP_REVIEW_SCHEMA: { [key: string]: unknown } = {
   type: "object",
   additionalProperties: false,
-  required: ["reasons", "concerns", "verdict", "risk", "customer_facing", "on_target", "law_ok", "blocking"],
+  required: ["reasons", "concerns", "verdict", "risk", "customer_facing", "on_target", "law_ok", "blocking", "charter_covered"],
   properties: {
     reasons: { type: "string", minLength: 20 },
     concerns: { type: "string", minLength: 1 },
@@ -43,7 +50,8 @@ const PRE_SHIP_REVIEW_SCHEMA: { [key: string]: unknown } = {
     customer_facing: { type: "boolean" },
     on_target: { type: "boolean" },
     law_ok: { type: "boolean" },
-    blocking: { type: "boolean" }
+    blocking: { type: "boolean" },
+    charter_covered: { type: "boolean" }
   }
 };
 
@@ -52,6 +60,8 @@ export async function reviewLoopFixWithLLM(args: {
   finding: string; // the loop finding the fix claims to address
   diff: string; // git diff main...HEAD
   evalsGreen: boolean;
+  /** Tier-2a: the claimed charter rule (id + verbatim excerpt from docs/policy_charter.md). */
+  charterCitation?: { id: string; excerpt: string } | null;
 }): Promise<PreShipReviewParse | null> {
   const apiKey = String(process.env.ANTHROPIC_API_KEY ?? "").trim();
   if (!apiKey) return null; // no independent reviewer → caller escalates (see decidePreShipGate)
@@ -91,6 +101,20 @@ export async function reviewLoopFixWithLLM(args: {
     "  When you approve, put the residual risk to watch (or \"none\").",
     "- If you mark on_target=false, law_ok=false, or blocking=true, concerns MUST say which one and why.",
     "",
+    ...(args.charterCitation
+      ? [
+          "CHARTER COVERAGE (charter_covered) — this change claims Tier-2a delegation: it says it merely",
+          "implements a policy the owner (Joe) has ALREADY ruled, quoted below from docs/policy_charter.md.",
+          "Judge the citation ADVERSARIALLY: charter_covered=true ONLY if the change is a faithful",
+          "implementation/correction toward that specific rule with no new judgment call smuggled in.",
+          "A stretched citation — the rule is adjacent, the change goes beyond it, or 'correct' here",
+          "requires a decision the rule does not make — is charter_covered=false. When false, concerns",
+          "must say what the change decides that the cited rule does not.",
+          `Cited rule ${args.charterCitation.id}:`,
+          args.charterCitation.excerpt,
+          ""
+        ]
+      : ["No charter citation was supplied — set charter_covered=false (it is not being claimed).", ""]),
     `Gates already green (tsc + ci:eval): ${args.evalsGreen ? "yes" : "NO"}.`,
     `Title: ${args.title}`,
     `Finding being fixed: ${args.finding}`,
@@ -127,6 +151,8 @@ export async function reviewLoopFixWithLLM(args: {
       onTarget: p.on_target === true,
       lawOk: p.law_ok === true,
       blocking: p.blocking === true,
+      // Fail-safe direction: anything but an explicit true means NOT covered.
+      charterCovered: p.charter_covered === true,
       // Normalize blank prose to undefined: an empty string satisfies `required` but is falsy, so it
       // used to slip through as "the reviewer explained itself" and land as a contentless hold.
       reasons: cleanReviewText(p.reasons),
@@ -169,14 +195,29 @@ export function summarizePreShipHold(review: PreShipReviewParse): string {
 
 // PURE gate. Ship only on a clean approve with green gates; anything else ESCALATES to a human. The
 // conservative default (no review, or any doubt) is ESCALATE — never silently ship an unreviewed change.
+// Tier-2a (requireCharterCovered): a clean approve additionally needs the reviewer's confirmation that
+// the cited docs/policy_charter.md rule genuinely covers the change — an approve WITHOUT coverage still
+// escalates, because "good change" is not the question; "already ruled by Joe" is.
 export function decidePreShipGate(
   review: PreShipReviewParse | null,
-  opts: { evalsGreen: boolean }
+  opts: { evalsGreen: boolean; requireCharterCovered?: boolean }
 ): { ship: boolean; escalate: boolean; reason: string } {
   if (!opts.evalsGreen) return { ship: false, escalate: false, reason: "gates not green (tsc + ci:eval) — fix before shipping" };
   if (!review) return { ship: false, escalate: true, reason: "no independent cross-model review available — escalate to a human" };
   if (review.verdict === "approve" && !review.blocking && review.onTarget && review.lawOk && review.risk !== "high") {
-    return { ship: true, escalate: false, reason: `cross-model review approved (risk=${review.risk}, on_target, law_ok)` };
+    if (opts.requireCharterCovered && !review.charterCovered) {
+      const why = cleanReviewText(review.concerns) ?? cleanReviewText(review.reasons) ?? "no detail given";
+      return {
+        ship: false,
+        escalate: true,
+        reason: `cross-model review approved the change but REJECTED the charter citation (charter_covered=false) — this is a NEW judgment call, ask Joe: ${why}`
+      };
+    }
+    return {
+      ship: true,
+      escalate: false,
+      reason: `cross-model review approved (risk=${review.risk}, on_target, law_ok${opts.requireCharterCovered ? ", charter_covered" : ""})`
+    };
   }
   // A hold must always arrive actionable: the reviewer's own words when it gave any, plus the
   // deterministic list of checks that failed either way.
