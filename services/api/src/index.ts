@@ -494,6 +494,7 @@ import {
   getPreferredSalespeople,
   type SchedulerConfig
 } from "./domain/schedulerConfig.js";
+import { resolveStaffFollowUpTimingPhrase } from "./domain/staffFollowUpTiming.js";
 import {
   getOAuthClient,
   saveTokens,
@@ -57816,17 +57817,20 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const asksIfInventoryIsAllOnline = isInventoryOnlineCompletenessQuestionText(
       latestInboundBeforeDraft?.body ?? event.body ?? ""
     );
+    // Hours-aware timing, mirroring the live ADF path (routes/sendgridInbound.ts) so regenerating a
+    // credit-app ack can't re-introduce an after-hours "shortly" the live path already avoids.
+    const financeFollowUpWhen = await resolveStaffFollowUpTimingPhrase();
     let reply = latestInboundIsPrequalAdf
       ? hasPriorOutbound
         ? firstName
-          ? `Thanks ${firstName} — we just received your pre-qualification submission. Our finance team will reach out shortly to review options and next steps.`
-          : "Thanks — we just received your pre-qualification submission. Our finance team will reach out shortly to review options and next steps."
-        : `${buildAgentIntro(firstName, agentName, dealerName)}Thanks — I received your pre-qualification submission. I’ll have our finance team reach out shortly to review options.`
+          ? `Thanks ${firstName} — we just received your pre-qualification submission. Our finance team will reach out ${financeFollowUpWhen} to review options and next steps.`
+          : `Thanks — we just received your pre-qualification submission. Our finance team will reach out ${financeFollowUpWhen} to review options and next steps.`
+        : `${buildAgentIntro(firstName, agentName, dealerName)}Thanks — I received your pre-qualification submission. I’ll have our finance team reach out ${financeFollowUpWhen} to review options.`
       : hasPriorOutbound
         ? firstName
-          ? `Thanks ${firstName} — we just received your online credit application. Our finance team will reach out shortly to go over options.`
-          : "Thanks — we just received your online credit application. Our finance team will reach out shortly to go over options."
-        : `${buildAgentIntro(firstName, agentName, dealerName)}Thanks — I received your credit application. I’ll have our finance team reach out shortly.`;
+          ? `Thanks ${firstName} — we just received your online credit application. Our finance team will reach out ${financeFollowUpWhen} to go over options.`
+          : `Thanks — we just received your online credit application. Our finance team will reach out ${financeFollowUpWhen} to go over options.`
+        : `${buildAgentIntro(firstName, agentName, dealerName)}Thanks — I received your credit application. I’ll have our finance team reach out ${financeFollowUpWhen}.`;
     if (asksIfInventoryIsAllOnline) {
       reply = `${reply} ${buildInventoryOnlineCompletenessReply()}`;
     }

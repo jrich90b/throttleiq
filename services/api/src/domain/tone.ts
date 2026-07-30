@@ -280,10 +280,70 @@ function dedupeIdentityIntro(text: string): string {
   return out;
 }
 
+/**
+ * Drop a SECOND self-introduction naming the agent we already introduced.
+ *
+ * `dedupeIdentityIntro` only recognizes the old `this is {agent} at {dealer}` form, so it can't see
+ * the softened opener (`it's {agent} over at {dealer}`, live since 2026-06-15) or the LLM tacking on
+ * a bare `I'm {agent}`. Jason Marshall (+17165230421, 2026-07-29) shipped as:
+ *   "Hey Jason, it's Alexandra over at American H-D. Gotcha — I'll have our sales team check the
+ *    build timeline… I'm Alexandra, nice to meet you, I'll confirm details and text you back…"
+ * and Joe hand-stripped the second intro before sending.
+ *
+ * Deliberately surgical: this removes ONLY the redundant intro fragment (plus an immediately
+ * trailing pleasantry), never through to the end of the sentence — the Jason draft carried real
+ * content ("I'll confirm details and text you back") right after it. It also anchors on the SAME
+ * name used in the first intro, so an unrelated "it's Scott you'll be meeting" is untouched.
+ * A deterministic output guard at the universal tone sink, per the de-corp enforcement pattern.
+ */
+/** Words that follow "it's/I'm" constantly but are never the agent's name. */
+const NOT_A_NAME = new Set([
+  "a", "an", "the", "my", "our", "your", "his", "her", "their", "no", "not", "just", "still",
+  "great", "good", "happy", "here", "there", "going", "about", "all", "also", "always", "usually",
+  "best", "worth", "possible", "tough", "hard", "easy", "close", "open", "free", "ready", "fine",
+  "i", "we", "you", "he", "she", "they", "it", "that", "this", "one", "up", "on", "in", "at"
+]);
+
+function dropRepeatSelfIntro(text: string): string {
+  const out = String(text ?? "").trim();
+  if (!out) return out;
+  // First intro, any supported form → capture who we said we were. The name must be genuinely
+  // capitalized in the SOURCE (a case-insensitive [A-Z] would happily match "it's a great bike").
+  let first: RegExpExecArray | null = null;
+  let agent = "";
+  const finder = /\b(?:this is|it'?s|i'?m|i am)\s+([\w'-]+)\b/gi;
+  for (let m = finder.exec(out); m; m = finder.exec(out)) {
+    const candidate = String(m[1] ?? "");
+    if (!/^[A-Z][\w'-]*$/.test(candidate)) continue; // real capitalization, not the /i flag's
+    if (NOT_A_NAME.has(candidate.toLowerCase())) continue;
+    first = m;
+    agent = candidate;
+    break;
+  }
+  if (!first || !agent || (first.index ?? -1) < 0) return out;
+  const after = (first.index ?? 0) + String(first[0]).length;
+  const head = out.slice(0, after);
+  const escaped = agent.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const repeat = new RegExp(
+    `\\b(?:this is|it'?s|i'?m|i am)\\s+${escaped}\\b(?:\\s+(?:over\\s+)?at\\s+[^.,!?]{2,60})?` +
+      `(?:\\s*,?\\s*(?:nice|good|great)\\s+to\\s+(?:meet|e-?meet)\\s+you)?\\s*[,.!]?\\s*`,
+    "gi"
+  );
+  const tail = out.slice(after).replace(repeat, " ");
+  let joined = `${head} ${tail}`
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .trim();
+  // Re-capitalize a clause left dangling by the removal ("… timeline. i'll confirm …").
+  joined = joined.replace(/([.!?]\s+)([a-z])/g, (_m, p, c) => `${p}${c.toUpperCase()}`);
+  return joined;
+}
+
 export function normalizeSalesToneBase(text: string): string {
   let out = String(text ?? "").trim();
   if (!out) return out;
   out = dedupeIdentityIntro(out);
+  out = dropRepeatSelfIntro(out);
 
   const replacements: Array<[RegExp, string]> = [
     [

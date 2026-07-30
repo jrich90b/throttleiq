@@ -112,6 +112,7 @@ import type {
 } from "../domain/llmDraft.js";
 import type { InboundMessageEvent } from "../domain/types.js";
 import { getSchedulerConfig, getPreferredSalespeople } from "../domain/schedulerConfig.js";
+import { resolveStaffFollowUpTimingPhrase } from "../domain/staffFollowUpTiming.js";
 import { getAuthedCalendarClient, insertEvent, queryFreeBusy } from "../domain/googleCalendar.js";
 import {
   expandBusyBlocks,
@@ -2326,6 +2327,14 @@ function extractTrafficLogProFollowUpTopic(text?: string | null): string | undef
   return undefined;
 }
 
+/**
+ * Walk-in (Traffic Log Pro) recap tail. NEVER claims WHEN the visit happened — the lead carries no
+ * visit date, only `walkInCommentCapturedAt` (when the rep LOGGED the note), and reps log late: Larry
+ * Godzich (#11695) and Mike Zimmerman (#11697) were both logged Mon 2026-07-27 for a Saturday visit,
+ * and Scott had to hand-correct "stopping in today" → "chatting on SAturday" before sending. Asserting
+ * "today" is a fact we don't have, so the copy stays day-neutral ("Thanks for stopping in") — true
+ * whenever it goes out. Pinned by draft_accuracy_trio:eval.
+ */
 function buildTrafficLogProWalkInTail(args: {
   step: number;
   comment: string;
@@ -2362,12 +2371,12 @@ function buildTrafficLogProWalkInTail(args: {
   }
   if (step === 8) {
     if (followUpTopic) {
-      return withTopic("Thanks again for coming in today - it was great working with you.");
+      return withTopic("Thanks again for coming in - it was great working with you.");
     }
     if (hasFinanceCue) {
-      return "Thanks again for coming in today - it was great working with you. I'll keep you posted as we wrap up finance and final details.";
+      return "Thanks again for coming in - it was great working with you. I'll keep you posted as we wrap up finance and final details.";
     }
-    return "Thanks again for coming in today - it was great working with you. I'll keep you posted on final details and next steps.";
+    return "Thanks again for coming in - it was great working with you. I'll keep you posted on final details and next steps.";
   }
   if (step === 7) {
     if (followUpTopic) {
@@ -2380,25 +2389,25 @@ function buildTrafficLogProWalkInTail(args: {
   }
   if (step === 6 || step === 5) {
     if (followUpTopic) {
-      return withTopic("Thanks again for your time today.");
+      return withTopic("Thanks again for your time.");
     }
     if (hasPricingCue) {
-      return "Thanks again for sitting down with me today. I'll follow up with the numbers we discussed and next steps.";
+      return "Thanks again for sitting down with me. I'll follow up with the numbers we discussed and next steps.";
     }
-    return "Thanks again for your time today. I'll follow up shortly with next steps.";
+    return "Thanks again for your time. I'll follow up shortly with next steps.";
   }
   if (step <= 4) {
     if (followUpTopic) {
       return buildTimingAwareWalkInFollowUpLine({
-        base: "Thanks for stopping in today -",
+        base: "Thanks for stopping in -",
         followUpTopic,
         modelLabel: label
       });
     }
     if (hasFollowupCue) {
-      return "Thanks for stopping in today - I'll check back in soon like we discussed.";
+      return "Thanks for stopping in - I'll check back in soon like we discussed.";
     }
-    return `Thanks for stopping in today. If you want, I can send a quick recap on ${label}.`;
+    return `Thanks for stopping in. If you want, I can send a quick recap on ${label}.`;
   }
   return null;
 }
@@ -7005,17 +7014,21 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     // Wording AND intro both key off "has the customer received anything yet", not "is this the first
     // ADF" — otherwise a customer whose first ADF draft went unsent opens on the mid-conversation
     // "we just received..." copy, which presumes a relationship they've had no message about.
+    // Credit apps land at all hours; "shortly" after close is a promise we can't keep (christopher
+    // killian #11649 + Roger McCleskey #11650 both arrived ~4:45pm Saturday, past the 3pm close, and
+    // staff deleted "shortly" from both before sending). Resolve the real next-open time instead.
+    const when = await resolveStaffFollowUpTimingPhrase();
     let ack = isPrequalLead
       ? shouldIntroduceOnAdf
-        ? "Thanks — I received your pre-qualification submission. I’ll have our finance team reach out shortly to review options."
+        ? `Thanks — I received your pre-qualification submission. I’ll have our finance team reach out ${when} to review options.`
         : firstName
-          ? `Thanks ${firstName} — we just received your pre-qualification submission. Our finance team will reach out shortly to review options and next steps.`
-          : "Thanks — we just received your pre-qualification submission. Our finance team will reach out shortly to review options and next steps."
+          ? `Thanks ${firstName} — we just received your pre-qualification submission. Our finance team will reach out ${when} to review options and next steps.`
+          : `Thanks — we just received your pre-qualification submission. Our finance team will reach out ${when} to review options and next steps.`
       : shouldIntroduceOnAdf
-        ? "Thanks — I received your credit application. I’ll have our finance team reach out shortly."
+        ? `Thanks — I received your credit application. I’ll have our finance team reach out ${when}.`
         : firstName
-          ? `Thanks ${firstName} — we just received your online credit application. Our finance team will reach out shortly to go over options.`
-          : "Thanks — we just received your online credit application. Our finance team will reach out shortly to go over options.";
+          ? `Thanks ${firstName} — we just received your online credit application. Our finance team will reach out ${when} to go over options.`
+          : `Thanks — we just received your online credit application. Our finance team will reach out ${when} to go over options.`;
     if (shouldIntroduceOnAdf) {
       ack = await applyInitialAdfPrefix(ack);
     }
