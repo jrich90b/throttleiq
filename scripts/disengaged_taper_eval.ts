@@ -318,6 +318,86 @@ check("participation is parser-decided and stamped at ingest", () => {
   );
 });
 
+// ---------------------------------------------------------------------------
+// A CONTENTLESS CALL MUST NOT BE "SUMMARIZED" (root cause found 2026-07-30).
+//
+// summarizeVoiceTranscriptWithLLM is handed the transcript AND lead.vehicle ("Known lead info
+// (may help resolve model names)"). When the transcript carries no conversation, the lead JSON is
+// the only substantive content in the prompt and the model writes the LEAD RECORD BACK as customer
+// speech. Proven on +17165236994: a 117-character transcript containing only our own phone greeting
+// produced "Customer inquired about a Ultra Limited in Billiard Red/Vivid Black (stock U888-21)
+// ... asked about trade-in and a test ride; they requested a callback." lead.vehicle for that
+// conversation is exactly {model: "Ultra Limited", color: "Billiard Red/Vivid Black",
+// stockId: "U888-21"} — every detail fabricated. Those summaries feed the draft composer
+// (effectiveContext), durable customer facts, and the task auto-closer.
+// ---------------------------------------------------------------------------
+const { shouldSuppressVoiceSummary, buildUnsummarizableCallNote } = await import(
+  "../services/api/src/domain/conversationStore.ts"
+);
+
+check("a confident IVR / voicemail / no-answer call is not summarized", () => {
+  for (const outcome of ["ivr_or_system", "voicemail", "no_answer"]) {
+    assert.equal(
+      shouldSuppressVoiceSummary({ outcome, confidence: 0.95 }),
+      true,
+      `${outcome} must not be handed to the summarizer`
+    );
+  }
+});
+
+check("a real conversation is still summarized, and uncertainty never suppresses", () => {
+  // Fail direction: suppressing wrongly loses a summary (information), which is strictly safer
+  // than fabricating one — but it is still a loss, so only a CONFIDENT non-conversation suppresses.
+  const keep: [string, any][] = [
+    ["a live conversation", { outcome: "live_conversation", confidence: 0.96 }],
+    ["unclear", { outcome: "unclear", confidence: 0.99 }],
+    ["low-confidence IVR", { outcome: "ivr_or_system", confidence: 0.6 }],
+    ["no parse (parser off or errored)", null],
+    ["missing confidence", { outcome: "voicemail" }]
+  ];
+  for (const [label, parse] of keep) {
+    assert.equal(shouldSuppressVoiceSummary(parse), false, `${label} => still summarized`);
+  }
+});
+
+check("the neutral marker names what happened and asserts nothing about the customer", () => {
+  assert.equal(buildUnsummarizableCallNote("ivr_or_system"), "Automated phone system — no conversation recorded.");
+  assert.equal(buildUnsummarizableCallNote("no_answer"), "No answer — not contacted.");
+  assert.equal(buildUnsummarizableCallNote("voicemail"), "Voicemail — not contacted.");
+  for (const o of ["ivr_or_system", "no_answer", "voicemail", null]) {
+    const note = buildUnsummarizableCallNote(o);
+    assert.ok(
+      !/customer (?:asked|inquired|wants|requested|said)/i.test(note),
+      "the marker must never claim the customer said anything"
+    );
+  }
+});
+
+check("the contentless-call gate feeds every summary CONTENT consumer", () => {
+  const apiSrc = fs.readFileSync(path.resolve("services/api/src/index.ts"), "utf8");
+  assert.ok(
+    /const callHadNoConversation = isVoicemail \|\| suppressVoiceSummary;/.test(apiSrc),
+    "one flag combines the fail-safe voicemail regex with the parser suppression"
+  );
+  // Everything that consumes summary CONTENT must hang off it, or a fabricated summary still
+  // reaches a customer-facing reply.
+  assert.ok(
+    (apiSrc.match(/if \(!callHadNoConversation\) \{/g) ?? []).length >= 5,
+    "draft context, durable facts, pricing-task closes and post-call actions all gate on it"
+  );
+  // The summarizer itself must be gated.
+  assert.ok(
+    /isVoicemail \|\| suppressVoiceSummary[\s\S]{0,160}buildUnsummarizableCallNote/.test(apiSrc),
+    "a contentless call gets the neutral marker instead of a generated summary"
+  );
+  // One parse per call, reused — not two LLM round-trips.
+  assert.equal(
+    (apiSrc.match(/parseVoiceCallParticipationWithLLM\(\{/g) ?? []).length,
+    1,
+    "participation is parsed ONCE per call and reused for both the summary gate and the stamp"
+  );
+});
+
 // LLM arm: the whole ruling rests on the parser separating a real conversation from an
 // answering-machine greeting recorded in the customer's OWN voice. Pinned against 8 REAL
 // production call records (scripts/fixtures/voice_participation_fixtures.json), including the
