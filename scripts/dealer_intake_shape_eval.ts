@@ -72,22 +72,43 @@ check("link_canonical_resolves", "our own product-link convention still resolves
   assert.equal(row.supported, true, `our link convention must resolve: ${row.error ?? ""}`);
 });
 
-// --- 2. A known-unsupported shape is reported as such, by name. -------------
-check("feed_attribute_style_is_reported_unsupported", "attribute-style feed fields report as a gap", () => {
+// --- 2. Shapes the feed-tolerance work fixed stay fixed. --------------------
+// These three were gaps when this harness was written and are now handled. They are pinned
+// as SUPPORTED so the tolerance work in inventoryFeed.parseFeed can't silently regress.
+// (Lesson from the run that caught this: the original checks asserted "this shape is
+// broken", which made them fail the moment the shape was fixed. Pin the capability, or —
+// for the honesty property — pin it against a shape that is unreadable BY CONSTRUCTION.)
+check("feed_attribute_style_now_supported", "attribute-style feed fields resolve", () => {
   const row = byId(feed, "attribute_style_fields");
-  assert.equal(row.supported, false, "attribute-style fields are not read today — must not report as handled");
+  assert.equal(row.supported, true, `attribute-style fields must resolve: ${row.error ?? row.missingRequired.join(", ")}`);
   for (const field of ["stockId", "year", "make", "model"]) {
-    assert.ok(
-      row.missingRequired.includes(field),
-      `${field} should be named as missing so the report is actionable, got ${JSON.stringify(row.missingRequired)}`
-    );
+    assert.ok(row.fields.find(f => f.field === field)?.present, `${field} should resolve from an attribute`);
   }
 });
 
-check("feed_unknown_container_is_reported", "an unrecognized row element reports zero rows, not a silent pass", () => {
+check("feed_name_value_now_supported", "a generic name/value row resolves", () => {
+  const row = byId(feed, "nested_attribute_list");
+  assert.equal(row.supported, true, `name/value rows must resolve: ${row.error ?? row.missingRequired.join(", ")}`);
+});
+
+check("feed_vehicle_container_now_supported", "<vehicles><vehicle> rows are found", () => {
   const row = byId(feed, "vehicle_element_name");
-  assert.equal(row.supported, false);
+  assert.equal(row.supported, true, `vehicle-named rows must be found: ${row.error ?? row.missingRequired.join(", ")}`);
+});
+
+check("feed_stock_alias_now_supported", "<stock_number> yields the stock number", () => {
+  const row = byId(feed, "stock_number_alias");
+  assert.equal(row.supported, true, `stock_number must resolve: ${row.error ?? row.missingRequired.join(", ")}`);
+});
+
+// --- 2b. The honesty property, pinned against an unreadable-by-construction shape. ---
+check("feed_unknown_container_is_reported", "an unrecognized row element reports zero rows, not a silent pass", () => {
+  const row = byId(feed, "unknown_container");
+  assert.equal(row.supported, false, "a container we don't know must never report as handled");
   assert.match(String(row.error), /no rows/i, "the report must say the container wasn't recognized");
+  for (const field of ["stockId", "year", "make", "model"]) {
+    assert.ok(row.missingRequired.includes(field), `${field} must be named as missing so the report is actionable`);
+  }
 });
 
 check("adf_capitalized_is_reported_unsupported", "capitalized ADF elements report as a gap", () => {
