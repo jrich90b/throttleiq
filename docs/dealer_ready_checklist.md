@@ -18,7 +18,7 @@ evidence date whenever a capability is re-verified.
 | Deposit / payment requests (Stripe) | WORKING | 2026-06-04 (dealer_payment_requests.json + customer flow) | Re-verify before June 30 |
 | DocuSign | UNVERIFIED | last customer mention 2026-04-01; tokens file 2026-05-19 | Probe token validity + a sandbox envelope (open) |
 | Postgres dual-write | WORKING | parity clean expected from 6/12 (shadow-leak fix) | Read-flip June 17 |
-| Worker dispatcher | SHADOW | running since 6/10 | Tick flip June 17 |
+| Worker dispatcher | WORKING | 2026-07-30 09:17Z tick flip (`WORKER_DRIVEN_TICKS=1`); boot log "in-process background ticks disabled", worker ticking every 60s, 791 conversations post-restart, zero worker errors since 7/07 | Shadowed 6/10-7/30. Rollback: drop the line from api.env + redeploy |
 
 ## The machine-readable verdict
 
