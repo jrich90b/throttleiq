@@ -1,5 +1,8 @@
 import { detectSchedulingSignals, extractTimeToken } from "./legacyRegexFallback.js";
-import { isBusinessHoursQuestionText } from "./workflowRegressionGuards.js";
+import {
+  hasBusinessHoursQuestionHint,
+  isBusinessHoursQuestionText
+} from "./workflowRegressionGuards.js";
 
 export type InboundPipelineStage =
   | "pre_parser"
@@ -37,8 +40,41 @@ export type InboundPreParserDecision = {
   hasScheduleSignal: boolean;
   hasScheduleTimeSignal: boolean;
   hasScheduleDaySignal: boolean;
+  // Which signal claimed the turn. "lexical" = the pre-existing regex gate; "parser" = only the
+  // typed parser saw it (the hours question with no hours word). Auditing only — the reply and
+  // the route outcome are identical either way.
+  source: "lexical" | "parser";
   reason: "business_hours_question";
 };
+
+/**
+ * The typed parser's verdict, passed IN so this decision stays pure and sync (an async
+ * classifier would cascade through all five call sites for no gain).
+ * Structurally compatible with BusinessHoursQuestionParse from llmDraft.
+ */
+export type BusinessHoursQuestionParseInput = {
+  isHoursQuestion: boolean;
+  scope: "dealership" | "staff_person" | "appointment_slot" | "none";
+  day?: string | null;
+  confidence?: number;
+};
+
+export const BUSINESS_HOURS_QUESTION_PARSER_MIN_CONFIDENCE = 0.7;
+
+/**
+ * Only a confident DEALERSHIP-scope read routes. A staff_person or appointment_slot read is a
+ * question store hours would answer WRONGLY, and an unsure read is no read at all.
+ */
+export function isBusinessHoursQuestionParserAccepted(
+  parse: BusinessHoursQuestionParseInput | null | undefined
+): boolean {
+  if (!parse) return false;
+  if (parse.isHoursQuestion !== true) return false;
+  if (parse.scope !== "dealership") return false;
+  const confidence =
+    typeof parse.confidence === "number" && Number.isFinite(parse.confidence) ? parse.confidence : 0;
+  return confidence >= BUSINESS_HOURS_QUESTION_PARSER_MIN_CONFIDENCE;
+}
 
 export type InboundTerminalRouteDecision =
   | {
@@ -129,15 +165,42 @@ function normalizeText(value: string | null | undefined): string {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
+/**
+ * Whether this turn is worth one business-hours parser call. Pure + shared so the live and
+ * regenerate paths can never drift on when the parser runs.
+ *
+ * Note the second gate: a turn the regex ALREADY routes gets no parser call, because the parser
+ * is additive-only and could not change the outcome. So the new comprehension costs nothing on
+ * the hours questions we handle today — only on the ones we were missing.
+ */
+export function shouldParseBusinessHoursQuestion(input: {
+  provider: InboundPipelineProvider;
+  channel: "sms" | "email";
+  text: string | null | undefined;
+}): boolean {
+  const text = normalizeText(input.text);
+  if (!text) return false;
+  if (input.provider !== "twilio" || input.channel !== "sms") return false;
+  if (isBusinessHoursQuestionText(text)) return false;
+  return hasBusinessHoursQuestionHint(text);
+}
+
 export function classifyInboundPreParserTurn(input: {
   provider: InboundPipelineProvider;
   channel: "sms" | "email";
   text: string | null | undefined;
+  // Optional: callers that ran the typed parser pass its verdict in. The parser is ADDITIVE
+  // ONLY — it can claim a turn the regex missed, but it never vetoes one the regex claims.
+  // A veto would fail toward NOT answering an hours question, which is the failure this whole
+  // path exists to prevent, and no production miss asks for it.
+  hoursQuestionParse?: BusinessHoursQuestionParseInput | null;
 }): InboundPreParserDecision | null {
   const text = normalizeText(input.text);
   if (!text) return null;
   if (input.provider !== "twilio" || input.channel !== "sms") return null;
-  if (!isBusinessHoursQuestionText(text)) return null;
+  const lexicalHoursQuestion = isBusinessHoursQuestionText(text);
+  const parserHoursQuestion = isBusinessHoursQuestionParserAccepted(input.hoursQuestionParse);
+  if (!lexicalHoursQuestion && !parserHoursQuestion) return null;
 
   const schedulingSignals = detectSchedulingSignals(text);
   const hasScheduleTimeSignal = !!extractTimeToken(text) || schedulingSignals.hasDayTime;
@@ -155,6 +218,7 @@ export function classifyInboundPreParserTurn(input: {
     hasScheduleSignal: hasScheduleTimeSignal || hasScheduleDaySignal,
     hasScheduleTimeSignal,
     hasScheduleDaySignal,
+    source: lexicalHoursQuestion ? "lexical" : "parser",
     reason: "business_hours_question"
   };
 }

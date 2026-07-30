@@ -348,6 +348,7 @@ import {
   parseWatchOptOutWithLLM,
   parsePostSaleOwnershipWithLLM,
   parseWatchScopeWithLLM,
+  parseBusinessHoursQuestionWithLLM,
   parseFinanceProcessQuestionWithLLM,
   parseFinanceHardshipDisclosureWithLLM,
   parseIncomingInventoryPurposeWithLLM,
@@ -737,6 +738,7 @@ import {
   canInviteScheduleAfterBusinessHours,
   classifyInboundPreParserTurn,
   decorateBusinessHoursReply,
+  shouldParseBusinessHoursQuestion,
   resolveDealerTransactionPolicyRoute,
   resolveInboundTerminalRoute,
   type InboundPreParserDecision
@@ -789,6 +791,7 @@ import {
   isAccessoryCustomizationRequestText,
   isAudioDemoStatusQuestionText,
   isBusinessHoursQuestionText,
+  hasBusinessHoursQuestionHint,
   isBlockedCadencePersonalizationLineText,
   isCloseoutSignoffNoResponseText,
   isDemoDayEventQuestionText,
@@ -23273,6 +23276,37 @@ function isSalesLeadForBusinessHours(conv: any, isServiceLeadOverride?: boolean)
     !!conv?.lead?.tradeVehicle?.model ||
     !!conv?.lead?.tradeVehicle?.description ||
     (!!bucket && !["service", "parts", "apparel", "other"].includes(bucket))
+  );
+}
+
+/**
+ * ONE place both reply paths get the business-hours read, so live and regenerate cannot drift on
+ * when the parser runs or how its verdict is shaped (route-parity law). Returns null whenever the
+ * turn isn't worth a call or the parse fails — the caller then behaves exactly as it does today.
+ */
+async function resolveBusinessHoursQuestionParse(args: {
+  provider: string;
+  channel: "sms" | "email";
+  text: string | null | undefined;
+  conv: any;
+  scope: "live" | "regen";
+}) {
+  if (
+    !shouldParseBusinessHoursQuestion({
+      provider: args.provider,
+      channel: args.channel,
+      text: args.text
+    })
+  ) {
+    return null;
+  }
+  return safeLlmParse(
+    args.scope === "regen" ? "regen_business_hours_question_parser" : "business_hours_question_parser",
+    () =>
+      parseBusinessHoursQuestionWithLLM({
+        text: args.text ?? "",
+        history: buildHistory(args.conv, 6)
+      })
   );
 }
 
@@ -56818,7 +56852,14 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const regenPreParserDecision = classifyInboundPreParserTurn({
     provider: event.provider,
     channel,
-    text: event.body
+    text: event.body,
+    hoursQuestionParse: await resolveBusinessHoursQuestionParse({
+      provider: event.provider,
+      channel,
+      text: event.body,
+      conv,
+      scope: "regen"
+    })
   });
   if (regenPreParserDecision?.kind === "business_hours_question") {
     const withScheduleInvite = await buildBusinessHoursPipelineReply(conv, event.body ?? "", {
@@ -60309,7 +60350,14 @@ if (authToken && signature) {
   const livePreParserDecision = classifyInboundPreParserTurn({
     provider: event.provider,
     channel: event.channel === "email" ? "email" : "sms",
-    text: event.body
+    text: event.body,
+    hoursQuestionParse: await resolveBusinessHoursQuestionParse({
+      provider: event.provider,
+      channel: event.channel === "email" ? "email" : "sms",
+      text: event.body,
+      conv,
+      scope: "live"
+    })
   });
   if (
     livePreParserDecision?.kind === "business_hours_question" &&
@@ -60335,6 +60383,7 @@ if (authToken && signature) {
     recordRouteOutcome("live", livePreParserDecision.routeOutcome, {
       convId: conv.id,
       leadKey: conv.leadKey,
+      source: livePreParserDecision.source,
       hasScheduleTimeSignal: livePreParserDecision.hasScheduleTimeSignal,
       hasScheduleDaySignal: livePreParserDecision.hasScheduleDaySignal
     });

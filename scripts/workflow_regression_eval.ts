@@ -36,6 +36,7 @@ import {
   hasPriorOutOfStockNoticeForModel,
   isAccessoryCustomizationRequestText,
   isAudioDemoStatusQuestionText,
+  hasBusinessHoursQuestionHint,
   isBusinessHoursQuestionText,
   isBlockedCadencePersonalizationLineText,
   isCloseoutSignoffNoResponseText,
@@ -259,6 +260,44 @@ const cases: Case[] = [
     actual: isBusinessHoursQuestionText(
       "Hi Joe, sorry to text you after hours but had a quick question. Would you be able to facilitate a trade for a used bike I found with a private seller?"
     ),
+    expected: false
+  },
+  // hasBusinessHoursQuestionHint is a COST gate, not a verdict — it only decides whether
+  // parseBusinessHoursQuestionWithLLM is worth calling. It must be a strict superset of the
+  // narrow gate above, and must cover the phrasings that carry no hours word.
+  {
+    id: "hours_hint_covers_available_weekends",
+    actual: hasBusinessHoursQuestionHint("Are you guys available weekends?"),
+    expected: true
+  },
+  {
+    id: "hours_hint_covers_your_availability",
+    actual: hasBusinessHoursQuestionHint("I do work days what is your availability like?"),
+    expected: true
+  },
+  {
+    id: "hours_hint_covers_you_around_sunday",
+    actual: hasBusinessHoursQuestionHint("you guys around on Sunday?"),
+    expected: true
+  },
+  {
+    id: "hours_hint_is_superset_of_lexical_gate",
+    actual: hasBusinessHoursQuestionHint("Are you open until what time tomorrow?"),
+    expected: true
+  },
+  {
+    id: "hours_hint_skips_inventory_availability",
+    actual: hasBusinessHoursQuestionHint("Do you have any Road Glides available?"),
+    expected: false
+  },
+  {
+    id: "hours_hint_skips_payment_question",
+    actual: hasBusinessHoursQuestionHint("What would my payment be on the Street Glide?"),
+    expected: false
+  },
+  {
+    id: "hours_hint_skips_plain_statement",
+    actual: hasBusinessHoursQuestionHint("Sounds good, thanks Joe"),
     expected: false
   },
   {

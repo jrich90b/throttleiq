@@ -3,7 +3,8 @@ import {
   classifyInboundPreParserTurn,
   decorateBusinessHoursReply,
   resolveDealerTransactionPolicyRoute,
-  resolveInboundTerminalRoute
+  resolveInboundTerminalRoute,
+  shouldParseBusinessHoursQuestion
 } from "../services/api/src/domain/inboundPipeline.ts";
 
 type Case = {
@@ -67,6 +68,195 @@ const cases: Case[] = [
       text: "What are your hours?"
     }),
     expected: null
+  },
+  // Production miss, Dustin Jordan +17163277383 (2026-07-29): two consecutive hours questions
+  // with no hours word were punted to the lead owner. The regex alone must still miss them
+  // (that pins WHY the parser is needed); the parser must route them.
+  {
+    id: "hours_question_without_hours_word_misses_lexical_gate",
+    actual: classifyInboundPreParserTurn({
+      provider: "twilio",
+      channel: "sms",
+      text: "Are you guys available weekends?"
+    }),
+    expected: null
+  },
+  {
+    id: "hours_question_without_hours_word_routes_on_parser",
+    actual: classifyInboundPreParserTurn({
+      provider: "twilio",
+      channel: "sms",
+      text: "Are you guys available weekends?",
+      hoursQuestionParse: {
+        isHoursQuestion: true,
+        scope: "dealership",
+        day: "weekends",
+        confidence: 0.93
+      }
+    })?.routeOutcome,
+    expected: "business_hours_question_pre_parser"
+  },
+  {
+    id: "hours_question_parser_route_is_labeled_parser_sourced",
+    actual: classifyInboundPreParserTurn({
+      provider: "twilio",
+      channel: "sms",
+      text: "I do work days what is your availability like?",
+      hoursQuestionParse: { isHoursQuestion: true, scope: "dealership", day: null, confidence: 0.85 }
+    })?.source,
+    expected: "parser"
+  },
+  {
+    id: "lexical_hours_question_stays_lexical_sourced",
+    actual: classifyInboundPreParserTurn({
+      provider: "twilio",
+      channel: "sms",
+      text: "Are you open Saturday?"
+    })?.source,
+    expected: "lexical"
+  },
+  // scope is the safety discriminator: store hours are a WRONG answer to these two.
+  {
+    id: "staff_person_availability_is_not_a_dealership_hours_answer",
+    actual: classifyInboundPreParserTurn({
+      provider: "twilio",
+      channel: "sms",
+      text: "Is Giovanni working Saturday?",
+      hoursQuestionParse: {
+        isHoursQuestion: true,
+        scope: "staff_person",
+        day: "Saturday",
+        confidence: 0.95
+      }
+    }),
+    expected: null
+  },
+  {
+    id: "appointment_slot_question_is_not_a_dealership_hours_answer",
+    actual: classifyInboundPreParserTurn({
+      provider: "twilio",
+      channel: "sms",
+      // Deliberately NOT the "anything open at 2" phrasing — that one carries the word "open"
+      // and the pre-existing lexical gate has always routed it, so it proves nothing here.
+      text: "Any chance you could fit me in at 2 on Thursday?",
+      hoursQuestionParse: {
+        isHoursQuestion: true,
+        scope: "appointment_slot",
+        day: "Thursday",
+        confidence: 0.9
+      }
+    }),
+    expected: null
+  },
+  {
+    id: "low_confidence_hours_parse_does_not_route",
+    actual: classifyInboundPreParserTurn({
+      provider: "twilio",
+      channel: "sms",
+      text: "you around this weekend?",
+      hoursQuestionParse: { isHoursQuestion: true, scope: "dealership", day: null, confidence: 0.4 }
+    }),
+    expected: null
+  },
+  {
+    id: "hours_parse_false_flag_does_not_route",
+    actual: classifyInboundPreParserTurn({
+      provider: "twilio",
+      channel: "sms",
+      text: "any Road Glides available?",
+      hoursQuestionParse: { isHoursQuestion: false, scope: "none", day: null, confidence: 0.95 }
+    }),
+    expected: null
+  },
+  // ADDITIVE-ONLY: a confident non-dealership parse must never take away a turn the regex
+  // already answers. Fail direction of a veto would be silence on a real hours question.
+  {
+    id: "parser_never_vetoes_a_lexical_hours_question",
+    actual: classifyInboundPreParserTurn({
+      provider: "twilio",
+      channel: "sms",
+      text: "What time do you close today?",
+      hoursQuestionParse: {
+        isHoursQuestion: true,
+        scope: "staff_person",
+        day: "today",
+        confidence: 0.99
+      }
+    })?.routeOutcome,
+    expected: "business_hours_question_pre_parser"
+  },
+  {
+    id: "hours_parser_stays_off_non_twilio_channels",
+    actual: classifyInboundPreParserTurn({
+      provider: "sendgrid_adf",
+      channel: "sms",
+      text: "Are you guys available weekends?",
+      hoursQuestionParse: { isHoursQuestion: true, scope: "dealership", day: null, confidence: 0.95 }
+    }),
+    expected: null
+  },
+  // The parser-claimed turn still carries its scheduling signals to the reply decorator.
+  {
+    id: "parser_routed_hours_question_keeps_day_signal",
+    actual: classifyInboundPreParserTurn({
+      provider: "twilio",
+      channel: "sms",
+      text: "are you guys available Saturday?",
+      hoursQuestionParse: {
+        isHoursQuestion: true,
+        scope: "dealership",
+        day: "Saturday",
+        confidence: 0.9
+      }
+    })?.hasScheduleDaySignal,
+    expected: true
+  },
+  // Cost gate: never pay for a parser call on a turn the regex already routes, and never skip
+  // one on the miss class. Shared by live + regen so the two paths cannot drift.
+  {
+    id: "hours_parser_not_called_when_regex_already_routes",
+    actual: shouldParseBusinessHoursQuestion({
+      provider: "twilio",
+      channel: "sms",
+      text: "What time do you close today?"
+    }),
+    expected: false
+  },
+  {
+    id: "hours_parser_called_on_the_production_miss",
+    actual: shouldParseBusinessHoursQuestion({
+      provider: "twilio",
+      channel: "sms",
+      text: "Are you guys available weekends?"
+    }),
+    expected: true
+  },
+  {
+    id: "hours_parser_called_on_the_availability_phrasing",
+    actual: shouldParseBusinessHoursQuestion({
+      provider: "twilio",
+      channel: "sms",
+      text: "I do work days what is your availability like?"
+    }),
+    expected: true
+  },
+  {
+    id: "hours_parser_not_called_on_inventory_availability",
+    actual: shouldParseBusinessHoursQuestion({
+      provider: "twilio",
+      channel: "sms",
+      text: "Do you have any Road Glides available?"
+    }),
+    expected: false
+  },
+  {
+    id: "hours_parser_not_called_on_email",
+    actual: shouldParseBusinessHoursQuestion({
+      provider: "twilio",
+      channel: "email",
+      text: "Are you guys available weekends?"
+    }),
+    expected: false
   },
   {
     id: "dealer_policy_route_accepts_parser_decision",
