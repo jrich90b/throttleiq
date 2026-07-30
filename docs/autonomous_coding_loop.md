@@ -183,6 +183,38 @@ Ordering note: DETECT consumes whatever `latest.json` is fresh + commit-matched 
 is not required, because per-conv API boots (~5–15s each) can overrun the 2-minute gap and the
 commit-binding guard makes deferred (next-run) consumption safe.
 
+### Disposition ledger — the PERMANENT record (Joe, 2026-07-30)
+Joe: *"it should know what is stale/already fixed and not show up again."* The four passes above are
+all INFERENCE with an expiry — a dimension cutover date, a commit whose message happens to name the
+phone number, a 14-day merged-PR window, an N-sample re-replay. So a finding a routine explicitly
+disposed weeks ago returns as fresh Tier-2 work: on 2026-07-30 the feed still ranked Derek's budget
+miss (Joe-ruled AND built 7/29) and the Aaron Smith no-show (disposed that morning) in its top 8.
+
+`reports/anomaly_loop/dispositions.json` is the non-inferential complement. Every routine records
+through ONE writer — `act_runner.ts dispose --key <convId::dimension> --as <fixed | stale-echo |
+no-action | joe-ruled> [--by] [--deploy-ts] [--note]` — and DETECT's disposition pass suppresses
+those keys **permanently**: no window, nothing to re-derive. It runs FIRST (before the four guesses)
+because it is the only pass that cannot be wrong about its own premise, and it shrinks the input to
+every costlier pass after it. The ledger is box-side, so a Mac routine disposes over ssh against the
+deploy checkout (`cd /home/ubuntu/leadrider-api/americanharley && REPORT_ROOT=… npx tsx
+scripts/act_runner.ts dispose …`) — no new transport.
+
+**The one fail-safe exception — a disposition must never eat a real regression.** The disposition's
+KIND decides whether a later occurrence can revive the key:
+- **code-state** (`fixed`, `stale-echo`) — a claim about the code at a moment, carrying a boundary
+  (`deployTs ?? at`). An event AFTER the boundary comes back tagged `regressionOfDisposed` (the fix
+  didn't hold). An event we cannot date is unknowable ⇒ KEPT, same as the sibling passes.
+- **policy** (`no-action`, `joe-ruled`) — a claim that this is NOT A DEFECT. Timeless, so the key
+  stays suppressed. Safe because a disposition is scoped to one conversation+dimension: a genuine
+  rule regression surfaces on other convIds, which carry no disposition.
+
+Fail-direction everywhere else: no ledger, a malformed payload, an unknown disposition word, or an
+undatable record suppresses NOTHING; a corrupt ledger makes `dispose` refuse to write rather than
+silently replace every recorded disposition with an empty file. Pure + IO-free
+(`services/api/src/domain/dispositionLedger.ts`), pinned by `stale_finding_suppression:eval`
+(behaviour + fail-safety + vocabulary) and `anomaly_classifier:eval` (pass ORDER — the ledger must
+stay ahead of the four guesses).
+
 ### Anomaly-loop DETECT → CLASSIFY cron (Phase 3, LIVE on americanharley 2026-06-25)
 Five minutes after the feed refreshes, classify it into a tier-tagged WORK ORDER (`reports/anomaly_loop/
 next.json`) via `classifyOutcomeAnomaly` (the tier contract as code). It also MERGES the Net 3

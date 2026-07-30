@@ -9,6 +9,10 @@
  *
  * Subcommands:
  *   list                         — print the current work orders (id = convId::dimension)
+ *   dispose --key <k> --as <d>   — record a finding as dealt with (fixed | stale-echo | no-action |
+ *                                  joe-ruled) in reports/anomaly_loop/dispositions.json, so
+ *                                  anomaly_loop_detect suppresses that key permanently. The single
+ *                                  writer every routine calls (ROUTINE_CONTRACT.md "Staleness").
  *   prep --id <key> | --top      — write reports/act/brief-<key>.md (finding + conv + actions + the
  *                                  parser-first contract + suggested branch/PR), for the coding agent to implement
  *   open-pr --title <t> [--eval-verified]
@@ -27,6 +31,15 @@ import {
   findOpenPrForFindingKey,
   isMeaningfulFindingKey
 } from "../services/api/src/domain/loopPrDedup.ts";
+import {
+  CODE_STATE_DISPOSITIONS,
+  DISPOSITIONS,
+  isDisposition,
+  parseDispositionLedgerPayload,
+  serializeDispositionLedger,
+  upsertDisposition,
+  type DispositionRecord
+} from "../services/api/src/domain/dispositionLedger.ts";
 import { listOpenLoopPrs, listRecentlyMergedLoopPrs } from "./loopPrLedger.ts";
 
 const argv = process.argv.slice(2);
@@ -100,6 +113,59 @@ if (sub === "check-open-pr") {
     process.exit(4);
   }
   console.log(`NONE — no open or recently-merged PR covers "${key}"`);
+  process.exit(0);
+}
+
+// Record a DISPOSITION so this finding never surfaces again (Joe, 2026-07-30: "it should know what is
+// stale/already fixed and not show up again"). Every routine writes through here so the ledger has one
+// shape; anomaly_loop_detect suppresses disposed keys permanently.
+//
+// The ledger is BOX-SIDE (detect runs there), so a routine on the Mac disposes over ssh against the
+// deploy checkout, which already tracks origin/main:
+//   ssh lightsail '/bin/bash -lc "cd /home/ubuntu/leadrider-api/americanharley && \
+//     REPORT_ROOT=/home/ubuntu/leadrider-runtime/americanharley/reports \
+//     npx tsx scripts/act_runner.ts dispose --key \"<convId>::<dimension>\" --as fixed --by <routine>"'
+if (sub === "dispose") {
+  const key = flag("key");
+  const as = flag("as");
+  if (!key || !isMeaningfulFindingKey(key)) {
+    console.error('dispose requires --key <convId::dimension>');
+    process.exit(2);
+  }
+  if (!isDisposition(as)) {
+    console.error(`dispose requires --as <${DISPOSITIONS.join(" | ")}>`);
+    process.exit(2);
+  }
+  const ledgerPath = path.join(reportRoot, "anomaly_loop", "dispositions.json");
+  let existing: DispositionRecord[] = [];
+  if (fs.existsSync(ledgerPath)) {
+    try {
+      const parsed = parseDispositionLedgerPayload(JSON.parse(fs.readFileSync(ledgerPath, "utf8")));
+      if (parsed) existing = [...parsed.values()];
+    } catch {
+      // A corrupt ledger must not silently become an EMPTY one — that would un-suppress every
+      // disposition ever recorded. Refuse to write and let a human look.
+      console.error(`Refusing to write: ${ledgerPath} exists but could not be parsed. Fix or move it first.`);
+      process.exit(2);
+    }
+  }
+  const records = upsertDisposition(existing, {
+    key,
+    disposition: as,
+    at: new Date().toISOString(),
+    by: flag("by") || process.env.ROUTINE_NAME || "unknown",
+    deployTs: flag("deploy-ts") ?? null,
+    note: flag("note") ?? null
+  });
+  fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
+  fs.writeFileSync(ledgerPath, JSON.stringify(serializeDispositionLedger(records), null, 2));
+  const written = records.find(r => r.key === key)!;
+  console.log(`DISPOSED "${key}" as ${written.disposition} (by ${written.by}) → ${ledgerPath} (${records.length} record(s))`);
+  console.log(
+    CODE_STATE_DISPOSITIONS.has(written.disposition)
+      ? `   code-state disposition: an occurrence after ${written.deployTs ?? written.at} will resurface as regression-of-disposed`
+      : `   policy disposition: this key is suppressed permanently (not a defect)`
+  );
   process.exit(0);
 }
 
@@ -449,5 +515,5 @@ function cleanForNotify(text: string | null | undefined): string {
   return String(text ?? "").replace(/[`*_]/g, "").trim().slice(0, 600);
 }
 
-console.error("Usage: act_runner.ts <list | prep --id <key>|--top | check-open-pr --key <convId::dimension> | open-pr --title <t> [--finding-key <k>] [--eval-verified] | review [--ship --title <t>] [--finding-key <k>] [--eval-verified] [--finding <s>] [--charter <rule-id, e.g. C3.2 — Tier-2a: auto-merge only if the reviewer confirms the cited docs/policy_charter.md rule covers the change; notify-after>]>");
+console.error("Usage: act_runner.ts <list | prep --id <key>|--top | check-open-pr --key <convId::dimension> | dispose --key <convId::dimension> --as <fixed|stale-echo|no-action|joe-ruled> [--by <routine>] [--deploy-ts <iso>] [--note <s>] | open-pr --title <t> [--finding-key <k>] [--eval-verified] | review [--ship --title <t>] [--finding-key <k>] [--eval-verified] [--finding <s>] [--charter <rule-id, e.g. C3.2 — Tier-2a: auto-merge only if the reviewer confirms the cited docs/policy_charter.md rule covers the change; notify-after>]>");
 process.exit(2);
