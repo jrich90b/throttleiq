@@ -22,15 +22,17 @@ evidence date whenever a capability is re-verified.
 
 ## The machine-readable verdict
 
-This table is one of FOUR gates in the dealer-#2 readiness bar (Joe, 2026-07-29 —
-`docs/policy_charter.md` "North star"). The other three are the release gate's clean-day
-streak, zero open P0/P1 in the agent-manager report, and a dealer-portable universal eval
-tier. `npm run rollout_readiness:report` joins all four and writes one verdict to
+This table feeds the **operability** section of the dealer-#2 readiness bar — one of the
+five tests Joe confirmed on 2026-07-30 (`docs/policy_charter.md` "North star": funnel,
+portability, operability, stranger test, pitch numbers). Alongside this table, operability
+also grades the release gate's clean-day streak and zero open P0/P1 in the agent-manager
+report. `npm run rollout_readiness:report` joins all five sections and writes one verdict to
 `reports/rollout_readiness/latest.json` (+ `latest.md`); the loop digest prints it as a
 single line so "how close is dealer #2?" is a number, not a research project. The grader is
 pinned fail-CLOSED by `rollout_readiness:eval` — a missing input or an unparseable table
-reads NOT_MET, never MET. **Keep the Status column a bare word** (`WORKING` / `SHADOW` /
-`UNVERIFIED`): the scorecard grades this table by parsing it.
+reads NOT_MET, never MET, and a section nobody has measured yet blocks the bar exactly like
+a failing one. **Keep the Status column a bare word** (`WORKING` / `SHADOW` / `UNVERIFIED`):
+the scorecard grades this table by parsing it.
 
 ## Open verification items
 1. DocuSign: validate token refresh and send a test envelope before declaring day-1 ready.
