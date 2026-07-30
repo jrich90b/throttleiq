@@ -3,6 +3,19 @@
 **v1 — compiled 2026-07-30 from Joe's rulings (2026-06 → 2026-07-29). Ratified by Joe's
 signature on the PR that introduced it.**
 
+## North star (Joe, confirmed 2026-07-29 night)
+
+LeadRider is the business, not a tool for one store: a self-running AI BDC any dealer can
+turn on. American Harley is dealer #1 — the proof and the sales pitch. **Dealer #2 is
+triggered by a READINESS BAR, not a sales conversation** (Joe: "I believe a readiness bar"):
+the concrete artifacts are `docs/dealer_ready_checklist.md` (every row verified WORKING),
+the release gate's clean-day streak, no open P0/P1, and the rollout-readiness scorecard.
+
+What this means for every decision made under this charter: portability outranks
+AH-specific polish; an AH-only hardcode is debt; the standing question on every build is
+"would this work at a dealer we've never met?"; and anything that requires Joe (or any
+owner) in the daily loop is a defect against the goal, not a feature.
+
 ## What this document is
 
 The machine-consulted record of **settled policy**: every product/behavior decision Joe has
