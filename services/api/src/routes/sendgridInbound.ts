@@ -2020,6 +2020,7 @@ import { getSystemMode } from "../domain/settingsStore.js";
 import {
   decideFirstTouchAutoSend,
   firstTouchAutoSendDebugEnabled,
+  hasDeliverablePhoneKey,
   isFirstTouchAckAutoSendEnabled,
   buildFirstTouchShadowRecord,
   appendFirstTouchShadowLog
@@ -5890,7 +5891,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       optedOut: isOptOutKeywordInbound(event?.body ?? null),
       callOnly: conv?.lead?.preferredContactMethod === "phone",
       invariantAllow: true, // past the invariant.allow gate above
-      hasDeliverablePhone: typeof leadKey === "string" && leadKey.startsWith("+")
+      hasDeliverablePhone: hasDeliverablePhoneKey(leadKey)
     };
     const autoSendDecision = decideFirstTouchAutoSend({
       enabled: isFirstTouchAckAutoSendEnabled(),
@@ -6413,7 +6414,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         optedOut: isOptOutKeywordInbound(event?.body ?? null),
         callOnly: conv?.lead?.preferredContactMethod === "phone",
         invariantAllow: true,
-        hasDeliverablePhone: typeof leadKey === "string" && leadKey.startsWith("+")
+        hasDeliverablePhone: hasDeliverablePhoneKey(leadKey)
       });
       appendFirstTouchShadowLog(
         buildFirstTouchShadowRecord({

@@ -21,6 +21,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { normalizePhone } from "./suppressionStore.js";
+
 export type FirstTouchAutoSendInput = {
   /** Feature flag (FIRST_TOUCH_ACK_AUTOSEND). Off ⇒ never auto-send. */
   enabled: boolean;
@@ -58,6 +60,24 @@ export function decideFirstTouchAutoSend(input: FirstTouchAutoSendInput): FirstT
   if (!input.invariantAllow) return { send: false, reason: "invariant_block" };
   if (!input.hasDeliverablePhone) return { send: false, reason: "no_deliverable_phone" };
   return { send: true, reason: "first_touch_deterministic_ack" };
+}
+
+/**
+ * Is this lead key something we can actually deliver an SMS to?
+ *
+ * Was `leadKey.startsWith("+")` inline at the two call sites — but leadKey is stored as BARE
+ * DIGITS ("7164789799", not "+17164789799"), so the check rejected every SMS lead it saw. Across
+ * the 2026-07-27..30 shadow corpus that was 218 of 218 otherwise-eligible first-touch leads, i.e.
+ * the feature could never fire at all and its "0 sends" told us nothing about safety. The
+ * suppression check on the ADJACENT line normalizes first and works correctly; this one didn't.
+ *
+ * Now shares suppression's `normalizePhone`, so "is this a phone we can text" and "is this phone
+ * opted out" can never disagree about what a phone number is. Still fail-safe: anything that does
+ * not normalize to E.164 (email-only leads, blanks, junk) returns false and holds the draft.
+ */
+export function hasDeliverablePhoneKey(leadKey: unknown): boolean {
+  if (typeof leadKey !== "string") return false;
+  return normalizePhone(leadKey).startsWith("+");
 }
 
 /** Reads FIRST_TOUCH_ACK_AUTOSEND. Default OFF (dark). */

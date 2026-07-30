@@ -24,7 +24,12 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-function normalizePhone(input: string): string {
+/**
+ * Exported so the first-touch deliverability check can use the SAME definition of "a phone"
+ * that suppression uses. They sit on adjacent lines of the same gate and disagreeing about
+ * what a phone number looks like is exactly how a lead gets mis-gated.
+ */
+export function normalizePhone(input: string): string {
   const raw = String(input ?? "").trim();
   if (!raw) return "";
   if (raw.startsWith("+")) return raw;

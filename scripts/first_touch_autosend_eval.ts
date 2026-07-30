@@ -12,6 +12,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   decideFirstTouchAutoSend,
+  hasDeliverablePhoneKey,
   isFirstTouchAckAutoSendEnabled,
   buildFirstTouchShadowRecord,
   type FirstTouchAutoSendInput
@@ -158,7 +159,46 @@ function run(): void {
     "evidence stream: the main-opener log is first-touch + debug gated and NOT auto-send-eligible"
   );
 
-  console.log("PASS first-touch-autosend eval (dark no-op + 1 send case + 7 fail-safes + parity + shadow record + STEP 2 wiring + evidence stream)");
+  // --- Deliverable-phone key. The check WAS `leadKey.startsWith("+")` inline, but leadKey is
+  // stored as BARE DIGITS — so it rejected every SMS lead and the feature could never fire. In the
+  // 2026-07-27..30 shadow corpus that was 218 of 218 otherwise-eligible first-touch leads, which
+  // is why "0 auto-sends" was evidence of nothing. Real leadKeys from that corpus are pinned here.
+  for (const deliverable of ["7164789799", "5126299400", "7168185994", "+17164789799", "17164789799", "(716) 478-9799"]) {
+    assert.strictEqual(
+      hasDeliverablePhoneKey(deliverable),
+      true,
+      `real production leadKey must be deliverable: ${deliverable}`
+    );
+  }
+  // Fail-safe: anything that is not a phone still holds the draft.
+  for (const notAPhone of ["rspenc29@gmail.com", "", "   ", "abc", "12345", null, undefined, 7164789799]) {
+    assert.strictEqual(
+      hasDeliverablePhoneKey(notAPhone as unknown),
+      false,
+      `non-phone lead key must NOT be treated as deliverable: ${String(notAPhone)}`
+    );
+  }
+  // The two call sites must use the shared helper, not re-inline a raw prefix test.
+  assert.ok(
+    !/leadKey\.startsWith\("\+"\)/.test(adfSrc),
+    "the raw startsWith('+') deliverability test must not come back — it rejects bare-digit leadKeys"
+  );
+  assert.strictEqual(
+    (adfSrc.match(/hasDeliverablePhone: hasDeliverablePhoneKey\(leadKey\)/g) ?? []).length,
+    2,
+    "both first-touch gate call sites must use the shared deliverable-phone helper"
+  );
+  // Deliverability and suppression must agree on what a phone IS — they gate the same send.
+  const suppressionSrc = fs.readFileSync(
+    path.join(process.cwd(), "services/api/src/domain/suppressionStore.ts"),
+    "utf8"
+  );
+  assert.ok(
+    /export function normalizePhone/.test(suppressionSrc),
+    "suppression's normalizePhone is the shared definition of a phone number"
+  );
+
+  console.log("PASS first-touch-autosend eval (dark no-op + 1 send case + 7 fail-safes + parity + shadow record + STEP 2 wiring + evidence stream + deliverable-phone key)");
 }
 
 const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
