@@ -16,6 +16,29 @@ AH-specific polish; an AH-only hardcode is debt; the standing question on every 
 "would this work at a dealer we've never met?"; and anything that requires Joe (or any
 owner) in the daily loop is a defect against the goal, not a feature.
 
+### The bar, as five tests (Joe, confirmed 2026-07-30 — "Ok")
+
+The readiness bar is scored by `scripts/rollout_readiness_report.ts` into
+`reports/rollout_readiness/latest.json`. It has FIVE sections, and **all five are visible
+from day one** — a section we have not measured yet reads `NOT_MEASURED`, never omitted:
+
+1. **Funnel** — answer / book / show rates against the 58/16/27 baseline (offered 58%,
+   booked 16%, offer→book 27%; americanharley, 30d, 6/16, sales-scoped), plus first-touch
+   latency.
+2. **Portability** — the universal-vs-dealer eval split is clean, and the count of
+   AH hardcodes sitting in universal code paths is at or under its ratchet.
+3. **Operability** — every `docs/dealer_ready_checklist.md` row WORKING, the release gate's
+   clean-day streak at target, no open P0/P1, and escalations that need a human trending down.
+4. **Stranger test** — has a fresh synthetic "dealer #2" been provisioned **from config
+   alone** and passed the gates cold? Yes/no + date. Starts at *not yet attempted*.
+5. **Pitch numbers** — response time, booking lift, BDC hours replaced: what we can
+   actually claim to dealer #2. Starts at *not yet measured*.
+
+**The score must not flatter.** The bar is MET only when every section meets its target AND
+no section is still unmeasured — an unmeasured section blocks the bar exactly like a failing
+one, so "we never checked" can never round up to "we're ready." Targets are proposed by the
+loop and live in `READINESS_TARGETS` in that script; they are Joe's to veto in one place.
+
 ## What this document is
 
 The machine-consulted record of **settled policy**: every product/behavior decision Joe has
