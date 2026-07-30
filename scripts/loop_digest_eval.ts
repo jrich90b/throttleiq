@@ -87,4 +87,31 @@ assert.match(mailer, /LOOP_DIGEST_ENABLED/, "mailer has a kill switch");
   assert.ok(!/DECISION QUEUE/.test(t1only.text), "no decision queue when nothing needs Joe");
 }
 
-console.log("PASS loop digest eval — healthy=quiet, findings formatted (Tier 2 first, counts + conv + class), decision queue + age clock, mailer send-guard + reuse.");
+// --- Dealer-#2 readiness line rides along on BOTH paths (Joe, 2026-07-29: the bar is the
+//     standing question, so a healthy day must still report it) — and stays absent when the
+//     scorecard has not been generated, so the digest never invents a verdict. ---
+{
+  const line = "Dealer-#2 readiness: NOT_MET — 2/4 gates (50%). Open: release_gate, no_p0_p1.";
+  const withFindings = formatLoopDigest(
+    { generatedAt: "now", workOrderCount: 1, notifyCount: 1, workOrders: [{ convId: "+1", dimension: "reported_issue", tier: 2, notify: true, detail: "x" }] },
+    { readinessLine: line }
+  );
+  assert.ok(withFindings.text.includes(line), "readiness line renders on a findings digest");
+  const healthy = formatLoopDigest({ generatedAt: "now", workOrderCount: 0, workOrders: [], stop: true }, { readinessLine: line });
+  assert.ok(healthy.text.includes(line), "readiness line renders on the all-clear digest");
+  assert.equal(healthy.hasContent, false, "the readiness line alone never breaks the healthy=quiet contract");
+
+  const noScorecard = formatLoopDigest({ generatedAt: "now", workOrderCount: 0, workOrders: [], stop: true });
+  assert.ok(!/readiness/i.test(noScorecard.text), "no scorecard => no readiness claim");
+  const blankScorecard = formatLoopDigest({ generatedAt: "now", workOrderCount: 0, workOrders: [] }, { readinessLine: "   " });
+  assert.ok(!/\n\n\s*$/.test(blankScorecard.text), "a blank readiness line adds no dangling section");
+}
+
+// --- Source guard: the mailer must actually feed the scorecard to the formatter. ---
+{
+  const src = fs.readFileSync("scripts/loop_digest.ts", "utf8");
+  assert.ok(/rollout_readiness/.test(src), "loop_digest reads the rollout-readiness scorecard");
+  assert.ok(/readinessLine/.test(src), "loop_digest passes readinessLine into formatLoopDigest");
+}
+
+console.log("PASS loop digest eval — healthy=quiet, findings formatted (Tier 2 first, counts + conv + class), decision queue + age clock, readiness line on both paths, mailer send-guard + reuse.");

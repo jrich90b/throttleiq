@@ -32,8 +32,19 @@ if (!fs.existsSync(nextPath)) {
 
 const payload = JSON.parse(fs.readFileSync(nextPath, "utf8"));
 
+// The dealer-#2 readiness bar rides along when the scorecard has been generated (it is written by
+// rollout_readiness:report). Absent or unreadable => the digest simply omits the line.
+let readinessLine: string | null = null;
+try {
+  const scorecard = JSON.parse(fs.readFileSync(path.join(reportRoot, "rollout_readiness", "latest.json"), "utf8"));
+  const { formatReadinessLine } = await import("./rollout_readiness_report.ts");
+  readinessLine = formatReadinessLine(scorecard);
+} catch {
+  readinessLine = null;
+}
+
 const { formatLoopDigest } = await import("../services/api/src/domain/loopDigest.ts");
-const digest = formatLoopDigest(payload, { dealer: process.env.DEALER_LABEL || undefined });
+const digest = formatLoopDigest(payload, { dealer: process.env.DEALER_LABEL || undefined, readinessLine });
 
 const force = String(process.env.LOOP_DIGEST_FORCE ?? "").trim() === "1";
 if (!digest.hasContent && !force) {
