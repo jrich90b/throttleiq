@@ -490,6 +490,98 @@ export function runLinkVariants(): VariantResult[] {
 }
 
 // ---------------------------------------------------------------------------
+// Onboarding mode — grade a REAL dealer's sample, not our synthetic variants.
+// ---------------------------------------------------------------------------
+
+/**
+ * The whole point of the synthetic suite above is to tell us which shapes we handle. What an
+ * onboarding conversation actually needs is the inverse: given THIS dealer's artifacts, what
+ * will we read? That is the residual unknown no amount of synthetic coverage removes, and it
+ * collapses to two files.
+ *
+ *   npm run dealer_intake_shape:test -- --adf ./their-lead.xml
+ *   npm run dealer_intake_shape:test -- --feed https://their-site.com/inventory/xml
+ *
+ * Reported as fill RATES across every row, not just the first: a feed where 3 of 400 units
+ * carry a stock number is broken in a way a single-row check would call fine.
+ */
+export type FeedSampleReport = {
+  rows: number;
+  fill: Record<string, { filled: number; pct: number }>;
+  /** Required fields present in NO row — the feed is unusable for these. */
+  deadRequired: string[];
+  /** Required fields present in some rows but under 90% — partial coverage. */
+  patchyRequired: string[];
+  usable: boolean;
+};
+
+export function gradeFeedSample(xml: string): FeedSampleReport {
+  const rows = parseFeed(xml) as any[];
+  const fill: Record<string, { filled: number; pct: number }> = {};
+  for (const key of FEED_REPORTED) {
+    const filled = rows.filter(r => {
+      const v = r?.[key];
+      if (v == null) return false;
+      if (Array.isArray(v)) return v.length > 0;
+      return String(v).trim() !== "";
+    }).length;
+    fill[key] = { filled, pct: rows.length ? Math.round((filled / rows.length) * 100) : 0 };
+  }
+  const deadRequired = FEED_REQUIRED.filter(k => fill[k].filled === 0);
+  const patchyRequired = FEED_REQUIRED.filter(k => fill[k].filled > 0 && fill[k].pct < 90);
+  return {
+    rows: rows.length,
+    fill,
+    deadRequired,
+    patchyRequired,
+    usable: rows.length > 0 && deadRequired.length === 0
+  };
+}
+
+export function gradeAdfSample(xml: string): VariantResult {
+  const variant = {
+    id: "sample",
+    label: "This dealer's sample lead email",
+    realWorld: "The actual ADF their provider sends."
+  };
+  try {
+    const lead: any = parseAdfXml(xml);
+    const fields: FieldCheck[] = ADF_REPORTED.map(f => {
+      const value = lead?.[f];
+      const present = value != null && String(value).trim() !== "";
+      return { field: f, required: ADF_REQUIRED.includes(f), present, value: present ? value : null };
+    });
+    const missingRequired = fields.filter(f => f.required && !f.present).map(f => f.field);
+    return {
+      surface: "adf",
+      ...variant,
+      supported: missingRequired.length === 0,
+      fields,
+      missingRequired
+    };
+  } catch (err) {
+    return {
+      surface: "adf",
+      ...variant,
+      supported: false,
+      fields: [],
+      missingRequired: [...ADF_REQUIRED],
+      error: err instanceof Error ? err.message : String(err)
+    };
+  }
+}
+
+/** Read a sample from a local path or fetch it from the dealer's URL. */
+async function loadSample(source: string): Promise<string> {
+  if (/^https?:\/\//i.test(source)) {
+    const resp = await fetch(source, { signal: AbortSignal.timeout(30_000) });
+    if (!resp.ok) throw new Error(`fetch failed: HTTP ${resp.status} ${resp.statusText}`);
+    return await resp.text();
+  }
+  return fs.readFileSync(source, "utf8");
+}
+
+// ---------------------------------------------------------------------------
 // Grading + report.
 // ---------------------------------------------------------------------------
 
@@ -602,6 +694,46 @@ async function main() {
   };
   const reportRoot = arg("--report-root") || process.env.REPORT_ROOT || path.resolve(process.cwd(), "reports");
   const outDir = path.join(reportRoot, "intake_shape");
+
+  // --- Onboarding mode: grade THIS dealer's artifacts and stop. ---
+  const adfSource = arg("--adf");
+  const feedSource = arg("--feed");
+  if (adfSource || feedSource) {
+    const sample: Record<string, unknown> = { at: new Date().toISOString() };
+    let allUsable = true;
+
+    if (adfSource) {
+      const lead = gradeAdfSample(await loadSample(adfSource));
+      sample.adf = { source: adfSource, ...lead };
+      allUsable = allUsable && lead.supported;
+      console.log(`\nLEAD EMAIL — ${adfSource}`);
+      console.log(lead.supported ? "  usable" : `  NOT usable — missing ${lead.missingRequired.join(", ")}`);
+      if (lead.error) console.log(`  error: ${lead.error}`);
+      for (const f of lead.fields) {
+        console.log(`  ${f.present ? "ok  " : "MISS"} ${f.field}${f.required ? " (required)" : ""}${f.present ? ` = ${String(f.value).slice(0, 48)}` : ""}`);
+      }
+    }
+
+    if (feedSource) {
+      const feed = gradeFeedSample(await loadSample(feedSource));
+      sample.feed = { source: feedSource, ...feed };
+      allUsable = allUsable && feed.usable;
+      console.log(`\nINVENTORY FEED — ${feedSource}`);
+      console.log(`  ${feed.rows} row(s); ${feed.usable ? "usable" : "NOT usable"}`);
+      if (feed.deadRequired.length) console.log(`  MISSING IN EVERY ROW: ${feed.deadRequired.join(", ")}`);
+      if (feed.patchyRequired.length) console.log(`  PATCHY (<90% of rows): ${feed.patchyRequired.join(", ")}`);
+      for (const [key, stat] of Object.entries(feed.fill)) {
+        console.log(`  ${stat.pct === 100 ? "ok  " : stat.filled === 0 ? "MISS" : "part"} ${key}: ${stat.filled}/${feed.rows} (${stat.pct}%)`);
+      }
+    }
+
+    fs.mkdirSync(outDir, { recursive: true });
+    fs.writeFileSync(path.join(outDir, "sample.json"), JSON.stringify(sample, null, 2));
+    console.log(`\n${allUsable ? "PASS" : "GAPS FOUND"} — written to ${path.join(outDir, "sample.json")}`);
+    // Exit non-zero on an unusable artifact so this can gate an onboarding step.
+    if (!allUsable) process.exit(1);
+    return;
+  }
 
   const variants = [...runAdfVariants(), ...runFeedVariants(), ...runLinkVariants()];
   const result = gradeIntakeShape(variants, new Date().toISOString());
