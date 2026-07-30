@@ -955,6 +955,7 @@ import {
   markPricingEscalated,
   getPricingAttempts,
   closeConversation,
+  applyDeferCloseSoftPause,
   mergeConversationLead,
   setConversationMode,
   setContactPreference,
@@ -27103,7 +27104,17 @@ function isRegenerateInboundActionableForRouting(text: string): boolean {
 }
 
 type CustomerDispositionDecision = {
-  reason: "customer_sell_on_own" | "customer_keep_current_bike" | "customer_stepping_back";
+  // "customer_deferred" is a genuine "not right now" (the parser's defer_no_window). It is kept
+  // SEPARATE from customer_stepping_back because that reason is ambiguous — it also carries "I'll
+  // pass", "can't afford it", and hasBoughtElsewhereDispositionSignalText ("I ended up buying a
+  // 2016 in Ohio"). Flattening the two threw away the one distinction that decides whether this
+  // lead is ever worth re-engaging (Joe ruling 2026-07-29). The dialogState stays
+  // customer_stepping_back so every existing disengagement guard keys off it unchanged.
+  reason:
+    | "customer_sell_on_own"
+    | "customer_keep_current_bike"
+    | "customer_stepping_back"
+    | "customer_deferred";
   state: "customer_sell_on_own" | "customer_keep_current_bike" | "customer_stepping_back";
 };
 
@@ -27280,7 +27291,8 @@ function resolveCustomerDispositionDecision(
       return { reason: "customer_stepping_back", state: "customer_stepping_back" };
     }
     if (acceptedParsed.disposition === "defer_no_window") {
-      return { reason: "customer_stepping_back", state: "customer_stepping_back" };
+      // A "not right now" — re-engageable later. Same dialogState, distinct reason.
+      return { reason: "customer_deferred", state: "customer_stepping_back" };
     }
   }
   // Fallback for parser-disabled/low-confidence cases.
@@ -27316,6 +27328,9 @@ function applyCustomerDispositionCloseout(conv: any, decision: CustomerDispositi
   pauseInventoryWatches(conv); // a customer stepping back is off the watch alerts too
   closeConversation(conv, decision.reason);
   stopRelatedCadences(conv, decision.reason, { close: true });
+  // Same soft-pause record the console archive now writes (Joe ruling 2026-07-29) — a customer who
+  // deferred is re-engageable, not rejected. AFTER closeConversation so it is not overwritten.
+  applyDeferCloseSoftPause(conv, decision.reason);
 }
 
 type CustomerFollowUpDeferralDecision = {
@@ -41254,6 +41269,13 @@ app.post("/conversations/:id/close", async (req, res) => {
   }
   closeConversation(conv, reason);
   stopRelatedCadences(conv, reason, { close: true });
+  // A DEFER-class archive is a soft pause, not a rejection (Joe ruling 2026-07-29). Staff archiving
+  // "not interested" on a lead who only said "not at this time" left the record claiming the lead
+  // was BOTH actively worked (followUp.mode "active") and rejected — Donald Schuler +17166220132.
+  // Runs AFTER closeConversation so the honest paused_indefinite state and the resume-eligible date
+  // survive that call's cadence stop. Adds no sends; the thread still archives and still reopens on
+  // a real inbound.
+  applyDeferCloseSoftPause(conv, reason);
   return res.json({ ok: true, conversation: conv });
 });
 
@@ -41278,7 +41300,8 @@ app.post("/conversations/:id/reopen", (req, res) => {
   const dispositionReasons = new Set([
     "customer_sell_on_own",
     "customer_keep_current_bike",
-    "customer_stepping_back"
+    "customer_stepping_back",
+    "customer_deferred"
   ]);
   if (dispositionReasons.has(String(conv.followUp?.reason ?? ""))) {
     conv.followUp = undefined;
