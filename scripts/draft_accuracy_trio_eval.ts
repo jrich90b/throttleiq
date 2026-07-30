@@ -73,6 +73,51 @@ assert.equal(
 assert.equal(phrase(SUN, at(12)), "when we open tomorrow", "Sunday (closed all day) → Monday is tomorrow");
 assert.equal(phrase(MON, at(22)), "when we open tomorrow", "Monday night → Tuesday");
 
+// ---- (2b) SERVICE ADFs get the same hours-aware promise as FINANCE ones (Joe, 2026-07-30).
+// Robert Spencer's service ADF (#11708) is stamped 2026-07-30T00:53Z, which is 20:53 WEDNESDAY in
+// America/New_York — after the 6pm close, not the small hours (the UTC stamp reads misleadingly).
+// The draft still promised service would reach out "shortly". The guard existed and was wired only
+// into the finance lane. Thursday is an open day, so the honest phrase is "when we open tomorrow".
+{
+  const WED = 3;
+  const robertLocal = localClockParts(new Date("2026-07-30T00:53:24.510Z"), "America/New_York");
+  assert.equal(robertLocal.dayIndex, WED, "the #11708 stamp is Wednesday evening in dealer time, not Thursday");
+  assert.equal(
+    phrase(robertLocal.dayIndex, robertLocal.minutesSinceMidnight),
+    "when we open tomorrow",
+    "#11708: 8:53pm Wednesday is past the 6pm close — never 'shortly'"
+  );
+  assert.equal(phrase(SAT, at(23, 30)), "when we open Monday", "a service ADF at 11:30pm Saturday must not say shortly");
+  assert.equal(phrase(SUN, at(2, 15)), "when we open tomorrow", "a 2:15am Sunday service ADF points at Monday");
+  // Still open later today => "shortly" remains correct and must NOT be over-corrected into hedging.
+  assert.equal(phrase(WED, at(8, 30)), "shortly", "8:30am Wednesday: we open at 9 the same day");
+
+  const sendgridSrc = await fs.readFile(path.join(process.cwd(), "services/api/src/routes/sendgridInbound.ts"), "utf8");
+  assert.match(
+    sendgridSrc,
+    /service department reach out \$\{serviceFollowUpWhen\}/,
+    "the service ADF ack must interpolate the hours-aware phrase, not hardcode 'shortly'"
+  );
+  assert.ok(
+    !/service department reach out shortly/.test(sendgridSrc),
+    "the hardcoded 'reach out shortly' service promise must be gone"
+  );
+
+  // The de-duped service fallback (index.ts) is the other place that promised "shortly", and it is
+  // reached from BOTH reply paths — so both callers must supply the phrase or it silently reverts.
+  const indexSrc = await fs.readFile(path.join(process.cwd(), "services/api/src/index.ts"), "utf8");
+  assert.match(
+    indexSrc,
+    /in touch \$\{String\(opts\?\.followUpWhen/,
+    "the de-duped service fallback must use the caller-supplied phrase"
+  );
+  assert.equal(
+    (indexSrc.match(/followUpWhen: await resolveStaffFollowUpTimingPhrase\(\)/g) ?? []).length,
+    2,
+    "both applyServicePolicy call sites (live twilio + regenerate) must pass the phrase — two-path parity"
+  );
+}
+
 // ---- (3) fail-safe: unknown/blank hours keep today's wording rather than invent a schedule.
 assert.equal(phrase(SAT, at(20), {}), "shortly", "no configured hours → fail safe to the status quo");
 assert.equal(phrase(SAT, at(20), null), "shortly", "null hours → fail safe");

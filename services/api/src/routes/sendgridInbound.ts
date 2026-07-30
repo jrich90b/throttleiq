@@ -6850,8 +6850,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   }
 
   if (isServiceLead) {
+    // Service ADFs land at all hours exactly like credit apps do — Robert Spencer's (#11708)
+    // arrived 2026-07-30 00:53 and was told service would reach out "shortly", a promise nobody
+    // was at the dealership to keep. The hours-aware phrase already guards the FINANCE lane a few
+    // hundred lines down; it was never extended here. Same fail direction, same fix, one source
+    // of truth (resolveStaffFollowUpTimingPhrase falls back to "shortly" if hours are unknown).
+    const serviceFollowUpWhen = await resolveStaffFollowUpTimingPhrase();
     let ack =
-      "Thanks — I’ve received your service request. I’ll have our service department reach out shortly.";
+      `Thanks — I’ve received your service request. I’ll have our service department reach out ${serviceFollowUpWhen}.`;
     ack = await applyInitialAdfPrefix(ack);
     ack = withInitialPhoto(ack);
     ack = withInitialAvailabilityLine(ack);

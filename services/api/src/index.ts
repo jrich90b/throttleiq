@@ -29920,6 +29920,12 @@ function applyServicePolicy(
     hasActionableFinanceContext?: boolean;
     hasActionableAvailabilityContext?: boolean;
     hasActionableSchedulingContext?: boolean;
+    /**
+     * Hours-aware trailing phrase for the de-duped fallback below ("...in touch ___"), resolved by
+     * the caller because this function is sync and reading the dealer's hours is async. Defaults to
+     * today's wording, so an un-passed call is behaviour-preserving.
+     */
+    followUpWhen?: string;
   }
 ): string {
   const inboundText = String(opts?.inboundText ?? "");
@@ -29942,7 +29948,8 @@ function applyServicePolicy(
   if (!explicitServiceIntentThisTurn && hasActionableSalesContext) return reply;
   let out = "We’ve received your service request and will have the service department reach out.";
   if (normalizeOutboundText(out) === normalizeOutboundText(lastOutboundText)) {
-    out = "Got it — our service department will be in touch shortly.";
+    // Same after-hours promise as the ADF ack: "shortly" at 1am is a promise nobody can keep.
+    out = `Got it — our service department will be in touch ${String(opts?.followUpWhen ?? "shortly").trim() || "shortly"}.`;
   }
   return out;
 }
@@ -59255,7 +59262,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     explicitServiceIntentThisTurn: regenReducedConversationState.departmentIntent === "service",
     hasActionableFinanceContext: regenPricingIntentHint,
     hasActionableAvailabilityContext: regenAvailabilityPrimaryIntentHint,
-    hasActionableSchedulingContext: regenSchedulingIntentHint
+    hasActionableSchedulingContext: regenSchedulingIntentHint,
+    followUpWhen: await resolveStaffFollowUpTimingPhrase()
   });
   reply = applySoftSchedulePolicy(conv, reply, String(event.body ?? ""));
   reply = stripYearPreferenceIfAnyYearSpecified(reply, String(event.body ?? ""));
@@ -70085,7 +70093,8 @@ if (authToken && signature) {
     explicitServiceIntentThisTurn: inboundDepartmentIntent === "service",
     hasActionableFinanceContext,
     hasActionableAvailabilityContext,
-    hasActionableSchedulingContext
+    hasActionableSchedulingContext,
+    followUpWhen: await resolveStaffFollowUpTimingPhrase()
   });
   reply = applySoftSchedulePolicy(conv, reply, String(event.body ?? ""));
   reply = stripYearPreferenceIfAnyYearSpecified(reply, String(event.body ?? ""));
