@@ -2176,7 +2176,10 @@ export function isDeclineCloseoutReason(reason: string | null | undefined): bool
     r === "not_interested" ||
     r === "customer_sell_on_own" ||
     r === "customer_keep_current_bike" ||
-    r === "customer_stepping_back"
+    r === "customer_stepping_back" ||
+    // A "not right now" archives on the same terms as any other decline — a real customer text
+    // still reopens it, only a bare ack leaves it archived (Joe ruling 2026-07-29).
+    r === "customer_deferred"
   );
 }
 
@@ -2214,6 +2217,45 @@ export function isDeclineCloseoutReason(reason: string | null | undefined): bool
  */
 export const DEFER_SOFT_PAUSE_RESUME_DAYS = 45;
 
+/**
+ * Which defer/decline reasons are worth RE-ENGAGING later, and which are an OUTCOME.
+ *
+ * Joe ruling 2026-07-29, after reviewing the first cut of this build: one bucket for four
+ * different meanings was wrong. "Not at this time" is a timing answer; "I bought a bike in Ohio"
+ * is a finished story. Coming back in 45 days to pitch a motorcycle to someone who already bought
+ * one is the fabricated-frame failure mode ([[adf-form-vs-question-framing]]) — talking to a
+ * customer about a reality that is not theirs.
+ *
+ * RE-ENGAGEABLE:
+ *  - "not_interested"           — what the console archive writes; Donald Schuler +17166220132 said
+ *                                only "Not at this time thank you" after a price. The case Joe is
+ *                                fixing.
+ *  - "customer_deferred"        — the parser's defer_no_window, an explicit "not right now".
+ *  - "customer_keep_current_bike" — keeping their bike today; still a rider, still a future buyer.
+ *
+ * PARKED (honest paused state, but never re-engaged):
+ *  - "customer_stepping_back"   — DELIBERATELY parked because it is AMBIGUOUS. The same reason
+ *                                carries "I'll pass", "can't afford it right now", AND
+ *                                hasBoughtElsewhereDispositionSignalText ("I ended up buying a
+ *                                2016 in Ohio"). Since it can mean "already bought", the safe read
+ *                                is to leave it alone. Genuine deferrals now land on
+ *                                "customer_deferred" instead, so this parks less than it used to.
+ *  - "customer_sell_on_own"     — about selling THEIR bike themselves, not about buying one.
+ *
+ * FAIL DIRECTION: no re-engagement. An unrecognized reason gets no resume date, so silence is
+ * always the default and a wrong read costs a lead we simply never re-touch — never a text to
+ * someone it would embarrass us to text.
+ */
+const DEFER_RESUME_ELIGIBLE_REASONS = new Set([
+  "not_interested",
+  "customer_deferred",
+  "customer_keep_current_bike"
+]);
+
+export function isDeferResumeEligibleCloseReason(reason: string | null | undefined): boolean {
+  return DEFER_RESUME_ELIGIBLE_REASONS.has(String(reason ?? "").trim().toLowerCase());
+}
+
 export function resolveDeferCloseSoftPause(args: {
   reason?: string | null;
   nowMs: number;
@@ -2222,7 +2264,9 @@ export function resolveDeferCloseSoftPause(args: {
   if (!isDeclineCloseoutReason(reason)) {
     return { softPause: false, followUpReason: reason, resumeEligibleAt: null };
   }
-  if (!Number.isFinite(args.nowMs)) {
+  // Honest paused state applies to EVERY defer-class close — a parked lead still must not read as
+  // "actively worked". Only the resume-eligible DATE is reserved for reasons worth re-touching.
+  if (!isDeferResumeEligibleCloseReason(reason) || !Number.isFinite(args.nowMs)) {
     return { softPause: true, followUpReason: reason, resumeEligibleAt: null };
   }
   const resumeMs = args.nowMs + DEFER_SOFT_PAUSE_RESUME_DAYS * 24 * 60 * 60 * 1000;

@@ -150,6 +150,9 @@ for (const reason of [
   "customer_stepping_back",
   "customer_keep_current_bike",
   "customer_sell_on_own",
+  // A "not right now" archives on the SAME terms as any other decline (Joe ruling 2026-07-29):
+  // it is re-engageable later, but it must not be dragged back by a stray "ok"/👍.
+  "customer_deferred",
   "CUSTOMER_STEPPING_BACK" // case-insensitive
 ]) {
   eq(isDeclineCloseoutReason(reason), true, `"${reason}" is a clean-decline closeout reason`);
@@ -157,7 +160,7 @@ for (const reason of [
 for (const reason of ["sold", "opt_out", "wrong_number", "unit_hold", "", null, undefined, "other"]) {
   eq(isDeclineCloseoutReason(reason), false, `"${reason}" must NOT count as a decline closeout`);
 }
-for (const reason of ["not_interested", "customer_stepping_back", "customer_keep_current_bike", "customer_sell_on_own"]) {
+for (const reason of ["not_interested", "customer_stepping_back", "customer_keep_current_bike", "customer_sell_on_own", "customer_deferred"]) {
   // decline + bare ack => stays archived out of the inbox
   {
     const conv = mkArchived(`d-ack-${reason}`);

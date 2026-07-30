@@ -27102,7 +27102,17 @@ function isRegenerateInboundActionableForRouting(text: string): boolean {
 }
 
 type CustomerDispositionDecision = {
-  reason: "customer_sell_on_own" | "customer_keep_current_bike" | "customer_stepping_back";
+  // "customer_deferred" is a genuine "not right now" (the parser's defer_no_window). It is kept
+  // SEPARATE from customer_stepping_back because that reason is ambiguous — it also carries "I'll
+  // pass", "can't afford it", and hasBoughtElsewhereDispositionSignalText ("I ended up buying a
+  // 2016 in Ohio"). Flattening the two threw away the one distinction that decides whether this
+  // lead is ever worth re-engaging (Joe ruling 2026-07-29). The dialogState stays
+  // customer_stepping_back so every existing disengagement guard keys off it unchanged.
+  reason:
+    | "customer_sell_on_own"
+    | "customer_keep_current_bike"
+    | "customer_stepping_back"
+    | "customer_deferred";
   state: "customer_sell_on_own" | "customer_keep_current_bike" | "customer_stepping_back";
 };
 
@@ -27279,7 +27289,8 @@ function resolveCustomerDispositionDecision(
       return { reason: "customer_stepping_back", state: "customer_stepping_back" };
     }
     if (acceptedParsed.disposition === "defer_no_window") {
-      return { reason: "customer_stepping_back", state: "customer_stepping_back" };
+      // A "not right now" — re-engageable later. Same dialogState, distinct reason.
+      return { reason: "customer_deferred", state: "customer_stepping_back" };
     }
   }
   // Fallback for parser-disabled/low-confidence cases.
@@ -41264,7 +41275,8 @@ app.post("/conversations/:id/reopen", (req, res) => {
   const dispositionReasons = new Set([
     "customer_sell_on_own",
     "customer_keep_current_bike",
-    "customer_stepping_back"
+    "customer_stepping_back",
+    "customer_deferred"
   ]);
   if (dispositionReasons.has(String(conv.followUp?.reason ?? ""))) {
     conv.followUp = undefined;

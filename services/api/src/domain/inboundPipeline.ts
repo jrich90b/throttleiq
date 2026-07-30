@@ -57,10 +57,14 @@ export type InboundTerminalRouteDecision =
       routeOutcome: "customer_disposition_closeout";
       shouldStop: true;
       parser: "customer_disposition";
+      // "customer_deferred" = an explicit "not right now", kept distinct from the ambiguous
+      // customer_stepping_back (which also carries "I'll pass" and "bought elsewhere"). The
+      // dispositionState stays customer_stepping_back, so route/guard behavior is unchanged.
       dispositionReason:
         | "customer_sell_on_own"
         | "customer_keep_current_bike"
-        | "customer_stepping_back";
+        | "customer_stepping_back"
+        | "customer_deferred";
       dispositionState:
         | "customer_sell_on_own"
         | "customer_keep_current_bike"
@@ -79,7 +83,8 @@ export type InboundTerminalRouteInput = {
     reason:
       | "customer_sell_on_own"
       | "customer_keep_current_bike"
-      | "customer_stepping_back";
+      | "customer_stepping_back"
+      | "customer_deferred";
     state:
       | "customer_sell_on_own"
       | "customer_keep_current_bike"
