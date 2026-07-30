@@ -87,11 +87,16 @@ export function checkMessage(body: string, opts: {
   if (fullName && !["Harley", "Davidson"].includes(fullName[2])) {
     out.push({ check: "full_name_greeting", detail: `${fullName[1]} ${fullName[2]}` });
   }
+  // The full brand name is fine when it's framed as an intro. This must recognize BOTH forms: the
+  // legacy "this is {agent} at {dealer}" AND the softened "it's {agent} over at {dealer}" that has
+  // been the canonical intro since 2026-06-15 (buildAgentIntroPhrase, domain/agentVoice.ts) and that
+  // Joe re-affirmed 2026-07-29. Matching only the legacy form made this rule flag the CURRENT house
+  // style as a violation on every non-first-touch message carrying the brand.
   if (
     opts.smsLike &&
     !opts.firstOutbound &&
     lower.includes("american harley-davidson") &&
-    !/this is [a-z]+ (at|from|with)/.test(lower)
+    !/(?:this is|it'?s) [a-z]+ (?:over )?(at|from|with)/.test(lower)
   ) {
     out.push({ check: "long_brand_repeat", detail: "full brand name outside first-touch intro" });
   }

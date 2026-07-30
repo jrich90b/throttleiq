@@ -11,6 +11,7 @@ import {
   postSaleVehicleIsNew,
   postSaleAccessoryOrEnjoyMessage
 } from "../services/api/src/domain/postSaleCadence.ts";
+import { checkMessage } from "./voice_charter_audit.ts";
 
 // --- postSaleVehicleIsNew: confident NEW only, else pre-owned ---
 assert.equal(postSaleVehicleIsNew({ sale: { condition: "new" } }), true, "sale.condition=new => new");
@@ -76,9 +77,21 @@ assert.ok(/enjoying the Street Glide/i.test(preownedMsg) && /just let me know/i.
 assert.ok((preownedMsg.match(/—/g) || []).length <= 1, "pre-owned message keeps the em-dash diet (<=1)");
 
 // charter long_brand_repeat: a post-sale touch is NOT a first outbound, so the full brand
-// name must be framed as a re-intro ("this is {rep} at {dealer}") to clear the check.
+// name must be framed as a re-intro to clear the check.
 // Origin: Weston (+17167439566) 2026-07-05 — "Giovanni at American Harley-Davidson" tripped it.
-assert.ok(/this is Giovanni at American Harley-Davidson/.test(preownedMsg), "PRE-OWNED => re-intro phrasing clears charter long_brand_repeat");
-assert.ok(/this is Giovanni at American Harley-Davidson/.test(newMsg), "NEW => re-intro phrasing clears charter long_brand_repeat");
+// The re-intro now uses the canonical SOFTENED wording (buildAgentIntro, "it's {rep} over at
+// {dealer}") per Joe's 2026-07-29 ruling; the charter rule was taught that form in the same change,
+// having previously only recognized the legacy "this is {rep} at {dealer}".
+assert.ok(/it's Giovanni over at American Harley-Davidson/.test(preownedMsg), "PRE-OWNED => re-intro phrasing clears charter long_brand_repeat");
+assert.ok(/it's Giovanni over at American Harley-Davidson/.test(newMsg), "NEW => re-intro phrasing clears charter long_brand_repeat");
+// And the charter checker itself must AGREE — the assertion above is only meaningful if the rule
+// actually clears the softened form (it didn't before 2026-07-29).
+for (const [label, msg] of [["PRE-OWNED", preownedMsg], ["NEW", newMsg]] as const) {
+  assert.ok(
+    !checkMessage(msg, { firstOutbound: false, smsLike: true, staffHasSent: false })
+      .some(v => v.check === "long_brand_repeat"),
+    `${label} => voice_charter_audit clears the softened re-intro (no long_brand_repeat)`
+  );
+}
 
 console.log("PASS post-sale cadence condition eval");
