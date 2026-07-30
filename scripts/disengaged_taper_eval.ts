@@ -152,6 +152,56 @@ check("advanceFollowUpCadence does NOT taper a silent lead below threshold", () 
   assert.ok(c.followUpCadence.nextDueAt);
 });
 
+// ---------------------------------------------------------------------------
+// The close-out is not graded by the value-add cadence rubric.
+//
+// The cadence-quality judge asks "does this proactive touch carry a concrete
+// reason to reach out?". A deliberate sign-off can never answer yes, so the
+// judge verdicted `suppress` on it ~100% of the time it saw one: 26 live
+// American Harley threads 2026-07-13..07-30, of which 25 were then GHOSTED —
+// the cadence ended with NO close-out at all, which is precisely the silent
+// drop-off this taper exists to replace. The sibling deterministic VALUE gate
+// already excludes the close-out (`!disengagedCloseoutActive`); the LLM gate
+// was the one proactive-touch gate in that loop that did not.
+// ---------------------------------------------------------------------------
+const apiSrc = fs.readFileSync(
+  new URL("../services/api/src/index.ts", import.meta.url),
+  "utf8"
+);
+
+check("the cadence-quality judge returns NO OPINION for the close-out class", () => {
+  const fn = apiSrc.slice(apiSrc.indexOf("async function runCadenceQualityJudgeShadow("));
+  assert.ok(fn.length > 0, "runCadenceQualityJudgeShadow must exist");
+  const body = fn.slice(0, fn.indexOf("const verdict = await judgeCadenceQualityWithLLM"));
+  assert.ok(
+    /opts\?\.messageClass === "disengaged_closeout"\s*\)?\s*return null;/.test(body),
+    "the close-out class must short-circuit BEFORE the LLM judge call (otherwise the false-positive cadence_quality_suppressed row is still written)"
+  );
+});
+
+check("BOTH cadence-judge call sites scope the message class off disengagedCloseoutActive", () => {
+  const calls = apiSrc.match(/runCadenceQualityJudgeShadow\((?:[^;]|\n){0,400}?\)/g) ?? [];
+  const callSites = calls.filter((c) => !c.startsWith("runCadenceQualityJudgeShadow(\n  conv: any"));
+  assert.equal(callSites.length, 2, `expected exactly 2 call sites, found ${callSites.length}`);
+  for (const site of callSites) {
+    assert.ok(
+      /messageClass:\s*disengagedCloseoutActive\s*\?\s*"disengaged_closeout"\s*:\s*"value_add"/.test(site),
+      `call site must pass the class derived from disengagedCloseoutActive: ${site.slice(0, 160)}`
+    );
+  }
+});
+
+check("a suppressed proactive touch still ENDS the taper (never re-queues the lead)", () => {
+  // The enforce branch advances the cadence and skips the send. Whether the
+  // close-out sent or was held, the sequence must terminate identically — a
+  // future change must not turn suppression into "try this lead again later".
+  const c = silentConv(8) as any;
+  advanceFollowUpCadence(c, "America/New_York");
+  assert.equal(c.followUpCadence.status, "completed", "suppressed touch still completes the cadence");
+  assert.equal(c.followUpCadence.stopReason, "disengaged_taper");
+  assert.equal(c.followUpCadence.nextDueAt, undefined, "no re-queue — we do not go back to pestering");
+});
+
 console.log(`\nDisengaged taper: ${passed} checks passed`);
 if (fail.length) {
   console.error(`\n${fail.length} failures`);

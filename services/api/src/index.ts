@@ -5201,6 +5201,12 @@ async function runDraftQualityJudgeShadow(
   }
 }
 
+// Which KIND of proactive cadence message is being judged. `value_add` is the ordinary touch the
+// cadence-quality rubric was written for; `disengaged_closeout` is the fixed taper sign-off template
+// (buildDisengagedCadenceCloseout), which is contentless BY DESIGN and must not be graded as if it
+// were trying to be a value-add touch.
+type CadenceQualityMessageClass = "value_add" | "disengaged_closeout";
+
 // Cadence-quality judge — SHADOW (STEP 1). Judge #3. The draft + no-response judges only see
 // INBOUND-triggered turns; this runs on a PROACTIVE follow-up cadence message about to go out and
 // LOGS whether it should send / fits state / sounds human / isn't pushy — without ever altering or
@@ -5209,12 +5215,25 @@ async function runDraftQualityJudgeShadow(
 async function runCadenceQualityJudgeShadow(
   conv: any,
   message: string,
-  channel: "sms" | "email"
+  channel: "sms" | "email",
+  opts?: { messageClass?: CadenceQualityMessageClass }
 ): Promise<CadenceQualityGateDecision | null> {
   try {
     if (!conv?.id) return null;
     if (!cadenceQualityJudgeShadowEnabled() && !isCadenceQualityJudgeEnabled() && !isCadenceQualityEnforceEnabled())
       return null;
+    // SCOPE GUARD — the disengagement-taper close-out is not graded by the value-add rubric.
+    // This judge asks "does this proactive touch carry a concrete reason to reach out?", which a
+    // deliberate sign-off can never answer yes to, so it verdicts `suppress` ~100% of the time it
+    // sees one (26 live threads, 2026-07-13..07-30; 25 of them were then GHOSTED — the cadence
+    // ended with no close-out at all, which is exactly the silent drop-off the taper exists to
+    // replace). Same exclusion the sibling VALUE gate already makes 190 lines up (see
+    // `!disengagedCloseoutActive` in the value-gate condition) — this makes the two gates agree.
+    // Deterministic is legal here: `messageClass` is a STATE predicate the caller already computed
+    // via shouldSendDisengagedCloseout (cadence kind + step index + zero inbound history), not a
+    // text match — no regex, no comprehension. Fail direction: retiring this guard makes us fail
+    // toward NOT sending a message we deterministically decided to send ⇒ invariant/scope guard.
+    if (opts?.messageClass === "disengaged_closeout") return null;
     const text = String(message ?? "").trim();
     if (!text) return null;
     let daysSinceLastInbound: number | null = null;
@@ -34322,7 +34341,9 @@ async function processDueFollowUpsUnlocked() {
     if (isCadenceQualityEnforceEnabled()) {
       const enfChannel: "sms" | "email" = useEmail ? "email" : "sms";
       const enfMsg = useEmail && emailMessage ? emailMessage : smsMessage;
-      const enfDecision = await runCadenceQualityJudgeShadow(conv, enfMsg, enfChannel);
+      const enfDecision = await runCadenceQualityJudgeShadow(conv, enfMsg, enfChannel, {
+        messageClass: disengagedCloseoutActive ? "disengaged_closeout" : "value_add"
+      });
       if (enfDecision?.action === "suppress") {
         console.log("[followup][cadence-quality-enforce] suppressed low-value proactive touch", {
           convId: conv.id,
@@ -34352,7 +34373,9 @@ async function processDueFollowUpsUnlocked() {
       // sounds human / isn't pushy. Fire-and-forget; never blocks or alters the cadence draft. Skipped
       // when ENFORCE is on — the awaited enforce gate above already judged + persisted this touch.
       if (!isCadenceQualityEnforceEnabled())
-        void runCadenceQualityJudgeShadow(conv, draftMessage, useEmail ? "email" : "sms");
+        void runCadenceQualityJudgeShadow(conv, draftMessage, useEmail ? "email" : "sms", {
+          messageClass: disengagedCloseoutActive ? "disengaged_closeout" : "value_add"
+        });
       maybeAddCallTodoForFollowUp();
       advanceFollowUpCadence(conv, cfg.timezone);
       continue;
