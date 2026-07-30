@@ -50,17 +50,26 @@ function fmtItem(w: LoopWorkOrder): string {
   return `  • [${t} ${w.action ?? "?"}${sev ? ` · ${sev}` : ""}] ${w.dimension ?? "?"}${tagStr}\n      ${String(w.detail ?? "").trim()}\n      conv: ${who}`;
 }
 
-export function formatLoopDigest(payload: LoopDigestPayload, opts: { dealer?: string } = {}): LoopDigest {
+export function formatLoopDigest(
+  payload: LoopDigestPayload,
+  opts: { dealer?: string; readinessLine?: string | null } = {}
+): LoopDigest {
   const dealer = opts.dealer ? ` (${opts.dealer})` : "";
   const orders = Array.isArray(payload.workOrders) ? payload.workOrders : [];
   const count = payload.workOrderCount ?? orders.length;
   const notifyCount = payload.notifyCount ?? orders.filter(o => o.notify).length;
+  // The dealer-#2 bar (Joe, 2026-07-29) — one line, printed even on an all-clear day, because
+  // "how close are we?" is a standing question the healthy path must still answer.
+  const readiness = String(opts.readinessLine ?? "").trim();
 
   if (!count) {
     return {
       hasContent: false,
       subject: `LeadRider agent-watch${dealer} — all clear`,
-      text: `No open findings as of ${payload.generatedAt ?? "now"}. The self-healing loop scanned the store and the turn-critic found nothing that needs review.`
+      text: [
+        `No open findings as of ${payload.generatedAt ?? "now"}. The self-healing loop scanned the store and the turn-critic found nothing that needs review.`,
+        ...(readiness ? ["", readiness] : [])
+      ].join("\n")
     };
   }
 
@@ -71,6 +80,7 @@ export function formatLoopDigest(payload: LoopDigestPayload, opts: { dealer?: st
   const lines: string[] = [];
   lines.push(`LeadRider agent-watch digest${dealer}`);
   lines.push(`${count} finding(s) — ${notifyCount} need your review. Generated ${payload.generatedAt ?? "now"} (feed ${payload.feedGeneratedAt ?? "?"}).`);
+  if (readiness) lines.push(readiness);
   if (payload.byTier) {
     lines.push(`By tier: T2 ${payload.byTier["2"] ?? 0} (needs review) / T1 ${payload.byTier["1"] ?? 0} (safe auto-patch) / T0 ${payload.byTier["0"] ?? 0} (reconcile-handled).`);
   }

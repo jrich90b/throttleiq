@@ -72,3 +72,52 @@ export const DEALER_OUTPUT_FACT_PATTERNS: RegExp[] = [
   /americanharley-davidson\.com/i,
   /\bU\d{3}-\d{2}\b/ // AH inventory stock-id shape, e.g. U876-22
 ];
+
+const ASSERTION_LINE = /\b(assert|expect|expected|mustInclude|toContain|toMatch|toEqual|toBe)\b/i;
+
+/** The eval script file backing a ci:eval entry, or null for composite/multi-file entries. */
+export function scriptFileFor(name: string): string | null {
+  const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"));
+  const cmd = String(pkg?.scripts?.[name] ?? "");
+  const m = cmd.match(/scripts\/([\w-]+)\.ts/);
+  if (!m) return null;
+  const file = path.join("scripts", `${m[1]}.ts`);
+  return fs.existsSync(file) ? file : null;
+}
+
+export type PortabilityScan = {
+  universal: number;
+  dealer: number;
+  violations: string[];
+};
+
+/**
+ * The single definition of "is the universal eval tier actually portable?" — shared by the
+ * ci:eval manifest guard (which FAILS on a violation) and the rollout-readiness scorecard
+ * (which REPORTS the same number as a bar gate). Two readers, one scan, so the gate and the
+ * scorecard can never disagree about how close dealer #2 is.
+ */
+export function scanUniversalEvalPortability(names: string[] = ciEvalScriptNames()): PortabilityScan {
+  const violations: string[] = [];
+  for (const name of names) {
+    if (name === "eval_suite_manifest:eval") continue;
+    if (tierForEval(name) !== "universal") continue;
+    const file = scriptFileFor(name);
+    if (!file) continue; // multi-file/composite entries (e.g. source-grep guards) — nothing to scan
+    const lines = fs.readFileSync(file, "utf8").split(/\r?\n/);
+    lines.forEach((line, i) => {
+      if (!ASSERTION_LINE.test(line)) return;
+      for (const pat of DEALER_OUTPUT_FACT_PATTERNS) {
+        if (pat.test(line)) {
+          violations.push(`${file}:${i + 1} (${name}) asserts dealer-output fact ${pat} → ${line.trim().slice(0, 100)}`);
+          break;
+        }
+      }
+    });
+  }
+  return {
+    universal: names.filter(n => n !== "eval_suite_manifest:eval" && tierForEval(n) === "universal").length,
+    dealer: names.filter(n => tierForEval(n) === "dealer:americanharley").length,
+    violations
+  };
+}

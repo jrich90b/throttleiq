@@ -20,6 +20,18 @@ evidence date whenever a capability is re-verified.
 | Postgres dual-write | WORKING | parity clean expected from 6/12 (shadow-leak fix) | Read-flip June 17 |
 | Worker dispatcher | SHADOW | running since 6/10 | Tick flip June 17 |
 
+## The machine-readable verdict
+
+This table is one of FOUR gates in the dealer-#2 readiness bar (Joe, 2026-07-29 —
+`docs/policy_charter.md` "North star"). The other three are the release gate's clean-day
+streak, zero open P0/P1 in the agent-manager report, and a dealer-portable universal eval
+tier. `npm run rollout_readiness:report` joins all four and writes one verdict to
+`reports/rollout_readiness/latest.json` (+ `latest.md`); the loop digest prints it as a
+single line so "how close is dealer #2?" is a number, not a research project. The grader is
+pinned fail-CLOSED by `rollout_readiness:eval` — a missing input or an unparseable table
+reads NOT_MET, never MET. **Keep the Status column a bare word** (`WORKING` / `SHADOW` /
+`UNVERIFIED`): the scorecard grades this table by parsing it.
+
 ## Open verification items
 1. DocuSign: validate token refresh and send a test envelope before declaring day-1 ready.
 2. Stripe deposit flow: one end-to-end re-verification closer to June 30.
