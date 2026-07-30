@@ -18,6 +18,17 @@ import {
   DIMENSION_FIX_CUTOVERS,
   type NamingCommit
 } from "../services/api/src/domain/anomalyClassifier.ts";
+import {
+  CODE_STATE_DISPOSITIONS,
+  DISPOSITIONS,
+  dispositionBoundaryMs,
+  isDisposition,
+  parseDispositionLedgerPayload,
+  partitionByDispositions,
+  POLICY_DISPOSITIONS,
+  upsertDisposition,
+  type DispositionRecord
+} from "../services/api/src/domain/dispositionLedger.ts";
 
 const a = (over: Record<string, unknown> = {}) => ({
   convId: "+1716",
@@ -183,6 +194,177 @@ const commit = (dateIso: string, subject = "Loop fix: human_correction_material 
   assert.match(detect, /suppressedShippedEchoCount/, "detect must report the echo-suppressed count in the payload");
 }
 
+// ── DISPOSITION LEDGER — the PERMANENT record (Joe 2026-07-30: "not show up again") ──
+// The three passes above all expire (a cutover date, a commit grep, a 14-day window). This one is
+// the explicit disposition a routine wrote, so it must never lapse — and must never eat a regression.
+const dz = (over: Record<string, unknown> = {}) => ({
+  convId: "+17162440763",
+  leadKey: "+17162440763",
+  dimension: "open_critic_finding",
+  category: "discovery" as const,
+  severity: "P2" as const,
+  healed: false,
+  detail: "ignored_customer_budget_constraint",
+  occurredAt: "2026-07-28T12:00:00.000Z",
+  ...over
+});
+const ledgerOf = (...recs: DispositionRecord[]) => new Map(recs.map(r => [r.key, r]));
+const rec = (over: Partial<DispositionRecord> = {}): DispositionRecord => ({
+  key: "+17162440763::open_critic_finding",
+  disposition: "joe-ruled",
+  at: "2026-07-29T18:00:00.000Z",
+  by: "leadrider-morning-quality-routine",
+  deployTs: null,
+  note: null,
+  ...over
+});
+
+// 15. POLICY disposition ("joe-ruled") suppresses the key permanently — no window, no expiry.
+//     This is the exact 7/30 case: Derek's budget miss was ruled + built on 7/29 and still ranked
+//     in the feed's top 8 the next morning.
+{
+  const { kept, suppressed, regressions } = partitionByDispositions([dz()], { ledger: ledgerOf(rec()) });
+  assert.equal(kept.length, 0, "a joe-ruled key is suppressed");
+  assert.equal(suppressed.length, 1);
+  assert.equal(regressions.length, 0, "a policy disposition has no regression path");
+  assert.match(suppressed[0].reason, /permanently suppressed/, "the reason says it is permanent");
+}
+
+// 16. POLICY disposition is TIMELESS: an occurrence years later is still the same non-defect.
+//     Safe because the key is one conversation+dimension — a real rule regression shows up on
+//     OTHER convIds, which carry no disposition.
+{
+  const { kept, suppressed } = partitionByDispositions([dz({ occurredAt: "2030-01-01T00:00:00.000Z" })], {
+    ledger: ledgerOf(rec())
+  });
+  assert.equal(kept.length, 0, "a much-later occurrence of a policy-disposed key stays suppressed");
+  assert.equal(suppressed.length, 1);
+}
+
+// 17. THE FAIL-SAFE EXCEPTION — a CODE-STATE disposition whose event postdates the fix deploy comes
+//     back marked regression-of-disposed. A fix that didn't hold is never silently eaten.
+{
+  const r = rec({ disposition: "fixed", deployTs: "2026-07-29T20:00:00.000Z" });
+  const { kept, suppressed, regressions } = partitionByDispositions(
+    [dz({ occurredAt: "2026-07-30T09:00:00.000Z" })],
+    { ledger: ledgerOf(r) }
+  );
+  assert.equal(suppressed.length, 0, "a post-deploy occurrence is NOT suppressed");
+  assert.equal(kept.length, 0, "it is reported as a regression, not as an ordinary kept finding");
+  assert.equal(regressions.length, 1, "it resurfaces as a regression");
+  assert.match(regressions[0].reason, /regression-of-disposed/, "the marker names the class");
+}
+
+// 18. CODE-STATE, pre-deploy event → suppressed (the ordinary already-fixed echo).
+{
+  const r = rec({ disposition: "fixed", deployTs: "2026-07-29T20:00:00.000Z" });
+  const { kept, suppressed, regressions } = partitionByDispositions(
+    [dz({ occurredAt: "2026-07-28T09:00:00.000Z" })],
+    { ledger: ledgerOf(r) }
+  );
+  assert.equal(kept.length, 0);
+  assert.equal(regressions.length, 0);
+  assert.equal(suppressed.length, 1, "an event before the deploy is a disposed echo");
+}
+
+// 19. BOUNDARY: deployTs beats `at` (routines usually dispose hours AFTER the deploy that fixed it),
+//     and an event exactly AT the boundary is suppressed (strictly-after is a regression).
+{
+  const r = rec({ disposition: "fixed", at: "2026-07-30T18:00:00.000Z", deployTs: "2026-07-29T20:00:00.000Z" });
+  assert.equal(dispositionBoundaryMs(r), Date.parse("2026-07-29T20:00:00.000Z"), "deployTs is the boundary, not `at`");
+  const { suppressed, regressions } = partitionByDispositions([dz({ occurredAt: "2026-07-29T20:00:00.000Z" })], {
+    ledger: ledgerOf(r)
+  });
+  assert.equal(regressions.length, 0, "an event exactly at the boundary is not a regression");
+  assert.equal(suppressed.length, 1);
+}
+
+// 20. FAIL-SAFE: an undatable occurrence against a CODE-STATE disposition is KEPT — we cannot prove
+//     it predates the fix, and the sibling passes fail the same way (never hide the unprovable).
+{
+  const r = rec({ disposition: "fixed", deployTs: "2026-07-29T20:00:00.000Z" });
+  const { kept, suppressed } = partitionByDispositions([dz({ occurredAt: undefined })], { ledger: ledgerOf(r) });
+  assert.equal(kept.length, 1, "no occurredAt + code-state disposition → keep");
+  assert.equal(suppressed.length, 0);
+}
+
+// 21. FAIL-SAFE: no ledger, an empty ledger, or a different key suppresses NOTHING.
+{
+  assert.equal(partitionByDispositions([dz()], { ledger: null }).kept.length, 1, "no ledger → keep");
+  assert.equal(partitionByDispositions([dz()], { ledger: new Map() }).kept.length, 1, "empty ledger → keep");
+  assert.equal(
+    partitionByDispositions([dz({ dimension: "held_draft_unresolved" })], { ledger: ledgerOf(rec()) }).kept.length,
+    1,
+    "the ledger is EXACT-KEY: a different dimension on the same conversation is untouched"
+  );
+}
+
+// 22. PARSING is fail-safe: a malformed record is dropped (suppresses nothing) rather than trusted,
+//     and a payload that isn't a ledger at all returns null. An unknown disposition word must never
+//     silently suppress.
+{
+  assert.equal(parseDispositionLedgerPayload(null), null, "non-object payload → null");
+  assert.equal(parseDispositionLedgerPayload({}), null, "payload without records → null");
+  const parsed = parseDispositionLedgerPayload({
+    version: 1,
+    records: [
+      rec(),
+      { ...rec({ key: "+1999::x" }), disposition: "probably-fine" }, // unknown vocabulary
+      { ...rec({ key: "+1888::x" }), at: "not-a-date" }, // undatable
+      { ...rec({ key: "::" }) } // meaningless key would suppress by accident
+    ]
+  });
+  assert.ok(parsed, "a well-formed ledger parses");
+  assert.equal(parsed!.size, 1, "only the valid record survives; the three malformed ones are dropped");
+  assert.ok(parsed!.has("+17162440763::open_critic_finding"));
+}
+
+// 23. NO FRESHNESS GUARD — unlike the PR-ledger export, an OLD disposition is still a disposition.
+//     (That is the whole point: the inference passes expire, this one must not.)
+{
+  const ancient = parseDispositionLedgerPayload({ version: 1, updatedAt: "2020-01-01T00:00:00.000Z", records: [rec()] });
+  assert.equal(ancient?.size, 1, "a years-old ledger still suppresses");
+}
+
+// 24. upsert is IDEMPOTENT (one row per key) and never lets the boundary drift LATER on its own —
+//     otherwise occurrences between the first and second disposal would stop counting as regressions.
+{
+  const first = upsertDisposition([], rec({ disposition: "fixed", at: "2026-07-29T18:00:00.000Z" }));
+  const second = upsertDisposition(first, rec({ disposition: "fixed", at: "2026-07-30T18:00:00.000Z" }));
+  assert.equal(second.length, 1, "re-disposing the same key updates in place (one record per key)");
+  assert.equal(second[0].at, "2026-07-29T18:00:00.000Z", "the EARLIEST disposal time is kept");
+  // An explicit deployTs IS allowed to move the boundary — that's a stated fact, not drift.
+  const third = upsertDisposition(second, rec({ disposition: "fixed", deployTs: "2026-07-30T20:00:00.000Z" }));
+  assert.equal(third[0].deployTs, "2026-07-30T20:00:00.000Z", "an explicit deployTs is recorded");
+}
+
+// 25. VOCABULARY integrity: every disposition is exactly one kind, and the two kinds cover them all.
+{
+  for (const d of DISPOSITIONS) {
+    assert.ok(
+      CODE_STATE_DISPOSITIONS.has(d) !== POLICY_DISPOSITIONS.has(d),
+      `${d} must be exactly one of code-state / policy (kind decides whether a regression can revive it)`
+    );
+    assert.ok(isDisposition(d));
+  }
+  assert.ok(!isDisposition("fixed-ish"), "an unknown word is not a disposition");
+  assert.equal(CODE_STATE_DISPOSITIONS.size + POLICY_DISPOSITIONS.size, DISPOSITIONS.length);
+}
+
+// 26. WIRING: detect consults the ledger, reports both counts, and act_runner exposes the writer
+//     every routine calls (ROUTINE_CONTRACT.md — "every routine records dispositions identically").
+{
+  const detect = fs.readFileSync(path.resolve("scripts/anomaly_loop_detect.ts"), "utf8");
+  assert.match(detect, /partitionByDispositions\(/, "detect must run the disposition suppressor");
+  assert.match(detect, /dispositions\.json/, "detect must read the box-side disposition ledger");
+  assert.match(detect, /suppressedByDispositionCount/, "detect must report the disposition-suppressed count");
+  assert.match(detect, /regressionOfDisposedCount/, "detect must report regressions of disposed findings");
+  assert.match(detect, /regressionOfDisposed: true/, "a regression stays in the feed, tagged — never dropped");
+  const runner = fs.readFileSync(path.resolve("scripts/act_runner.ts"), "utf8");
+  assert.match(runner, /sub === "dispose"/, "act_runner must expose the `dispose` writer");
+  assert.match(runner, /Refusing to write/, "a corrupt ledger must not be silently replaced by an empty one");
+}
+
 console.log(
-  "PASS stale-finding suppression eval (suppress pre-fix / keep uncertain / ledger integrity / wiring + already-shipped echoes: named-fix-postdates-event / regression-safe / scope / wiring)"
+  "PASS stale-finding suppression eval (suppress pre-fix / keep uncertain / ledger integrity / wiring + already-shipped echoes: named-fix-postdates-event / regression-safe / scope / wiring + disposition ledger: permanent policy suppression / regression-of-disposed fail-safe / boundary / parse+upsert fail-safety / vocabulary / wiring)"
 );

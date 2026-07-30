@@ -93,4 +93,21 @@ assert.match(det, /prevKeys\.has\(keyOf\(a\)\)/, "DETECT computes persistence vs
 assert.match(det, /stop: workOrders\.length === 0/, "DETECT emits stop:true when healthy");
 n += 4;
 
+// --- Suppression ORDER: the disposition ledger is the only non-inferential pass, so it must run
+//     BEFORE the three guesses (a cutover date, a commit grep, a merged-PR window) — both so a
+//     disposed finding can't be re-derived as fresh and so the costly passes see a smaller feed. ---
+{
+  const posDisposition = det.indexOf("partitionByDispositions(");
+  const posStale = det.indexOf("suppressStaleFindings(anomalies");
+  const posEcho = det.indexOf("suppressAlreadyShippedEchoes(");
+  const posReproduce = det.indexOf("partitionByReproduceConfirm(");
+  assert.ok(posDisposition > 0, "DETECT must run the disposition-ledger pass");
+  assert.ok(posDisposition < posStale, "the disposition ledger runs before the stale-cutover guess");
+  assert.ok(posDisposition < posEcho, "the disposition ledger runs before the commit-name guess");
+  assert.ok(posDisposition < posReproduce, "the disposition ledger runs before the costly re-replay pass");
+  // rawAnomalyCount must be captured BEFORE any suppression, or the report understates what was filtered.
+  assert.ok(det.indexOf("const rawAnomalyCount") < posDisposition, "rawAnomalyCount is captured before suppression");
+  n += 5;
+}
+
 console.log(`PASS anomaly classifier eval (${n} assertions)`);

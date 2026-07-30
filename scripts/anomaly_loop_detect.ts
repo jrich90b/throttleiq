@@ -90,9 +90,67 @@ for (const sib of [
   }
 }
 
+const rawAnomalyCount = anomalies.length;
+
+// DISPOSITION-LEDGER suppression (Joe, 2026-07-30: "it should know what is stale/already fixed and
+// not show up again"). Runs FIRST because it is the only non-inferential pass — the three below are
+// date/commit GUESSES that expire, this one is the explicit record a routine wrote when it disposed
+// the finding, so it never lapses and it shrinks the input to every costlier pass after it.
+// Fail-safe: no ledger file, malformed payload, or any error → suppress NOTHING.
+// Regressions are NOT dropped — a disposed key whose event postdates its fix boundary is re-added
+// below, marked, so a fix that didn't hold can never be silently eaten.
+let suppressedByDisposition: Array<{ convId: string; dimension: string; disposition: string; reason: string }> = [];
+let regressionOfDisposed: Array<{ convId: string; dimension: string; disposition: string; reason: string }> = [];
+try {
+  const { parseDispositionLedgerPayload, partitionByDispositions } = await import(
+    "../services/api/src/domain/dispositionLedger.ts"
+  );
+  const dispositionsPath = path.join(outDir, "dispositions.json");
+  if (fs.existsSync(dispositionsPath)) {
+    const ledger = parseDispositionLedgerPayload(JSON.parse(fs.readFileSync(dispositionsPath, "utf8")));
+    if (ledger && ledger.size) {
+      const part = partitionByDispositions(anomalies, { ledger });
+      if (part.suppressed.length || part.regressions.length) {
+        anomalies.length = 0;
+        // Regressions stay in the feed, tagged, so the digest and the loop can see that a
+        // disposed finding came back rather than treating it as brand new.
+        anomalies.push(
+          ...part.kept,
+          ...part.regressions.map(r => ({
+            ...(r.anomaly as any),
+            regressionOfDisposed: true,
+            dispositionReason: r.reason
+          }))
+        );
+        suppressedByDisposition = part.suppressed.map(s => ({
+          convId: String(s.anomaly.convId ?? ""),
+          dimension: String(s.anomaly.dimension ?? ""),
+          disposition: s.record.disposition,
+          reason: s.reason
+        }));
+        regressionOfDisposed = part.regressions.map(r => ({
+          convId: String(r.anomaly.convId ?? ""),
+          dimension: String(r.anomaly.dimension ?? ""),
+          disposition: r.record.disposition,
+          reason: r.reason
+        }));
+        if (suppressedByDisposition.length) {
+          console.log(`Suppressed ${suppressedByDisposition.length} finding(s) already DISPOSED by a routine (permanent, ${ledger.size} in ledger):`);
+          for (const s of suppressedByDisposition.slice(0, 20)) console.log(`   - ${s.convId} ${s.dimension} — ${s.reason}`);
+        }
+        if (regressionOfDisposed.length) {
+          console.log(`REGRESSION-OF-DISPOSED — ${regressionOfDisposed.length} disposed finding(s) re-occurred AFTER their fix; kept in the feed:`);
+          for (const r of regressionOfDisposed.slice(0, 20)) console.log(`   - ${r.convId} ${r.dimension} — ${r.reason}`);
+        }
+      }
+    }
+  }
+} catch {
+  /* malformed ledger / any error → keep every finding (fail toward surfacing, never toward hiding) */
+}
+
 // Stale-finding suppression (never re-fix a ghost): drop findings whose dimension is eval-guarded AND
 // whose triggering event predates the deployed fix. Conservative — keeps anything it can't prove stale.
-const rawAnomalyCount = anomalies.length;
 const { kept, suppressed } = suppressStaleFindings(anomalies, { guardingEvals: ciEvalScriptSet() });
 anomalies.length = 0;
 anomalies.push(...kept);
@@ -310,6 +368,10 @@ const payload = {
   feedGeneratedAt: feed?.generatedAt ?? null,
   totalAnomalies: anomalies.length,
   rawAnomalyCount,
+  suppressedByDispositionCount: suppressedByDisposition.length,
+  suppressedByDisposition,
+  regressionOfDisposedCount: regressionOfDisposed.length,
+  regressionOfDisposed,
   suppressedStaleCount: suppressed.length,
   suppressedStale: suppressed.map(s => ({ convId: s.anomaly.convId, dimension: s.anomaly.dimension, reason: s.reason })),
   suppressedByOpenPrCount: suppressedByOpenPr.length,
