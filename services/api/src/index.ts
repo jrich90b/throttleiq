@@ -476,6 +476,8 @@ import {
   buildDisengagedCadenceCloseout,
   customerEngagedWithCadence,
   voiceCallCountsAsEngagement,
+  shouldSuppressVoiceSummary,
+  buildUnsummarizableCallNote,
   shouldSendDisengagedCloseout,
   DISENGAGED_TAPER_AFTER_TOUCHES,
   registerMissedContactAttempt,
@@ -70516,21 +70518,35 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
       if (contactedValue === "YES") registerContactReached(conv);
       else registerMissedContactAttempt(conv);
     }
+    // Did the CUSTOMER actually take part? Computed ONCE here and used twice below: it gates
+    // summarization (a contentless transcript must never be "summarized" — see
+    // shouldSuppressVoiceSummary for the +17165236994 lead-record confabulation) and it stamps the
+    // engagement flag on the transcript row. Any failure => null => prior behavior on both.
+    const voiceParticipation = transcriptText
+      ? await parseVoiceCallParticipationWithLLM({ text: transcriptText }).catch(() => null)
+      : null;
+    const suppressVoiceSummary = shouldSuppressVoiceSummary(voiceParticipation);
+    // One flag for "this call carried no conversation": a voicemail by the fail-safe regex, OR a
+    // parser-confirmed IVR/system/no-answer. Everything downstream that consumes summary CONTENT
+    // (draft context, durable facts, task closes, post-call actions) hangs off this, so a call with
+    // nothing in it can no longer feed a fabricated customer statement into a reply.
+    const callHadNoConversation = isVoicemail || suppressVoiceSummary;
     if (noteText) {
-      const summaryText = isVoicemail
-        ? "Voicemail — not contacted."
-        : await summarizeVoiceTranscriptWithLLM({
-            transcript: transcriptText,
-            lead: conv.lead ?? undefined
-          });
-      if (!isVoicemail) {
+      const summaryText =
+        isVoicemail || suppressVoiceSummary
+          ? buildUnsummarizableCallNote(isVoicemail ? "voicemail" : voiceParticipation?.outcome)
+          : await summarizeVoiceTranscriptWithLLM({
+              transcript: transcriptText,
+              lead: conv.lead ?? undefined
+            });
+      if (!callHadNoConversation) {
         maybeMarkEngagedFromCall(conv, transcriptText, {
-          isVoicemail,
+          isVoicemail: callHadNoConversation,
           messageId: recordingSid || bodyCallSid || callbackCallSid || undefined
         });
       }
       if (summaryText) {
-        if (!isVoicemail) {
+        if (!callHadNoConversation) {
           const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
           setVoiceContext(conv, {
             summary: summaryText,
@@ -70548,7 +70564,7 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
           "voice_summary",
           callScopedMessageId
         );
-        if (!isVoicemail) {
+        if (!callHadNoConversation) {
           try {
             const voiceFactsParse = await safeLlmParse("voice_durable_facts_parser", () =>
               parseVoiceDurableFactsWithLLM({ summary: summaryText, lead: conv.lead ?? undefined })
@@ -70653,7 +70669,7 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
             console.warn("[voice-durable-facts] extraction failed", { message: err?.message ?? String(err) });
           }
         }
-        if (!isVoicemail) {
+        if (!callHadNoConversation) {
           markOpenPricingAnswerTodosDone(conv, `${summaryText}\n${transcriptText}`, {
             channel: "call",
             source: "voice_summary"
@@ -70749,7 +70765,7 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
             note: "Voicemail/no-contact call logged with no explicit finance outcome."
           });
         }
-        if (!isVoicemail) {
+        if (!callHadNoConversation) {
           await applyPostCallSummaryActions({
             conv,
             summaryText,
@@ -70794,15 +70810,13 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
         // state; the pure sync customerEngagedWithCadence reads the stamp. Parser-first: the
         // near-misses are answering-machine greetings in the customer's OWN voice and IVR hold
         // loops, which no keyword test separates reliably. Any failure => no stamp => prior behavior.
-        // TRANSCRIPT-PREFERRED, and that ordering is load-bearing. The generated SUMMARY is a lossy
-        // secondhand account that demonstrably misreads these calls: on +17169061487 it said
-        // "Customer (Sydney) said she'll call back when she can" — that was an answering-machine
-        // greeting — and on Syed (+12065383753) it flattened a real back-and-forth into "no details
-        // were provided". Feeding summary+transcript together scored 6/8 on the live fixtures (both
-        // a false positive AND the flagship case wrong); transcript-first scored 8/8.
-        const voiceParticipation = await parseVoiceCallParticipationWithLLM({
-          text: String(noteText ?? "").trim() || String(summaryText ?? "").trim()
-        }).catch(() => null);
+        // Reuses the single `voiceParticipation` parse computed above (one LLM call per call, not
+        // two). It reads the TRANSCRIPT, and that ordering is load-bearing: the generated SUMMARY is
+        // a secondhand account that demonstrably misreads these calls — on +17169061487 it said
+        // "Customer (Sydney) said she'll call back when she can" for an answering-machine greeting,
+        // and on Syed (+12065383753) it flattened a real back-and-forth into "no details were
+        // provided". Summary+transcript together scored 6/8 on the live fixtures (a false positive
+        // AND the flagship case wrong); transcript-only scored 8/8.
         const customerSpokeOnCall = voiceCallCountsAsEngagement(voiceParticipation);
         conv.messages.push({
           id: `msg_${Math.random().toString(16).slice(2)}_${Date.now()}`,

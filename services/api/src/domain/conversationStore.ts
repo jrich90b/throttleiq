@@ -4971,6 +4971,54 @@ export function voiceCallCountsAsEngagement(parse?: {
   return Number.isFinite(confidence) && confidence >= VOICE_PARTICIPATION_MIN_CONFIDENCE;
 }
 
+/**
+ * Pure. Should we SKIP generating a written summary for this call?
+ *
+ * ROOT CAUSE (2026-07-30). `summarizeVoiceTranscriptWithLLM` is handed the transcript AND the
+ * lead's vehicle fields ("Known lead info (may help resolve model names)"). When the transcript
+ * carries no actual conversation — an IVR menu, a hold loop, an answering-machine greeting — the
+ * lead JSON is the only substantive content in the prompt, so the model writes the LEAD RECORD BACK
+ * as if the customer had said it. Proven on +17165236994: a 117-character transcript containing
+ * only our own phone greeting ("Thank you for calling ... you may enter it at any") produced
+ * "Customer inquired about a Ultra Limited in Billiard Red/Vivid Black (stock U888-21) and wants
+ * pricing and availability. Customer asked about trade-in and a test ride; they requested a
+ * callback." Every one of those details is verbatim from `lead.vehicle` — model, color, stockId.
+ * The prompt's "Use ONLY facts stated in the transcript" does not hold when the transcript is empty
+ * of facts.
+ *
+ * That matters because those summaries are consumed downstream: they become draft-composer context
+ * (effectiveContext, priority 150), durable customer facts (voiceCadenceFacts), and the evidence
+ * the task auto-closer judges. A fabricated "the customer asked about a test ride" can therefore
+ * reach a real customer-facing reply.
+ *
+ * The existing regex `isLikelyVoicemailTranscript` stays (a fail-safe KEEP gate — its removal fails
+ * toward treating a voicemail as contacted). This is an ADDITIONAL suppressor for what the regex
+ * cannot see: our own IVR greeting carries no voicemail phrasing and clears the word-count check.
+ *
+ * FAIL DIRECTION: requires a HIGH-confidence, explicitly non-conversational outcome. `unclear`
+ * never suppresses. A wrong suppression loses a summary (the transcript is still stored, and the
+ * facts/context simply don't get set) — information loss, never fabrication. That is strictly safer
+ * than today, where a contentless call invents customer statements.
+ */
+export function shouldSuppressVoiceSummary(parse?: {
+  outcome?: string | null;
+  confidence?: number | null;
+} | null): boolean {
+  if (!parse) return false;
+  const outcome = String(parse.outcome ?? "").trim().toLowerCase();
+  if (outcome !== "ivr_or_system" && outcome !== "voicemail" && outcome !== "no_answer") return false;
+  const confidence = Number(parse.confidence);
+  return Number.isFinite(confidence) && confidence >= VOICE_PARTICIPATION_MIN_CONFIDENCE;
+}
+
+/** Neutral marker recorded in place of a summary we refused to fabricate. */
+export function buildUnsummarizableCallNote(outcome?: string | null): string {
+  const o = String(outcome ?? "").trim().toLowerCase();
+  if (o === "ivr_or_system") return "Automated phone system — no conversation recorded.";
+  if (o === "no_answer") return "No answer — not contacted.";
+  return "Voicemail — not contacted.";
+}
+
 /** True when any call on this thread was parser-confirmed as a live two-way conversation. */
 export function hasParticipatedVoiceCall(conv: Conversation): boolean {
   return (conv?.messages ?? []).some(m => (m as any)?.customerSpokeOnCall === true);
