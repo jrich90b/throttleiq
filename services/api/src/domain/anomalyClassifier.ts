@@ -414,3 +414,57 @@ export function rankSupersededGradeLast(
 ): number {
   return Number(Boolean(a?.gradeSuperseded)) - Number(Boolean(b?.gradeSuperseded));
 }
+
+/**
+ * Was the WHOLE report graded against a build that is no longer deployed?
+ *
+ * WHY (2026-07-31 loop tick): isSupersededGrade above closed the sweep→DETECT gap, but the very
+ * same hole reopens between DETECT and READ. next.json is generated ONCE and then consumed for
+ * hours by four routines (the 2h loop, agent-watch 9:07, anomaly-review 10:30, morning 7:30).
+ * Today DETECT ran at 08:55Z when deployed === graded === e3a1e4ea, froze `gradeSuperseded: false`
+ * onto every order, and #378 then deployed at 13:32Z. At 14:39Z the feed still advertised
+ * `supersededGradeCount: 0` while its top three Tier-1 orders were the out-of-stock dead-ends #378
+ * had just fixed — two of them (08610167776, +16785960725) named in #378's own commit message.
+ *
+ * A frozen `false` is worse than no annotation at all: it reads as positive proof the verdict is
+ * current. So consumers must re-evaluate against the commit deployed NOW, not the one recorded at
+ * generation time.
+ *
+ * Fail-direction (toward surfacing, identical to isSupersededGrade): unknown is never stale, so an
+ * unresolvable commit on either side leaves the report at full trust rather than demoting real work.
+ */
+export function isReportGradeStale(input: {
+  reportDeployedCommit?: string | null;
+  currentDeployedCommit?: string | null;
+}): boolean {
+  return isSupersededGrade({
+    gradedAtCommit: input?.reportDeployedCommit,
+    deployedCommit: input?.currentDeployedCommit
+  });
+}
+
+/**
+ * Re-annotate work orders at READ time against the currently deployed commit, then float the
+ * still-current findings to the top.
+ *
+ * Monotonic on purpose: a grade DETECT already proved superseded stays superseded even if the
+ * current commit can't be resolved now. We only ever add the demotion, never clear one — clearing
+ * would promote a verdict about code nobody runs back to the top of somebody's work queue.
+ *
+ * The sort key is ONLY the superseded tiebreak. Array#sort is stable, so DETECT's tier/severity
+ * ordering survives untouched inside each partition; this re-partitions, it does not re-rank. And
+ * as everywhere else in this file: nothing is suppressed — a superseded grade is unproven, not
+ * disproven, so the finding stays in the feed, just below work measured against the running build.
+ */
+export function refreshSupersededGrades<
+  T extends { gradedAtCommit?: string | null; gradeSuperseded?: boolean | null }
+>(orders: readonly T[], currentDeployedCommit?: string | null): T[] {
+  return (orders ?? [])
+    .map(o => ({
+      ...o,
+      gradeSuperseded:
+        Boolean(o?.gradeSuperseded) ||
+        isSupersededGrade({ gradedAtCommit: o?.gradedAtCommit, deployedCommit: currentDeployedCommit })
+    }))
+    .sort(rankSupersededGradeLast);
+}

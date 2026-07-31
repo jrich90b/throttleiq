@@ -36,10 +36,12 @@ import {
   DISPOSITIONS,
   isDisposition,
   parseDispositionLedgerPayload,
+  partitionByDispositions,
   serializeDispositionLedger,
   upsertDisposition,
   type DispositionRecord
 } from "../services/api/src/domain/dispositionLedger.ts";
+import { isReportGradeStale, refreshSupersededGrades } from "../services/api/src/domain/anomalyClassifier.ts";
 import { listOpenLoopPrs, listRecentlyMergedLoopPrs } from "./loopPrLedger.ts";
 
 const argv = process.argv.slice(2);
@@ -54,14 +56,102 @@ const reportRoot = process.env.REPORT_ROOT || path.resolve("reports");
 const nextPath = path.join(reportRoot, "anomaly_loop", "next.json");
 const keyOf = (w: any) => `${w?.convId ?? ""}::${w?.dimension ?? ""}`;
 
-function loadWorkOrders(): any[] {
+// READ-TIME GRADE STALENESS (2026-07-31). next.json is generated once and read for hours by four
+// routines; a deploy in between silently invalidates every verdict in it, yet the file still says
+// `gradeSuperseded: false`. So we recompute against the commit deployed RIGHT NOW — same resolver
+// as anomaly_loop_detect (git rev-parse HEAD in the deploy checkout), same fail-direction: if we
+// cannot resolve it, nothing is demoted.
+function currentDeployedCommit(): string | null {
+  try {
+    return execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {
+    return null;
+  }
+}
+
+// The disposition ledger has the SAME generation-vs-read problem. DETECT applies it when it
+// builds next.json; every disposition recorded afterwards has no effect until DETECT runs again.
+// 2026-07-31: the 13:10 tick disposed 08610167776 and +16785960725 as fixed, yet at 14:39 both
+// were still the top Tier-1 work orders in the 08:55 feed — the next tick re-investigated findings
+// this routine had already closed 90 minutes earlier. So re-apply the ledger at read time, through
+// the very same pure function DETECT uses (one code path ⇒ identical semantics, including the
+// regression-of-disposed fail-safe: a NEW occurrence after the fix boundary still comes back).
+function applyLedgerAtReadTime(orders: any[]): { kept: any[]; suppressed: number; regressions: number } {
+  const ledgerPath = path.join(reportRoot, "anomaly_loop", "dispositions.json");
+  if (!fs.existsSync(ledgerPath)) return { kept: orders, suppressed: 0, regressions: 0 };
+  let ledger: Map<string, DispositionRecord> | null = null;
+  try {
+    ledger = parseDispositionLedgerPayload(JSON.parse(fs.readFileSync(ledgerPath, "utf8")));
+  } catch {
+    // An unreadable ledger must suppress NOTHING — never hide work on a parse error.
+    return { kept: orders, suppressed: 0, regressions: 0 };
+  }
+  if (!ledger) return { kept: orders, suppressed: 0, regressions: 0 };
+  const part = partitionByDispositions(orders, { ledger });
+  // Regressions are real signal, not noise — they stay in the queue, flagged.
+  const revived = part.regressions.map(r => ({ ...(r.anomaly as any), regressionOfDisposed: true }));
+  return { kept: [...part.kept, ...revived], suppressed: part.suppressed.length, regressions: revived.length };
+}
+
+function loadReport(): {
+  payload: any;
+  orders: any[];
+  stale: boolean;
+  deployedNow: string | null;
+  disposedNow: number;
+  regressions: number;
+} {
   if (!fs.existsSync(nextPath)) {
     console.error(`No work order at ${nextPath} — run anomaly_loop_detect first.`);
     process.exit(2);
   }
   const payload = JSON.parse(fs.readFileSync(nextPath, "utf8"));
-  return Array.isArray(payload?.workOrders) ? payload.workOrders : [];
+  const deployedNow = currentDeployedCommit();
+  const stale = isReportGradeStale({
+    reportDeployedCommit: payload?.deployedCommit,
+    currentDeployedCommit: deployedNow
+  });
+  const ledgered = applyLedgerAtReadTime(Array.isArray(payload?.workOrders) ? payload.workOrders : []);
+  const orders = refreshSupersededGrades(ledgered.kept, deployedNow);
+  return {
+    payload,
+    orders,
+    stale,
+    deployedNow,
+    disposedNow: ledgered.suppressed,
+    regressions: ledgered.regressions
+  };
 }
+
+// Loud, unmissable banner: a caller acting on a pre-deploy verdict is about to rebuild something
+// that may already have shipped (2026-07-31: the top three Tier-1 orders were fixed by #378 four
+// hours before this feed was read). We warn and demote — never suppress.
+function warnIfReportStale(report: {
+  payload: any;
+  orders: any[];
+  stale: boolean;
+  deployedNow: string | null;
+  disposedNow: number;
+  regressions: number;
+}): void {
+  if (report.disposedNow) {
+    console.warn(
+      `\n.. ${report.disposedNow} work order(s) were disposed AFTER this feed was generated — dropped at read time ` +
+        `(they are already dealt with).${report.regressions ? ` ${report.regressions} kept as regression-of-disposed.` : ""}`
+    );
+  }
+  if (!report.stale) return;
+  const short = (c: unknown) => String(c ?? "?").slice(0, 8);
+  const supersededCount = report.orders.filter(o => o?.gradeSuperseded).length;
+  console.warn(
+    `\n!! GRADES ARE PRE-DEPLOY — this feed was generated against ${short(report.payload?.deployedCommit)} ` +
+      `(at ${report.payload?.generatedAt ?? "?"}), but ${short(report.deployedNow)} is deployed now.\n` +
+      `   ${supersededCount} of ${report.orders.length} work order(s) carry a verdict about code that is no longer running,\n` +
+      `   and they have been ranked BELOW findings measured against the running build (nothing was dropped).\n` +
+      `   REPRODUCE against current code before building a fix — the deploy in between may already have fixed it.\n`
+  );
+}
+
 
 function git(args: string[]): string {
   return execFileSync("git", args, { encoding: "utf8" }).trim();
@@ -170,14 +260,17 @@ if (sub === "dispose") {
 }
 
 if (sub === "list") {
-  const orders = loadWorkOrders();
+  const report = loadReport();
+  const orders = report.orders;
   if (!orders.length) {
     console.log("No work orders — the loop is healthy (stop:true).");
     process.exit(0);
   }
-  console.log(`${orders.length} work order(s) (Tier 2 first):\n`);
+  warnIfReportStale(report);
+  console.log(`${orders.length} work order(s) (Tier 2 first; superseded grades last):\n`);
   for (const w of orders) {
-    console.log(`  [T${w.tier} ${w.action}] ${w.dimension}  (${w.severity})`);
+    const stale = w?.gradeSuperseded ? "  [GRADE SUPERSEDED — reproduce first]" : "";
+    console.log(`  [T${w.tier} ${w.action}] ${w.dimension}  (${w.severity})${stale}`);
     console.log(`     id: ${keyOf(w)}`);
     console.log(`     ${String(w.detail ?? "").trim()}\n`);
   }
@@ -185,7 +278,9 @@ if (sub === "list") {
 }
 
 if (sub === "prep") {
-  const orders = loadWorkOrders();
+  const report = loadReport();
+  const orders = report.orders;
+  warnIfReportStale(report);
   const id = flag("id");
   const wo = id ? orders.find(w => keyOf(w) === id) : (has("top") ? orders[0] : undefined);
   if (!wo) {
@@ -219,9 +314,18 @@ if (sub === "prep") {
   const key = keyOf(wo);
   const safe = key.replace(/[^a-z0-9]+/gi, "_").toLowerCase();
   const branch = `fix/loop-${safe}`.slice(0, 60);
+  // A pre-deploy verdict goes into the brief the coding agent reads, not just the console it may
+  // never see — building against a superseded grade is how the loop rebuilds an already-shipped fix.
+  const staleBanner = wo?.gradeSuperseded
+    ? `> **⚠ GRADE SUPERSEDED — REPRODUCE BEFORE BUILDING.** This finding was graded against ` +
+      `\`${String(wo.gradedAtCommit ?? "?").slice(0, 8)}\`, but \`${String(report.deployedNow ?? "?").slice(0, 8)}\` ` +
+      `is deployed now. A commit in between may already have fixed it. Confirm the bug still reproduces on ` +
+      `CURRENT main first; if it does not, dispose it (\`act_runner dispose --key "${key}" --as fixed ` +
+      `--deploy-ts <iso>\`) and stop — do NOT write a patch.\n\n`
+    : "";
   const brief = `# Loop fix brief — ${wo.dimension} (${key})
 
-**Tier ${wo.tier} · ${wo.action} · ${wo.severity}** — ${wo.category}
+${staleBanner}**Tier ${wo.tier} · ${wo.action} · ${wo.severity}** — ${wo.category}
 
 ## Finding
 ${String(wo.detail ?? "").trim()}
