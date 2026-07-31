@@ -47,6 +47,7 @@ import {
   type ReplayRow
 } from "./corpus_replay_flywheel.ts";
 import { realJudge, type IntentJudgeCandidate, type IntentVerdict } from "./intent_handled_audit.ts";
+import { describeWalkInNoteProvenance } from "../services/api/src/domain/walkInFollowUpTopic.ts";
 
 type ReplayCase = {
   conversationId?: string;
@@ -229,10 +230,17 @@ for (const extra of ["inventory_snapshot.json", "todos.json", "events.json"]) {
   if (fs.existsSync(src)) fs.copyFileSync(src, path.join(snapDir, extra));
 }
 const messagesByConv = new Map<string, Array<{ direction?: string; body?: string; at?: string; createdAt?: string }>>();
+// This sweep decides whether a pinned finding STILL reproduces. Judging a walk-in lead record as
+// if the customer wrote it is what manufactured several of those findings in the first place, so
+// it must reach the same provenance the flywheel and the live audit pass (PR #368).
+const leadByConv = new Map<string, { walkIn?: boolean; walkInComment?: string }>();
 try {
   const snap = JSON.parse(fs.readFileSync(path.join(snapDir, "conversations.json"), "utf8"));
   const list: any[] = Array.isArray(snap) ? snap : snap?.conversations ?? [];
-  for (const c of list) messagesByConv.set(String(c?.id ?? ""), Array.isArray(c?.messages) ? c.messages : []);
+  for (const c of list) {
+    messagesByConv.set(String(c?.id ?? ""), Array.isArray(c?.messages) ? c.messages : []);
+    if (c?.lead) leadByConv.set(String(c?.id ?? ""), c.lead);
+  }
 } catch {
   /* context is best-effort; the judge still runs on inbound+draft */
 }
@@ -283,7 +291,13 @@ const judgeCache: Record<string, IntentVerdict | null> = fs.existsSync(judgeCach
 async function judgeCase(c: ReplayCase): Promise<IntentVerdict | null> {
   const row = replayRowFromCase(c);
   if (!isJudgeWorthy(row)) return null; // no draft / expected-silence → scoreTurn handles null
-  const ck = `${row.conversationId}::${row.messageId ?? ""}##${String(row.draft ?? "").replace(/\s+/g, " ").trim().slice(0, 300)}`;
+  const inboundProvenance = describeWalkInNoteProvenance({
+    body: row.body,
+    walkIn: leadByConv.get(row.conversationId)?.walkIn,
+    walkInComment: leadByConv.get(row.conversationId)?.walkInComment
+  });
+  // Provenance is part of the key: a verdict cached before it applied graded a different question.
+  const ck = `${row.conversationId}::${row.messageId ?? ""}##${String(row.draft ?? "").replace(/\s+/g, " ").trim().slice(0, 300)}${inboundProvenance ? "##walkin-prov" : ""}`;
   if (ck in judgeCache) return judgeCache[ck];
   const candidateInput: IntentJudgeCandidate = {
     convId: row.conversationId,
@@ -291,7 +305,8 @@ async function judgeCase(c: ReplayCase): Promise<IntentVerdict | null> {
     inboundText: row.body,
     replyText: String(row.draft ?? ""),
     replyKind: "draft",
-    context: buildJudgeContext(messagesByConv.get(row.conversationId) ?? [], row.messageAt)
+    context: buildJudgeContext(messagesByConv.get(row.conversationId) ?? [], row.messageAt),
+    inboundProvenance
   };
   try {
     const v = await realJudge(candidateInput);
