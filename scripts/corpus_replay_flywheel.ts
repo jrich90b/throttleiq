@@ -252,13 +252,41 @@ export function isFinancePolicyAnswer(row: ReplayRow, judge: IntentVerdict | nul
 // Blocked test-ride WITH the watch offer = the Joe-approved #151 behavior (2026-07-03): we never
 // book a bike we don't have; the draft explains it, offers alternates/inventory, AND offers the
 // watch. The judge wants a booking anyway — that's the judge being stricter than the design.
+// Charter C4.3 (stock-check-first), pinned live by test_ride_stock_check_first:eval.
+//
+// COPY-DRIFT REPAIR (2026-07-31): this classifier matched only the ORCHESTRATOR/regen draft
+// (buildBlockedTestRideInventoryDraft). PR #367 gave the initial-ADF first touch its OWN, shorter
+// unavailability copy (buildInitialUnavailableInventorySmsReply -- "I'm not seeing a 2026 Sportster
+// S in stock right now. I can check similar options, or I can keep an eye out and text you IF ONE
+// COMES IN") -- the same ruled behavior in different words, so it fell out of the design-accept and
+// the SAME policy-correct reply began failing the release gate as a P1 (08610167776 Sanjeev,
+// +16785960725 Justin, +18188420202 -- "book a test ride" / "availability" asks answered honestly).
+// A scorer that fails the behavior the charter REQUIRES teaches the loop to break the charter, so
+// the repair belongs here, not in the reply.
+//
+// Deliberately narrow so a real miss cannot hide behind it: the draft must lead with the honest
+// unavailability AND offer the watch, and the judge's CUSTOMER ASK must be about
+// availability/booking that bike. Keyed on the ask alone, never judge.why -- the why routinely
+// tacks "...or offer to schedule" onto asks that are really about something else (+12099195457
+// asked for mileage/price/year, which we still owe and which must keep failing).
 export function isBlockedTestRideWithWatchOffer(row: ReplayRow, judge: IntentVerdict | null | undefined): boolean {
   if (!judge || judge.addressed) return false;
   const draft = String(row.draft ?? "").toLowerCase();
-  return (
+  // Orchestrator / regenerate blocked draft (buildBlockedTestRideInventoryDraft).
+  if (
     /don['\u2019]t want to book you on a bike/.test(draft) &&
     /keep an eye out and text you the moment/.test(draft)
+  ) {
+    return true;
+  }
+  // Initial-ADF first-touch unavailability draft (buildInitialUnavailableInventorySmsReply, #367).
+  const unavailableLead =
+    /not seeing [^.]{0,60}in stock right now/.test(draft) || /is no longer available/.test(draft);
+  const watchOffer = /keep an eye out and text you/.test(draft);
+  const availabilityAsk = /(test ride|demo ride|book|schedul|availab|in stock)/i.test(
+    String(judge.customerAsk ?? "")
   );
+  return unavailableLead && watchOffer && availabilityAsk;
 }
 
 // A greeting that ADDRESSES a person by first name in the opening clause ("Good morning Scott,",
@@ -1262,6 +1290,70 @@ function selfTest() {
     humanBadDraft
   );
   assert(!humanBadDraftScore.pass, "a judge-failed DRAFT on a human-owned thread still fails (carve-out is silence-only)");
+
+  // Stock-check-first (charter C4.3) design-accept must cover BOTH unavailability drafts. The
+  // orchestrator/regen copy was already covered; PR #367 gave the initial-ADF first touch its own
+  // shorter copy and the same ruled behavior started failing the gate (08610167776 Sanjeev asked to
+  // book a 2026 Sportster S test ride for 29/6 at 12 pm; we don't have the bike, so we answer
+  // honestly and offer the watch instead of booking).
+  const initialAdfUnavailableDraft =
+    "Hey Sanjeev, it's Alexandra over at American Harley-Davidson. Thanks — I’m not seeing a 2026 " +
+    "Sportster S in stock right now. I can check similar options, or I can keep an eye out and text " +
+    "you if one comes in.";
+  const bookTestRideAsk: IntentVerdict = {
+    addressed: false,
+    customerAsk: "Book a test ride of a 2026 Harley-Davidson Sportster S on 29/6/2026 at 12 pm",
+    why: "the agent only said the bike isn't in stock without offering to schedule",
+    severity: "major"
+  };
+  const stockFirstRow = mk({ draft: initialAdfUnavailableDraft });
+  assert(
+    isBlockedTestRideWithWatchOffer(stockFirstRow, bookTestRideAsk),
+    "the initial-ADF unavailability copy (#367) is the same ruled stock-check-first behavior"
+  );
+  const stockFirstScore = adjustScore(scoreTurn(stockFirstRow, bookTestRideAsk), stockFirstRow);
+  assert(
+    stockFirstScore.pass && stockFirstScore.adjustment === "design_accepted_handoff",
+    "an honest out-of-stock answer to a test-ride ask passes as accepted design (C4.3), not a P1"
+  );
+  // The original orchestrator/regen draft still matches (no regression on the arm that worked).
+  const orchestratorBlockedDraft =
+    "I’m not seeing a 2021 Sportster S in stock right now, and I don’t want to book you on a bike we " +
+    "don’t have. Here’s our current inventory so you can pick an in-stock bike: https://example.com/i " +
+    "I can also keep an eye out and text you the moment one lands — want me to? Once you pick one, I " +
+    "can line up the test ride right away.";
+  assert(
+    isBlockedTestRideWithWatchOffer(mk({ draft: orchestratorBlockedDraft }), bookTestRideAsk),
+    "the orchestrator/regen blocked draft stays covered"
+  );
+  // FAIL-DIRECTION GUARDS — the narrow shape must not swallow real misses.
+  // (a) A non-availability ask on the SAME draft still fails: we genuinely owe mileage/price/year
+  //     (+12099195457), and judge.why mentioning "schedule" must not rescue it.
+  const specsAsk: IntentVerdict = {
+    addressed: false,
+    customerAsk: "Information about miles driven, price, and model year for the 2022 Iron 883",
+    why: "did not provide the requested details (mileage, price, year) or offer to schedule",
+    severity: "major"
+  };
+  const specsRow = mk({ draft: initialAdfUnavailableDraft });
+  assert(
+    !isBlockedTestRideWithWatchOffer(specsRow, specsAsk),
+    "an unanswered specs/pricing ask is NOT excused by the unavailability copy"
+  );
+  assert(!adjustScore(scoreTurn(specsRow, specsAsk), specsRow).pass, "the specs miss still fails the gate");
+  // (b) An IN-STOCK draft that simply never books stays a miss (no unavailability lead to excuse it).
+  const inStockDuckRow = mk({
+    draft: "Hey Sanjeev, it's Alexandra over at American Harley-Davidson. I can keep an eye out and text you if one comes in."
+  });
+  assert(
+    !isBlockedTestRideWithWatchOffer(inStockDuckRow, bookTestRideAsk),
+    "a watch offer WITHOUT the honest unavailability lead is not the ruled behavior"
+  );
+  // (c) A judge that says the ask WAS addressed never reaches the design-accept at all.
+  assert(
+    !isBlockedTestRideWithWatchOffer(stockFirstRow, { ...bookTestRideAsk, addressed: true }),
+    "an addressed verdict is never re-classified"
+  );
 
   // prompt builder reachable (shared with the nightly audit — same judging semantics)
   assert(buildIntentJudgePrompt({ convId: "x", at: "t", inboundText: "hi", replyText: "hey", replyKind: "draft", context: [] }).length > 50, "judge prompt builder shared");
