@@ -50017,38 +50017,101 @@ function canUseMdfPortalRunner(req: any) {
   return !!configured && !!provided && configured === provided;
 }
 
+/**
+ * Runner registration — one slot PER RUNNER KIND (Joe 2026-07-31, "seamless for other dealers
+ * if they want to switch computers").
+ *
+ * Two problems made a computer switch require a developer with shell access:
+ *  1. Reset did not STICK. It deleted the record, and the retired computer's next poll (60s)
+ *     silently re-claimed the empty slot. A dealer clicking Reset sees it work, then sees the
+ *     old machine reappear, with nothing in the UI explaining why.
+ *  2. MDF and warranty/RMA runners SHARED one slot (both called this validator), so stopping
+ *     the MDF runner was not enough — the warranty runner re-claimed the slot for the old
+ *     machine, and the two automations could never live on different computers.
+ *
+ * Fix: Reset writes a TOMBSTONE naming the retired machineId instead of deleting. That machine
+ * is refused (`runner_revoked`) and stands down; every other machine is free to claim the slot,
+ * and claiming CLEARS the tombstone, so revocation is self-expiring and can never accumulate.
+ * The server cannot reach into a dealer's computer, but the runner asks the server for work
+ * every minute — so the answer to that question is the off switch.
+ *
+ * Fail direction: revocation is deliberately NARROW — only the exact machineId that held the
+ * slot at the moment a manager clicked Reset. A wrongly-revoked runner would silently stop a
+ * dealer's automation, so it must never be inferable from a stale heartbeat or a name match.
+ */
+type MdfRunnerKind = "mdf" | "warranty_rma";
+
 type MdfRunnerRegistration = {
-  machineId: string;
+  machineId?: string;
   machineName?: string;
-  firstSeenAt: string;
-  lastSeenAt: string;
+  firstSeenAt?: string;
+  lastSeenAt?: string;
   lastIp?: string;
+  /** Set by Reset: the machine that was retired. It is refused until another machine claims the slot. */
+  revokedMachineId?: string;
+  revokedAt?: string;
+  /** Last time the retired machine tried anyway — this is what the console shows so a dealer can SEE it. */
+  revokedLastAttemptAt?: string;
 };
 
 const MDF_RUNNER_REGISTRY_PATH = process.env.MDF_PORTAL_RUNNER_REGISTRY_PATH || path.join(getDataDir(), "mdf_runner_registry.json");
+const WARRANTY_RMA_RUNNER_REGISTRY_PATH =
+  process.env.WARRANTY_RMA_PORTAL_RUNNER_REGISTRY_PATH || path.join(getDataDir(), "warranty_rma_runner_registry.json");
 const MDF_RUNNER_HEARTBEAT_TTL_MS = Math.max(60_000, Number(process.env.MDF_PORTAL_RUNNER_HEARTBEAT_TTL_MS ?? 10 * 60_000));
 
-async function readMdfRunnerRegistry(): Promise<MdfRunnerRegistration | null> {
+function mdfRunnerRegistryPath(kind: MdfRunnerKind): string {
+  return kind === "warranty_rma" ? WARRANTY_RMA_RUNNER_REGISTRY_PATH : MDF_RUNNER_REGISTRY_PATH;
+}
+
+function mdfRunnerKindFromRequest(req: any): MdfRunnerKind {
+  return String(req?.query?.kind || "").trim() === "warranty_rma" ? "warranty_rma" : "mdf";
+}
+
+async function readMdfRunnerRegistry(kind: MdfRunnerKind = "mdf"): Promise<MdfRunnerRegistration | null> {
   try {
-    const raw = await fs.promises.readFile(MDF_RUNNER_REGISTRY_PATH, "utf8");
+    const raw = await fs.promises.readFile(mdfRunnerRegistryPath(kind), "utf8");
     const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed.machineId === "string") return parsed as MdfRunnerRegistration;
+    // A tombstone (revoked, no current holder) is a REAL record — returning null for it would
+    // resurrect the exact bug this fixes, by making the slot look never-claimed.
+    if (parsed && (typeof parsed.machineId === "string" || typeof parsed.revokedMachineId === "string")) {
+      return parsed as MdfRunnerRegistration;
+    }
   } catch {
     return null;
   }
   return null;
 }
 
-async function writeMdfRunnerRegistry(registry: MdfRunnerRegistration) {
-  await fs.promises.mkdir(path.dirname(MDF_RUNNER_REGISTRY_PATH), { recursive: true });
-  await fs.promises.writeFile(MDF_RUNNER_REGISTRY_PATH, `${JSON.stringify(registry, null, 2)}\n`, "utf8");
+async function writeMdfRunnerRegistry(kind: MdfRunnerKind, registry: MdfRunnerRegistration) {
+  const target = mdfRunnerRegistryPath(kind);
+  await fs.promises.mkdir(path.dirname(target), { recursive: true });
+  await fs.promises.writeFile(target, `${JSON.stringify(registry, null, 2)}\n`, "utf8");
 }
 
-async function clearMdfRunnerRegistry() {
-  await fs.promises.rm(MDF_RUNNER_REGISTRY_PATH, { force: true }).catch(() => {});
+/**
+ * Reset = retire the current computer. Writes a tombstone naming it rather than deleting the
+ * file, so the retired runner cannot silently re-claim the empty slot on its next poll.
+ */
+async function revokeMdfRunnerRegistry(kind: MdfRunnerKind): Promise<MdfRunnerRegistration | null> {
+  const existing = await readMdfRunnerRegistry(kind);
+  const retiredId = String(existing?.machineId || "").trim();
+  if (!retiredId) {
+    await fs.promises.rm(mdfRunnerRegistryPath(kind), { force: true }).catch(() => {});
+    return null;
+  }
+  const tombstone: MdfRunnerRegistration = {
+    revokedMachineId: retiredId,
+    revokedAt: new Date().toISOString(),
+    machineName: existing?.machineName
+  };
+  await writeMdfRunnerRegistry(kind, tombstone);
+  return tombstone;
 }
 
-async function validateMdfPortalRunnerMachine(req: any): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+async function validateMdfPortalRunnerMachine(
+  req: any,
+  kind: MdfRunnerKind = "mdf"
+): Promise<{ ok: true } | { ok: false; status: number; error: string; code?: string }> {
   const machineId = String(req.header("x-mdf-runner-machine-id") || "").trim();
   const machineName = String(req.header("x-mdf-runner-machine-name") || "").trim().slice(0, 120);
   if (!machineId) {
@@ -50060,21 +50123,37 @@ async function validateMdfPortalRunnerMachine(req: any): Promise<{ ok: true } | 
   }
 
   const now = new Date();
-  const existing = await readMdfRunnerRegistry();
+  const existing = await readMdfRunnerRegistry(kind);
+
+  // Retired by a manager: refuse and tell the runner to stand down for good. Recorded so the
+  // console can show "the old computer is still trying" instead of leaving a dealer guessing.
+  if (existing?.revokedMachineId && existing.revokedMachineId === machineId) {
+    await writeMdfRunnerRegistry(kind, { ...existing, revokedLastAttemptAt: now.toISOString() });
+    return {
+      ok: false,
+      status: 409,
+      code: "runner_revoked",
+      error:
+        "runner_revoked: this computer was retired from the LeadRider runner in the console. Stopping. To use this computer again, run the runner installer on it."
+    };
+  }
+
   const active =
     existing?.lastSeenAt &&
     Number.isFinite(Date.parse(existing.lastSeenAt)) &&
     now.getTime() - Date.parse(existing.lastSeenAt) < MDF_RUNNER_HEARTBEAT_TTL_MS;
 
-  if (existing && existing.machineId !== machineId && active) {
+  if (existing?.machineId && existing.machineId !== machineId && active) {
     return {
       ok: false,
       status: 409,
+      code: "runner_conflict",
       error: `Another MDF runner is already active on ${existing.machineName || "another computer"}. Disable it or reset the runner registration before installing on this computer.`
     };
   }
 
-  await writeMdfRunnerRegistry({
+  // Claiming the slot CLEARS any tombstone — revocation is self-expiring, never accumulating.
+  await writeMdfRunnerRegistry(kind, {
     machineId,
     machineName: machineName || existing?.machineName || "MDF Runner",
     firstSeenAt: existing?.machineId === machineId ? existing.firstSeenAt : now.toISOString(),
@@ -50089,9 +50168,9 @@ async function requireMdfPortalRunner(req: any, res: any): Promise<boolean> {
     res.status(401).json({ ok: false, error: "invalid MDF portal runner token" });
     return false;
   }
-  const machine = await validateMdfPortalRunnerMachine(req);
+  const machine = await validateMdfPortalRunnerMachine(req, "mdf");
   if (!machine.ok) {
-    res.status(machine.status).json({ ok: false, error: machine.error });
+    res.status(machine.status).json({ ok: false, error: machine.error, code: machine.code });
     return false;
   }
   return true;
@@ -50128,26 +50207,50 @@ async function requireWarrantyRmaPortalRunner(req: any, res: any): Promise<boole
     res.status(401).json({ ok: false, error: "invalid warranty/RMA portal runner token" });
     return false;
   }
-  const machine = await validateMdfPortalRunnerMachine(req);
+  // Own slot (2026-07-31): sharing the MDF registration meant the warranty runner re-claimed
+  // the slot for the old computer during an MDF migration, and the two automations could never
+  // live on different computers.
+  const machine = await validateMdfPortalRunnerMachine(req, "warranty_rma");
   if (!machine.ok) {
-    res.status(machine.status).json({ ok: false, error: machine.error.replace(/\bMDF runner\b/g, "portal runner") });
+    res.status(machine.status).json({
+      ok: false,
+      error: machine.error.replace(/\bMDF runner\b/g, "portal runner"),
+      code: machine.code
+    });
     return false;
   }
   return true;
 }
 
-app.get("/mdf/portal-runner/registration", requireManager, async (_req, res) => {
-  const registration = await readMdfRunnerRegistry();
+app.get("/mdf/portal-runner/registration", requireManager, async (req, res) => {
+  const kind = mdfRunnerKindFromRequest(req);
+  const registration = await readMdfRunnerRegistry(kind);
   const active =
     !!registration?.lastSeenAt &&
     Number.isFinite(Date.parse(registration.lastSeenAt)) &&
     Date.now() - Date.parse(registration.lastSeenAt) < MDF_RUNNER_HEARTBEAT_TTL_MS;
-  return res.json({ ok: true, registration, active, heartbeatTtlMs: MDF_RUNNER_HEARTBEAT_TTL_MS });
+  // Surface the retired machine's attempts so a dealer can SEE the handoff finish, rather than
+  // watching a reset appear not to work (the failure mode this whole change exists to kill).
+  const retiredStillTrying =
+    !!registration?.revokedMachineId &&
+    !!registration?.revokedLastAttemptAt &&
+    Number.isFinite(Date.parse(registration.revokedLastAttemptAt)) &&
+    Date.now() - Date.parse(registration.revokedLastAttemptAt) < MDF_RUNNER_HEARTBEAT_TTL_MS;
+  return res.json({
+    ok: true,
+    kind,
+    registration,
+    active,
+    revoked: !!registration?.revokedMachineId,
+    retiredStillTrying,
+    heartbeatTtlMs: MDF_RUNNER_HEARTBEAT_TTL_MS
+  });
 });
 
-app.delete("/mdf/portal-runner/registration", requireManager, async (_req, res) => {
-  await clearMdfRunnerRegistry();
-  return res.json({ ok: true, reset: true });
+app.delete("/mdf/portal-runner/registration", requireManager, async (req, res) => {
+  const kind = mdfRunnerKindFromRequest(req);
+  const tombstone = await revokeMdfRunnerRegistry(kind);
+  return res.json({ ok: true, reset: true, kind, revokedMachineId: tombstone?.revokedMachineId ?? null });
 });
 
 function shellSingleQuote(value: string): string {

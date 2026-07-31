@@ -587,3 +587,83 @@ console.log("PASS mdf portal reliability additions");
   assert.ok(/acquireDaemonSingleton\(\)/.test(daemonSrc) && /leadrider-mdf-portal-daemon\.lock/.test(daemonSrc), "daemon singleton lock (watchdog duplicates exit instantly)");
 }
 console.log("PASS mdf runner windows port guards");
+
+// === Seamless computer switch (Joe 2026-07-31) ===================================================
+// Switching the runner to a new computer used to need shell access: Reset DELETED the record and
+// the retired computer's next poll silently re-claimed the empty slot, so the console showed the
+// old machine coming back with no explanation. Worse, the MDF and warranty/RMA runners shared ONE
+// slot, so a dealer could never run them on different computers. Both are pinned here.
+{
+  const { REVOKED_MARKER, RUNNER_REVOKED_EXIT_CODE } = await import(
+    "../services/api/src/domain/portalRunnerHandoff.ts"
+  );
+  const fsx = await import("node:fs");
+  const apiSrc = fsx.readFileSync("services/api/src/index.ts", "utf8");
+  const runnerSrc = fsx.readFileSync("scripts/mdf_portal_runner.ts", "utf8");
+  const daemonSrc = fsx.readFileSync("scripts/mdf_portal_runner_daemon.ts", "utf8");
+
+  // The stand-down exit code must be distinct from success (0) and generic failure (1). If it
+  // collided with 1, every API blip would retire a working dealer's computer — the one failure
+  // here that is far worse than the bug being fixed.
+  assert.equal(RUNNER_REVOKED_EXIT_CODE, 3, "revoked exit code is dedicated");
+  assert.ok(RUNNER_REVOKED_EXIT_CODE !== 0 && RUNNER_REVOKED_EXIT_CODE !== 1, "revoked exit code never collides with success/generic-failure");
+
+  // (a) Reset writes a TOMBSTONE naming the retired machine — it must not just delete the file,
+  //     which is precisely what let the old computer re-claim the slot.
+  assert.ok(/async function revokeMdfRunnerRegistry/.test(apiSrc), "reset revokes rather than deletes");
+  assert.ok(/revokedMachineId: retiredId/.test(apiSrc), "the tombstone names the retired machine");
+  assert.ok(/await revokeMdfRunnerRegistry\(kind\)/.test(apiSrc), "the DELETE endpoint uses the revoking path");
+
+  // (b) The retired machine is refused with the marker the runner matches on.
+  assert.ok(
+    /existing\.revokedMachineId === machineId/.test(apiSrc),
+    "a revoked machine is matched by EXACT machine id (never by name or a stale heartbeat)"
+  );
+  assert.ok(apiSrc.includes(REVOKED_MARKER), `the refusal body carries the ${REVOKED_MARKER} marker`);
+
+  // (c) Revocation is SELF-EXPIRING: any other machine claiming the slot clears the tombstone,
+  //     so a stale tombstone can never lock a dealer out of their own runner.
+  assert.ok(
+    /Claiming the slot CLEARS any tombstone/.test(apiSrc),
+    "claiming the slot clears the tombstone (revocation cannot accumulate)"
+  );
+
+  // (d) Each runner kind gets its OWN slot — the shared-slot bug that made stopping one runner
+  //     insufficient during a migration.
+  assert.ok(/WARRANTY_RMA_RUNNER_REGISTRY_PATH/.test(apiSrc), "warranty/RMA has its own registry path");
+  assert.ok(
+    /validateMdfPortalRunnerMachine\(req, "warranty_rma"\)/.test(apiSrc),
+    "the warranty/RMA runner validates against its OWN slot, not the MDF one"
+  );
+  assert.ok(
+    /validateMdfPortalRunnerMachine\(req, "mdf"\)/.test(apiSrc),
+    "the MDF runner validates against the MDF slot"
+  );
+
+  // (e) The runner child stands down on the revoked reply, and ONLY on that reply.
+  assert.ok(
+    new RegExp(`resp\\.status === 409 && /${REVOKED_MARKER}/\\.test\\(text\\)`).test(runnerSrc),
+    "the runner detects the revoked refusal specifically (a bare 409 stays a retryable failure)"
+  );
+  assert.ok(/process\.exit\(RUNNER_REVOKED_EXIT_CODE\)/.test(runnerSrc), "the runner exits with the dedicated code");
+
+  // (f) The daemon disables its OWN service — exiting alone would restart-loop under KeepAlive
+  //     and keep fighting for the slot, which is the visible symptom we are killing.
+  assert.ok(/code === RUNNER_REVOKED_EXIT_CODE/.test(daemonSrc), "the daemon reacts to the revoked code");
+  assert.ok(/standDownRetiredComputer/.test(daemonSrc), "the daemon stands the retired computer down");
+  assert.ok(
+    /\["\/Change", "\/TN", "LeadRider MDF Runner", "\/DISABLE"\]/.test(daemonSrc),
+    "Windows stand-down disables the runner scheduled task"
+  );
+  assert.ok(
+    /bootout.*ai\.leadrider\.mdf-portal-runner/.test(daemonSrc),
+    "macOS stand-down unloads the runner LaunchAgent"
+  );
+  // Stand-down must target the RUNNER service only — never the Chrome agent, which a human may
+  // be relying on, and never a taskkill of chrome.exe.
+  assert.ok(
+    !/standDownRetiredComputer[\s\S]{0,600}hdnet-chrome/.test(daemonSrc),
+    "stand-down never touches the Chrome agent"
+  );
+}
+console.log("PASS portal runner computer-switch handoff");
