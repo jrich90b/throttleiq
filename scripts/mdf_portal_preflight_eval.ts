@@ -542,6 +542,29 @@ console.log("PASS mdf portal reliability additions");
     /Run as administrator/.test(ps1),
     "if elevation is declined the installer names the exact manual fix"
   );
+  // CHECK-IN. Registration otherwise happens ONLY when the daemon polls, so a successful install
+  // whose auto-start failed is indistinguishable in the console from no install at all — both read
+  // "no active runner". That ambiguity cost an afternoon (Joe, 2026-07-31).
+  assert.ok(
+    /Invoke-WebRequest -Uri '[^']*\/mdf\/portal-runner\/tasks/.test(ps1),
+    "installer checks in with the server so the computer appears in the console"
+  );
+  assert.ok(
+    /"x-mdf-portal-token" = 'tok_eval_123'/.test(ps1),
+    "the check-in authenticates with the runner token"
+  );
+  assert.ok(
+    /mdf-runner-machine\.json/.test(ps1),
+    "the check-in uses the SAME identity file the runner reads, so both agree on the machine"
+  );
+  assert.ok(
+    /if \(-not \(Test-Path \$IdentityPath\)\)/.test(ps1),
+    "an existing machine identity is never overwritten (the id must stay stable across re-installs)"
+  );
+  assert.ok(
+    /The runner will register itself once it starts/.test(ps1),
+    "a failed check-in never fails the install — it is a reporting nicety, not a gate"
+  );
   assert.ok(/log in there now/.test(ps1), "installer tells the human the one manual step (H-DNet login)");
   assert.ok(/only ONE runner computer/.test(ps1), "installer surfaces the single-runner rule");
   assert.ok(!/launchctl/.test(ps1), "no macOS plumbing leaks into the Windows payload");
@@ -740,6 +763,18 @@ console.log("PASS mdf runner windows port guards");
     );
   }
 
+  // (d5) The card must distinguish "never installed" from "installed but not running". Both used
+  //      to render as a bare "no active runner", which is precisely how a failed auto-start hid
+  //      for an afternoon while the install had actually succeeded.
+  assert.ok(
+    /registered but has stopped checking in/.test(webSrcRunner),
+    "the card names the installed-but-not-running state instead of showing a bare 'no active runner'"
+  );
+  assert.ok(
+    /!mdfRunnerStatus\?\.active &&[\s\S]{0,120}?registration\?\.lastSeenAt \? \(/.test(webSrcRunner),
+    "that state keys off a PRIOR check-in going stale (registered once, then quiet)"
+  );
+
   // (e) The runner child stands down on the revoked reply, and ONLY on that reply.
   assert.ok(
     new RegExp(`resp\\.status === 409 && /${REVOKED_MARKER}/\\.test\\(text\\)`).test(runnerSrc),
@@ -749,6 +784,19 @@ console.log("PASS mdf runner windows port guards");
 
   // (f) The daemon disables its OWN service — exiting alone would restart-loop under KeepAlive
   //     and keep fighting for the slot, which is the visible symptom we are killing.
+  // (f0) The daemon must be able to LAUNCH the runner on Windows at all. `npx` is npx.cmd, and
+  //      Node >=18.20.2 / >=20.12.2 refuses to spawn .cmd/.bat without a shell — so the daemon
+  //      polled fine and failed on every tick with "runner spawn failed", on Windows only.
+  //      Live on a dealership PC 2026-07-31; invisible on macOS, which is why it shipped.
+  assert.ok(
+    /shell: isWindows/.test(daemonSrc),
+    "the daemon spawns the runner through a shell on Windows (npx is a .cmd Node will not spawn directly)"
+  );
+  assert.ok(
+    /isWindows \? `"\$\{apiBase\}"` : apiBase/.test(daemonSrc),
+    "the api-base is quoted on Windows, where shell mode re-parses the argument list"
+  );
+
   assert.ok(/code === RUNNER_REVOKED_EXIT_CODE/.test(daemonSrc), "the daemon reacts to the revoked code");
   assert.ok(/standDownRetiredComputer/.test(daemonSrc), "the daemon stands the retired computer down");
   assert.ok(
