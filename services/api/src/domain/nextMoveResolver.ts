@@ -122,6 +122,22 @@ export type NextMoveInput = {
 
 export type NextMoveKind = "none" | "call";
 
+/**
+ * A move that came due and was never actioned. Joe, 2026-07-31: "The call should disappear
+ * but should show up in the KPIs somewhere showing how many calls the salesperson missed for
+ * accountability." So a lapse leaves the daily board (it is not today's work) but never
+ * leaves the RECORD — this is the attributable receipt.
+ */
+export type LapsedMove = {
+  kind: "chart" | "reengage";
+  /** ISO the move was due. */
+  dueAt: string;
+  /** Whole days between the due moment and evaluation. */
+  daysLate: number;
+  /** Chart day it represented, when it came from the wall chart. */
+  chartDay?: number;
+};
+
 export type NextMoveDecision = {
   move: NextMoveKind;
   /** Machine-legible why, for the shadow log and the eval. */
@@ -130,6 +146,8 @@ export type NextMoveDecision = {
   dueAt?: string;
   /** The chart day this call serves, for `servedThroughChartDay` bookkeeping. */
   chartDay?: number;
+  /** Present only when the move lapsed — carries the accountability record. */
+  lapsed?: LapsedMove;
 };
 
 /** Chart days that may produce a CALL, after Joe's day-3 floor. */
@@ -196,7 +214,15 @@ export function decideNextMove(input: NextMoveInput): NextMoveDecision {
     const dueMs = lastReplyMs + ENGAGED_QUIET_DAYS_FOR_CALL * DAY_MS;
     // Quiet for months is not a 3-day re-engagement call — it's a lead awaiting a decision.
     if (input.nowMs - dueMs > MOVE_LAPSES_AFTER_DAYS * DAY_MS) {
-      return { move: "none", reason: "reengage_lapsed" };
+      return {
+        move: "none",
+        reason: "reengage_lapsed",
+        lapsed: {
+          kind: "reengage",
+          dueAt: new Date(dueMs).toISOString(),
+          daysLate: Math.floor((input.nowMs - dueMs) / DAY_MS)
+        }
+      };
     }
     return { move: "call", reason: "engaged_then_quiet", dueAt: new Date(dueMs).toISOString() };
   }
@@ -219,7 +245,100 @@ export function decideNextMove(input: NextMoveInput): NextMoveDecision {
   const dueMs = createdMs + day * DAY_MS;
   // A chart day that came due weeks ago is a backlog item, not today's work.
   if (input.nowMs - dueMs > MOVE_LAPSES_AFTER_DAYS * DAY_MS) {
-    return { move: "none", reason: "chart_lapsed", chartDay: day };
+    return {
+      move: "none",
+      reason: "chart_lapsed",
+      chartDay: day,
+      lapsed: {
+        kind: "chart",
+        dueAt: new Date(dueMs).toISOString(),
+        daysLate: Math.floor((input.nowMs - dueMs) / DAY_MS),
+        chartDay: day
+      }
+    };
   }
   return { move: "call", reason: "chart_day", chartDay: day, dueAt: new Date(dueMs).toISOString() };
+}
+
+// ---------------------------------------------------------------------------
+// MISSED-CALL ACCOUNTABILITY KPI
+//
+// Joe, 2026-07-31: "The call should disappear but should show up in the KPIs somewhere
+// showing how many calls the salesperson missed for accountability."
+//
+// A lapsed move leaves the daily board but not the record. This rolls those receipts up
+// per salesperson. PURE — the caller supplies the rows, so it is eval-pinnable and can back
+// either a KPI endpoint or a digest line without either owning the arithmetic.
+//
+// FAIRNESS, deliberately built in: a lapsed move on a lead NOBODY was assigned is not a
+// salesperson's miss — it is an assignment gap, and charging it to a person would make the
+// metric dishonest the first time it is used. Those land in `unassigned`, counted and
+// visible, never folded into anyone's number.
+// ---------------------------------------------------------------------------
+
+export type MissedCallRow = {
+  ownerId?: string | null;
+  ownerName?: string | null;
+  lapsed: LapsedMove;
+};
+
+export type MissedCallsByOwner = {
+  ownerId: string | null;
+  ownerName: string;
+  missed: number;
+  /** Days late of the oldest miss — how long the worst one sat. */
+  oldestDaysLate: number;
+  chartMisses: number;
+  reengageMisses: number;
+};
+
+export type MissedCallsSummary = {
+  total: number;
+  /** Lapsed moves on leads with no owner — an assignment gap, charged to nobody. */
+  unassigned: number;
+  byOwner: MissedCallsByOwner[];
+};
+
+/**
+ * Roll lapsed moves up per salesperson, worst first. Pure and total-preserving:
+ * `total === unassigned + sum(byOwner.missed)` always holds, so the number can never
+ * quietly lose misses.
+ */
+export function summarizeMissedCalls(rows: MissedCallRow[]): MissedCallsSummary {
+  const byKey = new Map<string, MissedCallsByOwner>();
+  let unassigned = 0;
+  let total = 0;
+
+  for (const row of rows ?? []) {
+    if (!row?.lapsed) continue;
+    total += 1;
+    const name = String(row.ownerName ?? "").trim();
+    const id = String(row.ownerId ?? "").trim();
+    if (!name && !id) {
+      unassigned += 1;
+      continue;
+    }
+    const key = id || name;
+    const entry =
+      byKey.get(key) ??
+      ({
+        ownerId: id || null,
+        ownerName: name || "(unnamed owner)",
+        missed: 0,
+        oldestDaysLate: 0,
+        chartMisses: 0,
+        reengageMisses: 0
+      } as MissedCallsByOwner);
+    entry.missed += 1;
+    const late = Number(row.lapsed.daysLate);
+    if (Number.isFinite(late) && late > entry.oldestDaysLate) entry.oldestDaysLate = late;
+    if (row.lapsed.kind === "chart") entry.chartMisses += 1;
+    else entry.reengageMisses += 1;
+    byKey.set(key, entry);
+  }
+
+  const byOwner = [...byKey.values()].sort(
+    (a, b) => b.missed - a.missed || b.oldestDaysLate - a.oldestDaysLate
+  );
+  return { total, unassigned, byOwner };
 }

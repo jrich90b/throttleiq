@@ -30,7 +30,12 @@ import {
   isOptOutKeywordInbound,
   isQuotedReactionEchoInbound
 } from "../services/api/src/domain/scoringExclusions.js";
-import { decideNextMove, type KnownNextEvent } from "../services/api/src/domain/nextMoveResolver.js";
+import {
+  decideNextMove,
+  summarizeMissedCalls,
+  type KnownNextEvent,
+  type MissedCallRow
+} from "../services/api/src/domain/nextMoveResolver.js";
 
 // Mirrors LEAD_INTAKE_MARKER_RE + LEAD_INTAKE_FIELD_RE in scoringExclusions.ts: a structured
 // ADF / widget payload is a SYSTEM re-sync of lead data, never a customer-authored reply.
@@ -111,6 +116,7 @@ function main() {
   let boardToday = 0;
   let boardResolver = 0;
   let backlog = 0;
+  const missedRows: MissedCallRow[] = [];
   const reasons: Record<string, number> = {};
   const rows: string[] = [];
 
@@ -142,6 +148,10 @@ function main() {
     // Leads whose move came due long ago: a ONE-TIME backlog to sweep or write off, never
     // part of the steady-state daily board.
     if (decision.reason === "chart_lapsed" || decision.reason === "reengage_lapsed") backlog += 1;
+    // Joe 7/31: the call disappears from the board but stays on the record.
+    if (decision.lapsed) {
+      missedRows.push({ ownerName: c.leadOwner?.name ?? null, lapsed: decision.lapsed });
+    }
 
     // Show the leads where the two disagree — that IS the change Joe is being asked to approve.
     if (rows.length < sample && (open.length > 1 || (open.length > 0) !== (decision.move !== "none"))) {
@@ -169,6 +179,16 @@ function main() {
   for (const [r, n] of Object.entries(reasons).sort((a, b) => b[1] - a[1])) {
     console.log(`  ${r.padEnd(28)} ${n}`);
   }
+  const missed = summarizeMissedCalls(missedRows);
+  console.log(`\nMISSED CALLS (accountability KPI) — total ${missed.total}`);
+  for (const o of missed.byOwner) {
+    console.log(
+      `  ${o.ownerName.padEnd(24)} ${String(o.missed).padStart(4)} missed` +
+        `   (chart ${o.chartMisses}, re-engage ${o.reengageMisses}, oldest ${o.oldestDaysLate}d late)`
+    );
+  }
+  console.log(`  ${"(no owner assigned)".padEnd(24)} ${String(missed.unassigned).padStart(4)} — an ASSIGNMENT gap, charged to nobody`);
+
   console.log(`\n--- sample leads where today's board and the resolver disagree ---`);
   console.log(rows.join("\n") || "  (none)");
   console.log("");

@@ -27,7 +27,8 @@ import {
   MOVE_LAPSES_AFTER_DAYS,
   chartCallDays,
   decideNextMove,
-  dueChartCallDay
+  dueChartCallDay,
+  summarizeMissedCalls
 } from "../services/api/src/domain/nextMoveResolver.ts";
 
 const DAY_MS = 86_400_000;
@@ -262,5 +263,42 @@ assert.equal(
   "chart_lapsed",
   "one day past the lapse window it becomes backlog"
 );
+
+// --- 8) Missed-call accountability KPI (Joe 7/31: "should show up in the KPIs somewhere
+//        showing how many calls the salesperson missed for accountability"). ---
+// A lapse must carry an attributable receipt, not just disappear.
+assert.ok(staleChart.lapsed, "a lapsed chart move must carry a record for the KPI");
+assert.equal(staleChart.lapsed!.kind, "chart");
+assert.equal(staleChart.lapsed!.chartDay, 30);
+assert.equal(staleChart.lapsed!.daysLate, 60, "90 days old, day-30 call => 60 days late");
+assert.ok(staleReengage.lapsed, "a lapsed re-engagement move must carry a record too");
+assert.equal(staleReengage.lapsed!.kind, "reengage");
+assert.equal(staleReengage.lapsed!.daysLate, 77, "quiet 80 days, due at +3 => 77 days late");
+
+// A move that is genuinely DUE is not a miss — only lapsed ones are.
+assert.equal(cold(5).lapsed, undefined, "a due call is not a missed call");
+assert.equal(quiet3.lapsed, undefined, "a due re-engagement call is not a missed call");
+
+const summary = summarizeMissedCalls([
+  { ownerName: "Giovanni Boccabella", lapsed: { kind: "chart", dueAt: daysAgo(40), daysLate: 40, chartDay: 30 } },
+  { ownerName: "Giovanni Boccabella", lapsed: { kind: "reengage", dueAt: daysAgo(9), daysLate: 9 } },
+  { ownerName: "Stone Giuga", lapsed: { kind: "chart", dueAt: daysAgo(12), daysLate: 12, chartDay: 14 } },
+  // No owner: an ASSIGNMENT gap, never charged to a salesperson.
+  { ownerName: "", ownerId: "", lapsed: { kind: "chart", dueAt: daysAgo(20), daysLate: 20, chartDay: 21 } },
+  { ownerName: null, lapsed: { kind: "chart", dueAt: daysAgo(30), daysLate: 30, chartDay: 30 } }
+]);
+assert.equal(summary.total, 5, "every lapsed move is counted");
+assert.equal(summary.unassigned, 2, "unowned misses are an assignment gap, charged to nobody");
+assert.equal(
+  summary.unassigned + summary.byOwner.reduce((s, o) => s + o.missed, 0),
+  summary.total,
+  "the rollup must be total-preserving — a miss can never quietly vanish"
+);
+assert.equal(summary.byOwner[0].ownerName, "Giovanni Boccabella", "worst offender sorts first");
+assert.equal(summary.byOwner[0].missed, 2);
+assert.equal(summary.byOwner[0].chartMisses, 1);
+assert.equal(summary.byOwner[0].reengageMisses, 1);
+assert.equal(summary.byOwner[0].oldestDaysLate, 40, "the oldest miss shows how long the worst one sat");
+assert.deepEqual(summarizeMissedCalls([]), { total: 0, unassigned: 0, byOwner: [] }, "empty is clean");
 
 console.log("next_move_resolver:eval OK — decision table + fail direction pinned (Joe 7/31 rulings)");
