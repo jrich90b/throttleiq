@@ -26,6 +26,7 @@ import { pathToFileURL } from "node:url";
 
 import { isNonSalesConversation, isShadowReplayMessage } from "../services/api/src/domain/scoringExclusions.ts";
 import { decideIntentHandledAnomaly } from "../services/api/src/domain/conversationOutcomeAudit.ts";
+import { describeWalkInNoteProvenance } from "../services/api/src/domain/walkInFollowUpTopic.ts";
 
 const CUSTOMER_IN = new Set(["twilio", "web_widget", "sendgrid"]);
 const SENT_OUT = new Set(["twilio", "sendgrid", "human"]);
@@ -37,6 +38,12 @@ export type IntentJudgeCandidate = {
   replyText: string;
   replyKind: "sent" | "draft";
   context: string[]; // up to a few prior messages, oldest->newest "in/out: body"
+  /**
+   * Who actually wrote `inboundText`, when it is NOT the customer's own words (a Traffic Log Pro
+   * walk-in lead record carrying a salesperson's note). Absent on a real customer message, which
+   * leaves the prompt byte-identical. See describeWalkInNoteProvenance.
+   */
+  inboundProvenance?: string | null;
 };
 
 export type IntentVerdict = {
@@ -138,7 +145,12 @@ export function selectIntentJudgeCandidates(
         inboundText,
         replyText: String(reply.body ?? "").trim(),
         replyKind: SENT_OUT.has(reply.provider) ? "sent" : "draft",
-        context
+        context,
+        inboundProvenance: describeWalkInNoteProvenance({
+          body: inboundText,
+          walkIn: conv?.lead?.walkIn,
+          walkInComment: conv?.lead?.walkInComment
+        })
       });
     }
   }
@@ -161,7 +173,8 @@ export function buildIntentJudgePrompt(c: IntentJudgeCandidate): string {
     "",
     c.context.length ? `Conversation so far:\n${c.context.join("\n")}` : "Conversation so far: (none)",
     "",
-    `Customer's latest message: ${c.inboundText}`,
+    ...(c.inboundProvenance ? [c.inboundProvenance, ""] : []),
+    `${c.inboundProvenance ? "Latest inbound record" : "Customer's latest message"}: ${c.inboundText}`,
     `Agent's reply${c.replyKind === "draft" ? " (drafted, not yet sent)" : ""}: ${c.replyText}`,
     "",
     "Return JSON: addressed (bool), customer_ask (short paraphrase of what they wanted),",

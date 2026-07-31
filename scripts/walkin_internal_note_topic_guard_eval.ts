@@ -11,8 +11,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
   isInternalNoteFollowUpTopic,
-  buildWalkInSpecRecapClause
+  buildWalkInSpecRecapClause,
+  describeWalkInNoteProvenance
 } from "../services/api/src/domain/walkInFollowUpTopic.ts";
+import { buildIntentJudgePrompt } from "./intent_handled_audit.ts";
 import { hasAdfFinanceApplicationContext } from "../services/api/src/domain/workflowRegressionGuards.ts";
 
 // The exact production failure topic, and each internal-note tell in isolation → rejected.
@@ -217,4 +219,81 @@ assert.doesNotMatch(
   "the inline finance regex over lead.inquiry/comment must not come back"
 );
 
-console.log("PASS walk-in internal-note follow-up topic guard eval (+ slot-only spec recap, TLP finance-context guard)");
+// ── The intent judge must be told the walk-in note is STAFF-written ────────────────────
+// The agent side of this module already knows a TLP "Inquiry" is an internal staff log. The judge
+// did not: it read the note as the customer's words, invented an ask, and filed a P1
+// corpus_replay_judge_fail on a reply that honored the note exactly.
+{
+  // THE PRODUCTION TURN (+17169705448, msg_9d8dbbc321971_1775078277067, replayed 2026-07-30).
+  // Scott's note defers the follow-up; extractWeatherFollowUpPlan defers the cadence to match.
+  const note = "Reach to to schedule a test ride for the end of next week when the weather looks better. (Step 3)";
+  const body = [
+    "WEB LEAD (ADF)",
+    "Source: Traffic Log Pro",
+    "Ref: 10879",
+    "Name: Dan Lamancuso",
+    "Year: 2026",
+    "Vehicle: Harley-Davidson Street Glide",
+    "",
+    "Inquiry:",
+    "reach to to schedule a test ride for the end of next week when the weather looks better. (step 3)"
+  ].join("\n");
+
+  const prov = describeWalkInNoteProvenance({ body, walkIn: true, walkInComment: note });
+  assert.ok(prov, "the pinned walk-in turn must carry provenance (case-insensitive note match)");
+  assert.match(prov!, /not a message the customer typed/, "provenance must say the customer did not write it");
+  assert.ok(prov!.includes(note), "provenance must quote the staff note verbatim");
+  // PROVENANCE ONLY: it must never coach the judge toward a verdict, or it would launder real
+  // misses (a walk-in note asking for email updates answered with "thanks for the update").
+  assert.doesNotMatch(prov!, /addressed|acceptable|by design|do not fail|counts as/i, "must not tell the judge what passes");
+
+  // Fail direction — every path that is not a confirmed walk-in note returns null, leaving the
+  // prompt byte-identical to today's.
+  assert.equal(describeWalkInNoteProvenance({ body, walkIn: false, walkInComment: note }), null, "not a walk-in lead");
+  assert.equal(describeWalkInNoteProvenance({ body, walkIn: true, walkInComment: "" }), null, "no note");
+  assert.equal(
+    describeWalkInNoteProvenance({ body, walkIn: true, walkInComment: "Wants a Road Glide in the spring" }),
+    null,
+    "a note the body does not carry is never used to relabel the inbound"
+  );
+  assert.equal(
+    describeWalkInNoteProvenance({ body: "Do you have any 883s left?", walkIn: true, walkInComment: note }),
+    null,
+    "a real customer SMS on a walk-in thread stays the customer's own words"
+  );
+
+  // Prompt wiring: provenance replaces the false "Customer's latest message" label.
+  const base = {
+    convId: "+17169705448",
+    at: "2026-04-01T21:17:57.066Z",
+    replyText: "Thanks for stopping in. I'll plan to follow up end of next week.",
+    replyKind: "draft" as const,
+    context: []
+  };
+  const withProv = buildIntentJudgePrompt({ ...base, inboundText: body, inboundProvenance: prov });
+  assert.match(withProv, /Latest inbound record:/, "a staff-note inbound is not labelled as the customer's message");
+  assert.doesNotMatch(withProv, /Customer's latest message:/, "the false label must be gone");
+  assert.ok(withProv.includes(prov!), "the prompt carries the provenance line");
+
+  const plain = buildIntentJudgePrompt({ ...base, inboundText: "Do you have any 883s left?" });
+  assert.match(plain, /Customer's latest message:/, "a real customer message keeps today's label");
+  assert.doesNotMatch(plain, /PROVENANCE:/, "no provenance line without a walk-in note");
+}
+
+// Wiring: both judged paths (the nightly corpus replay and the live intent audit) must populate it.
+assert.ok(
+  /inboundProvenance: provenanceFor\(row\)/.test(fs.readFileSync("scripts/corpus_replay_flywheel.ts", "utf8")),
+  "the corpus-replay judge must pass provenance"
+);
+{
+  const audit = fs.readFileSync("scripts/intent_handled_audit.ts", "utf8");
+  assert.ok(/inboundProvenance: describeWalkInNoteProvenance\(\{/.test(audit), "the live intent audit must pass provenance");
+}
+// A cached verdict judged WITHOUT provenance graded a different question — it must not be reused.
+assert.match(
+  fs.readFileSync("scripts/corpus_replay_flywheel.ts", "utf8"),
+  /provenanceFor\(row\) \? "##walkin-prov" : ""/,
+  "the judge cache key must change when provenance applies, or the fix never reaches a cached row"
+);
+
+console.log("PASS walk-in internal-note follow-up topic guard eval (+ slot-only spec recap, TLP finance-context guard, judge provenance)");
