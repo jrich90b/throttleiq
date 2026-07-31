@@ -10,7 +10,13 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { classifyOutcomeAnomaly, isSupersededGrade, rankSupersededGradeLast } from "../services/api/src/domain/anomalyClassifier.ts";
+import {
+  classifyOutcomeAnomaly,
+  isReportGradeStale,
+  isSupersededGrade,
+  rankSupersededGradeLast,
+  refreshSupersededGrades
+} from "../services/api/src/domain/anomalyClassifier.ts";
 
 const A = (over: any) => ({ category: "state", dimension: "x", healed: false, severity: "P2", ...over });
 let n = 0;
@@ -161,6 +167,80 @@ n += 4;
   // A superseded grade must never remove a finding from the feed.
   assert.ok(!/supersededGrade[\s\S]{0,200}anomalies\.length = 0/.test(d), "a superseded grade never suppresses findings");
   n += 6;
+}
+
+// --- READ-TIME GRADE STALENESS (2026-07-31): DETECT froze `gradeSuperseded` at generation, but
+//     next.json is READ for hours afterward by four routines. On 2026-07-31 DETECT ran at 08:55Z
+//     (deployed === graded === e3a1e4ea), #378 deployed at 13:32Z, and at 14:39Z the feed still
+//     advertised supersededGradeCount: 0 while its top three Tier-1 orders were the out-of-stock
+//     dead-ends #378 had just fixed. These pins hold the read-time re-check and its fail-direction. ---
+{
+  // A report generated against a build that is no longer deployed is stale...
+  assert.equal(isReportGradeStale({ reportDeployedCommit: "e3a1e4ea4ea2", currentDeployedCommit: "355e7c0a4912" }), true,
+    "a report graded before the current deploy is stale");
+  assert.equal(isReportGradeStale({ reportDeployedCommit: "355e7c0a4912", currentDeployedCommit: "355e7c0a4912" }), false,
+    "a report graded against the running build is current");
+  // ...and the same fail-direction as isSupersededGrade: unknown is never stale.
+  assert.equal(isReportGradeStale({ reportDeployedCommit: null, currentDeployedCommit: "355e7c0a4912" }), false,
+    "an unknown report commit is not proof of staleness");
+  assert.equal(isReportGradeStale({ reportDeployedCommit: "355e7c0a4912", currentDeployedCommit: null }), false,
+    "an unresolvable current commit never demotes real work");
+  n += 4;
+
+  // The re-annotation demotes but NEVER drops, and never re-ranks beyond the partition.
+  const orders = [
+    { convId: "a", tier: 2, gradedAtCommit: "e3a1e4ea4ea2" },
+    { convId: "b", tier: 2, gradedAtCommit: "355e7c0a4912" },
+    { convId: "c", tier: 1, gradedAtCommit: "355e7c0a4912" }
+  ];
+  const refreshed = refreshSupersededGrades(orders, "355e7c0a4912");
+  assert.equal(refreshed.length, orders.length, "a superseded grade never removes a finding from the feed");
+  assert.deepEqual(refreshed.map(o => o.convId), ["b", "c", "a"],
+    "pre-deploy grades sort last; the rest keep DETECT's tier order (stable partition)");
+  assert.equal(refreshed.find(o => o.convId === "a")?.gradeSuperseded, true, "the pre-deploy grade is marked");
+  assert.equal(refreshed.find(o => o.convId === "b")?.gradeSuperseded, false, "a current grade is left alone");
+
+  // Monotonic: a demotion DETECT already proved must survive an unresolvable current commit,
+  // or an unreadable repo would promote verdicts about code nobody runs back to the top.
+  const kept = refreshSupersededGrades([{ convId: "d", gradedAtCommit: "abc123def", gradeSuperseded: true }], null);
+  assert.equal(kept[0]?.gradeSuperseded, true, "an existing superseded mark is never cleared");
+  // Unknown current commit demotes nothing new.
+  const untouched = refreshSupersededGrades([{ convId: "e", gradedAtCommit: "e3a1e4ea4ea2" }], null);
+  assert.equal(untouched[0]?.gradeSuperseded, false, "no current commit → nothing newly demoted");
+  n += 6;
+}
+
+// --- The consumer: act_runner must re-check at READ time, warn, and carry it into the brief. ---
+{
+  const ar = fs.readFileSync("scripts/act_runner.ts", "utf8");
+  assert.match(ar, /isReportGradeStale\(/, "act_runner re-checks report staleness at read time");
+  assert.match(ar, /refreshSupersededGrades\(/, "act_runner re-annotates work orders against the deployed commit");
+  assert.match(ar, /rev-parse", "HEAD"/, "act_runner resolves the CURRENTLY deployed commit itself");
+  // The warning must reach both the operator AND the brief the coding agent actually works from.
+  assert.match(ar, /GRADE SUPERSEDED/, "the superseded state is surfaced, not silent");
+  assert.match(ar, /staleBanner/, "the fix brief carries the reproduce-first warning");
+  // prep --top must select from the RE-SORTED orders, or it hands over a pre-deploy verdict.
+  const prepSrc = ar.slice(ar.indexOf('if (sub === "prep")'), ar.indexOf('if (sub === "open-pr")'));
+  assert.match(prepSrc, /const report = loadReport\(\)/, "prep loads the staleness-aware report");
+  assert.match(prepSrc, /warnIfReportStale\(report\)/, "prep warns before handing over a work order");
+  // Fail-safe: read-time staleness must never suppress a finding.
+  assert.ok(!/refreshSupersededGrades[\s\S]{0,300}\.filter\(\s*\w*\s*=>\s*!\w*\.gradeSuperseded/.test(ar),
+    "act_runner never filters findings out on a superseded grade");
+  n += 8;
+
+  // The disposition ledger has the same generation-vs-read gap: the 13:10 tick disposed two keys
+  // that were still the top Tier-1 orders in the 08:55 feed at 14:39. act_runner must re-apply it
+  // at read time, reusing DETECT's pure function so the semantics cannot drift apart.
+  assert.match(ar, /partitionByDispositions\(/, "act_runner re-applies the disposition ledger at read time");
+  assert.match(ar, /parseDispositionLedgerPayload\(/, "act_runner reads the ledger through the shared parser");
+  // Regressions must survive the read-time pass — a disposition may never eat a real regression.
+  assert.match(ar, /regressionOfDisposed/, "a regression-of-disposed order stays in the queue");
+  const ledgerSrc = ar.slice(ar.indexOf("function applyLedgerAtReadTime"), ar.indexOf("function loadReport"));
+  assert.match(ledgerSrc, /part\.regressions/, "read-time ledger keeps regressions rather than dropping them");
+  // Fail-direction: an unreadable or absent ledger suppresses NOTHING.
+  assert.equal((ledgerSrc.match(/return \{ kept: orders, suppressed: 0, regressions: 0 \}/g) ?? []).length, 3,
+    "a missing, unparseable, or empty ledger keeps every work order");
+  n += 5;
 }
 
 // --- The producer: the flywheel must stamp the commit it graded, and omit it when unknown. ---
