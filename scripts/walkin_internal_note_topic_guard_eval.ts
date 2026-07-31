@@ -280,20 +280,37 @@ assert.doesNotMatch(
   assert.doesNotMatch(plain, /PROVENANCE:/, "no provenance line without a walk-in note");
 }
 
-// Wiring: both judged paths (the nightly corpus replay and the live intent audit) must populate it.
-assert.ok(
-  /inboundProvenance: provenanceFor\(row\)/.test(fs.readFileSync("scripts/corpus_replay_flywheel.ts", "utf8")),
-  "the corpus-replay judge must pass provenance"
-);
-{
-  const audit = fs.readFileSync("scripts/intent_handled_audit.ts", "utf8");
-  assert.ok(/inboundProvenance: describeWalkInNoteProvenance\(\{/.test(audit), "the live intent audit must pass provenance");
+// Wiring: EVERY site that builds an IntentJudgeCandidate must populate provenance, or that judge
+// keeps grading the staff note as customer speech. reproduce_confirm_sweep is the one that decides
+// whether a pinned finding still reproduces — an unlabelled judge there re-confirms the very
+// false positives this fixes (caught by the PR #368 cross-model reviewer).
+const JUDGE_CALL_SITES = [
+  "scripts/corpus_replay_flywheel.ts",
+  "scripts/intent_handled_audit.ts",
+  "scripts/reproduce_confirm_sweep.ts"
+];
+// These two cache verdicts on disk; the live audit judges fresh every run.
+const CACHED_JUDGE_SITES = new Set(["scripts/corpus_replay_flywheel.ts", "scripts/reproduce_confirm_sweep.ts"]);
+for (const site of JUDGE_CALL_SITES) {
+  const src = fs.readFileSync(site, "utf8");
+  assert.match(src, /inboundProvenance/, `${site} must pass inboundProvenance to the judge`);
+  if (!CACHED_JUDGE_SITES.has(site)) continue;
+  // A cached verdict judged WITHOUT provenance graded a different question — never reuse it.
+  assert.match(src, /"##walkin-prov"/, `${site} judge cache key must change when provenance applies`);
 }
-// A cached verdict judged WITHOUT provenance graded a different question — it must not be reused.
-assert.match(
-  fs.readFileSync("scripts/corpus_replay_flywheel.ts", "utf8"),
-  /provenanceFor\(row\) \? "##walkin-prov" : ""/,
-  "the judge cache key must change when provenance applies, or the fix never reaches a cached row"
-);
+// No FOURTH site may appear unlabelled: every IntentJudgeCandidate construction is accounted for.
+{
+  const all = fs
+    .readdirSync("scripts")
+    .filter(f => f.endsWith(".ts") && !f.endsWith("_eval.ts"))
+    .filter(f => /:\s*IntentJudgeCandidate\s*=/.test(fs.readFileSync(`scripts/${f}`, "utf8")))
+    .map(f => `scripts/${f}`)
+    .sort();
+  assert.deepEqual(
+    all,
+    JUDGE_CALL_SITES.filter(s => all.includes(s)).sort(),
+    `a new judge call site must pass provenance too — found ${JSON.stringify(all)}`
+  );
+}
 
 console.log("PASS walk-in internal-note follow-up topic guard eval (+ slot-only spec recap, TLP finance-context guard, judge provenance)");
