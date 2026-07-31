@@ -521,6 +521,27 @@ console.log("PASS mdf portal reliability additions");
   assert.ok(/--remote-debugging-port=9222/.test(ps1), "Chrome starts with the CDP port");
   assert.ok(/Register-ScheduledTask -TaskName "LeadRider MDF Runner"/.test(ps1), "daemon scheduled task");
   assert.ok(/Register-ScheduledTask -TaskName "LeadRider MDF Runner Watchdog"/.test(ps1), "5-minute keep-alive watchdog task");
+  // ELEVATION. Register-ScheduledTask needs admin; without it the installer completes the clone
+  // and npm install and then dies on the LAST step with "Access is denied" (HRESULT 0x80070005),
+  // registering no task — so the runner never starts, never contacts the server, and the console
+  // shows only "no active runner". Joe hit this 17 times on a real dealership PC (2026-07-31).
+  // The check must come BEFORE any Register-ScheduledTask call, or the failure returns.
+  assert.ok(
+    /WindowsBuiltInRole\]::Administrator/.test(ps1),
+    "installer checks for administrator rights (Register-ScheduledTask fails without them)"
+  );
+  assert.ok(
+    /Start-Process .*-Verb RunAs/.test(ps1),
+    "installer re-launches itself elevated instead of failing at the last step"
+  );
+  assert.ok(
+    ps1.indexOf("WindowsBuiltInRole]::Administrator") < ps1.indexOf("Register-ScheduledTask"),
+    "the elevation check runs BEFORE the first Register-ScheduledTask, not after the work is done"
+  );
+  assert.ok(
+    /Run as administrator/.test(ps1),
+    "if elevation is declined the installer names the exact manual fix"
+  );
   assert.ok(/log in there now/.test(ps1), "installer tells the human the one manual step (H-DNet login)");
   assert.ok(/only ONE runner computer/.test(ps1), "installer surfaces the single-runner rule");
   assert.ok(!/launchctl/.test(ps1), "no macOS plumbing leaks into the Windows payload");

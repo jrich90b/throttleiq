@@ -40,6 +40,31 @@ export type WindowsInstallerArgs = {
 export function buildWindowsInstallerPs1(args: WindowsInstallerArgs): string {
   return `$ErrorActionPreference = "Stop"
 Write-Host "Installing the LeadRider MDF runner (Windows)..."
+
+# Registering Scheduled Tasks needs ADMIN. Without it the installer runs all the way through --
+# clone, npm install, everything -- and dies on the very last step with "Access is denied"
+# (HRESULT 0x80070005), leaving no task, so the runner never starts and never contacts the
+# server. Every layer above then shows silence: the console just says "no active runner".
+# Joe hit this 17 times on a real dealership PC (2026-07-31) with nothing pointing at the cause.
+# So ask Windows for rights UP FRONT rather than failing at the end.
+$principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+  Write-Host "This installer needs administrator rights to register the runner's background tasks."
+  Write-Host "Windows will ask you to approve - choose Yes. A new window will open and continue there."
+  try {
+    Start-Process -FilePath "powershell" -Verb RunAs -ArgumentList @(
+      "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ('"' + $PSCommandPath + '"')
+    ) | Out-Null
+    Write-Host "Continuing in the administrator window. You can close this one."
+  } catch {
+    Write-Host ""
+    Write-Host "Administrator rights were declined, so the install cannot finish."
+    Write-Host "Right-click the installer file and choose 'Run as administrator', then try again."
+  }
+  Read-Host "Press Enter to close this window"
+  exit 0
+}
+
 Write-Host ""
 Write-Host "BEFORE YOU CONTINUE: only ONE runner computer can be active per dealership."
 Write-Host "If another computer is still registered, open the LeadRider console and hit Reset on"
