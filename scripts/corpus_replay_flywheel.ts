@@ -1296,10 +1296,12 @@ function selfTest() {
   // shorter copy and the same ruled behavior started failing the gate (08610167776 Sanjeev asked to
   // book a 2026 Sportster S test ride for 29/6 at 12 pm; we don't have the bike, so we answer
   // honestly and offer the watch instead of booking).
+  // Live copy as of 2026-07-31 (buildInitialUnavailableInventorySmsReply, Joe's two ways forward:
+  // come in and pick from what we have, or we text them when we get one).
   const initialAdfUnavailableDraft =
     "Hey Sanjeev, it's Alexandra over at American Harley-Davidson. Thanks — I’m not seeing a 2026 " +
-    "Sportster S in stock right now. I can check similar options, or I can keep an eye out and text " +
-    "you if one comes in.";
+    "Sportster S in stock right now. Want to pick something out from what we have and still come " +
+    "in? Or I can keep an eye out and text you when we get one.";
   const bookTestRideAsk: IntentVerdict = {
     addressed: false,
     customerAsk: "Book a test ride of a 2026 Harley-Davidson Sportster S on 29/6/2026 at 12 pm",
