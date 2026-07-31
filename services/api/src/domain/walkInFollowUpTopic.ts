@@ -57,6 +57,54 @@ export function buildWalkInSpecRecapClause(input: {
   return `Just so I've got it right — you're looking for a ${spec}.`;
 }
 
+/**
+ * Tell the intent judge WHO WROTE the inbound it is about to grade.
+ *
+ * WHY (2026-07-31): the agent side of this module already knows a Traffic Log Pro walk-in
+ * "Inquiry" is an internal staff log written ABOUT the customer. The intent judge was never told.
+ * `buildIntentJudgePrompt` hands it the synthetic ADF body under the fixed label "Customer's
+ * latest message", so the judge reads a salesperson's note as the customer's own words, invents a
+ * customer ask out of it, and fails the reply for not fulfilling an ask nobody made.
+ *
+ * The pinned case (+17169705448, msg_9d8dbbc321971_1775078277067): the TLP note read "reach to to
+ * schedule a test ride for the end of next week when the weather looks better. (Step 3)". That is
+ * a staff instruction to follow up LATER — and the code honors it deliberately
+ * (`extractWeatherFollowUpPlan` defers the whole cadence to a weather-suitable date). The judge
+ * graded it "the customer's request was to schedule a test ride", severity MAJOR, and the flywheel
+ * filed a P1 `corpus_replay_judge_fail`. Three of the 25 replay work orders in the 7/31 feed are
+ * walk-ins; 44 leads in the live store carry a walk-in note.
+ *
+ * This states PROVENANCE ONLY — never what a good reply looks like. The judge still decides, so a
+ * reply that genuinely fails the note (a walk-in note asking for email updates answered with
+ * "thanks for the update") still fails. Returns null unless the note is actually the prose in the
+ * body, so a body the note does not appear in is never relabeled. Fail direction: with no match
+ * the prompt is byte-identical to today's.
+ */
+export function describeWalkInNoteProvenance(input: {
+  body?: string | null;
+  walkIn?: boolean | null;
+  walkInComment?: string | null;
+}): string | null {
+  if (!input?.walkIn) return null;
+  const note = String(input.walkInComment ?? "").replace(/\s+/g, " ").trim();
+  if (!note) return null;
+  const normalize = (v: string | null | undefined) =>
+    String(v ?? "")
+      .replace(/<[^>]*>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+  const normNote = normalize(note);
+  // Only claim provenance when the note IS the narrative text the judge is reading.
+  if (!normNote || !normalize(input.body).includes(normNote)) return null;
+  return [
+    "PROVENANCE: this inbound is a dealership lead RECORD, not a message the customer typed.",
+    `Its narrative text is a salesperson's walk-in log written ABOUT an in-store visit: "${note}".`,
+    "Judge the reply against what that staff note actually calls for — do not treat the note's",
+    "words as an ask the customer just sent."
+  ].join(" ");
+}
+
 export function isInternalNoteFollowUpTopic(topic: string | null | undefined): boolean {
   const raw = String(topic ?? "").trim();
   if (!raw) return false;

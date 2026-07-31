@@ -42,6 +42,7 @@ import {
   isTestLeadEmail
 } from "../services/api/src/domain/scoringExclusions.ts";
 import { isPlaceholderModel } from "../services/api/src/domain/modelDeflection.ts";
+import { describeWalkInNoteProvenance } from "../services/api/src/domain/walkInFollowUpTopic.ts";
 
 export type ReplayRow = {
   id?: string;
@@ -669,13 +670,24 @@ async function main() {
   // the judge misreads context-dependent replies (cohort-1 calibration).
   const dataDir = flag("data-dir") ?? String(report?.sourceDataDir ?? "");
   const contextByConv = new Map<string, Array<{ direction?: string; body?: string; at?: string }>>();
+  // A walk-in lead's ADF "Inquiry" is a salesperson's log about an in-store visit, not the
+  // customer's words. The judge must be told, or it invents a customer ask and fails the reply for
+  // not fulfilling it (+17169705448 — see describeWalkInNoteProvenance).
+  const leadByConv = new Map<string, { walkIn?: boolean; walkInComment?: string }>();
   const snapPath = dataDir ? path.join(dataDir, "conversations.json") : "";
   if (snapPath && fs.existsSync(snapPath)) {
     const snap = JSON.parse(fs.readFileSync(snapPath, "utf8"));
     for (const c of snap?.conversations ?? []) {
       contextByConv.set(String(c?.id ?? ""), Array.isArray(c?.messages) ? c.messages : []);
+      if (c?.lead) leadByConv.set(String(c?.id ?? ""), c.lead);
     }
   }
+  const provenanceFor = (row: ReplayRow): string | null =>
+    describeWalkInNoteProvenance({
+      body: row.body,
+      walkIn: leadByConv.get(String(row.conversationId ?? ""))?.walkIn,
+      walkInComment: leadByConv.get(String(row.conversationId ?? ""))?.walkInComment
+    });
   const contextFor = (row: ReplayRow): string[] => {
     const msgs = contextByConv.get(String(row.conversationId ?? "")) ?? [];
     const cutMs = Date.parse(String(row.messageAt ?? ""));
@@ -694,7 +706,10 @@ async function main() {
   // Judge cache keyed by turnKey + draft hash: classifier-only iterations re-score for free;
   // a turn re-judges ONLY when its draft changed (i.e., after a code fix).
   const cachePath = path.join(outDir, "judge_cache.json");
-  const draftHash = (row: ReplayRow) => `${turnKeyOf(row)}##${String(row.draft ?? "").replace(/\s+/g, " ").trim().slice(0, 300)}`;
+  // The provenance marker is part of the key: a cached verdict judged WITHOUT it graded a
+  // different question, so those rows must re-judge even though the draft is unchanged.
+  const draftHash = (row: ReplayRow) =>
+    `${turnKeyOf(row)}##${String(row.draft ?? "").replace(/\s+/g, " ").trim().slice(0, 300)}${provenanceFor(row) ? "##walkin-prov" : ""}`;
   const cache: Record<string, IntentVerdict | null> = fs.existsSync(cachePath)
     ? JSON.parse(fs.readFileSync(cachePath, "utf8"))
     : {};
@@ -712,7 +727,8 @@ async function main() {
       inboundText: row.body,
       replyText: String(row.draft ?? ""),
       replyKind: "draft",
-      context: contextFor(row)
+      context: contextFor(row),
+      inboundProvenance: provenanceFor(row)
     };
     try {
       const v = await realJudge(candidate);
