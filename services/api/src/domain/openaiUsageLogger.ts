@@ -40,6 +40,26 @@ const DEFAULT_PRICING: Record<string, Pricing> = {
   "gpt-4o": { inputPerMillion: 2.5, cachedInputPerMillion: 1.25, outputPerMillion: 10 }
 };
 
+/**
+ * Models the code can select that we KNOWINGLY have no rate for.
+ *
+ * Found 2026-07-31: `gpt-5` is the draft A/B challenger and the browser-automation model, and it
+ * was absent from the table above — so a real 6,640-token call logged `estimatedCostUsd: null` and
+ * July's spend summed to $29.21 with those calls counted as FREE. A missing rate did not look like
+ * a missing rate; it looked like zero.
+ *
+ * A guessed rate would be worse than a null — it produces a confident wrong number that nobody
+ * re-checks. So the rate stays absent until someone reads the REAL one off the billing dashboard
+ * (the only authority on what this account is charged) and either adds it here or sets
+ * OPENAI_USAGE_PRICING_JSON. What changed is that the absence is now LOUD: records carry
+ * `pricingKnown: false`, and openai_usage_pricing:eval fails the build when a selectable model is
+ * neither priced nor listed here.
+ */
+export const UNPRICED_ACKNOWLEDGED: Record<string, string> = {
+  "gpt-5": "rate not yet taken from the billing dashboard (2026-07-31); ~41 calls/month, draft A/B challenger + browser automation",
+  "gpt-image-1": "image pricing is per-image, not per-token — this token-based estimator cannot express it"
+};
+
 function normalizeModel(model: unknown): string {
   return String(model ?? "").trim();
 }
@@ -119,6 +139,9 @@ export function recordOpenAIUsage(response: any, context: OpenAIUsageContext): v
     outputTokens: usage.output_tokens ?? 0,
     totalTokens: usage.total_tokens ?? 0,
     estimatedCostUsd: model ? estimateCostUsd(model, usage) : null,
+    // Distinguishes "this cost nothing" from "we don't know what this cost". Without it a missing
+    // rate is indistinguishable from free, which is exactly how gpt-5 spend went unseen.
+    pricingKnown: model ? pricingForModel(model) != null : false,
     metadata: context.metadata ?? {}
   };
 
