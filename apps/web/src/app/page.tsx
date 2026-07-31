@@ -2174,13 +2174,21 @@ type MdfClaimEntry = {
 
 type MdfRunnerRegistrationStatus = {
   registration: {
-    machineId: string;
+    machineId?: string;
     machineName?: string;
-    firstSeenAt: string;
-    lastSeenAt: string;
+    firstSeenAt?: string;
+    lastSeenAt?: string;
     lastIp?: string;
+    revokedMachineId?: string;
+    revokedAt?: string;
+    revokedLastAttemptAt?: string;
   } | null;
   active: boolean;
+  /** A retired computer is recorded — the slot is waiting for the new computer to claim it. */
+  revoked?: boolean;
+  /** The retired computer is STILL checking in. Shown explicitly: a silent tug-of-war over the
+   *  slot is exactly what made a computer switch look broken (Joe, 2026-07-31). */
+  retiredStillTrying?: boolean;
   heartbeatTtlMs: number;
 };
 
@@ -8374,8 +8382,12 @@ export default function Home() {
       const resp = await fetch("/api/mdf/portal-runner/registration", { method: "DELETE" });
       const data = await resp.json();
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "MDF runner registration could not be reset.");
-      setMdfRunnerStatus({ registration: null, active: false, heartbeatTtlMs: mdfRunnerStatus?.heartbeatTtlMs ?? 0 });
-      setMdfPortalTaskNotice("MDF runner registration reset. The next installed runner computer can register.");
+      // Re-read rather than assume: the reply now carries the retired machine, and the panel
+      // should show "retired, waiting for the new computer" instead of a bare empty slot.
+      await loadMdfRunnerStatus();
+      setMdfPortalTaskNotice(
+        "Runner computer retired. The old computer will stop on its own within a minute — you don't need to touch it. Now run the installer on the new computer."
+      );
     } catch (err) {
       setMdfError(err instanceof Error ? err.message : "MDF runner registration could not be reset.");
     } finally {
@@ -16617,8 +16629,16 @@ export default function Home() {
 	                  <p className="mt-2 text-sm text-gray-500">
 	                    {mdfRunnerStatus?.registration?.lastSeenAt
 	                      ? `Last check-in: ${new Date(mdfRunnerStatus.registration.lastSeenAt).toLocaleString()}`
-	                      : "Install this on one trusted computer that can log into H-DNet. A second active runner computer will be blocked."}
+	                      : mdfRunnerStatus?.revoked
+	                        ? `${mdfRunnerStatus.registration?.machineName || "The old computer"} was retired. Run the installer on the new computer to finish the switch.`
+	                        : "Install this on one trusted computer that can log into H-DNet. A second active runner computer will be blocked."}
 	                  </p>
+	                  {mdfRunnerStatus?.retiredStillTrying ? (
+	                    <p className="mt-1 text-sm font-semibold text-amber-700">
+	                      {mdfRunnerStatus.registration?.machineName || "The retired computer"} is still checking in. It is being
+	                      turned away and will stop on its own within a minute - you do not need to do anything on it.
+	                    </p>
+	                  ) : null}
 	                </div>
 	                <div className="flex flex-wrap gap-2">
 	                  <button

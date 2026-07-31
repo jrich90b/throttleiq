@@ -6,6 +6,7 @@ import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { RUNNER_REVOKED_EXIT_CODE } from "../services/api/src/domain/portalRunnerHandoff.ts";
 import {
   ANSIRA_CLAIMS_LIST_URL,
   ANSIRA_FORM_CONTROLS,
@@ -304,6 +305,17 @@ async function loadRemoteBundles(options: RunnerOptions): Promise<{ task: AgentT
     cache: "no-store"
   });
   const text = await resp.text();
+  // Retired by a manager in the console (Joe 2026-07-31). The server cannot reach into this
+  // computer, so this reply IS the off switch: exit with the dedicated RUNNER_REVOKED_EXIT_CODE
+  // and let the daemon stand the machine down for good. Anything else stays a normal failure
+  // that retries — a transient 409 must never retire a working runner.
+  if (resp.status === 409 && /runner_revoked/.test(text)) {
+    console.error(
+      "[mdf-portal-runner] This computer was retired from the LeadRider runner in the console. Standing down.\n" +
+        "To use this computer as the runner again, run the runner installer on it."
+    );
+    process.exit(RUNNER_REVOKED_EXIT_CODE);
+  }
   if (!resp.ok) throw new Error(`Could not load remote MDF portal tasks (${resp.status}): ${text.slice(0, 500)}`);
   const data = JSON.parse(text) as { tasks?: { task?: AgentTask; claim?: MdfClaimEntry | null }[] };
   return (Array.isArray(data.tasks) ? data.tasks : []).filter(row => row?.task?.id).map(row => ({

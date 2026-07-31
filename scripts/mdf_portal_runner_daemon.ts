@@ -20,6 +20,7 @@ import { existsSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { RUNNER_REVOKED_EXIT_CODE } from "../services/api/src/domain/portalRunnerHandoff.ts";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 loadEnvFile(path.join(rootDir, ".env"));
@@ -213,6 +214,16 @@ async function tick() {
     // runner's own guided fallback remains the safety net.
     await ensureChromeHealthy();
     const code = await runOnce();
+    if (code === RUNNER_REVOKED_EXIT_CODE) {
+      warn(
+        "this computer was RETIRED from the LeadRider runner in the console — standing down and disabling the runner service. " +
+          "Run the runner installer on this computer to use it again."
+      );
+      stopping = true;
+      await standDownRetiredComputer();
+      stop();
+      return;
+    }
     if (code !== 0) {
       consecutiveFailures += 1;
       failuresTotal += 1;
@@ -249,6 +260,30 @@ function stop() {
   stopping = true;
   releaseDaemonSingleton();
   setTimeout(() => process.exit(0), 1000).unref();
+}
+
+/**
+ * This computer was retired from the runner in the console (Joe 2026-07-31). Exiting is not
+ * enough: the keep-alive (LaunchAgent KeepAlive / Windows watchdog task) restarts us straight
+ * away, so the old computer would sit in a restart loop still fighting for the slot. Disable
+ * OUR OWN service, then exit — the deliberate, dealer-visible end of "switch computers".
+ *
+ * Reversible by design: re-running the runner installer on this computer re-registers it and
+ * re-enables the service. Only ever reached via the dedicated revoked exit code, never a
+ * generic failure.
+ */
+async function standDownRetiredComputer(): Promise<void> {
+  const isWindows = process.platform === "win32";
+  const uid = typeof process.getuid === "function" ? process.getuid() : 501;
+  const command = isWindows ? "schtasks" : "launchctl";
+  const args = isWindows
+    ? ["/Change", "/TN", "LeadRider MDF Runner", "/DISABLE"]
+    : ["bootout", `gui/${uid}/ai.leadrider.mdf-portal-runner`];
+  await new Promise<void>(resolve => {
+    const child = spawn(command, args, { stdio: "ignore" });
+    child.on("close", () => resolve());
+    child.on("error", () => resolve());
+  });
 }
 
 process.on("SIGINT", stop);
