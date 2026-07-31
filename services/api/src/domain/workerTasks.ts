@@ -17,6 +17,7 @@ export const WORKER_TICK_TASKS = [
   "inventory-watch",
   "inventory-holds",
   "task-escalations",
+  "staff-task-digests",
   "gate-blocker-digest",
   "photo-delivery"
 ] as const;

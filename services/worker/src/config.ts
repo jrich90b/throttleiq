@@ -36,6 +36,10 @@ export const WORKER_SCHEDULES: WorkerSchedule[] = [
       "staff-appt-notify",
       "appt-questions",
       "task-escalations",
+      // Minute lane on purpose: the digests fire once per period AT OPENING, and the runner's
+      // durable period key makes every extra tick a no-op. A coarser lane would only add jitter
+      // to when the store's first message of the day lands.
+      "staff-task-digests",
       "gate-blocker-digest",
       "photo-delivery"
     ],
