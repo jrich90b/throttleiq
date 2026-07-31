@@ -17,7 +17,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-const { classifyOutcomeAnomaly, suppressStaleFindings, suppressAlreadyShippedEchoes } = await import(
+const { classifyOutcomeAnomaly, suppressStaleFindings, suppressAlreadyShippedEchoes, isSupersededGrade, rankSupersededGradeLast } = await import(
   "../services/api/src/domain/anomalyClassifier.ts"
 );
 type NamingCommit = { hash: string; subject: string; dateMs: number };
@@ -347,12 +347,41 @@ const classified = anomalies.map(a => {
   return { ...a, persistent, firstSeenAt: firstSeen[keyOf(a)], ageDays: ageDaysOf(keyOf(a)), ...cls };
 });
 
+// SUPERSEDED-GRADE ANNOTATION (2026-07-31). Offline detectors (the corpus-replay flywheel) grade a
+// specific deployed build and stamp it as `gradedAtCommit`. A finding's `occurredAt` says only when
+// that sweep ran — so once main moves and redeploys, a recent sweep can still be carrying verdicts
+// about code nobody runs (2026-07-30: the 05:00Z sweep graded f1b7131a; 29 commits deployed by
+// 23:49Z, and all 30 of its findings still ranked at the top of next.json). This does NOT suppress
+// anything — a superseded grade is unproven, not disproven. It labels the verdict and sorts it below
+// equally-ranked findings measured against the running code. Fail-direction is toward surfacing:
+// an unresolvable commit on either side leaves the finding at full rank.
+let deployedHeadCommit: string | null = null;
+try {
+  deployedHeadCommit = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+} catch {
+  deployedHeadCommit = null; // no repo → nothing is provably superseded → annotate nothing
+}
+for (const c of classified) {
+  (c as any).gradeSuperseded = isSupersededGrade({
+    gradedAtCommit: (c as any).gradedAtCommit,
+    deployedCommit: deployedHeadCommit
+  });
+}
+const supersededGrade = classified
+  .filter(c => (c as any).gradeSuperseded)
+  .map(c => ({ convId: String((c as any).convId ?? ""), dimension: String((c as any).dimension ?? ""), gradedAtCommit: String((c as any).gradedAtCommit ?? "") }));
+
 // Work order = anything the orchestrator must act on (tier 0 / reconcile-handled drops out).
 const TIER_RANK: Record<number, number> = { 2: 0, 1: 1, 0: 2 };
 const SEV_RANK: Record<string, number> = { P1: 0, P2: 1, P3: 2 };
 const workOrders = classified
   .filter(c => c.workOrder)
-  .sort((a, b) => (TIER_RANK[a.tier] - TIER_RANK[b.tier]) || (SEV_RANK[a.severity] ?? 9) - (SEV_RANK[b.severity] ?? 9));
+  .sort(
+    (a, b) =>
+      TIER_RANK[a.tier] - TIER_RANK[b.tier] ||
+      (SEV_RANK[a.severity] ?? 9) - (SEV_RANK[b.severity] ?? 9) ||
+      rankSupersededGradeLast(a as any, b as any)
+  );
 
 const byAction: Record<string, number> = {};
 const byTier: Record<string, number> = { "0": 0, "1": 0, "2": 0 };
@@ -380,6 +409,10 @@ const payload = {
   suppressedShippedEcho,
   suppressedByReproduceCount: suppressedByReproduce.length,
   suppressedByReproduce,
+  // Graded against a build that has since been replaced — ranked last, never suppressed.
+  supersededGradeCount: supersededGrade.length,
+  supersededGrade,
+  deployedCommit: deployedHeadCommit,
   workOrderCount: workOrders.length,
   byTier,
   byAction,
@@ -392,6 +425,12 @@ fs.writeFileSync(prevPath, JSON.stringify({ keys: anomalies.map(keyOf), firstSee
 
 console.log(`Anomaly-loop DETECT — ${anomalies.length} anomalies → ${workOrders.length} work order(s)`);
 console.log(`By tier: 0 ${byTier["0"]} (reconcile-handled) / 1 ${byTier["1"]} / 2 ${byTier["2"]}; needs-Joe (notify): ${notify.length}`);
+if (supersededGrade.length) {
+  const gradedAt = supersededGrade[0]?.gradedAtCommit ?? "?";
+  console.log(
+    `${supersededGrade.length} finding(s) graded at ${gradedAt.slice(0, 8)}, superseded by deployed ${String(deployedHeadCommit ?? "?").slice(0, 8)} — ranked last, NOT suppressed (re-grade pending: corpus_replay:nightly).`
+  );
+}
 for (const [action, n] of Object.entries(byAction).sort((a, b) => b[1] - a[1])) console.log(`  ${String(n).padStart(4)}  ${action}`);
 for (const c of workOrders.slice(0, 20)) {
   console.log(`   - [T${c.tier}${c.persistent ? "/persistent" : ""}${c.notify ? "/notify" : ""}] ${c.action} ${c.dimension} ${c.convId} — ${c.rationale}`);

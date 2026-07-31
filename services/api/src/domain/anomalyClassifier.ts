@@ -370,3 +370,47 @@ export function classifyOutcomeAnomaly(
       };
   }
 }
+
+/**
+ * Was this finding graded against code that has since been replaced?
+ *
+ * WHY (2026-07-31 loop tick): the corpus-replay flywheel measures the DEPLOYED build, but its
+ * findings only carry `occurredAt` — the time the sweep RAN, which says nothing about the code
+ * version it judged. On 2026-07-30 the 05:00Z sweep graded commit f1b7131a; by 23:49Z that day
+ * 29 commits had merged AND deployed (incl. #360, which fixes one of the very turns the sweep
+ * flagged). All 30 replay findings still ranked at the TOP of next.json as fresh Tier-1/2 work,
+ * so every routine re-triaged verdicts rendered against code nobody is running. `occurredAt`
+ * cannot express this: the sweep is genuinely recent, its VERDICT is not.
+ *
+ * This does NOT suppress — a superseded grade is unproven, not disproven, and most such findings
+ * are real. It only marks the verdict as untrustworthy so ranking can prefer findings measured
+ * against what is actually running (see rankSupersededGradeLast).
+ *
+ * Fail-direction (toward surfacing): unknown is never superseded. A missing/blank grade commit,
+ * a missing deployed commit, or equal commits → false → the finding keeps its full rank. We only
+ * demote when we can positively prove the grade is stale.
+ */
+export function isSupersededGrade(input: {
+  gradedAtCommit?: string | null;
+  deployedCommit?: string | null;
+}): boolean {
+  const graded = String(input?.gradedAtCommit ?? "").trim();
+  const deployed = String(input?.deployedCommit ?? "").trim();
+  if (!graded || !deployed) return false;
+  // Compare on the shorter length so an abbreviated sha and a full sha still match.
+  const n = Math.min(graded.length, deployed.length);
+  if (n < 7) return false; // too short to identify a commit — refuse to judge
+  return graded.slice(0, n).toLowerCase() !== deployed.slice(0, n).toLowerCase();
+}
+
+/**
+ * Sort comparator fragment: within an otherwise equal rank, a finding whose grade is superseded
+ * sorts AFTER one graded against the running code. Returns 0 when both agree, so callers can chain
+ * it behind their existing tier/severity keys without changing any other ordering.
+ */
+export function rankSupersededGradeLast(
+  a: { gradeSuperseded?: boolean | null },
+  b: { gradeSuperseded?: boolean | null }
+): number {
+  return Number(Boolean(a?.gradeSuperseded)) - Number(Boolean(b?.gradeSuperseded));
+}

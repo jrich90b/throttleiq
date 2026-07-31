@@ -10,7 +10,7 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { classifyOutcomeAnomaly } from "../services/api/src/domain/anomalyClassifier.ts";
+import { classifyOutcomeAnomaly, isSupersededGrade, rankSupersededGradeLast } from "../services/api/src/domain/anomalyClassifier.ts";
 
 const A = (over: any) => ({ category: "state", dimension: "x", healed: false, severity: "P2", ...over });
 let n = 0;
@@ -108,6 +108,70 @@ n += 4;
   // rawAnomalyCount must be captured BEFORE any suppression, or the report understates what was filtered.
   assert.ok(det.indexOf("const rawAnomalyCount") < posDisposition, "rawAnomalyCount is captured before suppression");
   n += 5;
+}
+
+
+// --- SUPERSEDED GRADE (2026-07-31): an offline sweep's verdict is only as current as the build it
+//     graded. `occurredAt` cannot express this — the 2026-07-30 05:00Z sweep was hours old and
+//     entirely superseded by the 23:49Z deploy, yet all 30 of its findings ranked top of next.json.
+//     These pins hold the fail-direction: we demote ONLY on positive proof, never on uncertainty. ---
+{
+  assert.equal(isSupersededGrade({ gradedAtCommit: "f1b7131ace4d", deployedCommit: "cfd2c382aa11" }), true,
+    "a different graded commit is superseded");
+  assert.equal(isSupersededGrade({ gradedAtCommit: "cfd2c382aa11", deployedCommit: "cfd2c382aa11" }), false,
+    "the same commit is not superseded");
+  // Abbreviated vs full sha must still match, or every sweep would look superseded.
+  assert.equal(isSupersededGrade({ gradedAtCommit: "cfd2c382", deployedCommit: "cfd2c382aa1189ff" }), false,
+    "an abbreviated sha matching the deployed sha is not superseded");
+  assert.equal(isSupersededGrade({ gradedAtCommit: "CFD2C382", deployedCommit: "cfd2c382aa1189ff" }), false,
+    "sha comparison is case-insensitive");
+  // Fail-direction: unknown is NEVER superseded, so a finding is never demoted on missing data.
+  assert.equal(isSupersededGrade({ gradedAtCommit: null, deployedCommit: "cfd2c382" }), false,
+    "a missing graded commit keeps full rank");
+  assert.equal(isSupersededGrade({ gradedAtCommit: "cfd2c382", deployedCommit: null }), false,
+    "a missing deployed commit keeps full rank");
+  assert.equal(isSupersededGrade({ gradedAtCommit: "  ", deployedCommit: "cfd2c382" }), false,
+    "a blank graded commit keeps full rank");
+  assert.equal(isSupersededGrade({ gradedAtCommit: "abc", deployedCommit: "cfd2c382" }), false,
+    "a too-short sha is not enough to judge — keep full rank");
+  n += 8;
+
+  // Ordering: superseded sorts AFTER current, and equal states are a no-op tiebreak (so the
+  // existing tier/severity order is untouched for everything else).
+  assert.equal(rankSupersededGradeLast({ gradeSuperseded: true }, { gradeSuperseded: false }) > 0, true,
+    "superseded sorts after current");
+  assert.equal(rankSupersededGradeLast({ gradeSuperseded: false }, { gradeSuperseded: true }) < 0, true,
+    "current sorts before superseded");
+  assert.equal(rankSupersededGradeLast({ gradeSuperseded: false }, { gradeSuperseded: false }), 0,
+    "two current findings keep their prior order");
+  assert.equal(rankSupersededGradeLast({}, {}), 0, "absent annotation is a no-op tiebreak");
+  n += 4;
+}
+
+// --- The wiring: DETECT must ANNOTATE + RANK, and must never suppress on a superseded grade. ---
+{
+  const d = fs.readFileSync("scripts/anomaly_loop_detect.ts", "utf8");
+  assert.match(d, /gradeSuperseded = isSupersededGrade\(/, "DETECT annotates each finding with gradeSuperseded");
+  assert.match(d, /rankSupersededGradeLast\(/, "DETECT applies the superseded tiebreak to the work-order sort");
+  assert.match(d, /supersededGradeCount/, "DETECT reports how many findings carry a superseded grade");
+  // The tiebreak must come LAST — tier and severity still decide first.
+  const sortSrc = d.slice(d.indexOf("const workOrders = classified"), d.indexOf("const byAction"));
+  assert.ok(sortSrc.indexOf("TIER_RANK") < sortSrc.indexOf("rankSupersededGradeLast"), "tier outranks the grade tiebreak");
+  assert.ok(sortSrc.indexOf("SEV_RANK") < sortSrc.indexOf("rankSupersededGradeLast"), "severity outranks the grade tiebreak");
+  // A superseded grade must never remove a finding from the feed.
+  assert.ok(!/supersededGrade[\s\S]{0,200}anomalies\.length = 0/.test(d), "a superseded grade never suppresses findings");
+  n += 6;
+}
+
+// --- The producer: the flywheel must stamp the commit it graded, and omit it when unknown. ---
+{
+  const fw = fs.readFileSync("scripts/corpus_replay_flywheel.ts", "utf8");
+  assert.match(fw, /gradedAtCommit\?: string/, "FlywheelFinding carries the graded commit");
+  assert.match(fw, /buildFindings\(scores, confirmedRegressions, atIso, flag\("graded-at-commit"\)\)/,
+    "the flywheel passes the graded commit through from its flag");
+  const ny = fs.readFileSync("scripts/corpus_replay_nightly.ts", "utf8");
+  assert.match(ny, /"--graded-at-commit", headCommit/, "the nightly stamps the deployed commit it replayed against");
+  n += 3;
 }
 
 console.log(`PASS anomaly classifier eval (${n} assertions)`);

@@ -153,7 +153,10 @@ async function main() {
       "--out-dir",
       outDir,
       "--max-judge",
-      maxJudge
+      maxJudge,
+      // Stamp the code version these verdicts grade, so a finding whose grade is superseded by a
+      // later deploy stops out-ranking findings measured against what is actually running.
+      ...(headCommit ? ["--graded-at-commit", headCommit] : [])
     ]);
 
     // 5) Record the sweep (drives the next skip-if-unchanged decision).
