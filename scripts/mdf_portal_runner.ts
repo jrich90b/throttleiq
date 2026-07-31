@@ -21,6 +21,7 @@ import {
   pickAccountTileLabel,
   portalFormDidNotExpandSummary,
   portalRunDeadlineSummary,
+  portalRunDeadlineMs,
   sessionExpiredSummary,
   activityYearFromDates,
   composeRescueSummary,
@@ -1565,12 +1566,53 @@ async function pickSessionRetryTask(tasks: AgentTask[], options: RunnerOptions):
  * work is torn down when this tick's process exits (each daemon tick is its own
  * process), so no orphaned automation keeps driving the form.
  */
-async function withPortalRunDeadline<T>(run: Promise<T>): Promise<T> {
-  const deadlineMs = Math.max(60_000, Number(process.env.MDF_PORTAL_RUN_DEADLINE_MS ?? 10 * 60_000));
+/**
+ * Ceiling for ONE upload control. Generously above a real upload (a few large PDFs over a
+ * dealership connection) so it can only fire on a wedged call, never on a slow-but-working one.
+ */
+const UPLOAD_STEP_TIMEOUT_MS = Math.max(
+  30_000,
+  Number(process.env.MDF_PORTAL_UPLOAD_STEP_TIMEOUT_MS) || 3 * 60_000
+);
+
+/**
+ * What the run is doing right now, so the deadline can SAY it instead of blaming Chrome.
+ * Module-level because the fill is a single sequential run per tick.
+ */
+let portalRunStep: string | null = null;
+function setPortalRunStep(step: string | null): void {
+  portalRunStep = step;
+}
+
+/**
+ * Bound ONE browser step. Playwright's per-action default does not cover every call, so a
+ * single hung upload used to consume the whole run budget and then be reported as "Chrome
+ * stopped responding". Failing the step names the real culprit and lets the run carry on.
+ */
+async function withStepTimeout<T>(label: string, ms: number, work: Promise<T>): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`step timed out after ${Math.round(ms / 1000)}s: ${label}`)), ms);
+        timer.unref();
+      })
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function withPortalRunDeadline<T>(run: Promise<T>, fileCount = 0): Promise<T> {
+  const override = Number(process.env.MDF_PORTAL_RUN_DEADLINE_MS);
+  const deadlineMs = Number.isFinite(override) && override > 0
+    ? Math.max(60_000, override)
+    : portalRunDeadlineMs(fileCount);
   let timer: NodeJS.Timeout | undefined;
   const deadline = new Promise<never>((_, reject) => {
     timer = setTimeout(
-      () => reject(new Error(portalRunDeadlineSummary(Math.round(deadlineMs / 60_000)))),
+      () => reject(new Error(portalRunDeadlineSummary(Math.round(deadlineMs / 60_000), portalRunStep ?? undefined))),
       deadlineMs
     );
     timer.unref();
@@ -1770,6 +1812,10 @@ async function runPlaywrightPortalDraft(claim: MdfClaimEntry, options: RunnerOpt
   const supportFiles = files.filter(file => !assignedInvoiceNames.has(file.name));
   const tempDir = path.join(os.tmpdir(), `leadrider-mdf-${claim.id}-${Date.now()}`);
   await mkdir(tempDir, { recursive: true });
+  // Files that did NOT attach. Reported rather than thrown: a claim saved as a draft with 5 of 6
+  // invoices and a line naming the missing one is recoverable by a human in seconds; the same
+  // run failing outright leaves nothing and says nothing.
+  const uploadFailures: string[] = [];
   try {
     const invoicePathGroups = await Promise.all(
       invoiceFileGroups.map(async group => (await Promise.all(group.map(file => downloadPortalFile(file, tempDir)))).filter(Boolean) as string[])
@@ -1779,13 +1825,30 @@ async function runPlaywrightPortalDraft(claim: MdfClaimEntry, options: RunnerOpt
     for (let i = 0; i < invoicePathGroups.length; i += 1) {
       const paths = invoicePathGroups[i];
       if (!paths.length || !fileInputs[i]) continue;
-      await fileInputs[i].setInputFiles(paths.length === 1 ? paths[0] : paths);
-      await page.waitForTimeout(5000);
-      await setInvoiceFileCategories(page, i + 1);
+      const label = `uploading invoice row ${i + 1} of ${invoicePathGroups.length} (${paths
+        .map(p => path.basename(p))
+        .join(", ")})`;
+      setPortalRunStep(label);
+      // Bound each row: one wedged upload used to eat the entire run budget and then be
+      // reported as an unresponsive Chrome. A row that times out is SKIPPED and named, so the
+      // remaining rows still upload and the summary says which file did not attach.
+      try {
+        await withStepTimeout(label, UPLOAD_STEP_TIMEOUT_MS, fileInputs[i].setInputFiles(paths.length === 1 ? paths[0] : paths));
+        await page.waitForTimeout(5000);
+        await setInvoiceFileCategories(page, i + 1);
+      } catch (err: any) {
+        uploadFailures.push(`invoice row ${i + 1}: ${err?.message ?? err}`);
+      }
     }
     const supportInput = fileInputs[invoicePathGroups.length] ?? fileInputs[1];
     if (supportPaths.length && supportInput) {
-      await supportInput.setInputFiles(supportPaths);
+      const supportLabel = `uploading ${supportPaths.length} supporting document(s)`;
+      setPortalRunStep(supportLabel);
+      await withStepTimeout(supportLabel, UPLOAD_STEP_TIMEOUT_MS, supportInput.setInputFiles(supportPaths)).catch(
+        (err: any) => {
+          uploadFailures.push(`supporting documents: ${err?.message ?? err}`);
+        }
+      );
       await page.waitForTimeout(8000);
       const supportCategoryCount = await page.locator('select[name^="files["][name$="[file_category]"]').count();
       for (let i = 0; i < supportCategoryCount; i += 1) {
@@ -1798,6 +1861,7 @@ async function runPlaywrightPortalDraft(claim: MdfClaimEntry, options: RunnerOpt
       await fillText(page, "#app-claimed-amount", claimedAmount);
     }
 
+    setPortalRunStep("saving the draft (Save for Later)");
     await page.locator("#app-draft-submit-btn").scrollIntoViewIfNeeded();
     await page.locator("#app-draft-submit-btn").click();
     await page.waitForLoadState("domcontentloaded", { timeout: 45_000 }).catch(() => {});
@@ -1813,6 +1877,13 @@ async function runPlaywrightPortalDraft(claim: MdfClaimEntry, options: RunnerOpt
       `Filled ${claim.packet.claimType || "media"} claim for ${claim.title}.`,
       `Filled ${Math.max(invoices.length, invoicePathGroups.length)} invoice section(s).`,
       `Uploaded ${invoicePathGroups.flat().length} invoice file(s) and ${supportPaths.length} supporting file(s).`,
+      // Never let a partial upload pass as a clean save — a draft missing an invoice looks
+      // identical to a complete one in the console, and the dealer finds out at Harley.
+      ...(uploadFailures.length
+        ? [
+            `ATTENTION - ${uploadFailures.length} file upload(s) did NOT attach and must be added by hand before submitting: ${uploadFailures.join("; ")}.`
+          ]
+        : []),
       "Did not click final Submit.",
       "Human review still needed before final submission."
     ].join(" ");
@@ -2085,7 +2156,10 @@ async function runMain(options: RunnerOptions) {
   let result: { code: number; summary: string; links?: string[] };
   try {
     result = playwrightAvailable
-      ? await withPortalRunDeadline(runPlaywrightPortalDraft(claim, options))
+      ? await withPortalRunDeadline(
+          runPlaywrightPortalDraft(claim, options),
+          Array.isArray(claim?.packet?.uploadedFiles) ? claim.packet.uploadedFiles.length : 0
+        )
       : await runBrowserUse(promptPath, resultPath, options, localFiles.length ? filesDir : undefined);
   } catch (err: any) {
     result = {
