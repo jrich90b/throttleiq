@@ -390,6 +390,7 @@ import {
 import { customerVisitConfirmed, rideOutcomeImpliesVisit, phantomVisitGuardEnabled } from "./domain/visitFraming.js";
 import { isSpecificModel, isPlaceholderModel } from "./domain/modelDeflection.js";
 import { shouldSuppressCadenceAck } from "./domain/cadenceAckGate.js";
+import { PORTAL_RUNNER_KINDS, resolveRunnerKindsToRetire } from "./domain/portalRunnerHandoff.js";
 import type {
   AffectParse,
   AccessoryRequestParse,
@@ -50222,8 +50223,7 @@ async function requireWarrantyRmaPortalRunner(req: any, res: any): Promise<boole
   return true;
 }
 
-app.get("/mdf/portal-runner/registration", requireManager, async (req, res) => {
-  const kind = mdfRunnerKindFromRequest(req);
+async function describeRunnerSlot(kind: MdfRunnerKind) {
   const registration = await readMdfRunnerRegistry(kind);
   const active =
     !!registration?.lastSeenAt &&
@@ -50236,21 +50236,50 @@ app.get("/mdf/portal-runner/registration", requireManager, async (req, res) => {
     !!registration?.revokedLastAttemptAt &&
     Number.isFinite(Date.parse(registration.revokedLastAttemptAt)) &&
     Date.now() - Date.parse(registration.revokedLastAttemptAt) < MDF_RUNNER_HEARTBEAT_TTL_MS;
+  return { kind, registration, active, revoked: !!registration?.revokedMachineId, retiredStillTrying };
+}
+
+app.get("/mdf/portal-runner/registration", requireManager, async (req, res) => {
+  const kind = mdfRunnerKindFromRequest(req);
+  // Report EVERY slot. Reporting only the default one is how a warranty/RMA runner stayed
+  // invisible in the console while it held a computer (American Harley, 2026-07-31): the panel
+  // showed an empty MDF slot, so a still-running machine looked like no machine at all.
+  const slots = await Promise.all(PORTAL_RUNNER_KINDS.map(k => describeRunnerSlot(k)));
+  const primary = slots.find(s => s.kind === kind) ?? (await describeRunnerSlot(kind));
   return res.json({
     ok: true,
     kind,
-    registration,
-    active,
-    revoked: !!registration?.revokedMachineId,
-    retiredStillTrying,
+    slots,
+    anyActive: slots.some(s => s.active),
+    anyRetiredStillTrying: slots.some(s => s.retiredStillTrying),
+    // Back-compat: existing readers expect the requested slot at the top level.
+    registration: primary.registration,
+    active: primary.active,
+    revoked: primary.revoked,
+    retiredStillTrying: primary.retiredStillTrying,
     heartbeatTtlMs: MDF_RUNNER_HEARTBEAT_TTL_MS
   });
 });
 
 app.delete("/mdf/portal-runner/registration", requireManager, async (req, res) => {
-  const kind = mdfRunnerKindFromRequest(req);
-  const tombstone = await revokeMdfRunnerRegistry(kind);
-  return res.json({ ok: true, reset: true, kind, revokedMachineId: tombstone?.revokedMachineId ?? null });
+  // Reset means "retire this COMPUTER". With no explicit ?kind= that is EVERY slot the machine
+  // holds — the console sends none, and retiring only the default slot is what made Reset look
+  // dead while the warranty/RMA runner kept renewing (American Harley, 2026-07-31).
+  const kinds = resolveRunnerKindsToRetire(req?.query?.kind as string | undefined);
+  const retired: { kind: MdfRunnerKind; revokedMachineId: string | null }[] = [];
+  for (const kind of kinds) {
+    const tombstone = await revokeMdfRunnerRegistry(kind);
+    retired.push({ kind, revokedMachineId: tombstone?.revokedMachineId ?? null });
+  }
+  const firstRetired = retired.find(r => r.revokedMachineId);
+  return res.json({
+    ok: true,
+    reset: true,
+    retired,
+    // Back-compat for readers written against the single-slot reply.
+    kind: kinds[0],
+    revokedMachineId: firstRetired?.revokedMachineId ?? null
+  });
 });
 
 function shellSingleQuote(value: string): string {
