@@ -8347,9 +8347,17 @@ export default function Home() {
       // "no runner" while a MacBook renewed its claim every minute.
       const slots: any[] = Array.isArray(data.slots) ? data.slots : [];
       const held = slots.find(s => s?.active) || slots.find(s => s?.registration) || null;
+      // `revoked` / `retiredStillTrying` drive the ONLY messages that explain a retired computer
+      // ("X was retired — run the installer on the new computer", "the retired computer is still
+      // checking in"). The panel has rendered them since #383 but nothing ever SET them, so the
+      // switch flow went silent exactly when a dealer needed telling what was happening: the card
+      // showed a machine name with no check-in line and no reason (Joe, 2026-07-31, mid-switch —
+      // "it does not say the MacBook is empty either").
       setMdfRunnerStatus({
         registration: held?.registration ?? data.registration ?? null,
         active: data.anyActive ?? !!data.active,
+        revoked: held?.revoked ?? !!data.revoked,
+        retiredStillTrying: data.anyRetiredStillTrying ?? held?.retiredStillTrying ?? !!data.retiredStillTrying,
         heartbeatTtlMs: Number(data.heartbeatTtlMs ?? 0)
       });
     } catch (err) {

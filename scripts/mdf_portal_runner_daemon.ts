@@ -272,18 +272,37 @@ function stop() {
  * re-enables the service. Only ever reached via the dedicated revoked exit code, never a
  * generic failure.
  */
-async function standDownRetiredComputer(): Promise<void> {
-  const isWindows = process.platform === "win32";
-  const uid = typeof process.getuid === "function" ? process.getuid() : 501;
-  const command = isWindows ? "schtasks" : "launchctl";
-  const args = isWindows
-    ? ["/Change", "/TN", "LeadRider MDF Runner", "/DISABLE"]
-    : ["bootout", `gui/${uid}/ai.leadrider.mdf-portal-runner`];
-  await new Promise<void>(resolve => {
+function runStandDownCommand(command: string, args: string[]): Promise<void> {
+  return new Promise<void>(resolve => {
     const child = spawn(command, args, { stdio: "ignore" });
     child.on("close", () => resolve());
     child.on("error", () => resolve());
   });
+}
+
+/**
+ * Stand this computer down for good after the server retires it.
+ *
+ * WINDOWS: the installer registers a WATCHDOG task that runs `schtasks /Run /TN "LeadRider MDF
+ * Runner"` every 5 minutes — the KeepAlive equivalent. `schtasks /Run` starts a task on demand
+ * even when it is DISABLED, so disabling only the runner task left the watchdog resurrecting a
+ * retired computer every 5 minutes: refused → disable self → watchdog re-runs → refused... The
+ * watchdog is therefore disabled FIRST, so it cannot fire in the window between the two calls.
+ * (macOS has no watchdog — launchd's KeepAlive dies with the `bootout`, verified live 7/31.)
+ *
+ * Fail direction unchanged: every command is best-effort and never throws. A stand-down that
+ * fails leaves a runner retrying against a server that refuses it — noisy but harmless — whereas
+ * throwing here would crash the daemon mid-retirement and leave the computer in an unknown state.
+ */
+async function standDownRetiredComputer(): Promise<void> {
+  if (process.platform === "win32") {
+    // Order is load-bearing: kill the resurrector before the thing it resurrects.
+    await runStandDownCommand("schtasks", ["/Change", "/TN", "LeadRider MDF Runner Watchdog", "/DISABLE"]);
+    await runStandDownCommand("schtasks", ["/Change", "/TN", "LeadRider MDF Runner", "/DISABLE"]);
+    return;
+  }
+  const uid = typeof process.getuid === "function" ? process.getuid() : 501;
+  await runStandDownCommand("launchctl", ["bootout", `gui/${uid}/ai.leadrider.mdf-portal-runner`]);
 }
 
 process.on("SIGINT", stop);

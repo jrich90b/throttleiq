@@ -602,6 +602,9 @@ console.log("PASS mdf runner windows port guards");
   const runnerSrc = fsx.readFileSync("scripts/mdf_portal_runner.ts", "utf8");
   const daemonSrc = fsx.readFileSync("scripts/mdf_portal_runner_daemon.ts", "utf8");
   const webSrcRunner = fsx.readFileSync("apps/web/src/app/page.tsx", "utf8");
+  const { buildWindowsInstallerPs1 } = await import(
+    "../services/api/src/domain/mdfRunnerWindowsInstaller.ts"
+  );
 
   // The stand-down exit code must be distinct from success (0) and generic failure (1). If it
   // collided with 1, every API blip would retire a working dealer's computer — the one failure
@@ -700,6 +703,22 @@ console.log("PASS mdf runner windows port guards");
     "the Reset confirm tells the manager it stops every automation on that computer"
   );
 
+  // (d4) The retired-computer EXPLANATIONS must actually be populated. The panel has rendered
+  //      `revoked` / `retiredStillTrying` since #383, but the loader never set them, so a
+  //      mid-switch dealer saw a machine name with no check-in line and no reason at all —
+  //      silence exactly where the guidance was supposed to be (Joe, 2026-07-31).
+  const loader = webSrcRunner.slice(
+    webSrcRunner.indexOf("async function loadMdfRunnerStatus"),
+    webSrcRunner.indexOf("function downloadMdfRunnerInstaller")
+  );
+  assert.ok(loader.length > 0, "the runner-status loader must be findable");
+  for (const field of ["revoked", "retiredStillTrying"]) {
+    assert.ok(
+      new RegExp(`${field}:`).test(loader),
+      `the runner-status loader must set ${field}, or the retired-computer guidance never renders`
+    );
+  }
+
   // (e) The runner child stands down on the revoked reply, and ONLY on that reply.
   assert.ok(
     new RegExp(`resp\\.status === 409 && /${REVOKED_MARKER}/\\.test\\(text\\)`).test(runnerSrc),
@@ -718,6 +737,32 @@ console.log("PASS mdf runner windows port guards");
   assert.ok(
     /bootout.*ai\.leadrider\.mdf-portal-runner/.test(daemonSrc),
     "macOS stand-down unloads the runner LaunchAgent"
+  );
+
+  // (f2) Windows ALSO has a watchdog task that runs `schtasks /Run` on the runner every 5
+  //      minutes, and /Run starts a task even when it is DISABLED. Disabling only the runner
+  //      left the watchdog resurrecting a retired computer on a 5-minute loop — the macOS
+  //      `bootout` has no such counterpart (verified live 7/31). The watchdog must go down
+  //      FIRST, or it can fire in the gap between the two calls.
+  assert.ok(
+    /\["\/Change", "\/TN", "LeadRider MDF Runner Watchdog", "\/DISABLE"\]/.test(daemonSrc),
+    "Windows stand-down also disables the WATCHDOG, or it re-runs the disabled runner every 5 min"
+  );
+  assert.ok(
+    daemonSrc.indexOf('"LeadRider MDF Runner Watchdog", "/DISABLE"') <
+      daemonSrc.indexOf('"LeadRider MDF Runner", "/DISABLE"'),
+    "the watchdog is disabled BEFORE the runner (kill the resurrector first)"
+  );
+  // The watchdog task name must match what the installer actually registers, or the disable
+  // silently no-ops against a task that does not exist.
+  assert.ok(
+    buildWindowsInstallerPs1({
+      apiBase: "https://api.example.com",
+      runnerToken: "t",
+      repoUrl: "https://example.com/r.git",
+      branch: "main"
+    }).includes('"LeadRider MDF Runner Watchdog"'),
+    "the installer registers the exact watchdog task name the stand-down disables"
   );
   // Stand-down must target the RUNNER service only — never the Chrome agent, which a human may
   // be relying on, and never a taskkill of chrome.exe.

@@ -40,6 +40,17 @@ export type WindowsInstallerArgs = {
 export function buildWindowsInstallerPs1(args: WindowsInstallerArgs): string {
   return `$ErrorActionPreference = "Stop"
 Write-Host "Installing the LeadRider MDF runner (Windows)..."
+Write-Host ""
+Write-Host "BEFORE YOU CONTINUE: only ONE runner computer can be active per dealership."
+Write-Host "If another computer is still registered, open the LeadRider console and hit Reset on"
+Write-Host "the runner FIRST. Installing here while the old computer is still active will finish"
+Write-Host "successfully and then quietly never receive any work."
+$proceed = Read-Host "Has the old runner computer been reset (or is this the first one)? [y/N]"
+if ($proceed -notmatch '^[Yy]') {
+  Write-Host "Stopped. Reset the old runner in the console, then run this installer again."
+  Read-Host "Press Enter to exit"
+  exit 1
+}
 
 $AppDir = Join-Path $env:LOCALAPPDATA "LeadRider\\mdf-runner"
 $ProfileDir = Join-Path $env:LOCALAPPDATA "LeadRider\\mdf-chrome-profile"
