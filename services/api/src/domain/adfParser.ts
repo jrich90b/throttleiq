@@ -108,6 +108,73 @@ function pickTradeVehicle(v: any): any | null {
   return byInterest ?? null;
 }
 
+function normalizeTradeMirrorHint(s: string | null | undefined): string {
+  return String(s ?? "")
+    .toLowerCase()
+    .replace(/harley-?davidson/g, "")
+    .replace(/\b(?:19|20)\d{2}\b/g, "")
+    .replace(/[^a-z0-9 ]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Trade/sell language in the customer's OWN free text. Used only as a KEEP escape hatch below:
+// if the customer said anything about trading, the structured trade stays no matter what. Its
+// fail-direction is one-way — a miss here only makes us MORE conservative about dropping a
+// field the customer never filled in (AGENTS.md: deterministic is allowed for invariant guards).
+function inquiryMentionsTrade(inquiry: string | null | undefined): boolean {
+  return /\b(trade|trade-?in|trading|apprais|sell|selling|value my)\b/i.test(String(inquiry ?? ""));
+}
+
+/**
+ * Room58 "Book test ride" / "Request details" forms auto-populate the structured `Trade-In:`
+ * field with the SAME model the customer is asking about — a form-mapping artifact, not a trade
+ * the customer reported (Vehicle "Harley-Davidson FXD Super Glide" / Trade-In "Super Glide";
+ * Vehicle "Sportster S" / Trade-In "Sportster  S"; Vehicle "Iron 883" / Trade-In "Iron 883").
+ *
+ * Carrying that phantom through means the lead can be inferred `trade_in_sell`, and the first
+ * touch then answers a trade the customer never mentioned instead of the question they actually
+ * typed. Beth Bremer (Ref 11449, 2026-06-13) asked "I'm a smaller female... is the super glide a
+ * good option?" and the agent's draft opened "Thanks for using our trade-in estimator on your
+ * Super Glide" — her question was never answered. A human rescued the live thread; the replay
+ * corpus reproduces the bad draft (2026-07-31 sweep, judged `critical`).
+ *
+ * A MIRROR is dropped only when the trade field carries NO independent identity of its own —
+ * no year, no VIN, no mileage — and its model matches the bike of interest. A real trade
+ * ("Trade-In: 2019 Indian Chief", or a same-model trade with its own year/VIN/mileage) is
+ * untouched, and any trade language the customer typed keeps the field regardless.
+ *
+ * Deterministic structured-field classification (AGENTS.md allows deterministic for structured
+ * extraction). Fail-direction: dropping is the SAFE side — we stop asserting a trade the
+ * customer never reported, which is the fabricated-frame bug class.
+ */
+export function isMirroredTradeFieldArtifact(args: {
+  tradeModel?: string | null;
+  tradeDescription?: string | null;
+  tradeYear?: string | null;
+  tradeVin?: string | null;
+  tradeMileage?: number | null;
+  interestModel?: string | null;
+  interestDescription?: string | null;
+  inquiry?: string | null;
+}): boolean {
+  // Any independent identity on the trade field means the customer (or the feed) said something
+  // real about a second bike — never a bare mirror.
+  if (String(args.tradeYear ?? "").trim()) return false;
+  if (String(args.tradeVin ?? "").trim()) return false;
+  if (Number.isFinite(args.tradeMileage as number)) return false;
+  // The customer typed about trading — keep the field regardless of what the form mapped.
+  if (inquiryMentionsTrade(args.inquiry)) return false;
+
+  const trade = normalizeTradeMirrorHint(args.tradeModel) || normalizeTradeMirrorHint(args.tradeDescription);
+  if (!trade) return false;
+  const interest =
+    normalizeTradeMirrorHint(args.interestModel) || normalizeTradeMirrorHint(args.interestDescription);
+  if (!interest) return false;
+
+  return trade === interest || interest.includes(trade) || trade.includes(interest);
+}
+
 function stripHtml(s: string): string {
   return s.replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "").trim();
 }
@@ -634,15 +701,32 @@ export function parseAdfXml(adfXml: string): ParsedAdfLead {
       [tradeMake, tradeModel].filter(Boolean).join(" ") ||
       stripDanglingParenthetical(text(tradeVehicleRaw?.description)) ||
       undefined;
-    tradeVehicle = {
-      year: tradeYear,
-      make: tradeMake,
-      model: tradeModel,
-      vin: tradeVin,
-      mileage: tradeMileage,
-      condition: tradeCondition,
-      description: tradeDesc
-    };
+    // Drop a Room58-style form mirror before it can be read as a real trade (see
+    // isMirroredTradeFieldArtifact). Only the STRUCTURED branch is guarded — a trade parsed out of
+    // the customer's own comment text (sellVehicleFromComment, above) is something they actually said.
+    const mirrorsBikeOfInterest = isMirroredTradeFieldArtifact({
+      tradeModel,
+      tradeDescription: tradeDesc,
+      tradeYear,
+      tradeVin,
+      tradeMileage,
+      interestModel: vehicleModel,
+      interestDescription: desc,
+      // Both, because a Room58 comment often carries the customer's words WITHOUT an "Inquiry:"
+      // marker, in which case parseFromComment leaves `inquiry` empty and only `commentText` has them.
+      inquiry: [inquiry, commentText].filter(Boolean).join(" ")
+    });
+    tradeVehicle = mirrorsBikeOfInterest
+      ? undefined
+      : {
+          year: tradeYear,
+          make: tradeMake,
+          model: tradeModel,
+          vin: tradeVin,
+          mileage: tradeMileage,
+          condition: tradeCondition,
+          description: tradeDesc
+        };
   }
   return {
     leadRef,
