@@ -676,6 +676,18 @@ console.log("PASS mdf runner windows port guards");
     "the registration read reports EVERY slot, so a held computer cannot hide behind an empty default slot"
   );
 
+  // (d2b) Retiring a slot that has NO current holder must PRESERVE a standing tombstone.
+  //       Live regression 2026-07-31: once Reset retired every slot, each click tombstoned the
+  //       slot that had a holder and DELETED the other slot's tombstone — freeing it, so the
+  //       retired MacBook bounced straight back in on its next poll. Reset stopped sticking
+  //       again, one level down. Deleting a tombstone is UN-retiring a machine.
+  assert.ok(
+    /if \(existing\?\.revokedMachineId\) return existing;[\s\S]{0,200}?fs\.promises\.rm\(mdfRunnerRegistryPath\(kind\)/.test(
+      apiSrc
+    ),
+    "a standing tombstone is preserved, never deleted, when the slot has no current holder"
+  );
+
   // (d3) The console must consume the multi-slot reply. It reached only the default slot before,
   //      and the Next.js proxy takes no request object, so it cannot forward a ?kind= even if the
   //      browser sent one — which is exactly why "no kind" has to mean "all".

@@ -50097,6 +50097,13 @@ async function revokeMdfRunnerRegistry(kind: MdfRunnerKind): Promise<MdfRunnerRe
   const existing = await readMdfRunnerRegistry(kind);
   const retiredId = String(existing?.machineId || "").trim();
   if (!retiredId) {
+    // No CURRENT holder. If a tombstone is already standing, LEAVE IT: deleting it un-retires
+    // the machine it names, and that machine re-claims the freed slot on its next poll (~60s).
+    // Live regression, American Harley 2026-07-31: once Reset began retiring every slot, each
+    // click tombstoned whichever slot had a holder and DELETED the other slot's tombstone, so
+    // the retired MacBook kept bouncing back into the freed slot — "Reset doesn't stick" again,
+    // one level down. A standing tombstone is state to PRESERVE, not an empty slot to clean up.
+    if (existing?.revokedMachineId) return existing;
     await fs.promises.rm(mdfRunnerRegistryPath(kind), { force: true }).catch(() => {});
     return null;
   }
