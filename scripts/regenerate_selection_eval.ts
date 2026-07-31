@@ -1,4 +1,7 @@
-import { pickRegenerateInbound } from "../services/api/src/domain/regenerateSelection.ts";
+import {
+  pickRegenerateInbound,
+  isQuotedReactionInboundText
+} from "../services/api/src/domain/regenerateSelection.ts";
 
 type Case = {
   id: string;
@@ -417,11 +420,43 @@ console.log(`\nAll ${cases.length} regenerate selection checks passed.`);
 // Source-consistency guard: the LIVE reaction-only no-reply gate uses a separate copy of the
 // detector in index.ts — the localized (Spanish) tapback alternation must exist in BOTH copies
 // or the live path and regenerate selection drift (the Armando Cortes miss class).
+// The scorer twin (scoringExclusions.isQuotedReactionEchoInbound) is the THIRD copy — the
+// corpus-replay flywheel reads it, so a wrapper form present in two copies but missing from the
+// third still manufactures a phantom P1 (Henry Cole +17168618786, the attachment-tapback miss).
 import fs from "node:fs";
-for (const f of ["services/api/src/index.ts", "services/api/src/domain/regenerateSelection.ts"]) {
+for (const f of [
+  "services/api/src/index.ts",
+  "services/api/src/domain/regenerateSelection.ts",
+  "services/api/src/domain/scoringExclusions.ts"
+]) {
   const src = fs.readFileSync(f, "utf8");
+  if (!src.includes("matchesReactionToAttachment")) {
+    console.error(`FAIL attachment-tapback arm missing in ${f}`);
+    process.exit(1);
+  }
   if (!src.includes("le encant(?:a|\u00f3)") && !src.includes("le encant(?:a|ó)")) {
     console.error(`FAIL localized tapback alternation missing in ${f}`);
     process.exit(1);
   }
 }
+
+// The live no-reply gate itself: a heart on a PHOTO we texted is a button press, not an ask.
+// Henry Cole (+17168618786) hearted two photos Joe sent; with no quoted body to match, both
+// turns reached drafting and the replay judge graded the phantom reply as a blocking P1.
+const attachmentTapbackCases: Array<[string, boolean]> = [
+  ["Reacted ❤️ to an image", true], // the exact production body, 2026-07-01 and 07-02
+  ["Reacted 👍🏼 to a photo", true],
+  ['Reacted ❤️ to "Thanks for coming in"', true], // quoted arm unchanged
+  // Fail-direction: a real sentence containing those words still earns a reply.
+  ["Reacted ❤️ to an image of the Street Glide — got more?", false],
+  ["Can you send me a link to an image of the bike", false],
+  ["I reacted to a video", false]
+];
+for (const [body, expected] of attachmentTapbackCases) {
+  const got = isQuotedReactionInboundText(body);
+  if (got !== expected) {
+    console.error(`FAIL attachment tapback: ${JSON.stringify(body)} → ${got}, expected ${expected}`);
+    process.exit(1);
+  }
+}
+console.log(`Attachment-tapback wrapper: ${attachmentTapbackCases.length} live-gate checks passed.`);

@@ -492,6 +492,24 @@ assert.equal(isQuotedReactionEchoInbound("liked"), false);
 assert.equal(isQuotedReactionEchoInbound("Loved meeting you today, can I come Saturday?"), false);
 assert.equal(isQuotedReactionEchoInbound(""), false);
 
+// Tapback on an ATTACHMENT — the customer hearted a PHOTO we texted, so the carrier has no
+// text to quote and names the attachment instead. Every matcher required a quoted body, so
+// Henry Cole (+17168618786, 2026-07-01 and 07-02) read as two real inbounds: the replay judge
+// graded the resulting "I'll have someone follow up with you shortly" as an unaddressed ask,
+// a P1 corpus_replay_regression — and regressions are a BLOCKING release gate.
+assert.equal(isQuotedReactionEchoInbound("Reacted ❤️ to an image"), true); // live 7/01+7/02 phantom
+assert.equal(isBareReactionOnlyInbound("Reacted ❤️ to an image"), true); // the stuck-turn watchdog twin
+assert.equal(isQuotedReactionEchoInbound("Reacted 👍🏼 to a photo"), true);
+assert.equal(isQuotedReactionEchoInbound("Liked an attachment"), false); // no "to <object>" wrapper
+assert.equal(isQuotedReactionEchoInbound("Loved to a video"), true);
+// Fail-direction guards: this HIDES a turn, so the object must be EXACTLY one carrier
+// attachment noun and the actor EXACTLY a tapback verb/emoji. Real customer sentences that
+// happen to contain those words still get scored.
+assert.equal(isQuotedReactionEchoInbound("Reacted ❤️ to an image of the Street Glide — got more?"), false);
+assert.equal(isQuotedReactionEchoInbound("reacted badly to an image you sent me"), false);
+assert.equal(isQuotedReactionEchoInbound("Can you send me a link to an image of the bike"), false);
+assert.equal(isQuotedReactionEchoInbound("to an image"), false);
+
 // A staff member typing their own SMS from the console is not the agent's voice.
 // Production 2026-07-23: Stone Giuga's hand-typed check-in to Annie (+17165361711)
 // tripped the TEMPLATE-SOURCED `bare_check_in` charter check and dirtied the release
