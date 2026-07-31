@@ -133,6 +133,8 @@ DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
 DEPLOY_DATA_DIR="${DEPLOY_DATA_DIR:-/home/ubuntu/throttleiq-runtime/data}"
 DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE:-$DEPLOY_REPO/services/api/.env}"
 DEPLOY_PM2_PROCESS="${DEPLOY_PM2_PROCESS:-throttleiq-api}"
+DEPLOY_WORKER_PM2_PROCESS="${DEPLOY_WORKER_PM2_PROCESS:-}"
+DEPLOY_RESTART_WORKER="${DEPLOY_RESTART_WORKER:-1}"
 DEPLOY_API_PORT="${DEPLOY_API_PORT:-}"
 DEPLOY_HEALTH_URL="${DEPLOY_HEALTH_URL:-https://api.leadrider.ai/health}"
 DEPLOY_ALLOW_DIRTY_REMOTE="${DEPLOY_ALLOW_DIRTY_REMOTE:-0}"
@@ -231,6 +233,15 @@ echo
 if [[ "$DEPLOY_BUILD_MODE" == "local" ]]; then
   echo "Building API locally (artifact deploy)..."
   npm --workspace @throttleiq/api run build
+  # The worker ships its own dist and is the ONLY tick source when WORKER_DRIVEN_TICKS=1.
+  # Until 2026-07-31 this script built just the API, so the box ran a 2026-06-10 worker build and
+  # three minute-lane jobs (task-escalations, gate-blocker-digest, photo-delivery) were dead.
+  echo "Building worker locally (artifact deploy)..."
+  npm --workspace @throttleiq/worker run build
+  if [[ ! -f "$repo_root/services/worker/dist/index.js" ]]; then
+    echo "Local worker build produced no dist/index.js" >&2
+    exit 25
+  fi
   if [[ ! -f "$repo_root/services/api/dist/index.js" ]]; then
     echo "Local build produced no dist/index.js" >&2
     exit 25
@@ -244,8 +255,8 @@ if [[ "$DEPLOY_BUILD_MODE" == "local" ]]; then
       echo "Artifact deploys ship the LOCAL build for the remote checkout - push/pull first." >&2
       exit 26
     fi
-    if [[ -n "$(git status --porcelain services/api packages 2>/dev/null)" ]]; then
-      echo "Local services/api or packages tree is dirty; artifact would not match origin/$DEPLOY_BRANCH." >&2
+    if [[ -n "$(git status --porcelain services/api services/worker packages 2>/dev/null)" ]]; then
+      echo "Local services/api, services/worker or packages tree is dirty; artifact would not match origin/$DEPLOY_BRANCH." >&2
       exit 27
     fi
   fi
@@ -261,6 +272,8 @@ remote_env=(
   "DEPLOY_DATA_DIR=$(shell_quote "$DEPLOY_DATA_DIR")"
   "DEPLOY_ENV_FILE=$(shell_quote "$DEPLOY_ENV_FILE")"
   "DEPLOY_PM2_PROCESS=$(shell_quote "$DEPLOY_PM2_PROCESS")"
+  "DEPLOY_WORKER_PM2_PROCESS=$(shell_quote "$DEPLOY_WORKER_PM2_PROCESS")"
+  "DEPLOY_RESTART_WORKER=$(shell_quote "$DEPLOY_RESTART_WORKER")"
   "DEPLOY_API_PORT=$(shell_quote "$DEPLOY_API_PORT")"
   "DEPLOY_HEALTH_URL=$(shell_quote "$DEPLOY_HEALTH_URL")"
   "DEPLOY_HEALTH_ATTEMPTS=$(shell_quote "$DEPLOY_HEALTH_ATTEMPTS")"
@@ -280,6 +293,10 @@ if [[ "$DEPLOY_BUILD_MODE" == "local" && "$DEPLOY_DRY_RUN" != "1" ]]; then
   if ! rsync -az --delete "$repo_root/services/api/dist/" "$DEPLOY_HOST:$DEPLOY_REPO/services/api/dist/"; then
     echo "Artifact upload failed. For first-time provisioning (no remote repo yet)," >&2
     echo "run once with DEPLOY_BUILD_MODE=remote on a host with enough memory." >&2
+    exit 28
+  fi
+  if ! rsync -az --delete "$repo_root/services/worker/dist/" "$DEPLOY_HOST:$DEPLOY_REPO/services/worker/dist/"; then
+    echo "Worker artifact upload failed." >&2
     exit 28
   fi
 fi
@@ -463,6 +480,18 @@ else
   (cd "$DEPLOY_REPO/services/api" && nice -n 15 node --max-old-space-size="$DEPLOY_REMOTE_BUILD_HEAP_MB" ../../node_modules/typescript/bin/tsc -p tsconfig.json)
 fi
 
+# Build the WORKER too. It runs `node dist/index.js`, and this script used to build only the API —
+# so every change under services/worker/src silently never took effect. Harmless while the worker
+# was a shadow; a live outage the moment WORKER_DRIVEN_TICKS=1 flipped (2026-07-30) and disabled
+# the API's in-process ticks, because the worker became the ONLY path. Found 2026-07-31 with the
+# worker still running a 2026-06-10 build: it scheduled 4 of the 8 minute-lane tasks, so
+# task-escalations, gate-blocker-digest and photo-delivery had been dead for ~24h.
+# The worker is small (2 files) so this costs seconds and needs no heap tuning.
+if [[ -f "$DEPLOY_REPO/services/worker/tsconfig.json" ]]; then
+  echo "Building worker on the server..."
+  (cd "$DEPLOY_REPO" && nice -n 15 npm --workspace @throttleiq/worker run build)
+fi
+
 if [[ ! -f "$DEPLOY_ENV_FILE" ]]; then
   echo "Remote env file missing: $DEPLOY_ENV_FILE" >&2
   exit 22
@@ -505,6 +534,15 @@ if pm2 describe "$DEPLOY_PM2_PROCESS" >/dev/null 2>&1; then
   pm2 restart "$DEPLOY_PM2_PROCESS" --update-env
 else
   pm2 start npm --name "$DEPLOY_PM2_PROCESS" --cwd "$DEPLOY_REPO" -- --workspace @throttleiq/api run start
+fi
+
+# Restart the worker so a freshly built dist actually takes effect. Skipped when the process does
+# not exist (single-process installs). Never CREATES it — provisioning a worker is a deliberate
+# ops step, and quietly starting a second tick source would double every background job.
+if [[ "${DEPLOY_RESTART_WORKER:-1}" == "1" && -n "${DEPLOY_WORKER_PM2_PROCESS:-}" ]] &&
+  pm2 describe "$DEPLOY_WORKER_PM2_PROCESS" >/dev/null 2>&1; then
+  echo "Restarting worker process $DEPLOY_WORKER_PM2_PROCESS..."
+  pm2 restart "$DEPLOY_WORKER_PM2_PROCESS" --update-env
 fi
 pm2 save >/dev/null
 
