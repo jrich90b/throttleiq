@@ -70,6 +70,32 @@ assert.ok(
   "the new design accepts excuse judge-minor ONLY — a judge-major still fails"
 );
 
+// (5) Stock-check-first (charter C4.3) design-accept must track BOTH unavailability drafts. The
+//     classifier originally matched only the orchestrator/regen copy; PR #367 gave the initial-ADF
+//     first touch its own shorter copy, and the same ruled behavior started failing the release
+//     gate as a P1 (08610167776, +16785960725, +18188420202 — 7/31 sweep). Pinned: the second arm
+//     exists, and it keys on the judge's ASK, never judge.why (a why that tacks on "…or offer to
+//     schedule" must not rescue an unanswered specs/pricing miss). Behavior + fail-direction cases
+//     live in the self-test above.
+assert.ok(
+  /isBlockedTestRideWithWatchOffer\(row, score\.judge\)/.test(flywheel),
+  "adjustScore hooks the stock-check-first design accept"
+);
+{
+  const fn = flywheel.slice(
+    flywheel.indexOf("export function isBlockedTestRideWithWatchOffer"),
+    flywheel.indexOf("export function isBlockedTestRideWithWatchOffer") + 1400
+  );
+  assert.ok(
+    /not seeing \[\^\.\]\{0,60\}in stock right now/.test(fn) && /is no longer available/.test(fn),
+    "the design accept covers the initial-ADF unavailability copy (#367), not just the orchestrator draft"
+  );
+  assert.ok(
+    /judge\.customerAsk/.test(fn) && !/judge\.why/.test(fn),
+    "the availability-ask test reads customerAsk ONLY — judge.why must not widen the accept"
+  );
+}
+
 const audit = fs.readFileSync("scripts/intent_handled_audit.ts", "utf8");
 assert.ok(/export async function realJudge/.test(audit), "realJudge stays exported for the flywheel");
 
