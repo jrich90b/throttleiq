@@ -389,7 +389,7 @@ import {
 } from "./domain/contextFidelityHold.js";
 import { customerVisitConfirmed, rideOutcomeImpliesVisit, phantomVisitGuardEnabled } from "./domain/visitFraming.js";
 import { isSpecificModel, isPlaceholderModel } from "./domain/modelDeflection.js";
-import { shouldSuppressCadenceAck } from "./domain/cadenceAckGate.js";
+import { resolveCadenceAckSuppression } from "./domain/cadenceAckGate.js";
 import { PORTAL_RUNNER_KINDS, resolveRunnerKindsToRetire } from "./domain/portalRunnerHandoff.js";
 import type {
   AffectParse,
@@ -42534,18 +42534,20 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
     }
 
     let cadenceAckResult: { sent: boolean; reason?: string; sid?: string } | null = null;
-    // Suppress the warm cadence closer when a human is actively driving the thread (a manual
-    // outbound in the last few minutes) — otherwise the auto "I'll be here when you're ready"
-    // contradicts a rep who just texted the customer (Bill +17166090270, 2026-07-17).
-    const suppressAckForActiveHuman = shouldSuppressCadenceAck(conv, Date.now());
+    // Suppress the warm cadence closer when (a) a human is actively driving the thread (a
+    // manual outbound in the last few minutes) — otherwise the auto "I'll be here when you're
+    // ready" contradicts a rep who just texted the customer (Bill +17166090270, 2026-07-17);
+    // or (b) there is no unanswered customer turn for it to acknowledge, which makes it a
+    // fabricated conversational frame (Dominic +17169309966, 2026-07-20).
+    const ackSuppression = resolveCadenceAckSuppression(conv, Date.now());
     const cadenceAck =
-      effectiveResolution === "hold" || shouldApplyWatch || suppressAckForActiveHuman
+      effectiveResolution === "hold" || shouldApplyWatch || ackSuppression.suppress
         ? null
         : buildCadenceAck(effectiveResolution);
     if (cadenceAck) {
       cadenceAckResult = await sendCadenceAck(cadenceAck);
-    } else if (suppressAckForActiveHuman) {
-      cadenceAckResult = { sent: false, reason: "active_human_thread" };
+    } else if (ackSuppression.suppress) {
+      cadenceAckResult = { sent: false, reason: ackSuppression.reason! };
     }
 
     if (shouldApplyWatch) {
