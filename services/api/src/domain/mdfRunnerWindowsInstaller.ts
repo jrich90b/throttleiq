@@ -8,7 +8,13 @@
  * -ExecutionPolicy Bypass (a bare downloaded .ps1 opens in Notepad when double-clicked, so
  * the .bat wrapper is what makes it one-click for a non-technical dealer).
  *
- * The PowerShell payload mirrors install.sh: check Chrome/Git/Node → clone the runner to
+ * Prerequisites INSTALL THEMSELVES (Joe 2026-07-31, after the first real-Windows run stopped
+ * at "Git is required"): Chrome/Git/Node are installed via winget when missing, then PATH is
+ * re-read from the registry so the same session can see them. winget is absent on older
+ * Windows and can be declined at the UAC prompt, so every check keeps its original
+ * fail-safe: print the manual download URL and exit rather than proceeding half-installed.
+ *
+ * The PowerShell payload mirrors install.sh: ensure Chrome/Git/Node → clone the runner to
  * %LOCALAPPDATA%\LeadRider\mdf-runner → npm install → write .env (embedding the runner
  * token, same as the Mac flow) → register Scheduled Tasks for the dedicated CDP Chrome
  * (:9222, own profile, h-dnet.com) and the daemon (at-logon) plus a 5-minute WATCHDOG that
@@ -50,22 +56,50 @@ function Find-Chrome {
   return $null
 }
 
+function Update-PathFromRegistry {
+  $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+  $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+  $env:Path = (@($machinePath, $userPath) | Where-Object { $_ }) -join ";"
+}
+
+function Install-WithWinget {
+  param([string]$WingetId, [string]$Name)
+  if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { return $false }
+  Write-Host ("Installing " + $Name + " for you. This can take a few minutes - approve the Windows prompt if it asks.")
+  try {
+    winget install -e --id $WingetId --silent --accept-package-agreements --accept-source-agreements | Out-Null
+  } catch {
+    Write-Host ("Automatic install of " + $Name + " did not finish.")
+  }
+  Update-PathFromRegistry
+  return $true
+}
+
+function Ensure-Command {
+  param([string]$CommandName, [string]$WingetId, [string]$Name, [string]$ManualUrl)
+  if (Get-Command $CommandName -ErrorAction SilentlyContinue) { return }
+  Install-WithWinget -WingetId $WingetId -Name $Name | Out-Null
+  if (Get-Command $CommandName -ErrorAction SilentlyContinue) {
+    Write-Host ($Name + " is installed.")
+    return
+  }
+  Write-Host ($Name + " is required and could not be installed automatically. Install it from " + $ManualUrl + " (defaults are fine) then run this installer again.")
+  Read-Host "Press Enter to exit"
+  exit 1
+}
+
 $Chrome = Find-Chrome
 if (-not $Chrome) {
-  Write-Host "Google Chrome is required. Install it from https://www.google.com/chrome/ then run this installer again."
+  Install-WithWinget -WingetId "Google.Chrome" -Name "Google Chrome" | Out-Null
+  $Chrome = Find-Chrome
+}
+if (-not $Chrome) {
+  Write-Host "Google Chrome is required and could not be installed automatically. Install it from https://www.google.com/chrome/ then run this installer again."
   Read-Host "Press Enter to exit"
   exit 1
 }
-if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-  Write-Host "Git is required. Install it from https://git-scm.com/download/win (defaults are fine) then run this installer again."
-  Read-Host "Press Enter to exit"
-  exit 1
-}
-if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-  Write-Host "Node.js is required. Install the LTS version from https://nodejs.org/ then run this installer again."
-  Read-Host "Press Enter to exit"
-  exit 1
-}
+Ensure-Command -CommandName "git" -WingetId "Git.Git" -Name "Git" -ManualUrl "https://git-scm.com/download/win"
+Ensure-Command -CommandName "npm" -WingetId "OpenJS.NodeJS.LTS" -Name "Node.js" -ManualUrl "https://nodejs.org/"
 
 if (Test-Path (Join-Path $AppDir ".git")) {
   git -C $AppDir fetch --all --prune

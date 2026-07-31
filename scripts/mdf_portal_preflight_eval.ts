@@ -529,6 +529,49 @@ console.log("PASS mdf portal reliability additions");
   // quoting rule is concatenated single-quoted pieces, never backticks.
   assert.ok(!ps1.includes("`"), "no PowerShell backticks in the payload (TS-template embedding rule)");
 
+  // 2b) Prerequisites install THEMSELVES (Joe 2026-07-31). The first real-Windows run died at
+  // "Git is required", sending a non-technical dealer to two download pages. winget now installs
+  // Chrome/Git/Node in place. Two properties are load-bearing and pinned here:
+  //   (a) PATH is re-read from the registry after an install, or the same session still can't
+  //       see the new tool and the installer would false-fail the very thing it just installed;
+  //   (b) the manual-URL fallback SURVIVES for every tool — winget is missing on older Windows
+  //       and can be declined at the UAC prompt, and failing toward a clear instruction beats
+  //       proceeding half-installed.
+  for (const [id, name] of [
+    ["Google.Chrome", "Chrome"],
+    ["Git.Git", "Git"],
+    ["OpenJS.NodeJS.LTS", "Node.js"]
+  ] as const) {
+    assert.ok(ps1.includes(id), `${name} is auto-installed via its winget id (${id})`);
+  }
+  assert.ok(
+    /winget install -e --id \$WingetId --silent --accept-package-agreements --accept-source-agreements/.test(ps1),
+    "winget runs unattended (silent + both agreement flags) so a dealer never sees a prompt-loop"
+  );
+  assert.ok(
+    /GetEnvironmentVariable\("Path", "Machine"\)/.test(ps1) && /GetEnvironmentVariable\("Path", "User"\)/.test(ps1),
+    "PATH is re-read from the registry after install, so the running session sees the new tool"
+  );
+  for (const url of ["https://git-scm.com/download/win", "https://nodejs.org/", "https://www.google.com/chrome/"]) {
+    assert.ok(ps1.includes(url), `manual-download fallback survives for ${url} (winget may be absent or declined)`);
+  }
+  // Pin the CONSTRUCT, not a file-wide count: Git and Node share one Ensure-Command helper, so
+  // counting exit blocks would forbid exactly the reuse we want (see the eval-source-count
+  // brittleness lesson). What must hold is that BOTH paths to a missing tool fail closed.
+  assert.ok(
+    /Ensure-Command -CommandName "git"/.test(ps1) && /Ensure-Command -CommandName "npm"/.test(ps1),
+    "Git and Node both route through the ensure-then-fail-closed helper"
+  );
+  for (const block of [
+    ps1.slice(ps1.indexOf("function Ensure-Command")),
+    ps1.slice(ps1.indexOf("$Chrome = Find-Chrome"))
+  ]) {
+    assert.ok(
+      /could not be installed automatically[\s\S]{0,400}?Read-Host "Press Enter to exit"[\s\S]{0,40}?exit 1/.test(block),
+      "a prerequisite that winget could not supply still exits with the manual instruction, never a silent half-install"
+    );
+  }
+
   // 3) The API serves the .bat behind the same manager gate as the .sh.
   const apiSrc = fsx.readFileSync("services/api/src/index.ts", "utf8");
   assert.ok(
