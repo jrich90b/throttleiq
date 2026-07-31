@@ -578,9 +578,21 @@ export type FlywheelFinding = {
   occurredAt: string;
   category: "reply";
   detail: string;
+  /**
+   * The deployed commit these verdicts were rendered against. `occurredAt` only says when the
+   * sweep ran; a sweep is recent while its verdict is already superseded once main moves and
+   * redeploys (anomalyClassifier.isSupersededGrade). Omitted when the commit can't be resolved —
+   * unknown must never read as "graded against current code".
+   */
+  gradedAtCommit?: string;
 };
 
-export function buildFindings(scores: TurnScore[], regressions: TurnScore[], atIso: string): FlywheelFinding[] {
+export function buildFindings(
+  scores: TurnScore[],
+  regressions: TurnScore[],
+  atIso: string,
+  gradedAtCommit?: string | null
+): FlywheelFinding[] {
   const regressionKeys = new Set(regressions.map(r => r.turnKey));
   const out: FlywheelFinding[] = [];
   for (const s of scores) {
@@ -597,7 +609,8 @@ export function buildFindings(scores: TurnScore[], regressions: TurnScore[], atI
       healed: false,
       occurredAt: atIso,
       category: "reply",
-      detail: `[replay ${s.turnKey}] customer: "${s.body}" → draft: "${s.draft ?? "(none)"}" — ${why}`.slice(0, 480)
+      detail: `[replay ${s.turnKey}] customer: "${s.body}" → draft: "${s.draft ?? "(none)"}" — ${why}`.slice(0, 480),
+      ...(String(gradedAtCommit ?? "").trim() ? { gradedAtCommit: String(gradedAtCommit).trim() } : {})
     });
   }
   return out;
@@ -850,7 +863,9 @@ async function main() {
     }
   }
 
-  const findings = buildFindings(scores, confirmedRegressions, atIso);
+  // The commit these verdicts grade. The nightly resolves the deployed HEAD and passes it; a
+  // direct/manual run without the flag simply omits it (unknown, never guessed).
+  const findings = buildFindings(scores, confirmedRegressions, atIso, flag("graded-at-commit"));
 
   const failed = scores.filter(s => !s.pass);
   const summary: FlywheelSummary = {
