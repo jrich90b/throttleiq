@@ -594,13 +594,14 @@ console.log("PASS mdf runner windows port guards");
 // old machine coming back with no explanation. Worse, the MDF and warranty/RMA runners shared ONE
 // slot, so a dealer could never run them on different computers. Both are pinned here.
 {
-  const { REVOKED_MARKER, RUNNER_REVOKED_EXIT_CODE } = await import(
+  const { REVOKED_MARKER, RUNNER_REVOKED_EXIT_CODE, PORTAL_RUNNER_KINDS, resolveRunnerKindsToRetire } = await import(
     "../services/api/src/domain/portalRunnerHandoff.ts"
   );
   const fsx = await import("node:fs");
   const apiSrc = fsx.readFileSync("services/api/src/index.ts", "utf8");
   const runnerSrc = fsx.readFileSync("scripts/mdf_portal_runner.ts", "utf8");
   const daemonSrc = fsx.readFileSync("scripts/mdf_portal_runner_daemon.ts", "utf8");
+  const webSrcRunner = fsx.readFileSync("apps/web/src/app/page.tsx", "utf8");
 
   // The stand-down exit code must be distinct from success (0) and generic failure (1). If it
   // collided with 1, every API blip would retire a working dealer's computer — the one failure
@@ -638,6 +639,53 @@ console.log("PASS mdf runner windows port guards");
   assert.ok(
     /validateMdfPortalRunnerMachine\(req, "mdf"\)/.test(apiSrc),
     "the MDF runner validates against the MDF slot"
+  );
+
+  // (d2) Splitting the slot in two must not put a slot out of the console's REACH. Production
+  //      regression, American Harley 2026-07-31: the console sends no ?kind=, so Reset retired
+  //      only the default MDF slot while a MacBook kept renewing the warranty/RMA claim every
+  //      60s — Reset looked dead again, and the warranty slot had to be tombstoned by hand.
+  //      An unqualified Reset therefore retires the whole COMPUTER.
+  assert.deepEqual(
+    resolveRunnerKindsToRetire(undefined),
+    [...PORTAL_RUNNER_KINDS],
+    "Reset with no kind retires EVERY slot (the console sends no kind — this is the live path)"
+  );
+  assert.deepEqual(resolveRunnerKindsToRetire(""), [...PORTAL_RUNNER_KINDS], "blank kind retires every slot");
+  assert.deepEqual(
+    resolveRunnerKindsToRetire("warranty_rma"),
+    ["warranty_rma"],
+    "an explicitly named slot is retired alone"
+  );
+  assert.deepEqual(resolveRunnerKindsToRetire("mdf"), ["mdf"], "the MDF slot can still be retired alone");
+  assert.deepEqual(
+    resolveRunnerKindsToRetire("typo"),
+    [...PORTAL_RUNNER_KINDS],
+    "an unrecognized kind fails toward retiring everything, never toward retiring nothing"
+  );
+  assert.ok(
+    PORTAL_RUNNER_KINDS.includes("mdf") && PORTAL_RUNNER_KINDS.includes("warranty_rma"),
+    "every runner slot a computer can hold is listed, or Reset silently misses one"
+  );
+  assert.ok(
+    /resolveRunnerKindsToRetire\(/.test(apiSrc),
+    "the DELETE endpoint resolves which slots to retire (never a single hardcoded kind)"
+  );
+  assert.ok(
+    /const slots = await Promise\.all\(PORTAL_RUNNER_KINDS\.map/.test(apiSrc),
+    "the registration read reports EVERY slot, so a held computer cannot hide behind an empty default slot"
+  );
+
+  // (d3) The console must consume the multi-slot reply. It reached only the default slot before,
+  //      and the Next.js proxy takes no request object, so it cannot forward a ?kind= even if the
+  //      browser sent one — which is exactly why "no kind" has to mean "all".
+  assert.ok(
+    /Array\.isArray\(data\.slots\)/.test(webSrcRunner),
+    "the console reads the per-slot list, not just the default slot"
+  );
+  assert.ok(
+    /ALL LeadRider automation on it/.test(webSrcRunner),
+    "the Reset confirm tells the manager it stops every automation on that computer"
   );
 
   // (e) The runner child stands down on the revoked reply, and ONLY on that reply.

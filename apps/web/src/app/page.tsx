@@ -8342,9 +8342,14 @@ export default function Home() {
       const resp = await fetch("/api/mdf/portal-runner/registration", { cache: "no-store" });
       const data = await resp.json();
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "MDF runner status could not be loaded.");
+      // Prefer whichever slot a computer actually holds. Reading only the default slot is how a
+      // warranty/RMA runner stayed invisible here while it held a machine (7/31): the panel said
+      // "no runner" while a MacBook renewed its claim every minute.
+      const slots: any[] = Array.isArray(data.slots) ? data.slots : [];
+      const held = slots.find(s => s?.active) || slots.find(s => s?.registration) || null;
       setMdfRunnerStatus({
-        registration: data.registration ?? null,
-        active: !!data.active,
+        registration: held?.registration ?? data.registration ?? null,
+        active: data.anyActive ?? !!data.active,
         heartbeatTtlMs: Number(data.heartbeatTtlMs ?? 0)
       });
     } catch (err) {
@@ -8373,7 +8378,7 @@ export default function Home() {
 
   async function resetMdfRunnerRegistration() {
     const confirmed = window.confirm(
-      "Reset the MDF runner computer? Only do this when replacing the runner computer or intentionally moving H-DNet automation to another computer."
+      "Retire this runner computer? This stops ALL LeadRider automation on it (MDF and warranty/RMA). Only do this when replacing the runner computer or intentionally moving H-DNet automation to another computer."
     );
     if (!confirmed) return;
     setMdfRunnerActionBusy("reset");
@@ -8386,7 +8391,7 @@ export default function Home() {
       // should show "retired, waiting for the new computer" instead of a bare empty slot.
       await loadMdfRunnerStatus();
       setMdfPortalTaskNotice(
-        "Runner computer retired. The old computer will stop on its own within a minute — you don't need to touch it. Now run the installer on the new computer."
+        "Runner computer retired (all automation on it: MDF and warranty/RMA). The old computer will stop on its own within a minute — you don't need to touch it. Now run the installer on the new computer."
       );
     } catch (err) {
       setMdfError(err instanceof Error ? err.message : "MDF runner registration could not be reset.");
