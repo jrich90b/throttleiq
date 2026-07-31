@@ -265,11 +265,35 @@ const cases: Case[] = [
       }).toLowerCase();
       return (
         text.includes("not seeing an iron 883 in stock") &&
-        text.includes("similar options") &&
         text.includes("keep an eye out") &&
         !text.includes("pull the specs") &&
         !text.includes("follow up shortly")
       );
+    }
+  },
+  // Joe, 2026-07-31: an out-of-stock first touch must give the lead BOTH ways forward — come in and
+  // pick from what we have, or we text them when one lands. The old copy offered only the passive
+  // "I can check similar options" + the watch, so a booking-form lead who had already chosen a day
+  // got no invitation to come at all (08610167776, +16785960725). Charter C4.3 still binds: no time,
+  // no booking, no "noted" on a bike we don't have.
+  {
+    id: "unavailable_inventory_sms_invites_visit_and_offers_watch",
+    expected: true,
+    run: () => {
+      for (const status of ["not_found", "sold"] as const) {
+        const text = buildInitialUnavailableInventorySmsReply({
+          model: "Iron 883",
+          status
+        }).toLowerCase();
+        // Way forward 1: come in and pick from what we DO have.
+        if (!text.includes("still come in") || !text.includes("pick something out")) return false;
+        // Way forward 2: the watch.
+        if (!text.includes("keep an eye out and text you")) return false;
+        // C4.3: never a time, a booking, or a confirmation on the bike we don't have.
+        if (/\bat \d{1,2}(:\d{2})?\s*(am|pm)\b/.test(text)) return false;
+        if (/\bnoted\b|lined up|see you (then|at)|book an appointment/.test(text)) return false;
+      }
+      return true;
     }
   }
 ];

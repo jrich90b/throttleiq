@@ -15,16 +15,34 @@ function withIndefiniteArticle(label: string): string {
   return `${/^[aeiou]/i.test(clean) ? "an" : "a"} ${clean}`;
 }
 
+/**
+ * The initial-ADF first touch when the bike they asked about isn't ours to sell right now.
+ *
+ * Charter C4.3 (stock-check-first) says we never offer a test-ride time on a bike we don't have —
+ * so this reply names no time and books nothing. What it MUST still do is give the lead somewhere
+ * to go, and the two ways forward are Joe's (2026-07-31): pick something out from what we do have
+ * and still come in, OR we text them when we get one. The old copy only offered the passive half
+ * ("I can check similar options") plus the watch, so a web lead who had picked a day on the
+ * booking form got no invitation to come at all — the visit just evaporated (08610167776 Sanjeev,
+ * 2026 Sportster S for 29/6 at 12 pm; +16785960725 Justin, Breakout for 5/23 at 2pm).
+ *
+ * The LONGER orchestrator/regen draft (buildBlockedTestRideInventoryDraft) already made the same
+ * offer — "so you can pick an in-stock bike… once you pick one, I can line up the test ride right
+ * away" — so this brings the short first-touch copy in line with the reply that already ships.
+ */
 export function buildInitialUnavailableInventorySmsReply(args: {
   model?: string | null;
   status?: InitialEmailInventoryStatus | null;
 }): string {
   const model = String(args.model ?? "").trim();
   const subject = model ? withIndefiniteArticle(model) : "that bike";
+  // No time, no booking, no "noted" — the ways forward are a visit on an in-stock bike, or the watch.
+  const waysForward =
+    "Want to pick something out from what we have and still come in? Or I can keep an eye out and text you when we get one.";
   if (args.status === "sold") {
-    return `Thanks — that ${model || "bike"} is no longer available. I can check similar options, or I can keep an eye out and text you if one comes in.`;
+    return `Thanks — that ${model || "bike"} is no longer available. ${waysForward}`;
   }
-  return `Thanks — I’m not seeing ${subject} in stock right now. I can check similar options, or I can keep an eye out and text you if one comes in.`;
+  return `Thanks — I’m not seeing ${subject} in stock right now. ${waysForward}`;
 }
 
 export function buildInitialInventoryEmailSegment(args: {
