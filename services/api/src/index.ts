@@ -898,6 +898,7 @@ import {
   setRequestedTime,
   parseRequestedDayTime,
   parseRequestedDateOnly,
+  mentionsUnresolvedTimeframe,
   isImplausibleAppointmentDueAt,
   startFollowUpCadence,
   resolveNoShowFollowUpDueAt,
@@ -20696,6 +20697,16 @@ function buildCallbackTodoSchedule(
     requested = parseRequestedDayTime(`${source} at 9am`, timezone);
     defaultedToNineAm = !!requested;
   }
+  // A dateless timeframe ("in 10 days", "in 3 months") carries no day token, so parseRequestedDayTime
+  // can never see it and the callback fell back to due-tomorrow-9am. parseRequestedDateOnly resolves
+  // the date; 9am is the same opening-time default the day-token path already uses.
+  if (!requested) {
+    const dateOnly = parseRequestedDateOnly(source, timezone);
+    if (dateOnly) {
+      requested = { ...dateOnly, hour24: 9, minute: 0 };
+      defaultedToNineAm = true;
+    }
+  }
   if (!requested) return {};
   const dueAtDate = localPartsToUtcDate(timezone, requested);
   const dueAtMs = dueAtDate.getTime();
@@ -20786,9 +20797,18 @@ function addOrUpdateCallbackCallTodo(
     args.timezone
   );
   if (!schedule.dueAt || !schedule.reminderAt) {
-    const fallback = buildDefaultCallbackFallbackSchedule(args.timezone);
-    if (fallback.dueAt && fallback.reminderAt) {
-      schedule = fallback;
+    // "call me back" (no timeframe) and "call me next spring" (a timeframe we could not read) used
+    // to produce the SAME due-tomorrow-9am. The first is a fair default; the second put "Call
+    // requested: next spring." on a rep's desk the next morning — six months early. When the
+    // customer named a horizon we failed to resolve, leave the task UNDATED rather than invent one:
+    // missing beats wrong, and a false deadline is what teaches staff to ignore the overdue badge.
+    // The task still surfaces in the rep's morning window and the weekly manager digest.
+    const statedTimeframe = mentionsUnresolvedTimeframe(callbackTimeHint || parseSource);
+    if (!statedTimeframe) {
+      const fallback = buildDefaultCallbackFallbackSchedule(args.timezone);
+      if (fallback.dueAt && fallback.reminderAt) {
+        schedule = fallback;
+      }
     }
   }
   const dueLabel = schedule.dueAt ? formatSlotLocal(String(schedule.dueAt), args.timezone) : "";

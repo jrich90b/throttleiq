@@ -5617,6 +5617,68 @@ export function parseRequestedDayTime(
   };
 }
 
+/**
+ * "in 10 days" / "in 2 weeks" / "in 3 months" / "next month" → a number of days, else null.
+ *
+ * Deterministic QUANTITY extraction — a number and a unit — which AGENTS.md allows as structured
+ * extraction. It is not comprehension and must never try to be: anything requiring judgement
+ * ("next spring", "after the holidays", "once my bonus lands") returns null on purpose so the
+ * caller declines to invent a date instead of guessing one.
+ *
+ * The phrases the week-anchored branch above already owns (`next week`, `in a week`, `in a few
+ * days`, `a couple of weeks`) are deliberately NOT matched here — that branch runs first and
+ * anchors them to a MONDAY, which several evals pin. This only picks up what fell through.
+ *
+ * Months are 30 days: this dates a callback reminder, not a contract, and ±1 day at a 3-month
+ * horizon is immaterial. An absurd horizon is refused rather than clamped — past ~2 years the
+ * match is far more likely a misread number than a real ask.
+ */
+const TIMEFRAME_WORD_NUMBERS: Record<string, number> = {
+  a: 1, an: 1, one: 1, two: 2, couple: 2, few: 3, three: 3, four: 4, five: 5,
+  six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12
+};
+
+const MAX_TIMEFRAME_DAYS = 730;
+
+export function resolveRelativeTimeframeDays(text: string | null | undefined): number | null {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return null;
+  if (/\bnext month\b/.test(t)) return 30;
+
+  const m = t.match(
+    /\b(?:in\s+|after\s+)?(\d{1,3}|a|an|one|two|couple|few|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*(?:of\s+)?(day|week|month)s?\b/
+  );
+  if (!m) return null;
+  const raw = m[1];
+  const count = /^\d+$/.test(raw) ? Number(raw) : TIMEFRAME_WORD_NUMBERS[raw];
+  if (!Number.isFinite(count) || count <= 0) return null;
+  const perUnit = m[2] === "day" ? 1 : m[2] === "week" ? 7 : 30;
+  const days = count * perUnit;
+  if (days > MAX_TIMEFRAME_DAYS) return null;
+  return days;
+}
+
+/**
+ * Did the customer name a timeframe we could not turn into a date?
+ *
+ * The distinction that matters: "call me back" (no timeframe given) and "call me next spring" (a
+ * timeframe we failed to read) are NOT the same, but the callback path treated them identically —
+ * both fell back to due-tomorrow-9am. The first is a fair default; the second is a deadline six
+ * months early that trains staff to ignore the overdue badge.
+ *
+ * Used only to SUPPRESS an invented due date, never to create one, so a false positive costs an
+ * undated task (still visible in the rep's morning window and the weekly digest) while a false
+ * negative just restores today's behaviour. That asymmetry is why a keyword scan is acceptable
+ * here: it gates a default, not a customer-facing decision.
+ */
+export function mentionsUnresolvedTimeframe(text: string | null | undefined): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return /\b(day|days|week|weeks|month|months|year|years|spring|summer|fall|autumn|winter|holidays?|season|christmas|thanksgiving|tax\s+season|bonus|springtime)\b/.test(
+    t
+  );
+}
+
 export function parseRequestedDateOnly(
   text: string,
   timeZone: string
@@ -5678,6 +5740,33 @@ export function parseRequestedDateOnly(
       day: parts.day,
       dayOfWeek: weekdayFull((parts.weekday ?? "").slice(0, 3))
     };
+  }
+
+  // Numeric timeframes — "call me in 10 days", "in 2 weeks", "in 3 months", "next month".
+  // Same failure the week phrases below fixed, just the arithmetic half: none of these resolved,
+  // so the callback task fell back to due-TOMORROW-9am. Measured on the live store 2026-07-31:
+  // "Call requested: 10 days." and "Call requested: next spring." were both sitting on a rep's
+  // desk the next morning — nine days and six months early. A deadline nobody can meet is what
+  // teaches staff that an overdue badge means nothing.
+  //
+  // Deterministic quantity extraction (a number and a unit), NOT comprehension — which is exactly
+  // why seasonal//conditional asks ("next spring", "after the holidays", "once I sell my house")
+  // are deliberately NOT handled here: those are judgement and belong to a typed parser. They fall
+  // through to null, and the caller must then decline to invent a date rather than guess.
+  {
+    const days = resolveRelativeTimeframeDays(t);
+    if (days != null) {
+      const nowParts = getZonedParts(new Date(), timeZone);
+      const base = new Date(Date.UTC(nowParts.year, nowParts.month - 1, nowParts.day, 12, 0));
+      base.setUTCDate(base.getUTCDate() + days);
+      const parts = getZonedParts(base, timeZone);
+      return {
+        year: parts.year,
+        month: parts.month,
+        day: parts.day,
+        dayOfWeek: weekdayFull((parts.weekday ?? "").slice(0, 3))
+      };
+    }
   }
 
   const dayToken = parseDayToken(t);
