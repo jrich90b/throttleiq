@@ -5329,6 +5329,22 @@ function parseExactTime(text: string): { hour24: number; minute: number; timeTex
   return { hour24, minute, timeText };
 }
 
+/**
+ * Deterministic date EXTRACTION (AGENTS.md permits deterministic structured extraction — this
+ * reads digits, it does not judge intent).
+ *
+ * A CLOCK HOUR IS NOT A YEAR (2026-07-30 audit, 15 live tasks). The month-name branches ended in
+ * an optional `(\d{2,4})` year, so the time in "July 20 10:00 am" was captured as the year "10" →
+ * 2000+10 → the appointment landed in **2010**. Every wrong year on the box was 2010/2011/2012,
+ * because the dealership's morning slots are 10, 11 and 12 o'clock. Those tasks were created
+ * already ~15 years overdue. It only fired when the time followed the date directly — "July 20 AT
+ * 10:00" parsed fine, which is why it survived so long.
+ *
+ * So a month-name form now requires a 4-DIGIT year. Fail-direction is prefer-missing-over-wrong
+ * (same precedent as the feed-alias and replay-fidelity work): dropping an ambiguous 2-digit
+ * "year" falls back to the current year and the normal roll-forward, which is right far more often
+ * than trusting it. The slash form (7/20/26) keeps 2-digit years — its separators are unambiguous.
+ */
 function parseExplicitDate(text: string): { year: number; month: number; day: number } | null {
   const normalizeYear = (raw: string | undefined): number => {
     const nowYear = new Date().getFullYear();
@@ -5376,7 +5392,7 @@ function parseExplicitDate(text: string): { year: number; month: number; day: nu
   }
 
   const monthFirst = text.match(
-    /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s*(\d{2,4}))?\b/i
+    /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s*(\d{4}))?\b/i
   );
   if (monthFirst) {
     const month = monthMap[String(monthFirst[1] ?? "").toLowerCase()] ?? 0;
@@ -5387,7 +5403,7 @@ function parseExplicitDate(text: string): { year: number; month: number; day: nu
   }
 
   const dayFirst = text.match(
-    /\b(\d{1,2})(?:st|nd|rd|th)?\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:,?\s*(\d{2,4}))?\b/i
+    /\b(\d{1,2})(?:st|nd|rd|th)?\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:,?\s*(\d{4}))?\b/i
   );
   if (dayFirst) {
     const day = Number(dayFirst[1]);
@@ -5398,6 +5414,24 @@ function parseExplicitDate(text: string): { year: number; month: number; day: nu
   }
 
   return null;
+}
+
+/**
+ * Backstop invariant: a requested appointment time is a FUTURE time, so a computed due date far in
+ * the past is a parse failure, not a deadline. Stamping it produces a task born overdue — which is
+ * exactly what the clock-hour-as-year bug did 15 times (see parseExplicitDate). Callers drop the
+ * due date and keep the task, because "no deadline" is honest while "due in 2010" is noise that
+ * trains staff to ignore red.
+ *
+ * Deliberately generous at 24h so this only ever catches the absurd case: a customer asking at 2pm
+ * for "10am" resolves to earlier TODAY, which is a real same-day request whose handling this must
+ * not change. Only a date that cannot be a request at all is refused. Pure so it can be pinned.
+ */
+export const APPOINTMENT_DUE_PAST_TOLERANCE_MS = 24 * 60 * 60 * 1000;
+
+export function isImplausibleAppointmentDueAt(dueAtMs: number, nowMs: number): boolean {
+  if (!Number.isFinite(dueAtMs) || !Number.isFinite(nowMs)) return false; // unknown → never block
+  return dueAtMs < nowMs - APPOINTMENT_DUE_PAST_TOLERANCE_MS;
 }
 
 export function parsePreferredDateTime(
@@ -5590,12 +5624,17 @@ export function parseRequestedDateOnly(
   const t = String(text ?? "").toLowerCase();
   const explicitDate = parseExplicitDate(t);
   if (explicitDate) {
+    // Must mirror parseExplicitDate's year groups EXACTLY. When these two disagree, the roll-forward
+    // silently stops protecting a date: "July 20 10:00 am" read "10" as a 2-digit year (2010), and
+    // this check then saw a year as "provided", so nothing rolled it forward to 2026 — the task was
+    // born 15 years overdue. Month-name forms therefore require a 4-DIGIT year in both places; only
+    // the slash form (7/20/26), where separators make it unambiguous, still takes two digits.
     const explicitYearProvided =
       /\b\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b/.test(t) ||
-      /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s*)\d{2,4}\b/i.test(
+      /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s*)\d{4}\b/i.test(
         t
       ) ||
-      /\b\d{1,2}(?:st|nd|rd|th)?\s+(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:,?\s*)\d{2,4}\b/i.test(
+      /\b\d{1,2}(?:st|nd|rd|th)?\s+(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:,?\s*)\d{4}\b/i.test(
         t
       );
     let year = explicitDate.year;
