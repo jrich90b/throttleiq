@@ -898,6 +898,7 @@ import {
   setRequestedTime,
   parseRequestedDayTime,
   parseRequestedDateOnly,
+  isImplausibleAppointmentDueAt,
   startFollowUpCadence,
   resolveNoShowFollowUpDueAt,
   pauseFollowUpCadence,
@@ -20588,6 +20589,9 @@ function buildCallbackTodoSchedule(
   const dueAtDate = localPartsToUtcDate(timezone, requested);
   const dueAtMs = dueAtDate.getTime();
   if (!Number.isFinite(dueAtMs)) return {};
+  // A requested time can't be in the distant past — that's a parse failure, not a deadline. Keep
+  // the task, drop the bogus due date (missing beats a task born overdue).
+  if (isImplausibleAppointmentDueAt(dueAtMs, Date.now())) return {};
   const reminderLeadMinutes = getCallbackReminderLeadMinutes();
   const reminderAt = defaultedToNineAm ? new Date(dueAtMs) : new Date(dueAtMs - reminderLeadMinutes * 60_000);
   return {
@@ -20625,6 +20629,8 @@ function buildAppointmentTodoSchedule(
   const dueAtDate = localPartsToUtcDate(timezone, requested);
   const dueAtMs = dueAtDate.getTime();
   if (!Number.isFinite(dueAtMs)) return {};
+  // Same backstop as the callback schedule: a due date in the distant past is a parse failure.
+  if (isImplausibleAppointmentDueAt(dueAtMs, Date.now())) return {};
   const reminderLeadMinutes = getCallbackReminderLeadMinutes();
   const reminderAt = new Date(dueAtMs - reminderLeadMinutes * 60_000);
   return {
