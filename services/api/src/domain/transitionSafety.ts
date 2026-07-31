@@ -138,6 +138,9 @@ export function shouldSuppressDispositionCloseout(
   // This fail-UNSAFE usage is why the detector stays deterministic and is NOT migrated to a parser
   // (a disabled-LLM/low-confidence false negative would fail toward closing a live lead).
   if (isAffordabilityRideConfidenceObjectionText(text)) return true;
+  // KEEP (fail-direction): answering OUR qualifying question with a buying criterion is an
+  // ENGAGED turn — closing on it is a wrongful close (2026-07-30 Shad Stymus +17164208856).
+  if (hasQualificationCriteriaAnswerText(text)) return true;
   if (hasCompetingActiveIntentText(text)) return true;
   if (!hasPostSaleOrOwnershipContext(conv)) return false;
   const t = String(text ?? "").toLowerCase();
@@ -236,6 +239,50 @@ export function hasUnitInfoRequestText(text: string | null | undefined): boolean
       t
     ) || /\b(?:and\s+)?the\s+(?:price|pricing|cost|mileage|miles|specs?)\b/.test(t);
   return asksForMedia || asksForNumbers;
+}
+
+/**
+ * Deterministic INVARIANT guard — KEEP (AGENTS.md "invariant guards"). A turn that ANSWERS
+ * our own qualifying question with a concrete buying criterion is qualification data, not a
+ * closeout — however much apology or hardship language surrounds it.
+ *
+ * Production miss 2026-07-30 (Shad Stymus +17164208856, a 0-3 month lead). We asked
+ * "should I focus on new, used, or both? ... share your budget range"; he answered
+ * "Sorry been busy with work most likely used and the lowest monthly payments is the best
+ * for me at this moment as I have alot of hospital bills for my daughter..." — and the
+ * disposition parser read only the leading apology, so the lead was CLOSED with
+ * "I hear you. If anything changes down the road, just give me a shout."
+ *
+ * One level out from `hasUnitInfoRequestText` (2026-07-22 Jaydon Gerolimos): there the
+ * customer deferred and ASKED us something; here he ANSWERS us and asks nothing, so no
+ * ask-shaped or digit-shaped arm can catch it (`isStructuredFinanceInfoText` needs digits;
+ * "lowest monthly payments" has none).
+ *
+ * Fail direction if retired = a wrongful close on a customer who just handed us his buying
+ * criteria (fail-UNSAFE), so this stays deterministic alongside the parser few-shot. It keys
+ * on a CRITERION, never on mood: an apology, hardship, or bare defer with no criteria must
+ * still close, or we would pester customers who asked us to stop.
+ */
+export function hasQualificationCriteriaAnswerText(text: string | null | undefined): boolean {
+  const t = String(text ?? "")
+    .toLowerCase()
+    .replace(/[’]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!t) return false;
+  // Condition preference, stated as a PREFERENCE. The preference marker is what keeps this
+  // off "I ended up buying a used 2016 in Ohio" (a real closeout); `(?!\s+to\b)` drops
+  // "I used to ride".
+  const statesConditionPreference =
+    /\b(?:probably|most likely|likely|prefer|preferably|leaning(?:\s+towards?)?|looking\s+(?:for|at)|want|interested\s+in|focus\s+on|go\s+with|thinking|rather|ideally|open\s+to|either)\b[^.?!]{0,40}\b(?:used|pre-?owned)\b(?!\s+to\b)/.test(
+      t
+    ) || /\b(?:new\s+or\s+used|used\s+or\s+new|either\s+new\s+or\s+used)\b/.test(t);
+  // Non-numeric payment ceiling. The numeric sibling is already covered by
+  // `isStructuredFinanceInfoText`, which requires digits.
+  const statesPaymentPriority =
+    /\b(?:lowest|cheapest|smallest|as\s+low\s+as)\b[^.?!]{0,40}\b(?:monthly\s+)?payments?\b/.test(t) ||
+    /\bpayments?\b[^.?!]{0,30}\b(?:as\s+low\s+as\s+possible|as\s+cheap\s+as\s+possible)\b/.test(t);
+  return statesConditionPreference || statesPaymentPriority;
 }
 
 // Deterministic INVARIANT guard — KEEP (AGENTS.md "invariant guards"). Detects a

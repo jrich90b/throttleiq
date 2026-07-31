@@ -662,6 +662,7 @@ import {
   isDealerTransactionPolicyParserAccepted,
   isDispositionParserAccepted,
   isFirstTimeRiderGuidanceParserAccepted,
+  hasQualificationCriteriaAnswerText,
   isResponseControlParserAccepted,
   isResponseControlParserConfidentDecision,
   isResponseControlNoResponseAccepted,
@@ -15061,6 +15062,12 @@ function isHealthUpdateWithoutScheduleAsk(text: string | null | undefined): bool
       t
     );
   if (!healthContext) return false;
+  // A health mention that is INCIDENTAL to a buying-criteria answer is not a health-update
+  // turn. Without this, Shad Stymus (+17164208856) answering "most likely used and the lowest
+  // monthly payments ... I have alot of hospital bills for my daughter" was swallowed by the
+  // empathy arm on the word "hospital" — acknowledged, cadence frozen 21 days, and his stated
+  // criteria never acted on. Edited in the shared helper so every call site moves together.
+  if (hasQualificationCriteriaAnswerText(t)) return false;
   const explicitScheduleAsk =
     /\b(can i|can we|could i|could we|schedule|book|appointment|appt|what time|what day|available|openings?|does .* work|works? for you)\b/.test(
       t
