@@ -104,4 +104,116 @@ assert.equal(formatRequestedEraLabel(2000, 2005), "2000–2005", "range label re
 assert.equal(formatRequestedEraLabel(null, 2015), "2015-or-older", "open low end reads as -or-older");
 assert.equal(formatRequestedEraLabel(2020, null), "2020-or-newer", "open high end reads as -or-newer");
 
+// ─────────────────────────────────────────────────────────────────────────────
+// The INITIAL-ADF answer path (routes/sendgridInbound.ts) — same invariant, second site.
+//
+// Production repro (+18188420202, George Khoury, 2026-07-21, msg_81c4856073a4f_1784615558882):
+// Room58 ADF, structured `Year: 2022`, `Vehicle: Harley-Davidson Iron 883`, free-text
+// `Inquiry: "2027 883"`. `resolveInitialAdfInventoryStatus` looks the model up WITH the year,
+// finds nothing, retries with the year DROPPED, matches the lot's only 883 — a 2006 Sportster
+// 883 Low — and rebuilds the reply label from that unit's year:
+//   "Yes — the 2006 Sportster 883 Low is available right now."
+// 21 years off the ask, and it reads to the customer as "yes, we have what you asked for".
+// The guard below keeps only units that can honestly answer the requested year; when that
+// leaves nothing the path falls through to its existing not_found branch, which answers with
+// the REQUESTED label and offers to keep an eye out — the reply that actually shipped live.
+const {
+  decideAvailabilityAssertion,
+  AVAILABILITY_YEAR_TOLERANCE
+} = await import("../services/api/src/domain/availabilityAssertionGuard.ts");
+
+assert.equal(AVAILABILITY_YEAR_TOLERANCE, 1, "a one-year gap still answers the question; wider does not");
+
+// THE PRODUCTION MISS: a 2027 ask must never be answered by the 2006 on the lot.
+assert.deepEqual(
+  decideAvailabilityAssertion({ requestedYear: 2027, itemYear: 2006 }),
+  { assert: false, reason: "item_year_outside_tolerance" },
+  "a 2027 883 ask must NOT assert the 2006 Sportster 883 Low as available"
+);
+// The structured ADF year (2022) is just as wrong an answer as the free-text one.
+assert.equal(
+  decideAvailabilityAssertion({ requestedYear: 2022, itemYear: 2006 }).assert,
+  false,
+  "the ADF's structured 2022 must not be answered by a 2006 unit either"
+);
+
+// Regressions — everything that legitimately answers the ask must STILL assert.
+assert.equal(
+  decideAvailabilityAssertion({ requestedYear: 2022, itemYear: 2022 }).assert,
+  true,
+  "an exact-year match still answers"
+);
+assert.equal(
+  decideAvailabilityAssertion({ requestedYear: 2022, itemYear: 2021 }).assert,
+  true,
+  "a one-year gap still answers (model years drift by one)"
+);
+assert.equal(
+  decideAvailabilityAssertion({ requestedYear: 2022, itemYear: 2023 }).assert,
+  true,
+  "one year the other way still answers"
+);
+assert.deepEqual(
+  decideAvailabilityAssertion({ itemYear: 2006 }),
+  { assert: true, reason: "no_year_requested" },
+  "a model-only ask ('any Road Glides?') is answered by any year — behavior preserved"
+);
+
+// Range asks reuse the same era semantics the SMS resolver already enforces above.
+assert.equal(
+  decideAvailabilityAssertion({ requestedYearMin: 2000, requestedYearMax: 2005, itemYear: 2006 }).assert,
+  false,
+  "an early-2000s ask is not answered by a 2006"
+);
+assert.equal(
+  decideAvailabilityAssertion({ requestedYearMin: 2000, requestedYearMax: 2010, itemYear: 2006 }).assert,
+  true,
+  "a range that contains the unit still answers"
+);
+assert.equal(
+  decideAvailabilityAssertion({ requestedYearMin: 2020, itemYear: 2006 }).assert,
+  false,
+  "'2020 or newer' is not answered by a 2006"
+);
+
+// An unverifiable year fails toward the honest miss, matching matchInRequestedEra above, which
+// also drops unknown-year units once an era was asked for.
+assert.equal(
+  decideAvailabilityAssertion({ requestedYear: 2027, itemYear: null }).assert,
+  false,
+  "a unit with no known year cannot satisfy a year constraint"
+);
+assert.equal(
+  decideAvailabilityAssertion({ itemYear: null }).assert,
+  true,
+  "with no year asked for, an unknown unit year is still fine"
+);
+
+// Source pins — the guard is actually WIRED into the initial-ADF resolver, and it runs BEFORE
+// the in_stock assertion (a guard placed after the return would be dead code).
+const adfSource = await fs.readFile(path.resolve("services/api/src/routes/sendgridInbound.ts"), "utf8");
+assert.match(
+  adfSource,
+  /import \{ decideAvailabilityAssertion \} from "\.\.\/domain\/availabilityAssertionGuard\.js";/,
+  "sendgridInbound must import the availability-assertion guard"
+);
+const resolverIdx = adfSource.indexOf("async function resolveInitialAdfInventoryStatus(");
+assert.ok(resolverIdx > 0, "resolveInitialAdfInventoryStatus must exist");
+const guardIdx = adfSource.indexOf("decideAvailabilityAssertion({", resolverIdx);
+const inStockIdx = adfSource.indexOf('return { status: "in_stock", label: preferredLabel };', resolverIdx);
+assert.ok(guardIdx > resolverIdx, "the guard must be called inside resolveInitialAdfInventoryStatus");
+assert.ok(
+  inStockIdx > guardIdx,
+  "the guard must run BEFORE the in_stock assertion, or the off-year unit is already asserted"
+);
+// The year-less widening retry is the thing that makes the guard necessary; if it is ever
+// removed the guard is harmless, but while it exists the guard must sit between it and the reply.
+const retryIdx = adfSource.indexOf("findInventoryMatches({ year: null, model: targetModel })", resolverIdx);
+if (retryIdx > 0) {
+  assert.ok(
+    guardIdx > retryIdx,
+    "the guard must run after the year-less retry that can widen the match off-year"
+  );
+}
+
 console.log("PASS inventory era availability eval");

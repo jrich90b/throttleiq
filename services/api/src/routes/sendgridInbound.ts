@@ -131,6 +131,7 @@ import { getDealerProfile } from "../domain/dealerProfile.js";
 import { getDealerWeatherStatus } from "../domain/weather.js";
 import { getInventoryNote } from "../domain/inventoryNotes.js";
 import { getInventoryFeed, hasInventoryForModelYear, findInventoryMatches, findInventoryPrice } from "../domain/inventoryFeed.js";
+import { decideAvailabilityAssertion } from "../domain/availabilityAssertionGuard.js";
 import {
   buildInventoryBackedVehicleFactAnswer,
   mergeRecentPriceQuestionIntoFinanceAnswer
@@ -3662,6 +3663,23 @@ async function resolveInitialAdfInventoryStatus(
       });
       if (colorFiltered.length) matches = colorFiltered;
     }
+    // Year-appropriateness invariant. The year-less retry above is what lets a grossly off-year
+    // unit reach the reply, and the label below is rebuilt from the MATCHED unit's year — so
+    // without this, a "2027 883" ask answers "the 2006 Sportster 883 Low is available right now"
+    // (+18188420202). Drop the units that can't honestly answer the year that was asked; if that
+    // leaves nothing we fall through to `not_found` with the REQUESTED label, which is the
+    // out-of-stock line that offers to keep an eye out. Subtractive only — see
+    // domain/availabilityAssertionGuard.ts for the fail-direction argument.
+    const requestedYearNum = Number(targetYear);
+    matches = matches.filter(
+      item =>
+        decideAvailabilityAssertion({
+          requestedYear: Number.isFinite(requestedYearNum) ? requestedYearNum : null,
+          requestedYearMin: typeof target?.yearMin === "number" ? target.yearMin : null,
+          requestedYearMax: typeof target?.yearMax === "number" ? target.yearMax : null,
+          itemYear: Number(item?.year)
+        }).assert
+    );
     if (!matches.length) return { status: "not_found", label: fallbackLabel };
 
     let sawHold = false;
