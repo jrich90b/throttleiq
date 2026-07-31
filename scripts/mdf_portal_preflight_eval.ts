@@ -27,6 +27,9 @@ import {
   pickAccountTileLabel,
   portalFormDidNotExpandSummary,
   portalRunDeadlineSummary,
+  portalRunDeadlineMs,
+  runnerChromeRestartHint,
+  PORTAL_RUN_MAX_MS,
   sessionExpiredSummary
 } from "./mdf_portal_preflight.ts";
 
@@ -150,13 +153,13 @@ const bloatedSummary = cdpConnectFailureSummary(bloatedStats, "browserType.conne
 assert.ok(bloatedSummary.includes("119 debug targets"), "bloated summary names the target count");
 assert.ok(bloatedSummary.includes("35 tabs"), "bloated summary names the tab count");
 assert.ok(/daily-browsing/i.test(bloatedSummary), "bloated summary names the drift cause");
-assert.ok(bloatedSummary.includes("launchctl kickstart -k gui/501/ai.leadrider.hdnet-chrome"), "bloated summary carries the restart command");
+assert.ok(bloatedSummary.includes(runnerChromeRestartHint()), "bloated summary carries the restart command for THIS platform");
 assert.ok(bloatedSummary.includes("Timeout 30000ms exceeded"), "bloated summary preserves the original error");
 
 // (c) Chrome down / no debug port → a distinct "not reachable" class with the same fix.
 const downSummary = cdpConnectFailureSummary({ reachable: false, error: "fetch failed" });
 assert.ok(/not reachable/i.test(downSummary), "down-Chrome summary says the port is not reachable");
-assert.ok(downSummary.includes("launchctl kickstart"), "down-Chrome summary carries the restart command");
+assert.ok(downSummary.includes(runnerChromeRestartHint()), "down-Chrome summary carries the restart command for THIS platform");
 
 // A non-bloated attach failure (the unknown-cause residue) still gets the restart
 // runbook rather than a bare stack trace.
@@ -174,8 +177,32 @@ assert.ok(otherSummary.includes("kaboom"), "non-bloated failure preserves the or
 //      re-running so a rare post-save hang can't double-draft.
 const deadlineSummary = portalRunDeadlineSummary(10);
 assert.ok(/timed out after 10 minutes/i.test(deadlineSummary), "deadline summary states the run timed out and after how long");
-assert.ok(deadlineSummary.includes("launchctl kickstart"), "deadline summary carries the restart command");
+assert.ok(deadlineSummary.includes(runnerChromeRestartHint()), "deadline summary carries the restart command for THIS platform");
 assert.ok(/claims list/i.test(deadlineSummary) && /duplicate/i.test(deadlineSummary), "deadline summary tells the operator to verify the claims list against a duplicate draft");
+
+// (c2b) The deadline must SAY what it was doing. Blaming Chrome unconditionally sent an
+//       operator hunting a browser problem that did not exist, when the real cause was a
+//       12-file claim overrunning a budget sized for 3-4 minute runs (sales2, 2026-07-31).
+const stepSummary = portalRunDeadlineSummary(10, "uploading invoice row 3 of 6 (Invoice-3.pdf)");
+assert.ok(/still working on: uploading invoice row 3 of 6/.test(stepSummary), "deadline names the step it was on");
+assert.ok(!/Chrome stopped responding/.test(stepSummary), "it does not blame Chrome when a step was in flight");
+assert.ok(/timed out/i.test(stepSummary), "the health detector's 'timed out' phrase survives");
+assert.ok(/Chrome stopped responding/.test(deadlineSummary), "with no step in flight, the Chrome-hang wording is kept");
+
+// (c2c) The budget scales with the WORK. A fixed 10 min could never fit a 12-file claim, so
+//       every such run was killed mid-upload and reported as a hang.
+assert.ok(portalRunDeadlineMs(12) > portalRunDeadlineMs(0), "more files buy more time");
+assert.equal(portalRunDeadlineMs(0), 10 * 60_000, "a claim with no files keeps the original budget");
+assert.ok(portalRunDeadlineMs(12) >= 19 * 60_000, "a 12-file claim gets materially more than the old fixed 10 minutes");
+assert.equal(portalRunDeadlineMs(10_000), PORTAL_RUN_MAX_MS, "the budget is capped so a bad file count cannot hang a tick forever");
+assert.equal(portalRunDeadlineMs(-5), 10 * 60_000, "a nonsense file count falls back to the base budget");
+
+// (c2d) Restart instructions must match the DEALER'S platform. A Windows dealer was told to run
+//       `launchctl` — a command that cannot exist on their machine (sales2, 2026-07-31).
+const winHint = runnerChromeRestartHint("win32");
+assert.ok(/schtasks \/Run \/TN "LeadRider MDF Chrome"/.test(winHint), "Windows gets a Windows restart command");
+assert.ok(!/launchctl/.test(winHint), "no macOS command is shown to a Windows dealer");
+assert.ok(/launchctl kickstart/.test(runnerChromeRestartHint("darwin")), "macOS keeps its launchctl command");
 
 // (c3) Activity-dates + expansion gates — pins the 2026-07-06 Promotional-apparel
 //      blocker (task agent_mr9qnn3k_96w3kv): the packet had no activity dates, the

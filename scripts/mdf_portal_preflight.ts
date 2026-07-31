@@ -151,8 +151,23 @@ export function cdpLooksBloated(stats: CdpTargetStats): boolean {
   return (stats.pages ?? 0) > CDP_BLOAT_PAGE_LIMIT || (stats.targets ?? 0) > CDP_BLOAT_TARGET_LIMIT;
 }
 
-const RUNNER_CHROME_RESTART_HINT =
-  "Restart the runner Chrome (launchctl kickstart -k gui/501/ai.leadrider.hdnet-chrome) and keep that window for portal work only, then run the portal draft again.";
+/**
+ * Restart instructions for the runner Chrome, in the DEALER'S platform.
+ *
+ * This text was macOS-only, so a Windows dealer was told to run `launchctl` — a command that
+ * cannot exist on their machine, with nothing marking it as the wrong platform (hit live on
+ * dealership PC `sales2`, 2026-07-31). A remedy a dealer cannot execute is worse than none:
+ * it reads as "you are doing it wrong" rather than "this tool does not know your computer".
+ */
+export function runnerChromeRestartHint(platform: string = process.platform): string {
+  const restart =
+    platform === "win32"
+      ? 'Restart the runner Chrome (close that Chrome window, then run: schtasks /Run /TN "LeadRider MDF Chrome")'
+      : "Restart the runner Chrome (launchctl kickstart -k gui/501/ai.leadrider.hdnet-chrome)";
+  return `${restart} and keep that window for portal work only, then run the portal draft again.`;
+}
+
+const RUNNER_CHROME_RESTART_HINT = runnerChromeRestartHint();
 
 /**
  * Classified, operator-actionable summary for a CDP connect failure. Wording is
@@ -196,13 +211,42 @@ export function cdpConnectFailureSummary(stats: CdpTargetStats, attachError?: st
  * "Save for Later" (the only persistence point), but the operator must VERIFY in
  * the claims list before re-running so a rare post-save hang can't double-draft.
  */
-export function portalRunDeadlineSummary(deadlineMinutes: number): string {
+/**
+ * `lastStep` names what the run was doing when the clock ran out. Without it this summary
+ * asserted "the runner Chrome stopped responding", which is only ONE of the reasons a run can
+ * overrun — a 12-file claim simply taking longer than the budget reads identically, and that
+ * misdiagnosis sent an operator hunting a Chrome problem that did not exist (dealership PC
+ * `sales2`, 2026-07-31). Say what it was doing; only blame Chrome when nothing was in flight.
+ * The phrase "timed out" is load-bearing — the mdf-portal-health detector matches on it.
+ */
+export function portalRunDeadlineSummary(deadlineMinutes: number, lastStep?: string): string {
+  const cause = lastStep
+    ? `it was still working on: ${lastStep} (that step did not finish in time)`
+    : "the runner Chrome stopped responding mid-run (a browser call hung with no timeout; the attach itself had succeeded)";
   return (
-    `The MDF portal run timed out after ${deadlineMinutes} minutes and was abandoned — the runner Chrome stopped responding mid-run ` +
-    "(a browser call hung with no timeout; the attach itself had succeeded). " +
+    `The MDF portal run timed out after ${deadlineMinutes} minutes and was abandoned — ${cause}. ` +
     RUNNER_CHROME_RESTART_HINT +
     " Before re-running, check the Ansira claims list for a draft from this run — a hung run normally never reaches Save for Later, but verify so a re-run can't create a duplicate."
   );
+}
+
+/**
+ * Per-file allowance on top of the base run budget.
+ *
+ * The fixed 10-minute budget was sized on "~3-4 min observed" runs, but the upload step costs
+ * real time PER FILE (a settle wait after each invoice row, another after the supporting batch,
+ * plus Ansira's own processing) — so a claim with a dozen files could never fit, and was killed
+ * mid-upload every time while looking like a hang (`sales2`, 2026-07-31: 12 files, 6 invoices).
+ * Scaling with the actual work keeps the watchdog ABOVE any legitimate run, which is the whole
+ * point of it: it must only ever fire on a genuinely stuck run, never on a slow-but-working one.
+ */
+export const PORTAL_RUN_BASE_MS = 10 * 60_000;
+export const PORTAL_RUN_PER_FILE_MS = 45_000;
+export const PORTAL_RUN_MAX_MS = 45 * 60_000;
+
+export function portalRunDeadlineMs(fileCount: number, baseMs: number = PORTAL_RUN_BASE_MS): number {
+  const files = Number.isFinite(fileCount) && fileCount > 0 ? Math.floor(fileCount) : 0;
+  return Math.min(PORTAL_RUN_MAX_MS, baseMs + files * PORTAL_RUN_PER_FILE_MS);
 }
 
 // ---------------------------------------------------------------------------
