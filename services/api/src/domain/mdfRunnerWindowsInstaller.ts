@@ -40,6 +40,31 @@ export type WindowsInstallerArgs = {
 export function buildWindowsInstallerPs1(args: WindowsInstallerArgs): string {
   return `$ErrorActionPreference = "Stop"
 Write-Host "Installing the LeadRider MDF runner (Windows)..."
+
+# Registering Scheduled Tasks needs ADMIN. Without it the installer runs all the way through --
+# clone, npm install, everything -- and dies on the very last step with "Access is denied"
+# (HRESULT 0x80070005), leaving no task, so the runner never starts and never contacts the
+# server. Every layer above then shows silence: the console just says "no active runner".
+# Joe hit this 17 times on a real dealership PC (2026-07-31) with nothing pointing at the cause.
+# So ask Windows for rights UP FRONT rather than failing at the end.
+$principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+  Write-Host "This installer needs administrator rights to register the runner's background tasks."
+  Write-Host "Windows will ask you to approve - choose Yes. A new window will open and continue there."
+  try {
+    Start-Process -FilePath "powershell" -Verb RunAs -ArgumentList @(
+      "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ('"' + $PSCommandPath + '"')
+    ) | Out-Null
+    Write-Host "Continuing in the administrator window. You can close this one."
+  } catch {
+    Write-Host ""
+    Write-Host "Administrator rights were declined, so the install cannot finish."
+    Write-Host "Right-click the installer file and choose 'Run as administrator', then try again."
+  }
+  Read-Host "Press Enter to close this window"
+  exit 0
+}
+
 Write-Host ""
 Write-Host "BEFORE YOU CONTINUE: only ONE runner computer can be active per dealership."
 Write-Host "If another computer is still registered, open the LeadRider console and hit Reset on"
@@ -152,6 +177,35 @@ Register-ScheduledTask -TaskName "LeadRider MDF Runner Watchdog" -Action $watchA
 
 Start-ScheduledTask -TaskName "LeadRider MDF Chrome"
 Start-ScheduledTask -TaskName "LeadRider MDF Runner"
+
+# CHECK IN so the server knows this computer exists (Joe, 2026-07-31: "why can't the installer
+# show active in the computer"). Registration otherwise happens ONLY when the background daemon
+# polls, so an install that succeeds while the daemon never starts is INDISTINGUISHABLE in the
+# console from no install at all -- both read "no active runner". That ambiguity is what made a
+# failed auto-start take an afternoon to find. Checking in here means the console can instead say
+# "installed at <time>, but it has not checked in since", which names the real problem.
+# The identity file is the SAME one the runner reads, and an existing one is never overwritten,
+# so the installer and the daemon always agree on who this machine is.
+$IdentityDir = Join-Path $env:USERPROFILE ".leadrider"
+$IdentityPath = Join-Path $IdentityDir "mdf-runner-machine.json"
+New-Item -ItemType Directory -Force -Path $IdentityDir | Out-Null
+if (-not (Test-Path $IdentityPath)) {
+  $identity = @{ id = [guid]::NewGuid().ToString(); name = $env:COMPUTERNAME }
+  Set-Content -LiteralPath $IdentityPath -Value ($identity | ConvertTo-Json) -Encoding UTF8
+}
+try {
+  $ident = Get-Content -LiteralPath $IdentityPath -Raw | ConvertFrom-Json
+  $headers = @{
+    "x-mdf-portal-token" = '${args.runnerToken}'
+    "x-mdf-runner-machine-id" = $ident.id
+    "x-mdf-runner-machine-name" = $ident.name
+  }
+  Invoke-WebRequest -Uri '${args.apiBase}/mdf/portal-runner/tasks?limit=1' -Headers $headers -UseBasicParsing -TimeoutSec 20 | Out-Null
+  Write-Host "Checked in with LeadRider - this computer now shows in the console."
+} catch {
+  # Never fail the install on this: it is a reporting nicety, and the daemon registers anyway.
+  Write-Host "Could not reach LeadRider to check in. The runner will register itself once it starts."
+}
 
 Write-Host ""
 Write-Host "Installed."

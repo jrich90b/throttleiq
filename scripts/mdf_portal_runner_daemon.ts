@@ -173,6 +173,12 @@ async function ensureChromeHealthy(): Promise<boolean> {
 }
 
 function runOnce(): Promise<number> {
+  // WINDOWS: `npx` is npx.cmd, a batch script — and Node (>=18.20.2 / >=20.12.2) refuses to
+  // spawn .cmd/.bat without a shell, so this failed on EVERY tick with "runner spawn failed"
+  // while working perfectly on macOS. That asymmetry is why the Windows port shipped: the
+  // daemon starts, polls, finds work, and can never actually launch the runner. Live on a
+  // dealership PC 2026-07-31. The URL is quoted on Windows because shell mode re-parses args.
+  const isWindows = process.platform === "win32";
   return new Promise(resolve => {
     const child = spawn(
       "npx",
@@ -182,9 +188,10 @@ function runOnce(): Promise<number> {
         "--run",
         "--idle-ok",
         "--api-base",
-        apiBase
+        isWindows ? `"${apiBase}"` : apiBase
       ],
       {
+        shell: isWindows,
         cwd: rootDir,
         env: {
           ...process.env,

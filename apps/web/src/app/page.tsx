@@ -16652,6 +16652,19 @@ export default function Home() {
 	                      turned away and will stop on its own within a minute - you do not need to do anything on it.
 	                    </p>
 	                  ) : null}
+	                  {/* INSTALLED BUT NOT RUNNING. Without this the card cannot tell "never installed" from
+	                      "installed, but the background task never started" - both read as no active runner,
+	                      which is exactly what hid a failed auto-start for an afternoon (Joe, 2026-07-31).
+	                      A stale check-in is the tell: the computer registered once, then went quiet. */}
+	                  {!mdfRunnerStatus?.active &&
+	                  !mdfRunnerStatus?.revoked &&
+	                  mdfRunnerStatus?.registration?.lastSeenAt ? (
+	                    <p className="mt-1 text-sm font-semibold text-amber-700">
+	                      {mdfRunnerStatus.registration.machineName || "That computer"} registered but has stopped checking in.
+	                      The runner is installed there and is not running - start it on that computer, or re-run the
+	                      installer as administrator so it starts on its own.
+	                    </p>
+	                  ) : null}
 	                </div>
 	                <div className="flex flex-wrap gap-2">
 	                  <button
