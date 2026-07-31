@@ -460,7 +460,7 @@ import {
 } from "./domain/webTextWidget.js";
 import type { DailyForecast } from "./domain/weather.js";
 import { resolveTownNearestDealer, formatTownLabel } from "./domain/geo.js";
-import { getDataDir } from "./domain/dataDir.js";
+import { dataPath, getDataDir } from "./domain/dataDir.js";
 import { recordOpenAIUsage } from "./domain/openaiUsageLogger.js";
 import { getModelSpecs, buildSpecsSummary, buildGlanceSummary } from "./domain/specsScraper.js";
 import {
@@ -1012,6 +1012,13 @@ import {
   parseBusinessMinutes,
   resolveEscalationCandidates
 } from "./domain/taskEscalation.js";
+import {
+  buildStaleTaskDigest,
+  localDayKey,
+  selectStaleTasks,
+  shouldSendDigestNow,
+  STALE_TASK_DAYS
+} from "./domain/staffTaskDigest.js";
 import {
   appendStaffPingRecord,
   collectPingableTasks,
@@ -7782,6 +7789,7 @@ const WORKER_TICK_DISPATCH: Record<WorkerTickTask, () => Promise<unknown> | unkn
   "inventory-watch": () => processInventoryWatchlist(),
   "inventory-holds": () => processInventoryHolds(),
   "task-escalations": () => processTaskEscalations(),
+  "staff-task-digests": () => processStaffTaskDigests(),
   "gate-blocker-digest": () => processGateBlockerDigest(),
   "photo-delivery": () => processPendingPhotoDeliveries()
 };
@@ -7831,6 +7839,7 @@ if (isWorkerDrivenTicks()) {
     runBackgroundTask("staff-appt-notify", processStaffAppointmentNotifications);
     runBackgroundTask("appt-questions", processAppointmentQuestions);
     runBackgroundTask("task-escalations", processTaskEscalations);
+    runBackgroundTask("staff-task-digests", processStaffTaskDigests);
     runBackgroundTask("gate-blocker-digest", processGateBlockerDigest);
     runBackgroundTask("photo-delivery", processPendingPhotoDeliveries);
   }, 60_000);
@@ -19023,6 +19032,108 @@ async function sendInternalSms(toNumber: string, body: string): Promise<boolean>
 }
 
 let lastTaskEscalationDigestAtMs = 0;
+
+/**
+ * Durable "already sent" marker for the weekly stale-task digest.
+ *
+ * The escalation ping tracks its cooldown in a module variable, which resets on every restart —
+ * acceptable for a 2-hour cooldown, NOT for a once-a-week message: any Monday deploy would text
+ * the manager the backlog a second time. This keeps the period key on disk instead.
+ *
+ * Deliberately a plain file, not a registered store: it is disposable scheduling bookkeeping, not
+ * business data, and it must never participate in the store-shrink guard or dual-write.
+ * Fail-direction is SEND: an unreadable or missing marker reads as "not sent yet", so the failure
+ * is a duplicate digest rather than a silently skipped week.
+ */
+const STAFF_DIGEST_STATE_PATH = process.env.STAFF_DIGEST_STATE_PATH || dataPath("staff_digest_state.json");
+
+type StaffDigestState = { weeklyManager?: string };
+
+async function readStaffDigestState(): Promise<StaffDigestState> {
+  try {
+    const raw = await fs.promises.readFile(STAFF_DIGEST_STATE_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? (parsed as StaffDigestState) : {};
+  } catch {
+    return {}; // missing/corrupt → nothing recorded as sent → we send (never silently skip)
+  }
+}
+
+async function writeStaffDigestState(state: StaffDigestState): Promise<void> {
+  try {
+    await fs.promises.mkdir(path.dirname(STAFF_DIGEST_STATE_PATH), { recursive: true });
+    await fs.promises.writeFile(STAFF_DIGEST_STATE_PATH, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  } catch (e: any) {
+    console.warn("[staff-digest] could not persist state:", e?.message ?? e);
+  }
+}
+
+/**
+ * Weekly stale-task digest to the manager (Joe ruling 2026-07-31: "Weekly to manager").
+ *
+ * Closes the 48-hour blind spot in processTaskEscalations — see domain/staffTaskDigest.ts for the
+ * measurement. The SALESPERSON side is deliberately not here: the console's morning window
+ * (apps/web lib/morningDigest.ts) already shows each rep their open tasks once a day at login, so
+ * a rep SMS would duplicate a better surface. Surfacing only — nothing here closes or reassigns.
+ */
+async function processStaffTaskDigests() {
+  if (String(process.env.STAFF_TASK_DIGEST_ENABLED ?? "1").trim() !== "1") return;
+  const cfg = await getSchedulerConfigHot();
+  const tz = cfg.timezone || "America/New_York";
+  const now = new Date();
+  const dayName = now.toLocaleDateString("en-US", { weekday: "long", timeZone: tz }).toLowerCase();
+  const weeklyDay = String(process.env.STAFF_TASK_DIGEST_WEEKLY_DAY ?? "monday").trim().toLowerCase();
+  if (dayName !== weeklyDay) return;
+
+  const parts = getLocalDateParts(now, tz);
+  const dayHours = (cfg.businessHours as any)?.[dayName] ?? null;
+  const clock = {
+    minutesSinceMidnight: (parts.hour % 24) * 60 + parts.minute,
+    openMinutes: parseBusinessMinutes(dayHours?.open),
+    closeMinutes: parseBusinessMinutes(dayHours?.close)
+  };
+  // Sending on a single weekday makes today's date the week key — no ISO-week arithmetic to get wrong.
+  const todayKey = localDayKey(parts);
+  const state = await readStaffDigestState();
+  if (!shouldSendDigestNow({ clock, periodKey: todayKey, lastSentKey: state.weeklyManager })) return;
+
+  const staleDays = Math.max(
+    1,
+    Number(process.env.STAFF_TASK_DIGEST_STALE_DAYS ?? STALE_TASK_DAYS) || STALE_TASK_DAYS
+  );
+  const stale = selectStaleTasks(listOpenTodos(), now.getTime(), { staleDays });
+  if (!stale.length) {
+    // An empty backlog is the goal, not a message. Record the week so we don't re-evaluate all day.
+    await writeStaffDigestState({ ...state, weeklyManager: todayKey });
+    return;
+  }
+
+  let phone = normalizePhone(String(process.env.TASK_ESCALATION_NOTIFY_PHONE ?? "").trim());
+  if (!phone) {
+    const users = await listUsers();
+    const manager = users.find(u => u.role === "manager" && pickUserSmsPhone(u));
+    phone = manager ? pickUserSmsPhone(manager) : "";
+  }
+  if (!phone) return; // no manager phone → retry next tick rather than drop the week silently
+
+  const nameByConvId = new Map<string, string>();
+  for (const c of stale) {
+    const convId = String(c.todo.convId);
+    if (nameByConvId.has(convId)) continue;
+    const conv = getConversation(convId);
+    const name = [conv?.lead?.firstName, conv?.lead?.lastName]
+      .map(v => String(v ?? "").trim())
+      .filter(Boolean)
+      .join(" ");
+    if (name) nameByConvId.set(convId, name);
+  }
+  const body = buildStaleTaskDigest(stale, nameByConvId, staleDays);
+  if (!body) return;
+  const sent = await sendInternalSms(phone, body);
+  if (!sent) return; // a failed send is not a sent digest — retry on the next tick
+  await writeStaffDigestState({ ...state, weeklyManager: todayKey });
+  console.log(`[staff-digest] weekly stale digest -> manager (${stale.length} task(s) over ${staleDays}d)`);
+}
 
 /**
  * Manager escalation digest for rep task cards waiting past the threshold
