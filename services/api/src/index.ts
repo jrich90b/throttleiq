@@ -1020,6 +1020,7 @@ import {
   shouldSendDigestNow,
   STALE_TASK_DAYS
 } from "./domain/staffTaskDigest.js";
+import { recordComprehensionGap } from "./domain/comprehensionGapLog.js";
 import {
   appendStaffPingRecord,
   collectPingableTasks,
@@ -20809,6 +20810,17 @@ function addOrUpdateCallbackCallTodo(
       if (fallback.dueAt && fallback.reminderAt) {
         schedule = fallback;
       }
+    } else {
+      // Write down what we could not read. Declining to invent a date is the right BEHAVIOUR, but
+      // on its own it leaves no trace — which is exactly how "next spring" hid for months among
+      // 148k captured parser calls: it never reached a parser, so nothing recorded the miss.
+      // Pure logging; it cannot affect the task that was just created.
+      recordComprehensionGap({
+        site: "callback_timeframe",
+        phrase: callbackTimeHint || parseSource,
+        outcome: "left_undated",
+        convId: conv?.id
+      });
     }
   }
   const dueLabel = schedule.dueAt ? formatSlotLocal(String(schedule.dueAt), args.timezone) : "";
