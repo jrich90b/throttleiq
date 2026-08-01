@@ -163,22 +163,49 @@ export function extractStockIdFromText(
 }
 
 // --- Registry ---------------------------------------------------------------------------------
-// The only stateful part: the shapes last learned from this dealer's feed. Kept deliberately tiny
-// and separate from the pure functions above so every rule stays unit-testable without a feed.
+// The only stateful part: the shapes last learned from a dealer's feed. Kept deliberately tiny and
+// separate from the pure functions above so every rule stays unit-testable without a feed.
+//
+// KEYED BY DEALER, not global. A module-level singleton would work today (one process per dealer)
+// and fail silently the moment two dealers share one — dealer A's feed would decide what counts as
+// a stock number for dealer B. That is precisely the bug class this whole module exists to remove,
+// so it is not left as a future problem. The dealer resolver is INJECTED rather than imported so
+// this module stays dependency-free and testable without a store.
 
-let learnedShapes: StockIdShape[] = [];
+const shapesByDealer = new Map<string, StockIdShape[]>();
+const UNSCOPED_DEALER = "__unscoped__";
 
-/** Called whenever the inventory feed is parsed. A feed with no usable ids leaves the last set. */
-export function learnStockIdShapesFromFeed(stockIds: readonly (string | null | undefined)[]): void {
-  const derived = deriveStockIdShapes(stockIds);
-  if (derived.length) learnedShapes = derived;
+let resolveDealerId: () => string = () => UNSCOPED_DEALER;
+
+/** Wired once by inventoryFeed (which already resolves the dealer) to avoid an import cycle. */
+export function setStockIdShapeDealerResolver(resolver: () => string): void {
+  resolveDealerId = resolver;
 }
 
-export function getLearnedStockIdShapes(): StockIdShape[] {
-  return learnedShapes;
+function currentDealerKey(dealerId?: string | null): string {
+  const explicit = String(dealerId ?? "").trim();
+  if (explicit) return explicit;
+  try {
+    return String(resolveDealerId() ?? "").trim() || UNSCOPED_DEALER;
+  } catch {
+    return UNSCOPED_DEALER; // a resolver failure must fall back to cold start, never to another dealer
+  }
+}
+
+/** Called whenever a dealer's inventory feed is parsed. A feed with no usable ids leaves the last set. */
+export function learnStockIdShapesFromFeed(
+  stockIds: readonly (string | null | undefined)[],
+  dealerId?: string | null
+): void {
+  const derived = deriveStockIdShapes(stockIds);
+  if (derived.length) shapesByDealer.set(currentDealerKey(dealerId), derived);
+}
+
+export function getLearnedStockIdShapes(dealerId?: string | null): StockIdShape[] {
+  return shapesByDealer.get(currentDealerKey(dealerId)) ?? [];
 }
 
 /** Test-only: drop back to the cold-start state. */
 export function resetLearnedStockIdShapes(): void {
-  learnedShapes = [];
+  shapesByDealer.clear();
 }
