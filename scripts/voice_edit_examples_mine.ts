@@ -72,6 +72,76 @@ function similarity(draft: string, sent: string): number {
 }
 
 /**
+ * SHIPPED-FIX FILTER — the second gate, and the one that stops the corpus eating its own tail.
+ *
+ * A tweak can pass the containment floor and still be the wrong thing to teach, because the rep
+ * was not adjusting VOICE — they were correcting a FACT or a canonical form that we have since
+ * fixed in code. Promote those and the prompt starts arguing with the codebase: the worst case
+ * found in the live corpus is an edit that rewrites the canonical intro `it's {agent} over at
+ * {dealer}` into the older `it's {agent} at {dealer}` — a form Joe explicitly ruled AGAINST
+ * ("I'd rather see over at", 2026-07-29). One such example sitting in the prompt tells the agent
+ * to undo a ruling.
+ *
+ * The unifying principle: **a voice edit rearranges our words; it does not change a fact.** So
+ * the generic guard is "did the delta change a number, a year, a price, a percentage, or a model
+ * name?" — plus a short, NAMED list for canonical-form reversions, each citing what it protects.
+ *
+ * Fail direction is DROP. We need ~30 examples and have ~130 clean ones, so an over-eager filter
+ * costs nothing and an under-eager one teaches the agent to regress.
+ */
+const MODEL_TOKEN_RE =
+  /\b(?:street\s?glide|road\s?glide|fat\s?bo[by]|breakout|sportster|iron|nightster|heritage|softail|dyna|low\s?rider|pan\s?america|tri\s?glide|freewheeler|ultra|cvo|forty[-\s]?eight|\d{3,4}\s?(?:custom|s)?)\b/gi;
+
+function factSet(text: string): Set<string> {
+  const numbers = (text.match(/\$?\d[\d,.]*%?/g) ?? []).map(s => s.replace(/[.,]$/, ""));
+  const models = (text.match(MODEL_TOKEN_RE) ?? []).map(s => s.toLowerCase().replace(/\s+/g, " "));
+  return new Set([...numbers, ...models]);
+}
+
+/**
+ * ASYMMETRIC ON PURPOSE. Removing a fact is the archetypal voice edit — "I'll keep an eye on the
+ * 2026 FLHXSE CVO Street Glide we've got coming in" → "I'll keep an eye on it". INTRODUCING or
+ * SWAPPING one is a correction — "the Iron 883" → "the Sportster". So the test is not "did the
+ * facts differ" (that flagged every trim) but "does the SENT text assert a fact our draft did
+ * not". Subset ⇒ the rep only cut. Anything new ⇒ they corrected us.
+ */
+function introducesNewFact(draft: string, sent: string): boolean {
+  const before = factSet(draft);
+  for (const fact of factSet(sent)) {
+    if (!before.has(fact)) return true;
+  }
+  return false;
+}
+
+/** Canonical forms we have already settled. Each entry names the decision it protects. */
+const CANONICAL_FORM_REVERSIONS: Array<{ name: string; reverted: (draft: string, sent: string) => boolean }> = [
+  {
+    // Joe, 2026-07-29: "I'd rather see over at." Reps typing the old form fast on a phone is
+    // NOT a preference signal — see the staff-draft-edit-corpus memory.
+    name: "intro_over_at",
+    reverted: (draft, sent) => /\bover at\b/i.test(draft) && !/\bover at\b/i.test(sent)
+  },
+  {
+    // #340 dropRepeatSelfIntro — the second "I'm Alexandra, nice to meet you" is a shipped fix.
+    name: "double_self_intro",
+    reverted: (draft, sent) => /\bI'?m \w+, nice to\b/i.test(draft) && !/nice to\b/i.test(sent)
+  },
+  {
+    // #340 staffFollowUpTiming — "shortly" after close is resolved from configured hours now.
+    name: "after_hours_shortly",
+    reverted: (draft, sent) => /\bshortly\b/i.test(draft) && !/\bshortly\b/i.test(sent)
+  }
+];
+
+function shippedFixReason(draft: string, sent: string): string | null {
+  for (const rule of CANONICAL_FORM_REVERSIONS) {
+    if (rule.reverted(draft, sent)) return rule.name;
+  }
+  if (introducesNewFact(draft, sent)) return "fact_changed";
+  return null;
+}
+
+/**
  * Mirrors `normalizeManualIntentHint` in llmDraft.ts — the same five buckets the prompt reads,
  * so a promoted candidate lands in a bucket the drafter actually looks up.
  */
@@ -108,6 +178,8 @@ const conversations = loadConversations();
 
 let editsSeen = 0;
 let replacementsDropped = 0;
+let shippedFixDropped = 0;
+const shippedFixByReason: Record<string, number> = {};
 let tooOld = 0;
 const candidates: Candidate[] = [];
 
@@ -130,6 +202,14 @@ for (const conv of conversations) {
     if (score < tweakFloor) {
       // A replacement: the staff member knew something the agent didn't. Not voice.
       replacementsDropped += 1;
+      continue;
+    }
+
+    // Gate 2: the rep was correcting a fact or a settled form, not our voice.
+    const shippedFix = shippedFixReason(draft, reply);
+    if (shippedFix) {
+      shippedFixDropped += 1;
+      shippedFixByReason[shippedFix] = (shippedFixByReason[shippedFix] ?? 0) + 1;
       continue;
     }
 
@@ -178,6 +258,8 @@ fs.writeFileSync(
         editsSeen,
         outsideWindow: tooOld,
         replacementsDropped,
+        shippedFixDropped,
+        shippedFixByReason,
         tweaksEligible: candidates.length,
         selected: Object.values(byIntent).reduce((n, v) => n + v.length, 0)
       },
@@ -192,6 +274,8 @@ console.log("=== PER-DEALER VOICE EXAMPLE MINER (shadow) ===\n");
 console.log(`staff edits seen:        ${editsSeen}`);
 console.log(`  outside ${sinceDays}d window:   ${tooOld}`);
 console.log(`  replacements dropped:  ${replacementsDropped}  (out-of-band knowledge, NOT voice)`);
+console.log(`  shipped-fix dropped:   ${shippedFixDropped}  (a fact or settled form we already fixed in code)`);
+for (const [reason, n] of Object.entries(shippedFixByReason)) console.log(`      ${reason}: ${n}`);
 console.log(`  tweaks eligible:       ${candidates.length}`);
 console.log(`\nselected (max ${maxPerIntent}/intent):`);
 for (const [intent, rows] of Object.entries(byIntent)) {

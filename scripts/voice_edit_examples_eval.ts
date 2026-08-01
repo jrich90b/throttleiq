@@ -77,6 +77,32 @@ const store = {
         { direction: "in", provider: "twilio", at: nowIso(400), body: "Still thinking about it" },
         outbound("No rush at all, take your time.", "No rush, take your time.", nowIso(400))
       ]
+    },
+    {
+      // SHIPPED FIX — a rep typing the OLD intro back in. Joe ruled "I'd rather see over at"
+      // (2026-07-29). Promoting this would put a reversal of his ruling in the draft prompt.
+      id: "+17160000105",
+      messages: [
+        { direction: "in", provider: "twilio", at: nowIso(5), body: "Do you have the Sportster S?" },
+        outbound(
+          "Hey Shamsher, it's Alexandra over at American Harley-Davidson. I'm not seeing one in stock right now.",
+          "Hey Shamsher, it's Alexandra at American Harley-Davidson. I'm not seeing one in stock right now.",
+          nowIso(5)
+        )
+      ]
+    },
+    {
+      // SHIPPED FIX — the delta changes a FACT (the model), not the phrasing. A voice edit
+      // rearranges our words; it never renames the bike.
+      id: "+17160000106",
+      messages: [
+        { direction: "in", provider: "twilio", at: nowIso(6), body: "Any word on that one?" },
+        outbound(
+          "Yes, they are supposed to be coming back out with the Iron 883. I'll text you when we see one.",
+          "Yes, they are supposed to be coming back out with the Sportster. I'll text you when we see one.",
+          nowIso(6)
+        )
+      ]
     }
   ],
   todos: []
@@ -96,7 +122,7 @@ const all = Object.values(out.byIntent as Record<string, any[]>).flat();
 const replies = all.map(r => r.reply);
 
 assert.equal(out.shadow, true, "miner must declare itself shadow — it never writes the live file");
-assert.equal(out.summary.editsSeen, 4, "all four edits should be counted as seen");
+assert.equal(out.summary.editsSeen, 6, "all six edits should be counted as seen");
 assert.equal(out.summary.outsideWindow, 1, "the 400-day-old edit is outside the window");
 
 // The load-bearing assertion, both directions.
@@ -109,6 +135,19 @@ assert.ok(
   "a REPLACEMENT carrying out-of-band knowledge must never become a voice example"
 );
 assert.equal(out.summary.replacementsDropped, 1, "exactly the out-of-band reply is dropped");
+
+// Gate 2 — a tweak can be clean by containment and still be the wrong thing to teach.
+assert.ok(
+  !replies.some(r => /it's Alexandra at American/i.test(r)),
+  "an intro reverted off the canonical 'over at' must never become a voice example (Joe 7/29)"
+);
+assert.ok(
+  !replies.some(r => r.includes("coming back out with the Sportster")),
+  "an edit whose delta changes a FACT (the model) is a correction, not voice"
+);
+assert.equal(out.summary.shippedFixDropped, 2, "both shipped-fix edits are dropped");
+assert.equal(out.summary.shippedFixByReason.intro_over_at, 1, "the intro reversion is named");
+assert.equal(out.summary.shippedFixByReason.fact_changed, 1, "the model rename is named");
 
 // Bucketing: a promoted example is only useful if the drafter looks in the right bucket.
 assert.ok(
