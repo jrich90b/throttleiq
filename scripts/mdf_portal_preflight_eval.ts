@@ -11,6 +11,8 @@
  * all controls are present.
  */
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import {
   ANSIRA_CLAIMS_LIST_URL,
   ANSIRA_FORM_CONTROLS,
@@ -23,6 +25,8 @@ import {
   isExpiredSessionLanding,
   isSignInPageText,
   marketingActivityOptionIssue,
+  marketingActivityFailure,
+  marketingActivityFailureSummary,
   missingActivityDatesSummary,
   pickAccountTileLabel,
   portalFormDidNotExpandSummary,
@@ -130,6 +134,99 @@ const optionSummary = ansiraMarketingOptionSummary(rollover!);
 assert.ok(/no draft was created/i.test(optionSummary), "option summary states no draft was created");
 assert.ok(/ansira/i.test(optionSummary), "option summary points at Ansira");
 assert.ok(optionSummary.includes("2026 Media Claim"), "option summary carries the detail");
+
+// ---------------------------------------------------------------------------
+// 8b) CLAIM-YEAR MISMATCH vs. Ansira form drift (2026-08-01 production).
+//
+// Four "250 Years of Freedom" portal runs blocked on 2026-07-31 (agent_ms9dixrw_a0t5dh,
+// agent_ms9foivd_7qsqd8, agent_ms9fzccl_qn2lhr) and every one told the operator the Ansira
+// form had changed and to update the runner's selectors. It had not changed. The runner asked
+// for "2020 Event Claim" — the packet's activity dates extracted as 07/18/2020 off a single
+// mis-read invoice (the event was 07/18/2026) — while Ansira offered exactly what it always
+// offers. Blaming the portal sends the human to inspect a form that is fine.
+// ---------------------------------------------------------------------------
+const PROD_OPTIONS_20260731 = [
+  "-- Select --",
+  "2026 Event Claim",
+  "2026 Media Claim",
+  "Minimum Advertised Price (MAP) Only"
+];
+
+const yearMismatch = marketingActivityFailure("2020 Event Claim", PROD_OPTIONS_20260731);
+assert.ok(yearMismatch, "the 7/31 production failure is still caught");
+assert.equal(yearMismatch!.kind, "claim_year_mismatch", "it is classified as a CLAIM-year problem, not form drift");
+assert.equal(yearMismatch!.requestedYear, "2020", "names the year the runner asked for");
+assert.deepEqual(yearMismatch!.offeredYears, ["2026"], "names the year Ansira actually offers for that family");
+
+const mismatchSummary = marketingActivityFailureSummary(yearMismatch!);
+assert.ok(/no draft was created/i.test(mismatchSummary), "year-mismatch summary states nothing was saved");
+assert.ok(
+  !/form changed|update the runner's selectors|re-inspect the form/i.test(mismatchSummary),
+  "year-mismatch summary must NOT blame Ansira or ask for a selector update"
+);
+assert.ok(/activity (start\/end )?dates/i.test(mismatchSummary), "year-mismatch summary points at the claim's activity dates");
+assert.ok(mismatchSummary.includes("2020") && mismatchSummary.includes("2026"), "summary carries both years");
+
+// A genuine Ansira rollover rename — every year in the dropdown moves — is NOT a claim-year
+// mismatch: there is no same-family option in another year that the claim could belong to...
+// except that IS the rollover case, so the discriminator is which side is out of date. A claim
+// whose year is absent while the portal offers a LATER year is still the claim's problem to
+// fix (change the dates or wait for the new option); the drift wording is reserved for a
+// dropdown that no longer offers the family AT ALL.
+const familyGone = marketingActivityFailure("2026 Media Claim", ["-- Select --", "Co-op Reimbursement", "MAP Only"]);
+assert.ok(familyGone, "a dropdown with no matching claim family is caught");
+assert.equal(familyGone!.kind, "option_missing", "family gone entirely => real Ansira drift wording");
+assert.ok(
+  /form changed|re-inspect the form/i.test(marketingActivityFailureSummary(familyGone!)),
+  "genuine drift keeps the Ansira wording (fail direction: never soften a real portal change)"
+);
+
+// An empty dropdown (broken/blank form) must stay in the drift class too.
+assert.equal(
+  marketingActivityFailure("2026 Media Claim", [])!.kind,
+  "option_missing",
+  "empty dropdown is drift, not a claim-year problem"
+);
+
+// Present option => no failure at all, both APIs agree.
+assert.equal(marketingActivityFailure("2026 Event Claim", PROD_OPTIONS_20260731), null, "present option => null");
+assert.equal(
+  marketingActivityOptionIssue("2026 Event Claim", PROD_OPTIONS_20260731),
+  null,
+  "legacy string API stays in sync with the classifier"
+);
+
+// The classified summary must still reach the daily review: the mdf-portal-health detector
+// keys on the blocked shell, so a year-mismatch run cannot silently vanish from the feed.
+{
+  const flagged = findMdfPortalFailures({
+    tasks: [
+      {
+        id: "eval_claim_year_mismatch",
+        kind: "mdf_portal",
+        status: "needs_approval",
+        updatedAt: new Date().toISOString(),
+        output: { summary: `Deterministic MDF portal runner blocked before completion.\n\n${mismatchSummary}` }
+      }
+    ] as any
+  });
+  assert.equal(flagged.length, 1, "year-mismatch summary is still detected by mdf-portal-health");
+  assert.equal(flagged[0].dimension, "mdf_assistant_failure", "year-mismatch maps to mdf_assistant_failure");
+}
+
+// The runner must route through the CLASSIFIER, not the old unclassified string helper —
+// otherwise this whole distinction is dead code and the misdiagnosis comes straight back.
+{
+  const runnerSource = fs.readFileSync(path.resolve("scripts/mdf_portal_runner.ts"), "utf8");
+  assert.ok(
+    runnerSource.includes("marketingActivityFailureSummary(optionFailure)"),
+    "the runner emits the CLASSIFIED marketing-activity summary"
+  );
+  assert.ok(
+    !/ansiraMarketingOptionSummary\(/.test(runnerSource),
+    "the runner no longer emits the unclassified Ansira-drift summary directly"
+  );
+}
 
 // ---------------------------------------------------------------------------
 // 9) CDP browser-health classification — pins the 2026-07-06 production failure

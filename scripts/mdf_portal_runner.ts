@@ -11,12 +11,12 @@ import {
   ANSIRA_CLAIMS_LIST_URL,
   ANSIRA_FORM_CONTROLS,
   ansiraFormChangedSummary,
-  ansiraMarketingOptionSummary,
   cdpConnectFailureSummary,
   findMissingFormControls,
   isExpiredSessionLanding,
   isSignInPageText,
-  marketingActivityOptionIssue,
+  marketingActivityFailure,
+  marketingActivityFailureSummary,
   missingActivityDatesSummary,
   pickAccountTileLabel,
   portalFormDidNotExpandSummary,
@@ -1721,10 +1721,14 @@ async function runPlaywrightPortalDraft(claim: MdfClaimEntry, options: RunnerOpt
     .locator("#app-marketing-activity option")
     .allTextContents()
     .catch(() => [] as string[]);
-  const optionIssue = marketingActivityOptionIssue(portalClaimLabel, activityOptions);
-  if (optionIssue) {
+  // The failure is CLASSIFIED (2026-08-01): when the same claim family is offered under a
+  // different year, the portal is fine and the CLAIM's activity dates are wrong — blaming Ansira
+  // there sent the operator to re-inspect a form that never changed (the four "250 Years of
+  // Freedom" runs on 7/31 all asked for "2020 Event Claim" off a mis-read invoice date).
+  const optionFailure = marketingActivityFailure(portalClaimLabel, activityOptions);
+  if (optionFailure) {
     await browser.close();
-    return { code: 2, summary: ansiraMarketingOptionSummary(optionIssue) };
+    return { code: 2, summary: marketingActivityFailureSummary(optionFailure) };
   }
 
   await selectOptionByText(page, "#app-marketing-activity", portalClaimLabel);

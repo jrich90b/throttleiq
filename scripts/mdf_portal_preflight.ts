@@ -93,22 +93,130 @@ export function marketingActivityOptionIssue(
   requiredLabel: string,
   availableOptions: string[]
 ): string | null {
-  const norm = (s: string) => String(s ?? "").replace(/\s+/g, " ").trim().toLowerCase();
-  const need = norm(requiredLabel);
-  if (!need) return null;
-  const present = availableOptions.some(option => norm(option).includes(need));
-  if (present) return null;
-  const shown = availableOptions.map(option => option.trim()).filter(Boolean);
-  return (
-    `Marketing Activity option "${requiredLabel}" was not found in the dropdown ` +
-    "(the runner needs it to pick the claim type — most likely an Ansira rename such as a year rollover). " +
-    `Available options: ${shown.length ? shown.join(", ") : "(none)"}.`
-  );
+  return marketingActivityFailure(requiredLabel, availableOptions)?.detail ?? null;
 }
 
 /** Operator-facing summary when the required Marketing Activity option is missing/renamed. */
 export function ansiraMarketingOptionSummary(detail: string): string {
   return preflightFailureSummary(detail);
+}
+
+// ---------------------------------------------------------------------------
+// Claim-YEAR mismatch vs. Ansira form drift (2026-08-01).
+//
+// Production: four "250 Years of Freedom" portal runs blocked on 2026-07-31 (tasks
+// agent_ms9dixrw_a0t5dh, agent_ms9foivd_7qsqd8, agent_ms9fzccl_qn2lhr) and every one of them
+// told the operator "the Ansira Create MDF Recap form changed (likely an Ansira update) …
+// update the runner's selectors". The form had NOT changed. The runner asked for
+// "2020 Event Claim"; Ansira offered "2026 Event Claim", "2026 Media Claim", "MAP Only".
+//
+// The 2020 came from the CLAIM, not the portal: that packet's activity dates extracted as
+// 07/18/2020 (one invoice mis-read; the event was 07/18/2026 — the other six invoices all say
+// 2026), and portalClaimTypeLabel() builds the option label from `activityYearFromDates`.
+//
+// So the message pointed the operator at the wrong system entirely — the same misdiagnosis class
+// this file has already been burned by twice (the hidden-until-dates form body on 2026-07-06,
+// and the 12-file run budget on `sales2` 2026-07-31). When the dropdown still offers the SAME
+// claim family in a different year, the portal is fine and the CLAIM's dates are wrong; say that.
+//
+// Deterministic and read-only: this only classifies an already-failed lookup so the operator is
+// sent to the right place. It changes NO fill behavior and never rewrites the year — picking a
+// different funding year is a money-path decision and stays with the human.
+//
+// FAIL DIRECTION: anything it cannot confidently classify as a year mismatch keeps today's
+// "Ansira changed / re-inspect the form" wording, so a real portal change is never softened.
+// ---------------------------------------------------------------------------
+
+export type MarketingActivityFailureKind = "claim_year_mismatch" | "option_missing";
+
+export type MarketingActivityFailure = {
+  kind: MarketingActivityFailureKind;
+  /** The bare detail sentence (no summary shell). */
+  detail: string;
+  /** The year the runner asked Ansira for, when the failure is a year mismatch. */
+  requestedYear?: string;
+  /** The year(s) Ansira actually offers for the same claim family. */
+  offeredYears?: string[];
+};
+
+const YEAR_RE = /\b(?:19|20)\d{2}\b/;
+
+function normalizeOptionText(value: string): string {
+  return String(value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+/** "2020 Event Claim" -> "event claim" (the year-free family the dropdown groups by). */
+function claimFamily(label: string): string {
+  return normalizeOptionText(label).replace(YEAR_RE, "").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Classifies a missing Marketing Activity option. Returns null when the option is present
+ * (contains-match, whitespace/case-insensitive — mirroring the runner's `hasText` select).
+ */
+export function marketingActivityFailure(
+  requiredLabel: string,
+  availableOptions: string[]
+): MarketingActivityFailure | null {
+  const need = normalizeOptionText(requiredLabel);
+  if (!need) return null;
+  const options = (availableOptions ?? []).map(option => String(option ?? "").trim()).filter(Boolean);
+  if (options.some(option => normalizeOptionText(option).includes(need))) return null;
+
+  const shown = options.length ? options.join(", ") : "(none)";
+  const requestedYear = String(requiredLabel).match(YEAR_RE)?.[0] ?? "";
+  const family = claimFamily(requiredLabel);
+  // Same claim family, different year => the portal is fine; the claim's dates are not.
+  const offeredYears = requestedYear && family
+    ? options
+        .filter(option => claimFamily(option) === family)
+        .map(option => option.match(YEAR_RE)?.[0] ?? "")
+        .filter(year => year && year !== requestedYear)
+    : [];
+
+  if (offeredYears.length) {
+    const unique = [...new Set(offeredYears)];
+    return {
+      kind: "claim_year_mismatch",
+      requestedYear,
+      offeredYears: unique,
+      detail:
+        `This claim's activity dates put it in ${requestedYear}, so the runner looked for the Marketing Activity ` +
+        `"${requiredLabel}" — but Ansira only offers that claim type for ${unique.join(", ")}. ` +
+        `Available options: ${shown}.`
+    };
+  }
+
+  return {
+    kind: "option_missing",
+    requestedYear: requestedYear || undefined,
+    detail:
+      `Marketing Activity option "${requiredLabel}" was not found in the dropdown ` +
+      "(the runner needs it to pick the claim type — most likely an Ansira rename such as a year rollover). " +
+      `Available options: ${shown}.`
+  };
+}
+
+/**
+ * The claim-year-mismatch summary. Deliberately does NOT say the form changed and does NOT ask
+ * for a selector update — it names the claim's dates as the thing to fix, because they are.
+ */
+export function claimYearMismatchSummary(failure: MarketingActivityFailure): string {
+  return (
+    "MDF preflight stopped this run — the claim's activity year does not exist in Ansira. " +
+    "No draft was created (nothing was saved). " +
+    `${failure.detail} ` +
+    "The Ansira form is fine; the claim's activity dates are what's wrong. Fix the Activity start/end dates on " +
+    "the claim (check the invoice dates in the packet — a single mis-read date sets the year for the whole claim), " +
+    "then run the portal draft again."
+  );
+}
+
+/** Routes a marketing-activity failure to the summary that names the RIGHT system. */
+export function marketingActivityFailureSummary(failure: MarketingActivityFailure): string {
+  return failure.kind === "claim_year_mismatch"
+    ? claimYearMismatchSummary(failure)
+    : ansiraMarketingOptionSummary(failure.detail);
 }
 
 // ---------------------------------------------------------------------------
