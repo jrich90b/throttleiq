@@ -312,6 +312,14 @@ const eq = (id: string, actual: unknown, expected: unknown) => {
     2
   );
   eq("tick_repeat_backstop_advances_and_continues", /value touch repeats a recent message/.test(tickBlock), true);
+  // Money-interest parity: engagement alone is not enough — 3 of the 5 leads who replied and still
+  // got a rate quoted were engaged (+16813891971, +12109976639, +17169079662). Both paths read it
+  // through the ONE shared helper, or a regen quotes money the live tick would have withheld.
+  eq(
+    "both_paths_pass_money_interest_signal",
+    (idx.match(/showedMoneyInterest: leadShowedMoneyInterest\(conv\)/g) ?? []).length,
+    2
+  );
 
   if (failures.length) {
     console.error("FAIL cadence_value_gate eval:");
