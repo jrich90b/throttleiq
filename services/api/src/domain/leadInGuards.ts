@@ -20,6 +20,83 @@ export function isFabricatedGratitudeLeadIn(leadIn: string, customerText: string
   return !CUSTOMER_GRATITUDE.test(String(customerText ?? ""));
 }
 
+/** Word-bounded gratitude test — the SAME notion of "the customer thanked us" the guard above
+ *  uses, exported so the deterministic lead-in picker can't drift to a looser rule. */
+export function hasCustomerGratitude(text: string): boolean {
+  return CUSTOMER_GRATITUDE.test(String(text ?? ""));
+}
+
+// ---------------------------------------------------------------------------
+// LEAD-IN SOURCE guard (2026-07-31). The guard above protects the LLM lead-in path. Its
+// DETERMINISTIC twin (pickLeadInVariant in conversationStore) was never given the same
+// protection, and it fabricated a frame a different way: not by picking a wrong opener for the
+// customer's words, but by picking the opener from text that was never the customer's words.
+//
+// Real miss (dominic, +17169309966, 7/20 — Joe thumbed it down: "Should have never said you're
+// welcome"). A cadence ack "Sounds good — I'll be here when you're ready…" went out as
+// "You're welcome. I'll be here when you're ready…". Two independent defects stacked:
+//   1. SPEAKER-BLIND. The thread's last inbound was a VOICE-CALL TRANSCRIPT — a two-speaker
+//      script, "Customer: Go ahead.\nAgent: Thank you." — and the picker matched "thank you"
+//      spoken by OUR OWN agent. Only the Customer: lines are ever the customer's words.
+//   2. STALE. That transcript was 93 days old. "You're welcome" only makes sense as a reply to
+//      something just said; an inbound from three months ago must never frame a fresh send.
+// A third latent defect found while fixing these: the picker's gratitude test was an UNBOUNDED
+// substring match, so "ty" matched inside warranty / pretty / twenty / city / safety / quality
+// — i.e. "what's the warranty?" earned a "You're welcome." Fixed by reusing the word-bounded
+// CUSTOMER_GRATITUDE above.
+//
+// FAIL DIRECTION (AGENTS.md migrate-vs-keep): these are invariant guards on provenance, not
+// comprehension — deterministic is correct here. Every one fails SAFE: when a guard fires we
+// simply drop the lead-in fragment, and the business sentence still ships in full. Nothing goes
+// silent, no reply is lost, no side effect is skipped. The dangerous direction is the other one
+// (inventing a conversational frame the customer never opened), which is exactly the miss.
+
+/** An inbound older than this can no longer frame a fresh outbound's lead-in. Generous on
+ *  purpose — real reply threads turn around in minutes to hours, so this only ever trips on a
+ *  long-dormant thread, where a contextual opener is fabricated by definition. */
+export const LEAD_IN_MAX_INBOUND_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+const TRANSCRIPT_CUSTOMER_LINE = /^\s*customer\s*:\s*/i;
+
+/**
+ * The customer's OWN words from an inbound message. A `voice_transcript` inbound is a
+ * two-speaker script in which our agent also speaks, so only the `Customer:` lines count; if it
+ * carries no Customer: line at all we return "" rather than risk framing our reply with our own
+ * speech. Every other inbound provider is the customer's own message, returned unchanged.
+ */
+export function customerSpokenText(body: string, provider?: string | null): string {
+  const text = String(body ?? "");
+  if (String(provider ?? "") !== "voice_transcript") return text;
+  const lines = text
+    .split(/\r?\n/)
+    .filter(line => TRANSCRIPT_CUSTOMER_LINE.test(line))
+    .map(line => line.replace(TRANSCRIPT_CUSTOMER_LINE, "").trim())
+    .filter(Boolean);
+  return lines.join(" ");
+}
+
+/**
+ * The text a deterministic lead-in may be derived from: the customer's own words, and only
+ * while they are recent enough to still be what we are replying to. Returns "" when no lead-in
+ * should be fabricated at all. Pure + fail-safe; pinned by blended_lead_in_guard:eval.
+ */
+export function resolveLeadInSourceText(input: {
+  body?: string | null;
+  provider?: string | null;
+  at?: string | null;
+  now?: string | number | Date | null;
+}): string {
+  const spoken = customerSpokenText(String(input.body ?? ""), input.provider);
+  if (!spoken.trim()) return "";
+  const inboundMs = Date.parse(String(input.at ?? ""));
+  if (!Number.isFinite(inboundMs)) return spoken; // no timestamp to judge by → leave as-is
+  const nowMs =
+    input.now == null || input.now === "" ? Date.now() : new Date(input.now as string).getTime();
+  if (!Number.isFinite(nowMs)) return spoken;
+  if (nowMs - inboundMs > LEAD_IN_MAX_INBOUND_AGE_MS) return "";
+  return spoken;
+}
+
 // The other half of the same class: a reply opening "Totally fair question / Great question"
 // when the customer did not actually ask a question (a form, a statement). We detect the
 // customer-IS-a-question GENEROUSLY (any "?" or interrogative phrasing) so the audit only

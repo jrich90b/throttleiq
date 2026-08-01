@@ -31,6 +31,11 @@ import { buildPersonaSelfIntroPattern } from "./agentVoice.js";
 import { getCachedDealerProfile } from "./dealerProfile.js";
 import { findComputerLikePhrases } from "./voiceBannedPhrases.js";
 import {
+  hasCustomerGratitude,
+  isFabricatedGratitudeLeadIn,
+  resolveLeadInSourceText
+} from "./leadInGuards.js";
+import {
   isPendingIncomingInventoryNotifyTodoSummary,
   planPendingIncomingNotifyDedup
 } from "./pendingIncomingInventory.js";
@@ -2528,7 +2533,16 @@ export function appendOutbound(
     .reverse()
     .find(m => m.direction === "in" && m.body);
   const inboundText = lastInbound?.body ?? "";
-  const normalizedBody = normalizeGotItLeadIn(body, inboundText, provider);
+  // The LEAD-IN may only be derived from the customer's OWN words, and only while they are still
+  // what we are replying to. A voice-call transcript is a two-speaker script (our agent speaks in
+  // it too) and a months-old inbound frames nothing. See leadInGuards.ts for the 7/20 miss.
+  const leadInSourceText = resolveLeadInSourceText({
+    body: inboundText,
+    provider: lastInbound?.provider,
+    at: lastInbound?.at,
+    now: nowIso()
+  });
+  const normalizedBody = normalizeGotItLeadIn(body, leadInSourceText, provider);
   let stateSignalBody = salesToneProvider ? normalizeSalesToneBase(normalizedBody) : normalizedBody;
   let tonedBody = stateSignalBody;
   if (provider === "draft_ai") {
@@ -2847,7 +2861,9 @@ function pickLeadInVariant(text: string): string {
   ) {
     return "Thanks for sending that over.";
   }
-  if (/(thanks|thank you|thanks again|thx|ty|appreciate)/.test(t)) return "You're welcome.";
+  // Word-bounded via the shared guard: the old substring test matched "ty" inside warranty /
+  // pretty / twenty / city / safety / quality, so "what's the warranty?" opened "You're welcome."
+  if (hasCustomerGratitude(t)) return "You're welcome.";
   if (/(sorry|apologize|apologies|my bad)/.test(t)) return "No worries.";
   if (/(i left|already left|left a deposit|just letting you know|update)/.test(t)) return "Thanks for the update.";
   if (/(can you|could you|would you|do you|is it possible)/.test(t)) return "Sure.";
@@ -2873,15 +2889,20 @@ function normalizeGotItLeadIn(body: string, inboundText: string, provider: Messa
   const match = trimmed.match(/^(?:got it|sounds good)(?:\s*[—–-]|\.|,|!|:)?\s*/i);
   if (!match) return body;
   const rest = trimmed.slice(match[0].length);
+  // Belt-and-braces: never ship a gratitude opener the source text doesn't warrant, even if a
+  // future picker branch produced one (the guard the LLM lead-in path has had since 6/16).
+  const safeLeadIn = (source: string): string => {
+    const leadIn = pickLeadInVariant(source);
+    return leadIn && isFabricatedGratitudeLeadIn(leadIn, source) ? "" : leadIn;
+  };
   if (!rest) {
     // Bare ack with no contextual lead-in: never ship the curt "Got it." (Joe, 2026-06-20) —
     // fall back to a warm "Sounds good." instead of echoing the original opener.
-    const leadIn = pickLeadInVariant(inboundText);
-    return leadIn || "Sounds good.";
+    return safeLeadIn(inboundText) || "Sounds good.";
   }
   // Avoid stacked acknowledgments like "Thanks for sending that over. Thanks for the photo —".
   if (LEAD_IN_ACK_OPENER_RE.test(rest)) return capitalizeLeadInRest(rest);
-  const leadIn = pickLeadInVariant(inboundText);
+  const leadIn = safeLeadIn(inboundText);
   if (!leadIn) return capitalizeLeadInRest(rest);
   return `${leadIn} ${rest}`.trim();
 }
