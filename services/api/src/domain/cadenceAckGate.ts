@@ -18,6 +18,19 @@
 // says what they want); worst case the customer simply doesn't get an extra auto-line. The
 // warm closer is preserved for the intended case (customer defers, staff pause without
 // having just texted). Single call site (the console-only endpoint), so no both-paths rule.
+//
+// SECOND suppression reason — no customer turn to acknowledge (Dominic / +17169309966,
+// 2026-07-20). Staff hit pause on a thread whose newest customer message was 17 days old
+// and had already been answered by a later outbound (a watch alert). The ack fired anyway,
+// and `normalizeGotItLeadIn` (conversationStore.ts) rewrote its "Sounds good — " opener off
+// that stale inbound's "thanks", so the customer received:
+//   "You're welcome. I'll be here when you're ready. If anything changes, just let me know."
+// He replied "??" 23 minutes later and a rep had to text "Sorry Dominic, didn't mean to send
+// that last text". The warm closer only reads as a closer when it ANSWERS an unanswered
+// customer turn; with no such turn it fabricates a conversational frame the customer never
+// opened (the fabricated-frame class). Fail-direction is SAFE in the same way: the gate only
+// ever withholds a message that answers nothing — it is not on any reply path, writes no
+// state, and a staff member is at the keyboard at that exact moment.
 
 interface AckGateMessage {
   direction?: string | null;
@@ -68,4 +81,59 @@ export function shouldSuppressCadenceAck(
   }
 
   return false;
+}
+
+/**
+ * True when the thread has NO unanswered customer turn for the warm closer to acknowledge:
+ * the newest inbound is older than our newest outbound, or there is no inbound at all.
+ *
+ * Compares TIMESTAMPS, never array position — message rows are not guaranteed to be stored
+ * in chronological order. Rows with a missing/unparseable `at` are ignored.
+ *
+ * Deterministic structural predicate over conversation state (no comprehension, no regex).
+ */
+export function hasNoCustomerTurnToAcknowledge(
+  conv: AckGateConversation | null | undefined
+): boolean {
+  if (!conv) return false;
+
+  let newestInbound = NaN;
+  let newestOutbound = NaN;
+  for (const m of conv.messages ?? []) {
+    const atMs = parseMs(m?.at);
+    if (Number.isNaN(atMs)) continue;
+    if (m?.direction === "in") {
+      if (Number.isNaN(newestInbound) || atMs > newestInbound) newestInbound = atMs;
+    } else if (m?.direction === "out") {
+      if (Number.isNaN(newestOutbound) || atMs > newestOutbound) newestOutbound = atMs;
+    }
+  }
+
+  // Nothing we ever sent: an inbound-first thread still has a live customer turn — send.
+  if (Number.isNaN(newestOutbound)) return false;
+  // We have spoken and the customer never has: nothing to acknowledge — suppress.
+  if (Number.isNaN(newestInbound)) return true;
+  // Ties fail toward today's behavior (send).
+  return newestInbound < newestOutbound;
+}
+
+export type CadenceAckSuppressReason = "active_human_thread" | "no_customer_turn";
+
+/**
+ * Resolve whether the cadence pause/resume ack should be suppressed, and why.
+ * `active_human_thread` takes precedence so the reported reason stays stable for the case
+ * the gate originally shipped for. `nowMs` is injected for testability.
+ */
+export function resolveCadenceAckSuppression(
+  conv: AckGateConversation | null | undefined,
+  nowMs: number,
+  windowMs: number = CADENCE_ACK_ACTIVE_HUMAN_WINDOW_MS
+): { suppress: boolean; reason: CadenceAckSuppressReason | null } {
+  if (shouldSuppressCadenceAck(conv, nowMs, windowMs)) {
+    return { suppress: true, reason: "active_human_thread" };
+  }
+  if (hasNoCustomerTurnToAcknowledge(conv)) {
+    return { suppress: true, reason: "no_customer_turn" };
+  }
+  return { suppress: false, reason: null };
 }
