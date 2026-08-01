@@ -40,7 +40,9 @@ assert.ok(/delete args\.conv\.emailDraft/.test(index), "held must clear any exis
 assert.ok(/args\.conv\.draftHeld = \{/.test(index), "held must set the draftHeld marker");
 assert.ok(/return \{ ok: false, reason: "draft_quality_held", held: true \}/.test(index), "held must return a distinct held result");
 // A passing draft supersedes a stale held marker.
-assert.ok(/if \(args\.conv\.draftHeld\) args\.conv\.draftHeld = null/.test(index), "a passing draft must clear stale held state");
+// Re-pinned 2026-08-01: clearing moved into the single referee releaseHeldDraft when draftHeld was
+// un-stacked. Same behavior — a passing draft supersedes a stale hold — asserted via the call.
+assert.ok(/releaseHeldDraft\(args\.conv, "ai_draft_passed"\)/.test(index), "a passing draft must clear stale held state");
 // No double-judge: the post-publish shadow hook is skipped when the live gate is on.
 assert.ok(
   /if \(!isDraftQualityJudgeEnabled\(\)\) \{\s*\n\s*void runDraftQualityJudgeShadow/.test(index),

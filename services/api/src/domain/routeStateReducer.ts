@@ -3388,3 +3388,77 @@ export function decideFinanceDeclinedCadence(
     reason: isFinanceDeclined ? `finance_declined:${signals.join("+")}` : "not_finance_declined"
   };
 }
+
+// Who may release a HELD draft — one referee for what were six independent decisions.
+//
+// `draftHeld` is the "being fixed" marker: the quality gate withheld a reply, so staff see a card
+// instead of a draft. SETTING it is centralized already (both set-sites sit in
+// publishCustomerReplyDraft and run in sequence). CLEARING it was not — six places each decided for
+// themselves, and each was patched separately after its own production incident. The comments in
+// conversationStore.ts still name them: Nicholas Braun 2026-06-24 ("stuck because only provider
+// 'human' cleared it"), s R Gurajala 2026-06-25 ("the flag stayed stuck after a real reply"), and
+// again 2026-06-24 ("the console keeps showing 'being fixed' over a real draft").
+//
+// THE FIGHT, concretely: the clear-on-outbound site in `appendOutbound` releases the hold ONLY when
+// `heldKind === "context_fidelity"`, while the console-send site releases ANY hold. Same trigger — a
+// real reply went out — opposite answers. So a DRAFT-QUALITY hold survives a genuine reply on the
+// first path and the card never goes away. That is live today: the 2026-08-01 work order carries
+// "draft is stuck on being fixed" (+17167134728) and "says the ai's draft is being fixed, but no fix
+// happened" (+17164785613).
+//
+// This referee takes the UNION, which is the narrower site's own intent: any real reply releases any
+// hold. That is a BEHAVIOR CHANGE on that one path, in the fail-safe direction, and it is called out
+// in the PR rather than buried — a cleanup must never smuggle one in silently.
+//
+// FAIL DIRECTION: releasing costs nothing customer-facing — the marker is staff-only UI and the
+// withheld draft is NOT restored by clearing it (see the escalation site: "the withheld weak draft is
+// NOT restored — staff replies fresh"). Leaving it stuck, by contrast, hides a live lead behind a
+// permanent "being fixed" card, which is the reported failure. So unknown/ambiguous ⇒ RELEASE.
+//
+// The one thing that must NEVER release it: the same AI re-publishing another draft. That is the
+// generator that could not answer the turn marking its own homework.
+export type HeldDraftReleaseEvent =
+  | "real_reply" // a human/twilio/sendgrid message actually went to the customer
+  | "operator_draft" // staff authored a replacement draft in the console
+  | "ai_draft_passed" // a NEW ai draft cleared the quality gate
+  | "escalated_to_human" // the hold became a staff task; the limbo must not persist
+  | "ai_republish" // the same AI re-publishing — never self-clears
+  | "internal_log"; // an internal/system note — not a reply
+
+export type HeldDraftReleaseInput = {
+  /** Absent/blank = nothing is held. */
+  heldKind?: string | null;
+  event: HeldDraftReleaseEvent;
+};
+
+export type HeldDraftReleaseDecision = { release: boolean; reason: string };
+
+/** Providers that mean a message actually reached the customer. */
+const REAL_REPLY_PROVIDERS = new Set(["human", "twilio", "sendgrid"]);
+
+export function isRealReplyProvider(provider: string | null | undefined): boolean {
+  return REAL_REPLY_PROVIDERS.has(String(provider ?? "").trim().toLowerCase());
+}
+
+export function decideHeldDraftRelease(input: HeldDraftReleaseInput): HeldDraftReleaseDecision {
+  const held = String(input.heldKind ?? "").trim();
+  if (!held) return { release: false, reason: "nothing_held" };
+  switch (input.event) {
+    case "real_reply":
+      return { release: true, reason: "a real reply went out — the held turn is handled" };
+    case "operator_draft":
+      return { release: true, reason: "an operator-authored draft supersedes the hold" };
+    case "ai_draft_passed":
+      return { release: true, reason: "a new draft cleared the gate" };
+    case "escalated_to_human":
+      return { release: true, reason: "the hold became a staff task; limbo must not persist" };
+    case "ai_republish":
+      // The generator that could not answer this turn must not mark its own homework.
+      return { release: false, reason: "the same AI re-publishing never self-clears" };
+    case "internal_log":
+      return { release: false, reason: "an internal log entry is not a reply" };
+    default:
+      // Unknown event ⇒ release, per the fail direction above: a stuck card hides a live lead.
+      return { release: true, reason: "unrecognized event — failing toward releasing the hold" };
+  }
+}

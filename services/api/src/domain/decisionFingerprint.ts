@@ -124,6 +124,17 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     });
   });
 
+  // Added 2026-08-01 with the draftHeld un-stacking. Sampled as: given this conversation's CURRENT
+  // hold, would a real reply release it? That is the question the six former clear-sites disagreed on.
+  add("heldDraftReleaseOnRealReply", conv => {
+    const held = conv?.draftHeld;
+    if (!held || typeof reducer.decideHeldDraftRelease !== "function") return undefined;
+    return reducer.decideHeldDraftRelease({
+      heldKind: held.heldKind ?? held.reason,
+      event: "real_reply"
+    });
+  });
+
   return registry;
 }
 

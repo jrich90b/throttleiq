@@ -2,6 +2,11 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import type { InboundMessageEvent } from "./types.js";
 import { maybeMarkEngagedFromInbound } from "./engagement.js";
+import {
+  decideHeldDraftRelease,
+  isRealReplyProvider,
+  type HeldDraftReleaseEvent
+} from "./routeStateReducer.js";
 import { fileURLToPath } from "node:url";
 import { dataPath } from "./dataDir.js";
 import {
@@ -2516,16 +2521,11 @@ export function appendOutbound(
   // couldn't answer; it must not self-clear the flag). Placed AFTER the internal-action-log guard so a
   // blocked system/log entry never clears it. (Fix: a real Twilio reply — Nicholas Braun, 2026-06-24 —
   // left the flag stuck because only provider "human" cleared it.)
-  if (
-    (providerKey === "human" || providerKey === "twilio" || providerKey === "sendgrid") &&
-    (conv.draftHeld as any)?.heldKind === "context_fidelity"
-  ) {
-    conv.draftHeld = null;
-    for (const t of listOpenTodos()) {
-      if (t.convId === conv.id && String(t.summary ?? "").includes(CONTEXT_FIDELITY_HELD_TODO_MARKER)) {
-        markTodoDone(conv.id, t.id);
-      }
-    }
+  // This site used to release ONLY a context_fidelity hold while the console-send site released ANY
+  // hold on the same trigger — so a draft-quality hold survived a real reply here and the "being
+  // fixed" card never cleared. One referee now, via releaseHeldDraft.
+  if (isRealReplyProvider(providerKey)) {
+    releaseHeldDraft(conv, "real_reply");
   }
   const isEmailThread = String(from ?? "").includes("@") || String(to ?? "").includes("@");
   const salesToneProvider = provider === "draft_ai" || provider === "twilio" || provider === "sendgrid";
@@ -2957,20 +2957,34 @@ export function finalizeDraftAsSent(
     // A sent reply handles the held turn — clear the "needs reply" flag + its todo. The console "Send"
     // of a pending draft comes through HERE (not appendOutbound), so the clear must live here too,
     // else the flag stays stuck after a real reply (s R Gurajala, 2026-06-25).
-    if ((conv as any).draftHeld) {
-      (conv as any).draftHeld = null;
-      for (const t of listOpenTodos()) {
-        if (t.convId === conv.id && String(t.summary ?? "").includes(CONTEXT_FIDELITY_HELD_TODO_MARKER)) {
-          markTodoDone(conv.id, t.id);
-        }
-      }
-    }
+    releaseHeldDraft(conv, "real_reply");
   }
 
   conv.updatedAt = new Date().toISOString();
   scheduleSave();
 
   return { usedDraft: true, originalDraftBody: original };
+}
+
+/**
+ * Release a held ("being fixed") draft — the ONE place that clears `conv.draftHeld`.
+ *
+ * Six sites used to clear it, each with its own condition, each patched after its own incident, and
+ * two of them disagreed on the same trigger (see routeStateReducer.decideHeldDraftRelease). This
+ * does the whole job — ask the referee, clear the flag, close the paired "needs reply" todo — so a
+ * caller cannot get half of it right. Returns true if a hold was actually released.
+ */
+export function releaseHeldDraft(conv: Conversation, event: HeldDraftReleaseEvent): boolean {
+  const held: any = (conv as any).draftHeld;
+  if (!held) return false;
+  if (!decideHeldDraftRelease({ heldKind: held.heldKind ?? held.reason, event }).release) return false;
+  (conv as any).draftHeld = null;
+  for (const t of listOpenTodos()) {
+    if (t.convId === conv.id && String(t.summary ?? "").includes(CONTEXT_FIDELITY_HELD_TODO_MARKER)) {
+      markTodoDone(conv.id, t.id);
+    }
+  }
+  return true;
 }
 
 /**
@@ -2990,12 +3004,7 @@ export function healStaleHeldFlag(conv: Conversation): boolean {
     return Number.isFinite(at) && at > heldMs;
   });
   if (!repliedAfter) return false;
-  (conv as any).draftHeld = null;
-  for (const t of listOpenTodos()) {
-    if (t.convId === conv.id && String(t.summary ?? "").includes(CONTEXT_FIDELITY_HELD_TODO_MARKER)) {
-      markTodoDone(conv.id, t.id);
-    }
-  }
+  if (!releaseHeldDraft(conv, "real_reply")) return false;
   conv.updatedAt = nowIso();
   scheduleSave();
   return true;
@@ -3220,7 +3229,7 @@ export function saveOperatorDraft(
   // An operator-authored draft resolves any prior held state (draft-quality / context-fidelity) —
   // mirror publishCustomerReplyDraft, where a passing draft supersedes the held marker. Otherwise the
   // console keeps showing "being fixed" over a real draft (seen on s R Gurajala, 2026-06-24).
-  if ((conv as any).draftHeld) (conv as any).draftHeld = null;
+  releaseHeldDraft(conv, "operator_draft");
   if ((conv as any).contextFidelityShadow) (conv as any).contextFidelityShadow = null;
   if (args.channel === "email") {
     conv.emailDraft = body;
