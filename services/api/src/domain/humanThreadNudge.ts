@@ -16,7 +16,9 @@
  *
  * This is the pure decision (no store, no clock, no LLM) — the cadenceHoldTtl.ts pattern. It
  * enumerates every stop-state so the nudge can never fire into: a thread that is neither
- * human-owned nor handed off (those have cadences), opt-out, closed, call-only, a booked
+ * human-owned nor handed off (those have cadences), a NON-SALES department handoff (Motor
+ * Clothes/Parts/Service own that thread — staff todo, never a customer bump), opt-out, closed,
+ * call-only, a booked
  * appointment, an UNANSWERED customer message (that stays the owner's "needs YOUR reply" task —
  * the agent can't answer deal specifics), a pending draft, or a pending dated staff promise
  * ("I'll send numbers Monday" → the promise task owns the follow-up, no "just checking in" over
@@ -68,10 +70,22 @@ export function humanThreadNudgeSpacingDays(): number {
   return envNum("HUMAN_THREAD_NUDGE_SPACING_DAYS", HUMAN_THREAD_NUDGE_SPACING_DAYS_DEFAULT);
 }
 
+/**
+ * followUp.reason values we set ourselves when a NON-SALES department takes the thread
+ * (index.ts web-text-widget lane + the service-handoff lane). These are our own structured state,
+ * not comprehension — reading them is a deterministic invariant guard, not a regex over customer
+ * text. A Motor Clothes / Parts / Service thread belongs to that department: the agent has no
+ * facts it is allowed to add, so the composer's only moves are to re-ask what staff already asked
+ * or to fabricate. The staff todo written alongside the handoff IS the follow-up.
+ */
+const NON_SALES_HANDOFF_REASONS = new Set(["apparel_request", "parts_request", "service_request"]);
+
 export interface HumanThreadNudgeInput {
   conversationMode?: string | null; // "human" qualifies
   /** conv.followUp.mode — "manual_handoff" qualifies (Joe 7/23 widening). */
   followUpMode?: string | null;
+  /** conv.followUp.reason — a NON-SALES department handoff is another team's thread, never bumped. */
+  followUpReason?: string | null;
   suppressed?: boolean; // STOP / opt-out / do-not-contact
   conversationStatus?: string | null;
   closedAt?: string | null;
@@ -94,13 +108,23 @@ export interface HumanThreadNudgeInput {
 
 export type HumanThreadNudgeDecision = { nudge: false; reason: string } | { nudge: true; quietDays: number };
 
+/**
+ * The eligible-class pre-filter, shared with the tick lane so it can skip the expensive
+ * message/todo scans without restating (and drifting from) the first branch of the decision.
+ */
+export function isHumanThreadNudgeEligibleClass(conversationMode?: unknown, followUpMode?: unknown): boolean {
+  return (
+    String(conversationMode ?? "").trim().toLowerCase() === "human" ||
+    String(followUpMode ?? "").trim().toLowerCase() === "manual_handoff"
+  );
+}
+
 export function decideHumanThreadNudge(input: HumanThreadNudgeInput): HumanThreadNudgeDecision {
   // Eligible classes (Joe 7/23): a human-OWNED thread (mode=human) or a handed-off thread
   // (followUp.mode=manual_handoff). Everything else has a cadence/auto-draft lane of its own —
   // nudging there would double-message.
   const isHumanOwned = String(input.conversationMode ?? "").trim().toLowerCase() === "human";
-  const isHandedOff = String(input.followUpMode ?? "").trim().toLowerCase() === "manual_handoff";
-  if (!isHumanOwned && !isHandedOff) {
+  if (!isHumanThreadNudgeEligibleClass(input.conversationMode, input.followUpMode)) {
     return { nudge: false, reason: "not_human_or_handoff" };
   }
   if (input.suppressed) return { nudge: false, reason: "suppressed" };
@@ -116,6 +140,19 @@ export function decideHumanThreadNudge(input: HumanThreadNudgeInput): HumanThrea
     return { nudge: false, reason: "appointment_booked" };
   }
   if (input.hasPendingDraft) return { nudge: false, reason: "pending_draft" };
+  // A NON-SALES department handoff is another team's thread (Narendra +6282245353758, open-critic
+  // 2026-08-01): a Motor Clothes web-widget lead got the apparel handoff ack, Joe then asked "are
+  // you looking for factory racing t-shirts?", the customer never answered, and 12 quiet days later
+  // the nudge re-asked Joe's own question back at him. "Continue the thread in the rep's voice"
+  // over an unanswered staff question can only re-ask it, and the composer is forbidden new facts —
+  // so on a department thread it has no legal move. Handed-off leads that go stale get staff todos,
+  // not customer cadences, and that todo already exists (index.ts writes it on the handoff turn).
+  // Deliberately ABOVE the quiet clock: this is a class exclusion, not a timing artifact.
+  // mode=human wins — a rep who personally took the thread over is a stronger, fresher signal than
+  // the department reason recorded when the lead first arrived.
+  if (!isHumanOwned && NON_SALES_HANDOFF_REASONS.has(String(input.followUpReason ?? "").trim().toLowerCase())) {
+    return { nudge: false, reason: "non_sales_department_handoff" };
+  }
   // An unanswered CUSTOMER message stays the owner's job (the "needs YOUR reply" task, PR #223) —
   // the agent must not bump a customer who is waiting on the rep.
   if (input.lastMessageDirection !== "out") return { nudge: false, reason: "owner_reply_needed" };
