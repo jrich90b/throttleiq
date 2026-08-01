@@ -278,6 +278,40 @@ export function isShortAckNoAction(text: string | null | undefined): boolean {
  * Fail-direction: HIDES a turn from scoring, so a quoted body is REQUIRED — a
  * customer who merely writes the word "liked" (no quoted echo) is never skipped.
  */
+/**
+ * The tapback-on-an-ATTACHMENT wrapper: `Reacted ❤️ to an image`. Same button press as the
+ * quoted form, but the customer reacted to an MMS the dealer sent, so the carrier has no text
+ * to quote and names the attachment instead.
+ *
+ * Production miss (Henry Cole, +17168618786, 2026-07-01 and 07-02): he hearted two photos Joe
+ * texted him. Every reaction matcher we own requires a QUOTED body, so both turns read as real
+ * customer inbounds — the live reaction-only no-reply gate passed them through to drafting, and
+ * the corpus-replay judge graded the resulting "I'll have someone follow up with you shortly"
+ * as an unaddressed ask (a P1 `corpus_replay_regression`, which is a BLOCKING release gate).
+ * Same phantom class as the tapback exclusion added to the tone/reply-coverage scorers in
+ * c5ae6e32.
+ *
+ * Fail-direction: this HIDES a turn from scoring and SUPPRESSES a live reply, so it is tighter
+ * than the quoted arm — the object must be EXACTLY one carrier attachment noun with nothing
+ * before or after it. A customer who writes a sentence containing those words ("reacted badly
+ * to an image you sent") can never match, because the reaction token is still required to be a
+ * bare tapback verb or emoji.
+ */
+const REACTION_ATTACHMENT_OBJECT_REGEX =
+  /^(?:an?|the|un[ao]?|el|la)\s+(?:image|photo|picture|attachment|video|movie|gif|audio message|voice message|sticker|document|link|location|contact card|imagen|foto|video|archivo)$/i;
+
+function matchesReactionToAttachment(normalized: string): boolean {
+  const toAttachmentMatch = normalized.match(/^(.*?)\s+to\s+(.+)$/i);
+  if (!toAttachmentMatch) return false;
+  if (!REACTION_ATTACHMENT_OBJECT_REGEX.test(String(toAttachmentMatch[2] ?? "").trim())) return false;
+  const token = String(toAttachmentMatch[1] ?? "").trim().toLowerCase();
+  if (!token) return false;
+  if (/^(liked|loved|disliked|laughed at|emphasized|questioned|le encant(?:a|ó)|(?:no )?le gust(?:a|ó)|se ri[oó] de|enfatiz(?:a|ó)|destac(?:a|ó)|cuestion(?:a|ó))$/i.test(token)) {
+    return true;
+  }
+  return /^reacted(?:\s+with)?\s*[\p{Extended_Pictographic}️‍\u{1F3FB}-\u{1F3FF}\s]+$/u.test(token);
+}
+
 export function isQuotedReactionEchoInbound(text: string | null | undefined): boolean {
   const normalized = String(text ?? "")
     .replace(/[\u2000-\u200F\u202A-\u202E\u2060\uFEFF]/g, "")
@@ -296,7 +330,7 @@ export function isQuotedReactionEchoInbound(text: string | null | undefined): bo
   const toQuotedMatch = normalized.match(
     /^(.*?)\s+to\s+["'\u201c\u201d]([\s\S]{1,2000})["'\u201c\u201d]$/i
   );
-  if (!toQuotedMatch) return false;
+  if (!toQuotedMatch) return matchesReactionToAttachment(normalized);
   const reactionToken = String(toQuotedMatch[1] ?? "").trim().toLowerCase();
   if (!reactionToken) return false;
   if (
