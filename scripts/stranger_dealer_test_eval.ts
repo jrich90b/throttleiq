@@ -23,6 +23,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { countAhHardcodes } from "./rollout_readiness_report.ts";
 import {
   DEALER_PINNING_ENV_VARS,
   STRANGER_DEALER,
@@ -245,21 +246,22 @@ check("classifier_separates_fail_directions", "each AH literal shape lands in th
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-check("url_class_is_ratchet_blind", "the audit sees the no-space host form the ratchet's pattern misses", () => {
-  // The portability ratchet greps /american harley|north tonawanda/i, which cannot match
-  // "americanharley-davidson.com". The first live stranger run caught exactly this class
-  // reaching a customer, so the audit must carry its own literal set.
+check("url_class_counted_by_both_audit_and_ratchet", "the host form is counted by the audit AND by the ratchet", () => {
+  // History: this check used to pin the ratchet as BLIND to the no-space host form below
+  // (its pattern required a space), which is why the audit carries its own literal set. That was
+  // true when written and FIXED on 2026-08-01 — the pattern is now /american[\s-]?harley/. It kept
+  // passing only because it tested a hand-copied duplicate of the old pattern instead of the real
+  // function, so it silently documented a repaired bug as current. Same trap as
+  // dealer_intake_shape:eval asserting "attribute feeds are UNSUPPORTED" after they were fixed:
+  // a test that records damage becomes a test that demands it. It now calls countAhHardcodes
+  // directly, so the eval and the ratchet can never disagree again.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "stranger-url-"));
   const hostFormLine = 'const u = "https://americanharley-davidson.com/new";';
   fs.writeFileSync(path.join(dir, "u.ts"), `${hostFormLine}\n`);
   const sites = auditAhFallbackSites(dir);
-  assert.equal(sites?.length, 1, "the host-form URL must be counted");
+  assert.equal(sites?.length, 1, "the host-form URL must be counted by the audit");
   assert.equal(sites?.[0].failDirection, "pinned_url");
-  // The ratchet's own pattern, evaluated off the assertion line so this universal eval
-  // never carries a dealer literal on an asserting line (eval_suite_manifest:eval).
-  const ratchetPattern = /american harley|north tonawanda/i;
-  const ratchetSeesIt = ratchetPattern.test(hostFormLine);
-  assert.equal(ratchetSeesIt, false, "sanity: the ratchet's pattern really is blind to the host form");
+  assert.equal(countAhHardcodes(dir), 1, "the ratchet must now see the no-space host form too");
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
