@@ -174,6 +174,50 @@ assert.ok(
   `selling it privately must NOT set sell_to_dealer_interest`
 );
 
+// 8) THE FIX — Shad Stymus +17164208856, verbatim production turn (2026-07-30 replay P1).
+// We asked the qualifying question; he ANSWERED it (condition + payment priority) behind an
+// apology for being slow. On current main this parsed defer_no_window @0.90-0.95 and CLOSED a
+// 0-3 month lead. One level out from the Jaydon carve-out: he asks us nothing.
+const QUALIFY_ASK = {
+  direction: "out" as const,
+  body: "Hey Shad, happy to send a short list. What style are you leaning toward, and should I focus on new, used, or both? If you want, share your budget range and I will keep it dialed in."
+};
+const criteriaAnswer = await disp(
+  "Sorry been busy with work most likely used and the lowest monthly payments is the best for me at this moment as I have alot of hospital bills for my daughter which is not in the best health at the moment.  Thank you sincerely, Shad stymus.",
+  [QUALIFY_ASK]
+);
+assert.ok(
+  !CLOSEOUT_DISPOSITIONS.has(criteriaAnswer.disposition),
+  `answering our qualifying question must NOT close the lead — got ${criteriaAnswer.disposition}`
+);
+assert.equal(
+  criteriaAnswer.disposition,
+  "none",
+  `a buying-criteria answer should parse as none, got ${criteriaAnswer.disposition}`
+);
+
+// 8b) GENERALIZATION — same shape, no medical framing, no verbatim overlap with the few-shot,
+// so the lesson cannot be memorized off the hardship words.
+const criteriaAnswerParaphrase = await disp(
+  "Sorry for the slow reply, work has been nuts. Probably used, and honestly the lowest monthly payment I can get is what matters most to me right now.",
+  [{ direction: "out", body: "What style are you leaning toward, and should I focus on new, used, or both?" }]
+);
+assert.equal(
+  criteriaAnswerParaphrase.disposition,
+  "none",
+  `a paraphrased criteria answer should parse as none, got ${criteriaAnswerParaphrase.disposition}`
+);
+
+// 8c) REGRESSION GUARD — a clean stop with NO criteria must still close, so the carve-out
+// cannot degrade into "never close anything" and start pestering people.
+// The pinned property is that it CLOSES, not which closeout label wins — "stop texting me"
+// reads as stepping_back or defer_no_window depending on the roll, and both close the lead.
+const cleanStop = await disp("Not right now, please stop texting me.", [QUALIFY_ASK]);
+assert.ok(
+  CLOSEOUT_DISPOSITIONS.has(cleanStop.disposition),
+  `a stop-texting turn with no criteria must still close the lead, got ${cleanStop.disposition}`
+);
+
 console.log(
-  "PASS customer disposition eval — price-objection carve-out + alert-keeper live-ask carve-out + decide-soon window + sell-outright-to-dealer carve-out (none / defer_no_window / defer_with_window / sell_on_own)"
+  "PASS customer disposition eval — price-objection carve-out + alert-keeper live-ask carve-out + decide-soon window + sell-outright-to-dealer carve-out + qualification-answer carve-out (none / defer_no_window / defer_with_window / sell_on_own)"
 );

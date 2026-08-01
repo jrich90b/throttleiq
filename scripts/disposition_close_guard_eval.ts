@@ -9,9 +9,12 @@ import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-const { canApplyDispositionCloseout, hasActiveDealCloseoutBlockers, hasUnitInfoRequestText } = await import(
-  "../services/api/src/domain/transitionSafety.ts"
-);
+const {
+  canApplyDispositionCloseout,
+  hasActiveDealCloseoutBlockers,
+  hasUnitInfoRequestText,
+  hasQualificationCriteriaAnswerText
+} = await import("../services/api/src/domain/transitionSafety.ts");
 
 const nowMs = Date.parse("2026-06-11T19:08:28.000Z");
 const batka: any = {
@@ -165,6 +168,89 @@ assert.match(
   llmSource,
   /Could o see pictures of that 883 and the price/,
   "disposition parser few-shots pin the Jaydon Gerolimos production fixture"
+);
+
+// ---------------------------------------------------------------------------
+// Production miss 2026-07-30 — Shad Stymus +17164208856. We asked "should I focus on new,
+// used, or both? ... share your budget range"; he ANSWERED with criteria and was closed out.
+// One level out from Jaydon: he asks us nothing, so no ask-shaped arm can catch it.
+// ---------------------------------------------------------------------------
+const SHAD =
+  "Sorry been busy with work most likely used and the lowest monthly payments is the best for me at this moment as I have alot of hospital bills for my daughter which is not in the best health at the moment.  Thank you sincerely, Shad stymus.";
+
+assert.equal(
+  hasQualificationCriteriaAnswerText(SHAD),
+  true,
+  "the Shad production turn answers our qualifying question with buying criteria"
+);
+assert.equal(
+  hasQualificationCriteriaAnswerText(
+    "Sorry for the slow reply, work has been nuts. Probably used, and honestly the lowest monthly payment I can get is what matters most."
+  ),
+  true,
+  "the criteria answer generalizes past the medical framing"
+);
+assert.equal(
+  hasQualificationCriteriaAnswerText("Looking for a pre-owned Breakout if you get one in."),
+  true,
+  "a stated condition preference is a buying criterion"
+);
+
+// NEGATIVES — a bare defer, hardship, or apology with NO criteria must still close, or we
+// would never stop texting a customer who asked us to.
+for (const closeout of [
+  "Not right now, please stop texting me.",
+  "Money's just too tight right now, I've got to stop looking for a while.",
+  "I'm not looking right now but I'll get a hold of you when I'm ready.",
+  "I think I'm going to keep my bike and hold off for now.",
+  "Sorry, been busy with work. I'll get back to you.",
+  "I used to ride but not anymore.",
+  "I ended up buying a used 2016 in Ohio. Thank you, I appreciate it."
+]) {
+  assert.equal(
+    hasQualificationCriteriaAnswerText(closeout),
+    false,
+    `must not read a qualification answer in: ${closeout}`
+  );
+}
+
+assert.equal(
+  canApplyDispositionCloseout({
+    conv: { id: "+17164208856", messages: [] },
+    text: SHAD,
+    parsedAccepted: true,
+    hasDecision: true,
+    openTodos: []
+  }),
+  false,
+  "a turn that answers our own qualifying question with buying criteria must never close the lead, however confident the disposition parse"
+);
+assert.equal(
+  canApplyDispositionCloseout({
+    conv: { id: "z", messages: [] },
+    text: "Not right now, please stop texting me.",
+    parsedAccepted: true,
+    hasDecision: true,
+    openTodos: []
+  }),
+  true,
+  "a clean stop-texting turn with no criteria still closes"
+);
+
+assert.match(
+  llmSource,
+  /Answering OUR qualifying question is ENGAGED/,
+  "disposition parser rules carve out the answer-to-our-question turn"
+);
+assert.match(
+  llmSource,
+  /lowest monthly payments is the best for me at this moment/,
+  "disposition parser few-shots pin the Shad Stymus production fixture"
+);
+assert.match(
+  apiSource,
+  /hasQualificationCriteriaAnswerText\(t\)/,
+  "the health-update arm must not swallow a buying-criteria answer"
 );
 
 console.log("PASS disposition close guard eval");
