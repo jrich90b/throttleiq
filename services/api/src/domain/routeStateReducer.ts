@@ -3297,3 +3297,94 @@ export function isStaleSoldAnnouncement(input: {
   const maxDays = Number.isFinite(maxDaysRaw) && maxDaysRaw > 0 ? maxDaysRaw : 30;
   return input.nowMs - soldMs > maxDays * 24 * 60 * 60 * 1000;
 }
+
+// A lead whose FINANCING WAS DECLINED belongs on the long-term cadence, not the standard chase.
+//
+// Joe's ruling, 2026-08-01 ("5 yes long term"): "someone who just got declined is not a this-week
+// buyer." `applyFinanceOutcomeStatusFromSignal` already opens the right cadence
+// (kind `long_term`, FINANCE_DECLINED_DAY_OFFSETS = 30/60/120 days) the moment the decline is
+// recorded — but nothing DEFENDED it afterwards, so a later cadence write silently downgraded it.
+//
+// Production fixture — Tyler Boudreau `+17169905800`:
+//   19:43:45.442Z  staff record the To-Do outcome "not approved (needs a cosigner)"
+//                  -> followUp.reason = financing_declined, followUpCadence.kind = long_term
+//   19:44:22.868Z  (37 SECONDS later) staff manually text him about the co-signer. That text hits
+//                  `isManualOutboundCreditAppNeedsMoreInfoText` ("co-signer" is in its term list),
+//                  and `applyManualOutboundCreditAppNeedsMoreInfo` REPLACED the whole cadence with
+//                  kind `engaged` on FOLLOW_UP_DAY_OFFSETS.
+// He has been on the fast chase ever since — the operator report reads "this has a not approved
+// outcome. why did it go into a short term cadence follow up". `+17166060001` is the same class
+// ("finance application was not approved. shouldn't this go into a long term cadence?", 15d old).
+//
+// DETERMINISTIC BY DESIGN, and legal under AGENTS.md rule 2: this reads only RECORDED STATE
+// (`followUp.reason`, `financeOutcome.status`, the appointment outcome) — never customer text —
+// and it gates a SIDE EFFECT (which cadence schedule runs). No comprehension is involved.
+//
+// FAIL DIRECTION: a false positive slows an already-declined lead to 30/60/120-day touches; a
+// false negative is today's bug, chasing a just-declined customer every few days. Joe ruled the
+// slow direction, so unknown/blank => NOT declined (fail toward today's behavior) and any
+// POSITIVE decline signal wins.
+//
+// `needs_more_info` is deliberately NOT a decline — that lead is being actively worked and keeps
+// its engaged docs cadence. Only an outright decline drops to long-term.
+export type FinanceDeclinedCadenceInput = {
+  followUpReason?: string | null;
+  financeOutcomeStatus?: string | null;
+  appointmentOutcomeStatus?: string | null;
+  appointmentOutcomeSecondaryStatus?: string | null;
+  cadenceKind?: string | null;
+  cadenceStatus?: string | null;
+};
+
+export type FinanceDeclinedCadenceDecision = {
+  /** Does the recorded state say this lead's financing was declined? */
+  isFinanceDeclined: boolean;
+  /** May a caller replace the current cadence with a short-term (engaged/standard) one? */
+  blockEngagedDowngrade: boolean;
+  /** Is an active cadence currently running at the WRONG speed and in need of a heal? */
+  needsLongTermHeal: boolean;
+  reason: string;
+};
+
+const FINANCE_DECLINED_STATE_TOKENS = new Set([
+  "financing_declined",
+  "finance_not_approved",
+  "finance_declined",
+  "not_approved",
+  "declined"
+]);
+
+function isFinanceDeclinedToken(raw: string | null | undefined): boolean {
+  const value = String(raw ?? "").trim().toLowerCase();
+  if (!value) return false;
+  return FINANCE_DECLINED_STATE_TOKENS.has(value);
+}
+
+export function decideFinanceDeclinedCadence(
+  input: FinanceDeclinedCadenceInput
+): FinanceDeclinedCadenceDecision {
+  const signals: string[] = [];
+  if (isFinanceDeclinedToken(input.followUpReason)) signals.push("follow_up_reason");
+  // `financeOutcome.status` is the narrow finance lane and carries the bare token "declined";
+  // the appointment outcome carries the legacy "financing_declined" / secondary
+  // "finance_not_approved" pair written by normalizeAppointmentOutcomeInput().
+  if (isFinanceDeclinedToken(input.financeOutcomeStatus)) signals.push("finance_outcome");
+  if (isFinanceDeclinedToken(input.appointmentOutcomeStatus)) signals.push("appointment_outcome");
+  if (isFinanceDeclinedToken(input.appointmentOutcomeSecondaryStatus)) {
+    signals.push("appointment_outcome_secondary");
+  }
+
+  const isFinanceDeclined = signals.length > 0;
+  const cadenceKind = String(input.cadenceKind ?? "").trim().toLowerCase();
+  const cadenceStatus = String(input.cadenceStatus ?? "").trim().toLowerCase();
+  // post_sale outranks everything (they bought something in the end) and long_term is already
+  // correct, so neither is a downgrade target and neither needs healing.
+  const cadenceIsShortTerm = cadenceKind !== "long_term" && cadenceKind !== "post_sale";
+
+  return {
+    isFinanceDeclined,
+    blockEngagedDowngrade: isFinanceDeclined && cadenceKind === "long_term",
+    needsLongTermHeal: isFinanceDeclined && cadenceIsShortTerm && cadenceStatus === "active",
+    reason: isFinanceDeclined ? `finance_declined:${signals.join("+")}` : "not_finance_declined"
+  };
+}

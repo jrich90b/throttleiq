@@ -703,6 +703,7 @@ import {
   decideServiceSchedulingHandoffTurn,
   decideFinanceHardshipTurn,
   decideIncomingInventoryPurpose,
+  decideFinanceDeclinedCadence,
   decideNonMotorcycleTradeTurn,
   decideServiceAppointmentTurn,
   decideSchedulingTurn,
@@ -33610,6 +33611,45 @@ async function processDueFollowUpsUnlocked() {
       saveConversation(conv);
       cadence = conv.followUpCadence;
     }
+    // Finance-declined heal (Joe 2026-08-01, "5 yes long term"). Same idiom as the sold ->
+    // post_sale reconcile above: the cadence KIND is re-derived from recorded state before we
+    // decide to send, so a lead who is already on the wrong schedule is corrected BEFORE the
+    // next touch goes out rather than after. This is what pulls Tyler Boudreau +17169905800 off
+    // the fast chase without a data migration.
+    const financeDeclinedHeal = decideFinanceDeclinedCadence({
+      followUpReason: conv.followUp?.reason,
+      financeOutcomeStatus: conv.financeOutcome?.status,
+      appointmentOutcomeStatus: conv.appointment?.staffNotify?.outcome?.status,
+      appointmentOutcomeSecondaryStatus: conv.appointment?.staffNotify?.outcome?.secondaryStatus,
+      cadenceKind: cadence?.kind,
+      cadenceStatus: cadence?.status
+    });
+    if (financeDeclinedHeal.needsLongTermHeal && cadence) {
+      const declineAnchor = String(conv.followUp?.updatedAt ?? cadence.anchorAt ?? nowIso());
+      cadence.kind = "long_term";
+      cadence.stepIndex = 0;
+      cadence.anchorAt = declineAnchor;
+      // Never PULL a touch earlier than what was already scheduled: on an old decline the
+      // 30-day offset lands in the past, and re-anchoring there would fire an immediate blast.
+      const healedDueAt = computeFollowUpDueAt(
+        declineAnchor,
+        FINANCE_DECLINED_DAY_OFFSETS[0],
+        cfg.timezone
+      );
+      const priorDueMs = Date.parse(String(cadence.nextDueAt ?? ""));
+      const healedDueMs = Date.parse(healedDueAt);
+      cadence.nextDueAt =
+        Number.isFinite(priorDueMs) && Number.isFinite(healedDueMs) && priorDueMs > healedDueMs
+          ? String(cadence.nextDueAt)
+          : healedDueAt;
+      conv.updatedAt = nowIso();
+      saveConversation(conv);
+      console.log("[finance-declined-cadence] healed to long_term", {
+        convId: conv.id,
+        reason: financeDeclinedHeal.reason,
+        nextDueAt: cadence.nextDueAt
+      });
+    }
     if (!cadence || cadence.status !== "active" || !cadence.nextDueAt) continue;
     const isPostSale = cadence.kind === "post_sale";
     if (isPostSale) {
@@ -52988,6 +53028,26 @@ app.post("/conversations/:id/send", async (req, res) => {
       setFollowUpMode(conv, "manual_handoff", "credit_app_needs_info_voice_hold");
       stopFollowUpCadence(conv, "manual_handoff");
       recordRouteOutcome("manual", "manual_outbound_finance_docs_voice_hold", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        channel: opts?.channel ?? null
+      });
+      return true;
+    }
+    // Joe 2026-08-01 ("5 yes long term"): a DECLINED lead stays on the long-term cadence. Staff
+    // texting a declined customer about the co-signer/docs is normal follow-through and must not
+    // re-anchor him to the fast engaged chase — that is exactly how Tyler Boudreau +17169905800
+    // lost his long_term cadence 37 seconds after it was set. Centralized in routeStateReducer.
+    const financeDeclinedCadence = decideFinanceDeclinedCadence({
+      followUpReason: conv.followUp?.reason,
+      financeOutcomeStatus: conv.financeOutcome?.status,
+      appointmentOutcomeStatus: conv.appointment?.staffNotify?.outcome?.status,
+      appointmentOutcomeSecondaryStatus: conv.appointment?.staffNotify?.outcome?.secondaryStatus,
+      cadenceKind: conv.followUpCadence?.kind,
+      cadenceStatus: conv.followUpCadence?.status
+    });
+    if (financeDeclinedCadence.blockEngagedDowngrade) {
+      recordRouteOutcome("manual", "manual_outbound_finance_docs_declined_long_term_kept", {
         convId: conv.id,
         leadKey: conv.leadKey,
         channel: opts?.channel ?? null
