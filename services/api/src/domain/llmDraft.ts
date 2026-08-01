@@ -2775,6 +2775,13 @@ export type DraftEditJudgeParse = {
   // should fix at the parser) vs COSMETIC (only HOW it reads: voice, length, formatting, greeting — not
   // a comprehension bug). Only material corrections feed the self-healing loop.
   isMaterial: boolean;
+  /**
+   * Could the agent have known what the human added? `false` = out-of-band knowledge (an incoming
+   * trade not yet in inventory, the rep's own schedule, something agreed on a call) — the agent was
+   * uninformed, not wrong, and the correction rate must not charge it. Defaults TRUE on an absent or
+   * unparsed field: an unproven excuse is never credited (domain/agentCorrectionRate.ts).
+   */
+  agentCouldHaveKnown: boolean;
   category:
     | "wrong_intent" // the draft answered a different question than the customer asked
     | "out_of_context" // fluent but about the wrong thing (the context-fidelity failure class)
@@ -4225,9 +4232,17 @@ const CONTEXT_FIDELITY_JSON_SCHEMA: { [key: string]: unknown } = {
 const DRAFT_EDIT_JUDGE_JSON_SCHEMA: { [key: string]: unknown } = {
   type: "object",
   additionalProperties: false,
-  required: ["is_material", "category", "confidence", "reason", "steering"],
+  required: ["is_material", "agent_could_have_known", "category", "confidence", "reason", "steering"],
   properties: {
     is_material: { type: "boolean" },
+    // Could the AGENT have known what the human put in? A staff edit that adds out-of-band
+    // knowledge ("I'm taking a pre-owned 2016 in next week", "I have to leave at 5", "it's an
+    // out-of-state sale so no NYS tax") is the agent being UNINFORMED, not wrong — and counting
+    // those as agent errors is exactly the misread that inflated the 7/29 draft-edit read.
+    // false = the agent had no way to know. Unknown is NOT excusable: answer true unless the
+    // out-of-band knowledge is evident, so the correction rate errs against the agent rather
+    // than flattering it (domain/agentCorrectionRate.ts).
+    agent_could_have_known: { type: "boolean" },
     category: {
       type: "string",
       enum: [
@@ -10625,6 +10640,12 @@ export async function classifyDraftEditWithLLM(args: {
     "  wrong_lead_type (sales frame on a non-sales lead) | wrong_fact (corrected a fact/price/availability/",
     "  policy) | missing_info (rep added needed info the draft omitted) | voice_tone | length_brevity |",
     "  formatting | other. Use a cosmetic category (voice_tone/length_brevity/formatting) when is_material=false.",
+    "- agent_could_have_known: could the AGENT have known what the rep put in, from the thread, the lead",
+    "  record, or the inventory feed? Answer FALSE only when the rep clearly supplied OUT-OF-BAND knowledge",
+    "  the agent had no access to — a unit being taken in trade that is not in inventory yet, the rep's own",
+    "  schedule, a deal detail agreed on a phone call, a store fact nobody recorded. Answer TRUE when the",
+    "  information was available and the agent simply got it wrong or left it out. When unsure, answer TRUE:",
+    "  an unproven excuse must not be credited to the agent.",
     "- confidence 0..1 (>= 0.8 only when clear). reason: what changed. steering: one instruction so the",
     "  next draft gets it right (only meaningful when is_material).",
     "Be conservative: when the meaning is the same, is_material=false. When unsure, prefer cosmetic.",
@@ -10637,8 +10658,13 @@ export async function classifyDraftEditWithLLM(args: {
     '  Glide is $26,499 — want the out-the-door?" -> {"is_material":true,"category":"wrong_fact","confidence":0.9,',
     '   "reason":"corrected the price","steering":"quote the correct price for the Street Glide"}',
     '- generated: "Hi there — yes that\'s in stock, want to come see it?" | sent: "Hey John, good news —',
-    '  it\'s in stock! Want to swing by?" -> {"is_material":false,"category":"voice_tone","confidence":0.9,',
-    '   "reason":"same message, friendlier wording + name","steering":""}',
+    '  it\'s in stock! Want to swing by?" -> {"is_material":false,"agent_could_have_known":true,',
+    '   "category":"voice_tone","confidence":0.9,"reason":"same message, friendlier wording + name","steering":""}',
+    '- OUT-OF-BAND (live +17164792868): generated: "quick update on the Freewheeler: I\'m not seeing one',
+    '  available right now." | sent: "quick update on the Freewheeler: I\'m going to be taking in a pre-owned',
+    '  2016 with about 6,800 miles next week." -> {"is_material":true,"agent_could_have_known":false,',
+    '   "category":"missing_info","confidence":0.9,"reason":"rep knew of an incoming trade that is not in',
+    '   inventory yet","steering":""} — the agent was uninformed, not wrong; do NOT count it against it.',
     "",
     `Channel: ${args.channel ?? "sms"}`,
     `Anchor: ${JSON.stringify({ model_of_record: anchor.modelOfRecord ?? null, lead_type: anchor.leadType ?? null, dialog_state: anchor.dialogState ?? null })}`,
@@ -10683,6 +10709,10 @@ export async function classifyDraftEditWithLLM(args: {
       : undefined;
   return {
     isMaterial: parsed.is_material === true,
+    // Only an explicit `false` excuses the agent. A missing/garbled field must read as "the agent
+    // could have known" so an unparsed verdict never quietly discounts a correction — see the fail
+    // direction in domain/agentCorrectionRate.ts.
+    agentCouldHaveKnown: parsed.agent_could_have_known !== false,
     category,
     confidence,
     reason: typeof parsed.reason === "string" ? parsed.reason.slice(0, 240) : undefined,

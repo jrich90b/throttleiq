@@ -20,6 +20,7 @@ import {
   postSaleAccessoryOrEnjoyMessage,
   resolvePostSaleModelLabel
 } from "./domain/postSaleCadence.js";
+import { stampDraftProvenance } from "./domain/agentCorrectionRate.js";
 import { hasDeliveredOrPendingDealerRideThankYou } from "./domain/dealerRideThankYouDedup.js";
 import {
   hasDealProgressParserHintText,
@@ -5531,11 +5532,32 @@ async function recordDraftEditCorrection(
       },
       channel: args.channel
     });
-    if (!verdict || !verdict.isMaterial) return; // cosmetic edits are NOT a comprehension gap
+    if (!verdict) return;
+    // The verdict goes on the MESSAGE regardless of the outcome — including cosmetic ones.
+    // conv.humanCorrection below keeps only the LATEST material correction (right for the anomaly
+    // detector, useless for a rate), and cosmetic verdicts used to be thrown away entirely, so
+    // there was nothing to compute a rate FROM. Per-message is the durable record.
+    if (
+      stampDraftProvenance(conv.messages as any[], args.messageId, {
+        draftEdited: true,
+        draftEditVerdict: {
+          isMaterial: verdict.isMaterial,
+          agentCouldHaveKnown: verdict.agentCouldHaveKnown !== false,
+          category: verdict.category ?? null,
+          confidence: verdict.confidence ?? null
+        }
+      })
+    ) {
+      saveConversation(conv);
+    }
+    if (!verdict.isMaterial) return; // cosmetic edits are NOT a comprehension gap
     if (typeof verdict.confidence === "number" && verdict.confidence < 0.6) return; // low-signal
     (conv as any).humanCorrection = {
       at: new Date().toISOString(),
       category: verdict.category ?? null,
+      // Joe 2026-08-01: the correction RATE must not charge the agent for knowledge it could not
+      // have had. Persisted so agentCorrectionRate can bucket this edit as out-of-band.
+      agentCouldHaveKnown: verdict.agentCouldHaveKnown !== false,
       confidence: verdict.confidence ?? null,
       reason: verdict.reason ?? null,
       steering: verdict.steering ?? null,
@@ -5573,7 +5595,14 @@ function maybeRecordDraftEditCorrection(
 ): void {
   if (!fin?.usedDraft) return;
   const generated = String(fin.originalDraftBody ?? "");
-  if (!generated.trim() || generated.trim() === String(sent ?? "").trim()) return; // no edit
+  const edited = !!generated.trim() && generated.trim() !== String(sent ?? "").trim();
+  // Joe 2026-08-01: stamp EVERY draft-sourced send, edited or not. An unedited send previously left
+  // no trace that the text came from the agent, so there was no denominator and the correction
+  // count could never become a correction RATE (domain/agentCorrectionRate.ts).
+  if (stampDraftProvenance(conv.messages as any[], messageId, { draftEdited: edited })) {
+    saveConversation(conv);
+  }
+  if (!edited) return;
   void recordDraftEditCorrection(conv, { generated, sent: String(sent ?? ""), channel, messageId });
 }
 

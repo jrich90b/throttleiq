@@ -326,7 +326,24 @@ assert.match(llm, /export async function classifyDraftEditWithLLM/, "the materia
 assert.match(llm, /DRAFT_EDIT_JUDGE_JSON_SCHEMA/, "the diff-judge uses a typed structured-output schema");
 assert.match(idx, /maybeRecordDraftEditCorrection\(conv, fin/, "the send path records a staff edit (both email + sms sites)");
 assert.match(idx, /\(conv as any\)\.humanCorrection = \{/, "a MATERIAL correction is persisted on the conversation");
-assert.match(idx, /if \(!verdict \|\| !verdict\.isMaterial\) return/, "cosmetic edits are NOT recorded (material only)");
+// Cosmetic edits must never reach conv.humanCorrection (this feed is material-only). This used to
+// pin the single source line `if (!verdict || !verdict.isMaterial) return`, which broke the moment
+// the recorder legitimately split that guard in two so it could stamp the per-message verdict FIRST
+// — agent_correction_rate needs the cosmetic verdicts too (domain/agentCorrectionRate.ts). Pin the
+// ORDERING rather than the wording: an isMaterial early-return must still sit between the judge call
+// and the humanCorrection write, so a cosmetic verdict can never fall through to it. Same lesson as
+// the eval source-count brittleness — pin the behavior, not the exact characters.
+{
+  const judgeAt = idx.indexOf("const verdict = await classifyDraftEditWithLLM(");
+  const materialGuardAt = idx.indexOf("if (!verdict.isMaterial) return");
+  const persistAt = idx.indexOf("(conv as any).humanCorrection = {");
+  assert.ok(judgeAt >= 0, "the recorder calls the diff-judge");
+  assert.ok(materialGuardAt >= 0, "the recorder still early-returns on a non-material verdict");
+  assert.ok(
+    judgeAt < materialGuardAt && materialGuardAt < persistAt,
+    "cosmetic edits are NOT recorded: the isMaterial guard sits between the judge and the humanCorrection write"
+  );
+}
 assert.ok((idx.match(/maybeRecordDraftEditCorrection\(conv, fin/g) ?? []).length >= 2, "wired at both successful send sites (email + twilio)");
 
 // --- Net 3 wiring: the open-ended critic (LLM) + the sweep that emits discovery anomalies + the merge. ---
