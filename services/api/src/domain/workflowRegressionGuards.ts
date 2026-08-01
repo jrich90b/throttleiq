@@ -969,8 +969,17 @@ export function extractDealerLeadAppDemoBikeLabel(textRaw: string | null | undef
   return label || null;
 }
 
+// Structured extraction (deterministic, AGENTS.md-allowed): pull a dealer stock number token out of
+// a message. Every stock id in the live feed is LETTER-LED (observed shapes: A9-99, A99-99, A999-99,
+// AA9-99 across all 71 units), so the prefix must contain at least one alpha. Without that, an
+// all-digit prefix made customer phone numbers and date ranges read as stock numbers — "Itz
+// 716-713-8288" yielded "716-713" and hijacked the turn into the inventory-availability arm
+// (+17164233031, msg_30b26a65c146e_1777309569346). The trailing/leading guards keep a match from
+// being carved out of a longer digit-dash run, e.g. "713-8288" inside "(716) 713-8288".
 export function extractInventoryStockIdMention(textRaw: string | null | undefined): string | null {
-  const match = String(textRaw ?? "").match(/\b[A-Z0-9]{1,5}-\d{1,4}\b/i);
+  const match = String(textRaw ?? "").match(
+    /(?<![A-Z0-9-])(?=[A-Z0-9]{0,4}[A-Z])[A-Z0-9]{1,5}-\d{1,4}(?![-\d])/i
+  );
   return match?.[0] ? match[0].toUpperCase() : null;
 }
 

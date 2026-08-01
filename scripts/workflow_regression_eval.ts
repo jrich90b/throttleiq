@@ -1132,6 +1132,61 @@ const cases: Case[] = [
     actual: isStockNumberInventoryInterestText("Very interested in thw T10-26 street glide !!"),
     expected: true
   },
+  // Stock ids in the live feed are LETTER-LED (A9-99 / A99-99 / A999-99 / AA9-99 across all 71
+  // units), so an all-digit prefix is never one. Production turn +17164233031
+  // (msg_30b26a65c146e_1777309569346): the customer handed over her boyfriend's phone number and
+  // "716-713" was read as a stock number, hijacking the turn into the availability arm.
+  {
+    id: "customer_phone_number_is_not_a_stock_id",
+    actual: extractInventoryStockIdMention("Idk actually I should have given his number.  Itz 716-713-8288. His name is Steve"),
+    expected: null
+  },
+  {
+    id: "customer_phone_number_does_not_trigger_stock_interest",
+    actual: isStockNumberInventoryInterestText("Idk actually I should have given his number.  Itz 716-713-8288. His name is Steve"),
+    expected: false
+  },
+  {
+    id: "formatted_phone_number_is_not_a_stock_id",
+    actual: extractInventoryStockIdMention("call him at (716) 713-8288"),
+    expected: null
+  },
+  {
+    id: "day_range_is_not_a_stock_id",
+    actual: extractInventoryStockIdMention("looking to buy in 3-4 weeks, have any Street Glides?"),
+    expected: null
+  },
+  {
+    id: "price_range_is_not_a_stock_id",
+    actual: extractInventoryStockIdMention("interested if you have anything 10-15 thousand"),
+    expected: null
+  },
+  {
+    id: "iso_date_is_not_a_stock_id",
+    actual: extractInventoryStockIdMention("your email said 2026-04 availability"),
+    expected: null
+  },
+  // Regression guards: the narrowing must not cost us a single real stock number.
+  {
+    id: "letter_led_stock_id_still_extracted_short",
+    actual: extractInventoryStockIdMention("is S9-25 still there?"),
+    expected: "S9-25"
+  },
+  {
+    id: "letter_led_stock_id_still_extracted_long",
+    actual: extractInventoryStockIdMention("interested in T144-26 please"),
+    expected: "T144-26"
+  },
+  {
+    id: "letter_led_stock_id_still_extracted_two_letter",
+    actual: extractInventoryStockIdMention("do you still have AB9-99 in stock"),
+    expected: "AB9-99"
+  },
+  {
+    id: "lowercase_stock_id_still_extracted_uppercased",
+    actual: extractInventoryStockIdMention("still have t10-26?"),
+    expected: "T10-26"
+  },
   {
     id: "inventory_browse_link_request_detected",
     actual: isInventoryBrowseLinkRequestText("Can you send me your inventory link?"),
