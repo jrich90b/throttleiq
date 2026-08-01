@@ -354,12 +354,33 @@ function latestCustomerText(row: OutcomeCase): string | null {
   return row.customerFacingAfterOutcome[0]?.body ?? null;
 }
 
+/**
+ * A ride that ended in a SALE hands the customer to the post-sale lane, and the
+ * pre-outcome "thanks for coming in for the test ride, let me know if questions
+ * come up" draft is then WRONG — so the publisher correctly marks it stale when
+ * the sale is logged. Charles Desalvo (2026-08-01) is the case: sold at 18:36Z,
+ * thank-you draft staled, post_sale cadence active with the next touch already
+ * scheduled. Demanding a separate thank-you there flags the system for doing the
+ * right thing. Excluded only when the post-sale cadence is actually live and
+ * scheduled to reach them — a sold ride with NO post-sale follow-through still
+ * flags, because then nobody is talking to the buyer.
+ */
+function postSaleLaneOwnsFollowUp(row: OutcomeCase): boolean {
+  return (
+    String(row.status ?? "").toLowerCase() === "sold" &&
+    String(row.cadenceKind ?? "").toLowerCase() === "post_sale" &&
+    String(row.cadenceStatus ?? "").toLowerCase() === "active" &&
+    !!row.nextDueAt
+  );
+}
+
 function expectsDealerRideThankYou(row: OutcomeCase): boolean {
   if (row.family !== "dealer_ride") return false;
   const status = String(row.status ?? "").toLowerCase();
   const secondary = String(row.secondaryStatus ?? "").toLowerCase();
   if (status === "no_change" || secondary === "no_change") return false;
   if (row.preferredContactMethod === "phone") return false;
+  if (postSaleLaneOwnsFollowUp(row)) return false;
   return true;
 }
 

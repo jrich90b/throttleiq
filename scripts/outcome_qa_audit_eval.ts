@@ -174,11 +174,11 @@ const store = {
       messages: []
     },
     {
-      // Charles Desalvo, 2026-08-01: the ride-lead ingest publishes the thank-you
-      // draft and SMSes the salesperson the outcome prompt together; the outcome
-      // came back 74s later. The thank-you EXISTS, so this must raise no finding —
-      // anchoring only to the outcome timestamp made it a phantom release-gate P1.
-      id: "conv_dealer_thanked_before_outcome",
+      // Charles Desalvo, 2026-08-01 — the ride ended in a SALE. The pre-outcome
+      // thank-you draft is wrong once he owns the bike, so the publisher staled
+      // it and the post_sale cadence took over with the next touch scheduled.
+      // That is the system working; it must not read as a missing thank-you.
+      id: "conv_dealer_sold_post_sale_lane",
       leadKey: "+17160000005",
       mode: "suggest",
       leadOwner: { name: "Giovanni Boccabella" },
@@ -187,6 +187,11 @@ const store = {
         firstName: "Charles",
         lastName: "Desalvo",
         phone: "7160000005"
+      },
+      followUpCadence: {
+        status: "active",
+        kind: "post_sale",
+        nextDueAt: isoMinutesAgo(-180)
       },
       dealerRide: {
         staffNotify: {
@@ -202,12 +207,76 @@ const store = {
       },
       messages: [
         {
-          id: "msg_dealer_ride_thank_you",
+          id: "msg_dealer_ride_thank_you_staled",
+          direction: "out",
+          provider: "draft_ai",
+          draftStatus: "stale",
+          at: isoMinutesAgo(31),
+          body:
+            "Hey Charles, it's Alexandra over at American Harley-Davidson. Thanks again for coming in for the test ride on the 2024 Street Glide. If any questions come up, just text me anytime."
+        }
+      ]
+    },
+    {
+      // Fail direction: a SOLD ride with no post-sale follow-through still flags —
+      // nobody is talking to the buyer, and that is a real miss.
+      id: "conv_dealer_sold_no_post_sale_cadence",
+      leadKey: "+17160000006",
+      mode: "suggest",
+      leadOwner: { name: "Giovanni Boccabella" },
+      lead: {
+        leadRef: "DR4",
+        firstName: "Dana",
+        lastName: "Orphan",
+        phone: "7160000006"
+      },
+      dealerRide: {
+        staffNotify: {
+          followUpSentAt: isoMinutesAgo(31),
+          outcome: {
+            status: "sold",
+            primaryStatus: "showed",
+            secondaryStatus: "sold",
+            note: "",
+            updatedAt: isoMinutesAgo(30)
+          }
+        }
+      },
+      messages: []
+    },
+    {
+      // And a LIVE (non-stale) thank-you published at notify time, before the
+      // salesperson answered the outcome prompt 74s later, still counts.
+      id: "conv_dealer_thanked_before_outcome",
+      leadKey: "+17160000007",
+      mode: "suggest",
+      leadOwner: { name: "Stone Giuga" },
+      lead: {
+        leadRef: "DR5",
+        firstName: "Pat",
+        lastName: "Rider",
+        phone: "7160000007"
+      },
+      dealerRide: {
+        staffNotify: {
+          followUpSentAt: isoMinutesAgo(31),
+          outcome: {
+            status: "follow_up",
+            primaryStatus: "showed",
+            secondaryStatus: "needs_follow_up",
+            note: "wants to think it over",
+            updatedAt: isoMinutesAgo(30)
+          }
+        }
+      },
+      messages: [
+        {
+          id: "msg_dealer_ride_thank_you_live",
           direction: "out",
           provider: "draft_ai",
           at: isoMinutesAgo(31),
           body:
-            "Hey Charles, it's Alexandra over at American Harley-Davidson. Thanks again for coming in for the test ride on the 2024 Street Glide. If any questions come up or you want to go over options, just text me anytime."
+            "Hey Pat, it's Alexandra over at American Harley-Davidson. Thanks again for coming in for the test ride today — anything you want me to pull together while you think it over?"
         }
       ]
     }
@@ -220,11 +289,21 @@ const report = buildOutcomeQaReport(store, {
   sinceHours: 24
 });
 
-assertCheck("outcome_count", report.summary.outcomeCount, 6);
+assertCheck("outcome_count", report.summary.outcomeCount, 8);
 assertCheck("missing_dealer_ride_thank_you_detected", hasIssue(report, "missing_dealer_ride_customer_thank_you"), true);
 assertCheck(
   "missing_dealer_ride_thank_you_still_fires_when_absent",
   hasIssueForConv(report, "missing_dealer_ride_customer_thank_you", "conv_dealer_missing"),
+  true
+);
+assertCheck(
+  "sold_ride_handed_to_post_sale_lane_is_not_a_miss",
+  hasIssueForConv(report, "missing_dealer_ride_customer_thank_you", "conv_dealer_sold_post_sale_lane"),
+  false
+);
+assertCheck(
+  "sold_ride_without_post_sale_cadence_still_flags",
+  hasIssueForConv(report, "missing_dealer_ride_customer_thank_you", "conv_dealer_sold_no_post_sale_cadence"),
   true
 );
 assertCheck(
