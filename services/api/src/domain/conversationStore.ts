@@ -4924,6 +4924,7 @@ export function applyCadenceQuietWindow(
   const decision = decideCadenceQuietWindow({
     trigger: input.trigger,
     cadenceStatus: conv.followUpCadence?.status ?? null,
+    followUpMode: conv.followUp?.mode ?? null,
     reason: input.reason
   });
   if (decision.restartCadence) {

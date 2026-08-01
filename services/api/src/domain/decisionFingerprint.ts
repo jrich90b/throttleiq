@@ -143,7 +143,8 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
       if (typeof reducer.decideCadenceQuietWindow !== "function") return undefined;
       return reducer.decideCadenceQuietWindow({
         trigger,
-        cadenceStatus: conv?.followUpCadence?.status ?? null
+        cadenceStatus: conv?.followUpCadence?.status ?? null,
+        followUpMode: conv?.followUp?.mode ?? null
       });
     });
   }
