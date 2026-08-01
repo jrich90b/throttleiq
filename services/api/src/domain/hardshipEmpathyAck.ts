@@ -70,3 +70,59 @@ export function prependHardshipAck(draft: string): string {
   const base = String(draft ?? "").trimStart();
   return base ? `${HARDSHIP_EMPATHY_ACK} ${base}` : HARDSHIP_EMPATHY_ACK;
 }
+
+/**
+ * A leading agent self-introduction sentence, in either shape we emit:
+ *   "Hey Wesley, it's Alexandra over at American Harley-Davidson. "  (buildAgentIntro)
+ *   "Hi Wesley — This is Alexandra at American Harley-Davidson. "    (legacy inline intros)
+ * Inspecting OUR OWN composed draft, not the customer's words — same rationale as
+ * `draftAlreadyAcknowledgesHardship` above.
+ */
+const AGENT_INTRO_LEAD_RE =
+  /^(?:(?:hi|hey|hello)\b[^.!?]{0,60}?[,—-]\s*)?(?:it[’']?s|this is)\s+[^.!?]{2,120}?\bat\s+[^.!?]{2,160}?[.!]\s*/i;
+
+/**
+ * Apply the hardship acknowledgment to a FIXED department/handoff template.
+ *
+ * Why this exists instead of reusing the orchestrator's finalize hook: the department arms
+ * (parts/apparel/service/credit — the "we'll have the team reach out" acks) EARLY-RETURN their
+ * own hand-built template and never pass through `finalize()`, and they all call
+ * `setFollowUpMode(conv, "manual_handoff", ...)` first — so the orchestrator's `wrongContext`
+ * veto ("manual handoff owns its own empathy") would suppress the ack even if they did. That
+ * veto is correct for the MENTION-handoff arm, which composes its own "I'm really sorry to hear
+ * that." beat; it is wrong for these templates, which own no empathy beat at all. Wesley Buzzard
+ * (+17162913658, 2026-07-30) disclosed his mother's death while asking for a shirt and got the
+ * bare "Thanks — I've received your apparel request." So the templates OPT IN here rather than
+ * being vetoed generically; `orchestrator.ts`'s suppression is deliberately left untouched.
+ *
+ * INTRO-AWARE on purpose: the ADF lane prefixes an agent introduction before publishing, and a
+ * naive prepend yields "I'm really sorry to hear that. Hey Wesley, it's Alexandra over at …".
+ * The ack goes AFTER the intro sentence, never before it.
+ *
+ * `needsEmpathy` comes from the LLM affect parser's confidence-gated snapshot (parser-first —
+ * no regex reads the customer's words here). Pinned by scripts/hardship_empathy_ack_eval.ts.
+ */
+export function applyHardshipAckToHandoffTemplate(args: {
+  draft: string;
+  needsEmpathy: boolean;
+}): string {
+  const original = String(args.draft ?? "");
+  if (!args.needsEmpathy) return original;
+  const trimmed = original.trim();
+  if (!trimmed) return original;
+  const introMatch = trimmed.match(AGENT_INTRO_LEAD_RE);
+  const intro = introMatch ? introMatch[0] : "";
+  const body = intro ? trimmed.slice(intro.length) : trimmed;
+  if (
+    !shouldPrependHardshipAck({
+      needsEmpathy: true,
+      shouldRespond: true,
+      draft: body,
+      // The whole point: these templates carry no empathy beat, so manual_handoff must not veto.
+      wrongContext: false
+    })
+  ) {
+    return original;
+  }
+  return intro ? `${intro.trimEnd()} ${prependHardshipAck(body)}` : prependHardshipAck(body);
+}

@@ -43,7 +43,10 @@ const publishGateHasNoModeEscape = !/relayOnlyMarketplaceLead && systemMode/.tes
 
 // --- 2. the gate precedes draft production (invariant apply / appendOutbound) ---
 const relayIdx = publishBlock.indexOf("if (relayOnlyMarketplaceLead)");
-const invariantIdx = publishBlock.indexOf("const invariant = applyAdfReplyInvariant(text)");
+// Match the CALL, not its exact argument text: this assertion is about ORDER (the relay gate
+// must come first), and pinning the literal `(text)` made it fail the moment the argument was
+// wrapped — e.g. withAdfHardshipAck(text) for the department-handoff empathy ack.
+const invariantIdx = publishBlock.indexOf("applyAdfReplyInvariant(");
 const appendIdx = publishBlock.indexOf("appendOutbound(conv");
 const gateBeforeDraft = relayIdx >= 0 && invariantIdx > relayIdx && (appendIdx === -1 || appendIdx > relayIdx);
 

@@ -65,7 +65,10 @@ const emailArmPublishesEmailDraft =
 
 const idxPhoneArm = publishBlock.indexOf("if (prefersPhoneOnly)");
 const idxRelayArm = publishBlock.indexOf("if (relayOnlyMarketplaceLead)");
-const idxInvariant = publishBlock.indexOf("const invariant = applyAdfReplyInvariant(text);");
+// Match the CALL, not its exact argument text: this assertion is about ARM ORDER, and pinning
+// the literal `(text);` broke the moment the argument was wrapped (withAdfHardshipAck(text),
+// the department-handoff empathy ack). The ordering it guards is unchanged.
+const idxInvariant = publishBlock.indexOf("applyAdfReplyInvariant(");
 const idxEmailArm = publishBlock.indexOf("if (prefersEmailOnly)");
 const idxSmsAppend = publishBlock.indexOf('appendOutbound(conv, "dealership", leadKey, invariant.draftText, "draft_ai"');
 

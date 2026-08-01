@@ -1104,6 +1104,8 @@ import {
 import { formatEmailLayout, formatSmsLayout } from "./domain/tone.js";
 
 import { getSystemMode, setSystemMode, type SystemMode } from "./domain/settingsStore.js";
+import { applyAffectParseSnapshot } from "./domain/affectSnapshot.js";
+import { applyHardshipAckToHandoffTemplate } from "./domain/hardshipEmpathyAck.js";
 import {
   listUsers,
   createUser,
@@ -15391,34 +15393,8 @@ function updateLastIntent(conv: any, intent: LastIntentName, source: "dialog_sta
   conv.lastIntent = { name: intent, updatedAt, source };
 }
 
-function applyAffectParseSnapshot(
-  conv: any,
-  affectParse: AffectParse | null | undefined,
-  sourceMessageId?: string | null
-): AffectParse | null {
-  if (!conv || !affectParse) return null;
-  const confidence =
-    typeof affectParse.confidence === "number" && Number.isFinite(affectParse.confidence)
-      ? Math.max(0, Math.min(1, affectParse.confidence))
-      : 0;
-  const confidenceMin = Number(process.env.LLM_AFFECT_CONFIDENCE_MIN ?? 0.68);
-  const hasAffectSignal = affectParse.explicitAffect || affectParse.primaryAffect !== "none";
-  if (!hasAffectSignal || confidence < confidenceMin) return null;
-  conv.lastAffect = {
-    primary: affectParse.primaryAffect,
-    explicitAffect: !!affectParse.explicitAffect,
-    needsEmpathy: !!affectParse.needsEmpathy,
-    hasHumor: !!affectParse.hasHumor,
-    hasPositiveEnergy: !!affectParse.hasPositiveEnergy,
-    hasNegativeSentiment: !!affectParse.hasNegativeSentiment,
-    toneIntensity: affectParse.toneIntensity,
-    confidence,
-    source: "llm",
-    sourceMessageId: sourceMessageId ? String(sourceMessageId) : undefined,
-    updatedAt: nowIso()
-  };
-  return affectParse;
-}
+// applyAffectParseSnapshot moved to ./domain/affectSnapshot.ts (imported above) so the ADF/email
+// lane can apply the SAME acceptance gate — it previously had no affect parse at all.
 
 function mapBucketToCadenceTag(bucket?: string | null): string | null {
   if (!bucket) return null;
@@ -57101,6 +57077,15 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     regenRoutingParserDecision.intentOverride !== "general"
       ? regenRoutingParserDecision.intentOverride
       : null;
+  // Two-path parity with the live handler's `withDepartmentHardshipAck` (/webhooks/twilio): the
+  // fixed department/handoff templates opt IN to the hardship acknowledgment, because they
+  // early-return before the orchestrator's finalize hook and set manual_handoff (which would
+  // veto it there). `regenAcceptedAffect` is already computed above — no extra parse.
+  const withDepartmentHardshipAck = (reply: string): string =>
+    applyHardshipAckToHandoffTemplate({
+      draft: reply,
+      needsEmpathy: !!regenAcceptedAffect?.needsEmpathy
+    });
   const regenParserPricingIntent = regenRoutingIntentOverride === "pricing_payments";
   const regenParserSchedulingIntent = regenRoutingIntentOverride === "scheduling";
   const regenParserCallbackIntent = regenRoutingIntentOverride === "callback";
@@ -58938,10 +58923,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
           ? buildTakeOffMilwaukeeEightEngineReply()
           : "Thanks — I’ll have our parts department reach out shortly."
         : "Thanks — I’ll have our apparel team reach out shortly.";
+    const ackedReply = withDepartmentHardshipAck(reply);
     if (channel === "email") {
-      return respondWithEmailRegeneratedDraft(reply);
+      return respondWithEmailRegeneratedDraft(ackedReply);
     }
-    return respondWithSmsRegeneratedDraft(reply);
+    return respondWithSmsRegeneratedDraft(ackedReply);
   }
   if (isServiceStatusUpdateQuestionText(event.body)) {
     await assignDepartmentLeadOwnerIfUnassigned(conv, "service");
@@ -58960,7 +58946,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     setFollowUpMode(conv, "manual_handoff", "service_status_update");
     stopFollowUpCadence(conv, "manual_handoff");
     stopRelatedCadences(conv, "service_status_update", { setMode: "manual_handoff" });
-    const reply = buildServiceStatusUpdateHandoffReply();
+    const reply = withDepartmentHardshipAck(buildServiceStatusUpdateHandoffReply());
     if (channel === "email") {
       return respondWithEmailRegeneratedDraft(reply);
     }
@@ -58988,7 +58974,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       setFollowUpMode(conv, "manual_handoff", "service_status_update");
       stopFollowUpCadence(conv, "manual_handoff");
       stopRelatedCadences(conv, "service_status_update", { setMode: "manual_handoff" });
-      const reply = buildServiceStatusUpdateHandoffReply();
+      const reply = withDepartmentHardshipAck(buildServiceStatusUpdateHandoffReply());
       if (channel === "email") {
         return respondWithEmailRegeneratedDraft(reply);
       }
@@ -59038,8 +59024,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     setFollowUpMode(conv, "manual_handoff", "service_request");
     stopFollowUpCadence(conv, "manual_handoff");
     stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
-    const reply =
-      "We’ve received your service request and will have the service department reach out.";
+    const reply = withDepartmentHardshipAck(
+      "We’ve received your service request and will have the service department reach out."
+    );
     if (channel === "email") {
       return respondWithEmailRegeneratedDraft(reply);
     }
@@ -62782,6 +62769,55 @@ if (authToken && signature) {
       ? routingParserDecisionPrecheck.intentOverride
       : null;
 
+  // Affect parse, MEMOIZED and reachable from the department-handoff arms below. Those arms
+  // early-return a fixed template ~1,900 lines before the main parser batch computes
+  // `acceptedAffect`, so a customer who disclosed a hardship while asking a parts/apparel/service
+  // question got the bare "we'll have the team reach out" ack (Wesley Buzzard +17162913658,
+  // 2026-07-30 — his mother's death, answered with the flat apparel template).
+  // Lazy on purpose: nothing is parsed unless a department arm actually asks, and when the turn
+  // instead reaches the main batch the SAME promise is consumed there, so there is no extra
+  // round-trip and no added latency on the main path (the routingDecisionParsePrecheck →
+  // routingDecisionParsePromise reuse below is the same trick, made lazy).
+  const affectPrecheckInboundText = String(event.body ?? "").trim();
+  const affectPrecheckShortAck =
+    isShortAckText(affectPrecheckInboundText) || isEmojiOnlyText(affectPrecheckInboundText);
+  const affectParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_AFFECT_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY &&
+    !affectPrecheckShortAck;
+  let affectParsePrecheckPromise: Promise<AffectParse | null> | null = null;
+  const getAffectParsePrecheck = (): Promise<AffectParse | null> => {
+    if (!affectParsePrecheckPromise) {
+      affectParsePrecheckPromise = affectParserEligible
+        ? safeLlmParse("affect_parser", () =>
+            parseAffectWithLLM({
+              text: event.body ?? "",
+              history: recentHistory,
+              lead: conv.lead
+            })
+          )
+        : Promise.resolve(null);
+    }
+    return affectParsePrecheckPromise;
+  };
+  // Fixed department/handoff templates own no empathy beat, so they opt IN to the hardship ack —
+  // the orchestrator's generic manual_handoff veto is deliberately left alone (it is correct for
+  // the mention-handoff arm, which builds its own acknowledgment). Mirrored on the regenerate
+  // path by `withDepartmentHardshipAck` there — two-path parity (AGENTS.md).
+  const withDepartmentHardshipAck = async (reply: string): Promise<string> => {
+    const accepted = applyAffectParseSnapshot(
+      conv,
+      await getAffectParsePrecheck(),
+      event.providerMessageId
+    );
+    return applyHardshipAckToHandoffTemplate({
+      draft: reply,
+      needsEmpathy: !!accepted?.needsEmpathy
+    });
+  };
+
   const complimentSchedulingSignals = detectSchedulingSignals(String(event.body ?? ""));
   const complimentHasSchedulingSignal =
     llmExplicitScheduleIntent ||
@@ -62875,7 +62911,7 @@ if (authToken && signature) {
           ? buildTakeOffMilwaukeeEightEngineReply()
           : "Thanks — I’ll have our parts department reach out shortly."
         : "Thanks — I’ll have our apparel team reach out shortly.";
-    return publishLiveTwilioReply(reply);
+    return publishLiveTwilioReply(await withDepartmentHardshipAck(reply));
   }
   if (isServiceStatusUpdateQuestionText(event.body)) {
     await assignDepartmentLeadOwnerIfUnassigned(conv, "service");
@@ -62895,7 +62931,7 @@ if (authToken && signature) {
     stopFollowUpCadence(conv, "manual_handoff");
     stopRelatedCadences(conv, "service_status_update", { setMode: "manual_handoff" });
     const reply = buildServiceStatusUpdateHandoffReply();
-    return publishLiveTwilioReply(reply);
+    return publishLiveTwilioReply(await withDepartmentHardshipAck(reply));
   }
   const isServiceLead = inboundDepartmentIntent === "service";
   if (isServiceLead) {
@@ -62918,7 +62954,7 @@ if (authToken && signature) {
       stopFollowUpCadence(conv, "manual_handoff");
       stopRelatedCadences(conv, "service_status_update", { setMode: "manual_handoff" });
       const reply = buildServiceStatusUpdateHandoffReply();
-      return publishLiveTwilioReply(reply);
+      return publishLiveTwilioReply(await withDepartmentHardshipAck(reply));
     }
     // Compliment detection is COMPREHENSION → LLM classifier only (AGENTS.md: comprehend,
     // never regex) — same as the regenerate path; see the mirror site there. Fail direction
@@ -62957,7 +62993,7 @@ if (authToken && signature) {
     stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
     const reply =
       "We’ve received your service request and will have the service department reach out.";
-    return publishLiveTwilioReply(reply);
+    return publishLiveTwilioReply(await withDepartmentHardshipAck(reply));
   }
 
   const isDeferral = (text: string) => {
@@ -64676,21 +64712,11 @@ if (authToken && signature) {
       )
     : Promise.resolve(null);
   const routingDecisionParsePromise = Promise.resolve(routingDecisionParsePrecheck);
-  const affectParserEligible =
-    event.provider === "twilio" &&
-    process.env.LLM_ENABLED === "1" &&
-    process.env.LLM_AFFECT_PARSER_ENABLED !== "0" &&
-    !!process.env.OPENAI_API_KEY &&
-    !shortAck;
-  const affectParsePromise = affectParserEligible
-    ? safeLlmParse("affect_parser", () =>
-        parseAffectWithLLM({
-          text: event.body ?? "",
-          history: recentHistory,
-          lead: conv.lead
-        })
-      )
-    : Promise.resolve(null);
+  // Same parse the department-handoff arms may already have started (getAffectParsePrecheck is
+  // memoized); on the main path nothing started it yet, so it joins this batch in parallel
+  // exactly as before — no extra round-trip either way. `affectParserEligible` (including the
+  // shortAck test, computed from the same inbound text) now lives at the precheck hoist above.
+  const affectParsePromise = getAffectParsePrecheck();
   const parserStageStartedAt = Date.now();
   const [
     bookingParse,
