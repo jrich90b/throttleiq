@@ -4,6 +4,7 @@ import {
   type Conversation,
   type Message
 } from "./conversationStore.js";
+import { keepCustomerReceivedOutbounds } from "./agentVoice.js";
 
 type HistoryTurn = { direction: "in" | "out"; body: string };
 
@@ -284,4 +285,36 @@ export function buildEffectiveHistory(conv: Conversation | null | undefined, lim
   }));
 
   return [...contextLines, ...baseHistory];
+}
+
+/**
+ * `buildEffectiveHistory` restricted to the turns the customer ACTUALLY EXCHANGED with us:
+ * every inbound, plus only the outbounds a real provider delivered (`keepCustomerReceivedOutbounds`).
+ *
+ * WHY THIS EXISTS — the draft-quality judge (`judgeDraftQualityWithLLM`) reviews a candidate draft
+ * against "the recent thread". Fed the plain history, an unsent `draft_ai` row reads to it as a
+ * message we already sent, so it grades the candidate for CONSISTENCY WITH A MESSAGE THAT NEVER
+ * WENT OUT. Lead `+17168614216` (held 2026-07-31T18:36:56Z) is the case: the thread's only
+ * outbound was a stale `draft_ai` carrying a DIFFERENT sender name that was never delivered, so
+ * the judge held the next draft for "misidentifies sender — previous outgoing was <that name>" —
+ * a complaint no re-draft can satisfy, which is exactly why self-heal could not clear it. The
+ * customer had received nothing at all, across two ADFs and four days.
+ *
+ * Same fail direction as the rest of the gate (draftQualityGate.ts): a thinner thread can only
+ * make the judge LESS certain, and an unsure verdict resolves to `pass` — a good draft reaches
+ * the human reviewer. The reverse (holding on a phantom) silences the lead entirely.
+ *
+ * Deliberately NOT applied to `buildEffectiveHistory` itself: the ~40 comprehension parsers and
+ * the draft generator that share it answer a different question (what has been said/proposed on
+ * this thread), and quietly narrowing their context is a separate, much larger change.
+ */
+export function buildCustomerReceivedHistory(
+  conv: Conversation | null | undefined,
+  limit = 20
+): HistoryTurn[] {
+  if (!conv) return buildEffectiveHistory(conv, limit);
+  return buildEffectiveHistory(
+    { ...conv, messages: keepCustomerReceivedOutbounds(conv.messages ?? []) } as Conversation,
+    limit
+  );
 }
