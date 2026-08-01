@@ -21,7 +21,10 @@ import {
   extractStockIdFromText,
   stockIdMask,
   looksLikeCalendarDate,
-  matchesKnownStockIdShape
+  matchesKnownStockIdShape,
+  learnStockIdShapesFromFeed,
+  getLearnedStockIdShapes,
+  resetLearnedStockIdShapes
 } from "../services/api/src/domain/stockIdShapes.ts";
 
 // A letter-led dealer (the shape our first dealer happens to use). Deliberately NOT their real
@@ -79,6 +82,24 @@ check("dashed-numeric dealer: a phone number is still not a stock number", () =>
 check("a letter-led dealer does not recognize another dealer's format", () => {
   assert.equal(matchesKnownStockIdShape("12-345", letterLed), false);
   assert.equal(matchesKnownStockIdShape("24601", letterLed), false);
+});
+
+// --- REGISTRY IS DEALER-SCOPED: one dealer's feed can never redefine another's stock numbers ---
+check("learned shapes are keyed by dealer, not global", () => {
+  resetLearnedStockIdShapes();
+  learnStockIdShapesFromFeed(LETTER_LED_FEED, "dealer-a");
+  learnStockIdShapesFromFeed(NUMERIC_DEALER_FEED, "dealer-b");
+  assert.equal(getLearnedStockIdShapes("dealer-a")[0]?.mask, "A9-9");
+  assert.equal(getLearnedStockIdShapes("dealer-b")[0]?.mask, "9");
+  // The decisive one: dealer B's all-digit format must NOT make "24601" a stock number for A.
+  assert.equal(extractStockIdFromText("do you have 24601?", getLearnedStockIdShapes("dealer-a")), null);
+  assert.equal(extractStockIdFromText("do you have 24601?", getLearnedStockIdShapes("dealer-b")), "24601");
+});
+check("an unknown dealer reads cold, never another dealer's shapes", () => {
+  // Fail-safe direction: no shapes for this dealer => legacy fallback + universal exclusions,
+  // never a silent inheritance of whoever loaded a feed last.
+  assert.deepEqual(getLearnedStockIdShapes("dealer-never-seen"), []);
+  resetLearnedStockIdShapes();
 });
 
 // --- THE PRODUCTION TURN, at AH and at cold start ---------------------------------------------

@@ -3,7 +3,11 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { dataPath } from "./dataDir.js";
 import { getDealerId } from "./storePersistence.js";
-import { learnStockIdShapesFromFeed } from "./stockIdShapes.js";
+import { learnStockIdShapesFromFeed, setStockIdShapeDealerResolver } from "./stockIdShapes.js";
+
+// stockIdShapes keeps its learned shapes keyed by dealer but stays store-free; this is the one
+// place that knows both, so it supplies the resolver.
+setStockIdShapeDealerResolver(getDealerId);
 
 export type InventoryFeedItem = {
   stockId?: string;
@@ -267,7 +271,7 @@ async function loadInventorySnapshotFeedItems(): Promise<InventoryFeedItem[]> {
       const parsed = JSON.parse(raw) as { items?: InventoryFeedItem[] };
       const items = Array.isArray(parsed?.items) ? parsed.items : [];
       snapshotCache = { items, loadedAt: now };
-      learnStockIdShapesFromFeed(items.map(i => i.stockId));
+      learnStockIdShapesFromFeed(items.map(i => i.stockId), getDealerId());
       return items;
     } catch (err: any) {
       if (err?.code !== "ENOENT") {
@@ -516,7 +520,7 @@ export async function getInventoryFeed(opts?: { bypassCache?: boolean }): Promis
     cache = { items, loadedAt: now };
     // Teach the stock-number reader THIS dealer's id format (see stockIdShapes.ts). Learned from
     // the real feed only — never from parseFeed's synthetic vendor shapes in the intake harness.
-    learnStockIdShapesFromFeed(items.map(i => i.stockId));
+    learnStockIdShapesFromFeed(items.map(i => i.stockId), getDealerId());
     return items;
   } catch (err: any) {
     const reason = err?.name === "AbortError" ? "timeout" : "fetch_error";
