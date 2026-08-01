@@ -683,6 +683,12 @@ export async function parseNationalOffersWithLLM(offersText: string): Promise<Na
 
 export type NationalOfferMatch = {
   applies: boolean;
+  /**
+   * 0-based position of the matched offer in the list we sent, or null when the model returned
+   * nothing usable. This is the offer's IDENTITY — offerTitle is display text the model authors and
+   * it drifts between runs, which is what silently broke the never-repeat-a-promo ledger.
+   */
+  offerIndex: number | null;
   offerTitle: string;
   why: string;
   message: string; // on-voice SMS naming the offer for their bike, or "" when applies=false
@@ -691,9 +697,17 @@ export type NationalOfferMatch = {
 const NATIONAL_OFFER_MATCH_JSON_SCHEMA: { [key: string]: unknown } = {
   type: "object",
   additionalProperties: false,
-  required: ["applies", "offerTitle", "why", "message"],
+  required: ["applies", "offerIndex", "offerTitle", "why", "message"],
   properties: {
     applies: { type: "boolean" },
+    /**
+     * 1-based line number of the matched offer in the numbered list we sent. This — NOT offerTitle —
+     * is the offer's IDENTITY. offerTitle is free text the model authors and it demonstrably drifts
+     * ("Select Grand American Touring Models Extended-Term Monthly Payment" vs "Grand American
+     * Touring models Extended Term Monthly Payment" — same promo, +16102170861, 11 days apart), which
+     * silently broke the never-repeat-a-promo ledger. An integer cannot drift. -1 when applies=false.
+     */
+    offerIndex: { type: "integer" },
     offerTitle: { type: "string" },
     why: { type: "string" },
     message: { type: "string" }
@@ -725,8 +739,10 @@ export async function matchNationalOfferToLeadWithLLM(args: {
   const firstName = String(args.firstName ?? "").trim();
   const condition = args.condition === "new" || args.condition === "used" ? args.condition : "unknown";
   const model = process.env.OPENAI_MODEL || "gpt-5-mini";
+  // NUMBERED so the model can identify its pick by index. The index is the identity we act on; the
+  // title it writes back is display text only (see NATIONAL_OFFER_MATCH_JSON_SCHEMA.offerIndex).
   const offerLines = offers
-    .map(o => `- ${o.title} | applies_to: ${o.appliesTo} | ${o.terms} | ${o.eligibility} | exp ${o.expiration}`)
+    .map((o, i) => `${i + 1}. ${o.title} | applies_to: ${o.appliesTo} | ${o.terms} | ${o.eligibility} | exp ${o.expiration}`)
     .join("\n");
   const prompt = [
     "Decide whether any current national offer GENUINELY applies to a lead's bike of interest.",
@@ -741,30 +757,34 @@ export async function matchNationalOfferToLeadWithLLM(args: {
     firstName ? `  * greet them naturally by name (${firstName}) — or weave the name mid-sentence;` : "  * no generic 'Hey!' opener with an exclamation mark;",
     "  * NEVER open with 'Hey!' alone, never 'Let me know if you're interested!', no exclamation-mark spam, no 'Reply STOP', no corporate phrasing ('take advantage of', 'don't miss out', 'limited time').",
     "  * no fabrication — only the offer's stated terms; round nothing; invent no dates.",
-    "- If nothing genuinely applies, applies=false and message='' (the agent stays quiet — that is correct).",
+    "- If nothing genuinely applies, applies=false, offerIndex=-1 and message='' (the agent stays quiet — that is correct).",
+    "- offerIndex is the LINE NUMBER of the offer you matched, from the numbered list below. offerTitle must be COPIED VERBATIM from that same line — never re-word, re-title, shorten or prettify it. We use these to remember which promos this customer has already been sent.",
     "",
     "Examples:",
-    'bike "2026 Low Rider S" (name Mike) with a "$1,000 Customer Cash on 2025-2026 Low Rider S/ST" offer -> {"applies":true,"offerTitle":"$1,000 Customer Cash on 2025-2026 Low Rider S/ST","why":"exact model match","message":"Mike, that Low Rider S you were eyeing has $1,000 customer cash on it right now — want me to run what that does to the numbers?"}',
-    'bike "Electra Glide Ultra Classic" (condition new, no name) with a "Grand American Touring from $406/mo extended terms" offer -> {"applies":true,"offerTitle":"Select Grand American Touring Models Extended Terms","why":"touring family includes the Electra Glide","message":"They just put extended terms on the touring lineup — an Electra Glide like the one you were looking at can go out the door around $406 a month. Want the breakdown?"}',
+    'bike "2026 Low Rider S" (name Mike) with offer 1. "$1,000 Customer Cash on 2025-2026 Low Rider S/ST" -> {"applies":true,"offerIndex":1,"offerTitle":"$1,000 Customer Cash on 2025-2026 Low Rider S/ST","why":"exact model match","message":"Mike, that Low Rider S you were eyeing has $1,000 customer cash on it right now — want me to run what that does to the numbers?"}',
+    // offerTitle is COPIED, not re-titled. This example used to answer "Select Grand American Touring
+    // Models Extended Terms" for an offer actually titled "Grand American Touring from $406/mo
+    // extended terms" — teaching the rewrite that broke the dedup ledger (+16102170861).
+    'bike "Electra Glide Ultra Classic" (condition new, no name) with offer 1. "Grand American Touring from $406/mo extended terms" -> {"applies":true,"offerIndex":1,"offerTitle":"Grand American Touring from $406/mo extended terms","why":"touring family includes the Electra Glide","message":"They just put extended terms on the touring lineup — an Electra Glide like the one you were looking at can go out the door around $406 a month. Want the breakdown?"}',
     // The Joe-ruled miss verbatim (2026-07-22, +17165104578): new-bike touring promo financing was
     // texted onto a USED 2021 Street Glide Special. Condition gates the match, not just the family.
-    'bike "2021 Street Glide Special" (condition used) with the same "Grand American Touring from $406/mo extended terms" offer -> {"applies":false,"offerTitle":"","why":"national promo financing is for new bikes; this unit is used and the offer does not say used","message":""}',
-    'bike "2019 Iron 883" (condition used) with a "6.64% APR on used motorcycles for Riding Academy graduates" offer -> {"applies":true,"offerTitle":"Rider Training Graduate Used APR","why":"the offer explicitly covers used motorcycles","message":"If you did the Riding Academy, that Iron 883 qualifies for the grad rate — 6.64% on used bikes right now. Want me to check your dates?"}',
-    'bike "2025 Harley-Davidson" (no model named), any offers -> {"applies":false,"offerTitle":"","why":"model not named; never match a vague vehicle","message":""}',
-    'bike "2022 Sportster S" when offers are all Touring/Low Rider -> {"applies":false,"offerTitle":"","why":"no offer applies to a Sportster","message":""}',
+    'bike "2021 Street Glide Special" (condition used) with the same offer 1. "Grand American Touring from $406/mo extended terms" -> {"applies":false,"offerIndex":-1,"offerTitle":"","why":"national promo financing is for new bikes; this unit is used and the offer does not say used","message":""}',
+    'bike "2019 Iron 883" (condition used) with offer 1. "6.64% APR on used motorcycles for Riding Academy graduates" -> {"applies":true,"offerIndex":1,"offerTitle":"6.64% APR on used motorcycles for Riding Academy graduates","why":"the offer explicitly covers used motorcycles","message":"If you did the Riding Academy, that Iron 883 qualifies for the grad rate — 6.64% on used bikes right now. Want me to check your dates?"}',
+    'bike "2025 Harley-Davidson" (no model named), any offers -> {"applies":false,"offerIndex":-1,"offerTitle":"","why":"model not named; never match a vague vehicle","message":""}',
+    'bike "2022 Sportster S" when offers are all Touring/Low Rider -> {"applies":false,"offerIndex":-1,"offerTitle":"","why":"no offer applies to a Sportster","message":""}',
     // Same-FAMILY, different-MODEL over-stretch (Joe ruling 2026-07-25, +15854890786): a $1,000 credit
     // scoped to "Low Rider S/ST" was applied to a 2026 Breakout — both Softail, but the offer names
     // specific models the Breakout is not one of. A model-specific offer covers ONLY its named models.
-    'bike "2026 Breakout" (condition new) with a "$1,000 Customer Cash on 2025-2026 Low Rider S/ST" offer -> {"applies":false,"offerTitle":"","why":"the offer names specific models (Low Rider S/ST); a Breakout is a different Softail model, not covered","message":""}',
+    'bike "2026 Breakout" (condition new) with offer 1. "$1,000 Customer Cash on 2025-2026 Low Rider S/ST" -> {"applies":false,"offerIndex":-1,"offerTitle":"","why":"the offer names specific models (Low Rider S/ST); a Breakout is a different Softail model, not covered","message":""}',
     "",
     `Lead's bike of interest: ${vehicle}`,
     `Lead's bike condition: ${condition}${condition === "unknown" ? " (treat as NOT new — only explicitly-used offers can apply)" : ""}`,
     firstName ? `Lead's first name: ${firstName}` : "Lead's first name: (unknown — do not invent one)",
     "",
-    "Current national offers:",
+    "Current national offers (numbered — offerIndex is the line number you pick):",
     offerLines,
     "",
-    'Return only JSON: { "applies": <bool>, "offerTitle": "<title or empty>", "why": "<one phrase>", "message": "<SMS or empty>" }'
+    'Return only JSON: { "applies": <bool>, "offerIndex": <line number of the matched offer, or -1>, "offerTitle": "<that line\'s title copied verbatim, or empty>", "why": "<one phrase>", "message": "<SMS or empty>" }'
   ].join("\n");
   try {
     const parsed = await requestStructuredJson({
@@ -777,8 +797,12 @@ export async function matchNationalOfferToLeadWithLLM(args: {
     });
     if (!parsed || typeof parsed !== "object") return null;
     const applies = !!(parsed as any).applies;
+    const rawIndex = Number((parsed as any).offerIndex);
     return {
       applies,
+      // 1-based line number → 0-based array position. Anything out of range becomes null and the
+      // caller stays quiet: we never fire a promo we cannot identify well enough to remember.
+      offerIndex: Number.isInteger(rawIndex) && rawIndex >= 1 && rawIndex <= offers.length ? rawIndex - 1 : null,
       offerTitle: String((parsed as any).offerTitle ?? "").trim(),
       why: String((parsed as any).why ?? "").trim(),
       message: applies ? String((parsed as any).message ?? "").trim() : ""

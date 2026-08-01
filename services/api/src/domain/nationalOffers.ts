@@ -146,7 +146,34 @@ export async function findNationalOfferForVehicle(
     condition
   });
   if (!match || !match.applies || !match.message) return null;
-  return match;
+  // IDENTITY SNAP-BACK. The ledger that stops a promo repeating is keyed on the offer title, but the
+  // title the model writes is free text and drifts run to run: +16102170861 banked "Select Grand
+  // American Touring Models Extended-Term Monthly Payment" on 7/21 and "Grand American Touring models
+  // Extended Term Monthly Payment" on 8/1 — one promo, two keys, so it never matched itself and the
+  // same payment quote went out twice (+17163812367 got it on consecutive days). Resolve the model's
+  // pick back to the offer we actually sent it and bank THAT title, so the ledger compares like with
+  // like. Fail direction: an unresolvable pick returns null (stay quiet) rather than firing a promo
+  // we cannot remember having sent.
+  const canonical = resolveMatchedOffer(match, offers);
+  if (!canonical) return null;
+  return { ...match, offerTitle: canonical.title };
+}
+
+/**
+ * Resolve the model's pick back to one of the offers we actually gave it. Index first (an integer
+ * cannot drift); normalized title only as a fallback for a model that omitted the index. Returns
+ * null when the pick matches nothing — the caller then stays quiet.
+ */
+export function resolveMatchedOffer(
+  match: { offerIndex?: number | null; offerTitle?: string },
+  offers: NationalOffer[]
+): NationalOffer | null {
+  const list = Array.isArray(offers) ? offers : [];
+  const idx = match?.offerIndex;
+  if (typeof idx === "number" && Number.isInteger(idx) && idx >= 0 && idx < list.length) return list[idx];
+  const wanted = normalizeOfferTitle(String(match?.offerTitle ?? ""));
+  if (!wanted) return null;
+  return list.find(o => normalizeOfferTitle(o.title) === wanted) ?? null;
 }
 
 /**

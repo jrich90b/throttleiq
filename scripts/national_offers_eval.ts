@@ -23,6 +23,8 @@ import {
   offerRequiresRiderTrainingEligibility,
   leadRiderTrainingEligibilityForOffer,
   filterOffersForRiderEligibility,
+  filterOffersForDedup,
+  resolveMatchedOffer,
   type NationalOffer
 } from "../services/api/src/domain/nationalOffers.ts";
 
@@ -103,6 +105,45 @@ const offer = (over: Partial<NationalOffer>): NationalOffer => ({
 } as NationalOffer);
 const newPromo = offer({ title: "Select Grand American Touring Models Extended Terms", appliesTo: "Grand American Touring models", terms: "from $406/mo" });
 const usedPromo = offer({ title: "Rider Training Graduate Used APR", appliesTo: "used motorcycles", terms: "6.64% APR", eligibility: "Riding Academy graduates" });
+
+// --- 1d. OFFER IDENTITY: the ledger key must survive the model re-wording the title ------------
+// +16102170861 banked "Select Grand American Touring Models Extended-Term Monthly Payment" (7/21)
+// and "Grand American Touring models Extended Term Monthly Payment" (8/1) for ONE promo, so the
+// never-repeat ledger never matched itself and the same $406/mo quote went out twice.
+// +17163812367 got the same thing on CONSECUTIVE DAYS (7/25, 7/26). Identity is now the INDEX of
+// the offer in the list we sent the model; the banked title is snapped back to that offer's own.
+const touringOffer = offer({ title: "Grand American Touring from $406/mo extended terms", appliesTo: "Grand American Touring models" });
+const cashOffer = offer({ title: "$1,000 Customer Cash on 2025-2026 Low Rider S/ST", appliesTo: "Low Rider S/ST" });
+const twoOffers = [cashOffer, touringOffer];
+const R = resolveMatchedOffer;
+// The production drift: a re-worded title still resolves, because the INDEX carries the identity.
+eq(
+  "reworded_title_resolves_by_index",
+  R({ offerIndex: 1, offerTitle: "Select Grand American Touring Models Extended-Term Monthly Payment" }, twoOffers)?.title,
+  "Grand American Touring from $406/mo extended terms"
+);
+eq("index_zero_resolves", R({ offerIndex: 0, offerTitle: "whatever the model felt like" }, twoOffers)?.title, cashOffer.title);
+// Fallback path: no index (older/degraded response) → exact normalized title still resolves.
+eq("no_index_exact_title_resolves", R({ offerIndex: null, offerTitle: "$1,000 customer cash on 2025-2026 low rider s/st" }, twoOffers)?.title, cashOffer.title);
+// FAIL DIRECTION: an unusable pick resolves to null so the caller stays quiet — we never fire a
+// promo we cannot bank, because an unbankable promo is one that can repeat forever.
+eq("out_of_range_index_is_null", R({ offerIndex: 7, offerTitle: "" }, twoOffers), null);
+eq("negative_index_is_null", R({ offerIndex: -1, offerTitle: "" }, twoOffers), null);
+eq("no_index_and_reworded_title_is_null", R({ offerIndex: null, offerTitle: "Some Invented Promo Name" }, twoOffers), null);
+eq("empty_offer_list_is_null", R({ offerIndex: 0, offerTitle: "x" }, []), null);
+// The point of the whole fix: once the canonical title is banked, the ledger filters it next time.
+eq(
+  "canonical_title_dedups_next_run",
+  filterOffersForDedup(twoOffers, [R({ offerIndex: 1, offerTitle: "Grand American Touring models Extended Term Monthly Payment" }, twoOffers)!.title]).map(o => o.title),
+  [cashOffer.title]
+);
+// …and the pre-fix behavior is pinned as BROKEN, so nobody "simplifies" back to trusting the title.
+eq(
+  "raw_model_title_would_not_have_deduped",
+  filterOffersForDedup(twoOffers, ["Grand American Touring models Extended Term Monthly Payment"]).length,
+  2
+);
+
 eq("offer_used_detected_in_applies_to", offerExplicitlyCoversUsed(usedPromo), true);
 eq("offer_preowned_detected", offerExplicitlyCoversUsed(offer({ appliesTo: "pre-owned Softail models" })), true);
 eq("offer_new_promo_not_used", offerExplicitlyCoversUsed(newPromo), false);

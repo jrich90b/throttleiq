@@ -15641,6 +15641,11 @@ async function buildCadenceRegeneratedDraft(
       leadUnitUnavailable: await leadUnitUnavailableForValueGate(conv)
     });
     if (valueGate.action === "replace") {
+      // Repeat backstop — regen mirror of the live tick (route-parity law). A redraft that would
+      // re-send copy this lead already got keeps the prior draft instead (+16102170861).
+      if (wasCadenceLineUsedRecently(conv, valueGate.message)) {
+        return null;
+      }
       return { body: valueGate.message };
     }
     if (valueGate.action === "suppress") {
@@ -34439,6 +34444,20 @@ async function processDueFollowUpsUnlocked() {
         continue;
       }
       if (valueGate.action === "replace") {
+        // REPEAT BACKSTOP (+16102170861 / +17163812367). The offer message is swapped in AFTER
+        // selectNonRepeatingCadenceMessage has already run, so it never faced the "did we already say
+        // this?" check that every other cadence line faces. Identity-level dedup (the offer ledger)
+        // is the precise fix; this is the blunt one that does not depend on getting promo names
+        // right — it compares the COPY we are about to send. Fail direction: quiet.
+        if (wasCadenceLineUsedRecently(conv, valueGate.message)) {
+          console.log("[followup][cadence-value-gate] value touch repeats a recent message — staying quiet", {
+            convId: conv.id,
+            stepIndex: cadence.stepIndex,
+            kind: valueGate.kind
+          });
+          advanceFollowUpCadence(conv, cfg.timezone);
+          continue;
+        }
         console.log("[followup][cadence-value-gate] filler replaced with value touch", {
           convId: conv.id,
           stepIndex: cadence.stepIndex,
