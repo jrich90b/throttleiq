@@ -832,6 +832,7 @@ import {
   isVisitPlanContextNoteText,
   inferAcceptedScheduleDayFromReplyText,
   pickCatalogModelLabelFromText,
+  catalogModelReferencedInTurnText,
   resolveDayPartOnlyScheduleReply,
   resolveRequestedScheduleWindowMode,
   cadenceHeldUnitModelConsistentWithLead,
@@ -6098,7 +6099,12 @@ function getCatalogModelNameCandidates(): string[] {
   if (!lookup) return [];
   const keys = [...lookup.aliases.keys(), ...lookup.families.keys()]
     .map(k => String(k ?? "").trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    // Purely-numeric alias keys ("48", "72", "4 8") are never a watch LABEL: even matched
+    // whole-word they turn "can you do 72 months" into a Seventy-Two watch, and the glossary's
+    // own rule is ambiguous → clarify, never hard-resolve. Alias→CODE resolution
+    // (inferModelCodesForText) is untouched, so watch MATCHING keeps full strength.
+    .filter(k => /[a-z]/i.test(k));
   return Array.from(new Set(keys.map(k => normalizeDisplayCase(k))));
 }
 
@@ -31506,7 +31512,17 @@ async function resolveWatchModelFromText(
       )
     );
     models.sort((a, b) => b.length - a.length);
-    const match = models.find(m => textLower.includes(m.toLowerCase()));
+    // Whole-word only. A bare substring test meant every "loo(king)" minted a watch on the
+    // model "king" — "king" is a Road King slang ALIAS key (#288) and alias keys are label
+    // candidates here, so "Just looking for a s , thanks tho" (+17169490089) and "Definitely
+    // hit me up if one comes in" (+16412012540) both rendered "I'll keep an eye out for 2026
+    // king". 17% of the prod inbound corpus carries one of these phantom hits (king inside
+    // looking/thinking/working/asking, rk inside work/park, ev inside never/every).
+    // FAIL DIRECTION: ask. No whole-word hit falls through to the lead-vehicle fallback, and
+    // a null lands every call site in its existing "which model should I watch for?" arm —
+    // never a guessed watch. Same invariant as the model-authority relevance guard: never act
+    // on a model the customer didn't reference this turn.
+    const match = models.find(m => catalogModelReferencedInTurnText(textLower, m));
     if (match) return match;
   } catch (e) {
     // ignore inventory feed lookup failures; fall back to lead model

@@ -1587,6 +1587,23 @@ function scoreCatalogModelMention(textRaw: string | null | undefined, modelRaw: 
   return 1_000 + normalizedDisplay.length;
 }
 
+/**
+ * Whole-word "did the customer actually name this model this turn?" test, with plural
+ * tolerance ("any sportsters" references Sportster). Same invariant the model-authority
+ * relevance guard enforces — never act on a model the customer didn't reference — exposed
+ * for the deterministic watch-label resolver, which was still doing a bare substring test.
+ * Plural handling mirrors modelFamily.ts's familyPlural.
+ */
+export function catalogModelReferencedInTurnText(
+  textRaw: string | null | undefined,
+  modelRaw: string | null | undefined
+): boolean {
+  if (catalogModelMentionMatchesText(textRaw, modelRaw)) return true;
+  const model = String(modelRaw ?? "").trim();
+  if (!model || /s$/i.test(model)) return false;
+  return catalogModelMentionMatchesText(textRaw, `${model}s`);
+}
+
 export function pickCatalogModelLabelFromText(
   textRaw: string | null | undefined,
   models: Array<string | null | undefined>

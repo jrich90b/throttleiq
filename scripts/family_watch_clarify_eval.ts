@@ -30,6 +30,7 @@ import {
   isFamilyOnlyModelLabel,
   referencesFamilyOnlyInText
 } from "../services/api/src/domain/modelFamily.ts";
+import { catalogModelReferencedInTurnText } from "../services/api/src/domain/workflowRegressionGuards.ts";
 
 // 1) Label classification — family nodes vs specific models.
 const familyLabels = [
@@ -111,6 +112,80 @@ assert.ok(
   /isFamilyOnlyModelLabel\(model\) \|\| isPlaceholderModel\(model\)/.test(idx) &&
     /call_summary_watch_family_clarify_pending/.test(idx),
   "call-summary watch path must park family/placeholder labels as pending (clarify)"
+);
+
+// 4) Phantom-substring watch models — the SAME "never a guessed watch" invariant, on the
+// other half of the resolver. resolveWatchModelFromText used to pick its label with a bare
+// `textLower.includes(model)`, and since #288 put the slang ALIAS keys into the label
+// candidates, the bare word "king" (Road King) lives inside "looking". Both production turns
+// below rendered "I'll keep an eye out for 2026/2022 king" instead of the customer's actual
+// model. 17% of the prod inbound corpus carries such a phantom hit.
+const phantomTurns: Array<[string, string]> = [
+  // +17169490089 (corpus_replay_regression) — wanted a Low Rider S, got "2026 king".
+  ["Just looking for a s , thanks tho", "+17169490089"],
+  // +16412012540 (corpus_replay_judge_fail) — wanted a 2022 Low Rider El Diablo, got "2022 king".
+  [
+    "Thats what Im looking for. Definitely hit me up if one comes in or another store has one",
+    "+16412012540"
+  ],
+  // The same collision family, from other real turns.
+  ["What time you thinking?", "thinking"],
+  ["thanks for working on this for me", "working"],
+  ["I'm all set on the bike search", "never/every → EV"]
+];
+// Every catalog label candidate must fail the reference test on these turns — asserting the
+// WHOLE alias map (not just "king") is what would have blocked #288 from landing the collision.
+const familyLookup = JSON.parse(
+  fs.readFileSync(path.resolve("services/api/src/domain/model_codes_by_family.json"), "utf8")
+) as { aliases?: Record<string, unknown>; families?: Record<string, unknown> };
+const aliasKeys = [...Object.keys(familyLookup.aliases ?? {}), ...Object.keys(familyLookup.families ?? {})]
+  .map(k => String(k ?? "").trim())
+  .filter(Boolean);
+assert.ok(aliasKeys.includes("king"), "catalog must still carry the 'king' alias (the collision source)");
+for (const [turn, origin] of phantomTurns) {
+  for (const key of aliasKeys) {
+    assert.equal(
+      catalogModelReferencedInTurnText(turn, key),
+      false,
+      `phantom watch model "${key}" must not be referenced by: ${turn} (${origin})`
+    );
+  }
+}
+// Non-regression: a real model named in the turn still resolves (the fix must not mute watches).
+const realReferences: Array<[string, string]> = [
+  ["keep an eye out for a road king", "Road King"],
+  ["2026 low rider s when one lands", "Low Rider S"],
+  ["a road glide 3 please", "Road Glide 3"],
+  ["any sportsters", "Sportster"], // plural arm
+  ["text me if a street glide comes in", "Street Glide"]
+];
+for (const [turn, model] of realReferences) {
+  assert.equal(
+    catalogModelReferencedInTurnText(turn, model),
+    true,
+    `real model reference must still resolve: "${model}" in ${turn}`
+  );
+}
+// Purely-numeric alias keys ("48", "72") are never watch LABELS — even whole-word they turn
+// "can you do 72 months" into a Seventy-Two watch. They must be dropped at the candidate list.
+const candidatesBlock = idx.slice(idx.indexOf("function getCatalogModelNameCandidates"));
+const candidatesBody = candidatesBlock.slice(0, candidatesBlock.indexOf("\n}\n") + 3);
+assert.ok(
+  /\.filter\(k => \/\[a-z\]\/i\.test\(k\)\)/.test(candidatesBody),
+  "getCatalogModelNameCandidates must drop purely-numeric alias keys from the label candidates"
+);
+assert.ok(
+  aliasKeys.some(k => !/[a-z]/i.test(k)),
+  "catalog must still carry a purely-numeric alias key (the case the candidate filter exists for)"
+);
+// Source guard — the resolver must use the whole-word predicate, never the bare substring.
+assert.ok(
+  /catalogModelReferencedInTurnText\(textLower, m\)/.test(resolverBody),
+  "resolveWatchModelFromText must match catalog labels whole-word (catalogModelReferencedInTurnText)"
+);
+assert.ok(
+  !/textLower\.includes\(m\.toLowerCase\(\)\)/.test(resolverBody),
+  "resolveWatchModelFromText must NOT pick a watch label by bare substring (the 'looking' → 'king' bug)"
 );
 
 console.log("PASS family-watch-clarify eval (family taxonomy + resolver/voice-path clarify wiring)");
