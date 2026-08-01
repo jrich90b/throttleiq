@@ -25,6 +25,9 @@ import {
   filterOffersForRiderEligibility,
   filterOffersForDedup,
   resolveMatchedOffer,
+  filterOffersForMoneyInterest,
+  offerQuotesFinancingTerms,
+  leadShowedMoneyInterest,
   type NationalOffer
 } from "../services/api/src/domain/nationalOffers.ts";
 
@@ -94,6 +97,39 @@ eq("cond_inventory_context_fallback", C({ lead: {}, inventoryContext: { conditio
 eq("cond_missing_is_unknown", C({ lead: { vehicle: {} } }), "unknown");
 eq("cond_empty_conv", C({}), "unknown");
 
+// --- 1e. MONEY INTEREST: never quote a rate/payment to a lead who never raised money -----------
+// The engagement gate (1a) catches total strangers, but 3 of the 5 leads who DID reply and still
+// got a money pitch were engaged. Measured on the live store 2026-08-01:
+//   +16813891971 "just shopping around... what would I get for my dirtbike"  bucket trade_in_sell
+//   +12109976639 "trade it in for a road glide and cover the difference outright"  inventory_interest
+//   +17169079662 (near-empty reply)                                           bucket trade_in_sell
+// …vs the two legitimate finance leads, which MUST keep getting offers:
+//   +17164812815 bucket finance_prequal, lastIntent pricing (she asked for the payment #)
+//   +17163812367 bucket finance_prequal (arrived on a credit application)
+// Signal is persisted structured state only — no new parser, no customer prose.
+const M = leadShowedMoneyInterest;
+eq("money_finance_prequal_bucket", M({ classification: { bucket: "finance_prequal" } }), true);
+eq("money_last_intent_pricing", M({ lastIntent: { name: "pricing" } }), true);
+eq("money_last_intent_payments", M({ lastIntent: { name: "payments" } }), true);
+eq("money_stated_budget", M({ paymentBudgetContext: { monthly: 400 } }), true);
+// The three production misses, by their REAL persisted state:
+eq("money_trade_in_sell_lead_is_not_money", M({ classification: { bucket: "trade_in_sell" }, lastIntent: { name: "small_talk" } }), false);
+eq("money_inventory_interest_lead_is_not_money", M({ classification: { bucket: "inventory_interest" } }), false);
+eq("money_scheduling_intent_is_not_money", M({ classification: { bucket: "trade_in_sell" }, lastIntent: { name: "scheduling" } }), false);
+eq("money_empty_conv_is_not_money", M({}), false);
+// Our own pitch must never authorize the next one — only the CUSTOMER raising money counts.
+eq("money_our_finance_invite_does_not_count", M({ classification: { bucket: "trade_in_sell" }, financeAppInviteSentAt: "2026-07-21T00:00:00Z" } as any), false);
+
+// offerType splits "quotes financing terms" from "straight discount".
+const Q = offerQuotesFinancingTerms;
+eq("quotes_terms_monthly_payment", Q({ offerType: "monthly_payment" } as NationalOffer), true);
+eq("quotes_terms_financing_apr", Q({ offerType: "financing_apr" } as NationalOffer), true);
+eq("discount_customer_cash_is_not_terms", Q({ offerType: "customer_cash" } as NationalOffer), false);
+eq("discount_rebate_is_not_terms", Q({ offerType: "rebate_credit" } as NationalOffer), false);
+// FAIL DIRECTION: an offer we can't classify gets the STRICTER treatment (treated as quoting money).
+eq("unknown_offer_type_treated_as_terms", Q({ offerType: "other" } as NationalOffer), true);
+eq("blank_offer_type_treated_as_terms", Q({ offerType: "" } as NationalOffer), true);
+
 const offer = (over: Partial<NationalOffer>): NationalOffer => ({
   title: "Offer",
   appliesTo: "",
@@ -144,6 +180,14 @@ eq(
   2
 );
 
+// The filter itself: a no-money lead keeps only straight discounts; a money lead keeps everything.
+const cashPromo = offer({ title: "$1,000 Customer Cash on Low Rider S/ST", offerType: "customer_cash" });
+const termsPromo = offer({ title: "Grand American Touring from $406/mo extended terms", offerType: "monthly_payment" });
+eq("money_filter_no_interest_keeps_only_discounts", filterOffersForMoneyInterest([cashPromo, termsPromo], false).map(o => o.title), [cashPromo.title]);
+eq("money_filter_with_interest_keeps_all", filterOffersForMoneyInterest([cashPromo, termsPromo], true).length, 2);
+// Good news is still sayable to a quiet lead — this gate mutes RATES, not the whole promo channel.
+eq("money_filter_discount_survives_for_quiet_lead", filterOffersForMoneyInterest([cashPromo], false).length, 1);
+eq("money_filter_empty_list_safe", filterOffersForMoneyInterest([], false), []);
 eq("offer_used_detected_in_applies_to", offerExplicitlyCoversUsed(usedPromo), true);
 eq("offer_preowned_detected", offerExplicitlyCoversUsed(offer({ appliesTo: "pre-owned Softail models" })), true);
 eq("offer_new_promo_not_used", offerExplicitlyCoversUsed(newPromo), false);

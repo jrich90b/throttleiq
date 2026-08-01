@@ -121,22 +121,34 @@ export async function findNationalOfferForVehicle(
      * "not_evident" = the lead never sees a rider-training grad offer (Joe ruling 2026-07-23).
      */
     riderEligibility?: RiderTrainingEligibility;
+    /**
+     * The lead has raised money themselves (leadShowedMoneyInterest). Omitted = they haven't, and
+     * only non-financing offers (a straight discount) can apply.
+     */
+    showedMoneyInterest?: boolean;
   }
 ): Promise<NationalOfferMatch | null> {
   if (!isNationalOffersEnabled()) return null;
   const veh = String(vehicle ?? "").trim();
   if (!veh) return null;
   const condition: LeadUnitCondition = opts?.condition ?? "unknown";
-  // Two deterministic pre-filters BEFORE the LLM sees the offer list (fail direction = fewer offers):
+  // Deterministic pre-filters BEFORE the LLM sees the offer list (fail direction = fewer offers):
+  // - Dedup: a promotion already texted to this lead never fires again (Joe 2026-07-20).
   // - NEW-bike promo scope (Joe 2026-07-22): a used/unknown-condition lead only ever sees explicitly-used offers.
   // - Rider-training grad scope (Joe 2026-07-23): a lead without affirmative rider-training eligibility
   //   never sees a Riding Academy graduate offer (the +17164812815 grad-APR miss).
-  const offers = filterOffersForRiderEligibility(
-    filterOffersForLeadCondition(
-      filterOffersForDedup(await getNationalOffers(), opts?.excludeTitles ?? []),
-      condition
+  // - Money scope (2026-08-01): a lead who never raised financing/payments/budget themselves only
+  //   sees straight discounts, never an offer quoting a rate or a monthly payment.
+  const offers = filterOffersForMoneyInterest(
+    filterOffersForRiderEligibility(
+      filterOffersForLeadCondition(
+        filterOffersForDedup(await getNationalOffers(), opts?.excludeTitles ?? []),
+        condition
+      ),
+      opts?.riderEligibility ?? "not_evident"
     ),
-    opts?.riderEligibility ?? "not_evident"
+    // Omitted = never raised money = only straight discounts survive (fail toward quiet).
+    !!opts?.showedMoneyInterest
   );
   if (offers.length === 0) return null;
   const match = await matchNationalOfferToLeadWithLLM({
@@ -352,6 +364,57 @@ export function filterOffersForRiderEligibility(
   return offers.filter(o => !offerRequiresRiderTrainingEligibility(o));
 }
 
+/**
+ * Does this offer QUOTE FINANCING TERMS (a monthly payment, a rate) as opposed to being a straight
+ * discount? The distinction matters because the two are different speech acts: "$1,000 off that
+ * bike" is good news anyone shopping wants; "$406/month with 10% down for 96 months" presumes the
+ * customer is financing and is the thing we were volunteering at people who never raised money.
+ *
+ * FAIL DIRECTION: an unrecognized/blank offerType counts as financing terms — an offer we can't
+ * classify gets the stricter gate, so we err toward quiet rather than toward quoting money.
+ */
+export function offerQuotesFinancingTerms(offer: NationalOffer): boolean {
+  const t = String(offer?.offerType ?? "").trim().toLowerCase();
+  return t !== "customer_cash" && t !== "rebate_credit" && t !== "discount";
+}
+
+/**
+ * Has this lead ever shown us they're thinking about MONEY — financing, payments, or a budget?
+ * Reads only structured state the parsers already persisted (never customer prose):
+ *   - classification.bucket "finance_prequal" — they came in on a credit app / finance lead;
+ *   - lastIntent "pricing"/"payments" — a parsed money turn;
+ *   - paymentBudgetContext — they told us a monthly budget.
+ * Deliberately EXCLUDES financeAppInviteSentAt: that records US offering, not them asking, and
+ * using it would let one unsolicited pitch authorize the next.
+ *
+ * Measured against every lead that has ever received an offer touch (2026-08-01): this separates
+ * the three real misses (+16813891971 "just shopping around", +12109976639 "cover the difference
+ * outright", +17169079662) from the two legitimate finance leads (+17164812815, +17163812367).
+ */
+export function leadShowedMoneyInterest(conv: {
+  classification?: { bucket?: string } | null;
+  lastIntent?: { name?: string } | null;
+  paymentBudgetContext?: unknown;
+}): boolean {
+  if (String(conv?.classification?.bucket ?? "").trim().toLowerCase() === "finance_prequal") return true;
+  const intent = String(conv?.lastIntent?.name ?? "").trim().toLowerCase();
+  if (intent === "pricing" || intent === "payments") return true;
+  return !!conv?.paymentBudgetContext;
+}
+
+/**
+ * A lead who has never raised money never sees an offer that quotes financing terms — a straight
+ * discount still passes. Deterministic pre-filter ahead of the LLM matcher, same shape as the
+ * condition and rider-eligibility filters above; fail direction is "fewer offers → quieter".
+ */
+export function filterOffersForMoneyInterest(
+  offers: NationalOffer[],
+  showedMoneyInterest: boolean
+): NationalOffer[] {
+  if (showedMoneyInterest) return offers;
+  return offers.filter(o => !offerQuotesFinancingTerms(o));
+}
+
 /** The lead's bike-of-interest label for offer matching (lead vehicle, else the inventory watch). */
 export function vehicleLabelForOfferMatch(conv: { lead?: any; inventoryWatch?: any }): string {
   const v = (conv?.lead?.vehicle ?? {}) as any;
@@ -433,6 +496,14 @@ export async function evaluateProactiveCadenceValueGate(args: {
    * Omitted = not engaged: fail toward quiet, never toward an unsolicited money claim.
    */
   customerEverEngaged?: boolean;
+  /**
+   * The lead has raised financing/payments/budget themselves (leadShowedMoneyInterest). Omitted =
+   * they haven't, and an offer that QUOTES FINANCING TERMS is filtered out before the matcher —
+   * a straight discount still gets through. Engagement and money-interest are different questions:
+   * +16813891971 replied ("just shopping around, what would I get for my dirtbike") so he is
+   * engaged, and still had no business being quoted a rate.
+   */
+  showedMoneyInterest?: boolean;
 }): Promise<CadenceValueGateResult> {
   if (!isCadenceValueGateEnabled()) return { action: "send", reason: "gate_disabled" };
   if (args.isPostSale) return { action: "send", reason: "post_sale_exempt" };
@@ -453,7 +524,8 @@ export async function evaluateProactiveCadenceValueGate(args: {
         excludeTitles: args.alreadySentOfferTitles ?? [],
         firstName: args.firstName,
         condition: args.vehicleCondition ?? "unknown",
-        riderEligibility: args.riderEligibility ?? "not_evident"
+        riderEligibility: args.riderEligibility ?? "not_evident",
+        showedMoneyInterest: !!args.showedMoneyInterest
       })
     : null;
   const decision = decideProactiveCadenceValue({
