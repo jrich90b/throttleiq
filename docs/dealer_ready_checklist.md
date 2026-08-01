@@ -14,7 +14,7 @@ evidence date whenever a capability is re-verified.
 | Voice call capture (transcripts) | WORKING | 2026-06-10 22:04Z | |
 | Voice call summaries | WORKING | 2026-06-13 (report-join bug fixed: withVoiceSummary 0→423 on live data; voice_feedback_join:eval now gates ci:eval) | |
 | Traffic Log Pro walk-in ingest | WORKING | 2026-06-09 22:05Z (Perez walk-in) | |
-| Inventory watches | WORKING | 53 conversations carry watch state | |
+| Inventory watches | WORKING | 53 conversations carry watch state; watch LABEL matched whole-word since #406 (2026-08-01) — the bare substring test resolved slang alias `king` inside "loo-king" and confirmed phantom Road King watches on 17% of inbound turns (+17169490089, +16412012540); pinned by `family_watch_clarify:eval` | |
 | Deposit / payment requests (Stripe) | WORKING | 2026-06-04 (dealer_payment_requests.json + customer flow) | Re-verify before June 30 |
 | DocuSign | UNVERIFIED | last customer mention 2026-04-01; tokens file 2026-05-19 | Probe token validity + a sandbox envelope (open) |
 | Postgres dual-write | WORKING | parity clean expected from 6/12 (shadow-leak fix) | Read-flip June 17 |
