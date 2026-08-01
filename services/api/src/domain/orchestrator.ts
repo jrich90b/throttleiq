@@ -42,7 +42,12 @@ import { findMsrpPricing, getMsrpColorNames } from "./msrpPriceList.js";
 import { getInventoryNote } from "./inventoryNotes.js";
 import { getDealerProfile } from "./dealerProfile.js";
 import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildPriceObjectionCheaperWatchReply, GENERIC_AGENT_DISPLAY_NAME } from "./agentVoice.js";
-import { decideEventPromoTurn, decidePriceAnswerAnchor, decidePriceObjectionTurn } from "./routeStateReducer.js";
+import {
+  decideEventPromoTurn,
+  decidePriceAnswerAnchor,
+  decidePriceObjectionTurn,
+  decideStockNumberInterestTurn
+} from "./routeStateReducer.js";
 import { buildLongTermTimelineMessage } from "./longTermMessage.js";
 import { matchPartsCatalogLexicon } from "./partsCatalogLexicon.js";
 import {
@@ -2761,8 +2766,14 @@ export async function orchestrateInbound(
       event.body
     );
   const stockIdFromText = extractInventoryStockIdMention(event.body);
-  if (stockIdFromText && isStockNumberInventoryInterestText(event.body)) {
-    const stockReply = await buildStockNumberInventoryInterestReply(stockIdFromText);
+  // Same centralized precedence as the live + regenerate paths (decideStockNumberInterestTurn).
+  const stockNumberInterestTurn = decideStockNumberInterestTurn({
+    parserStockId: null, // this path has no typed inventory-entity parse to consult
+    deterministicStockId: stockIdFromText,
+    interestSignal: isStockNumberInventoryInterestText(event.body)
+  });
+  if (stockNumberInterestTurn.routeToStockInventory && stockNumberInterestTurn.stockId) {
+    const stockReply = await buildStockNumberInventoryInterestReply(stockNumberInterestTurn.stockId);
     return finalize({
       intent: stockReply.intent,
       stage: "ENGAGED",

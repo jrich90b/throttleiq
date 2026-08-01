@@ -35,6 +35,7 @@ export {
   decidePriceObjectionTurn,
   decideReservationHandoffTurn,
   decideSchedulingTurn,
+  decideStockNumberInterestTurn,
   shouldProposeDaySlotsForNamedDay,
   shouldSuppressCommittedBuyerAvailabilityRepitch,
   decideInternationalLeadTurn,

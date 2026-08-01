@@ -703,6 +703,7 @@ import {
   decideNonMotorcycleTradeTurn,
   decideServiceAppointmentTurn,
   decideSchedulingTurn,
+  decideStockNumberInterestTurn,
   shouldProposeDaySlotsForNamedDay,
   shouldSuppressCommittedBuyerAvailabilityRepitch,
   decideTradeQualifierTurn,
@@ -56478,9 +56479,13 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   if (process.env.LLM_APPOINTMENT_TIMING_PARSER_DEBUG === "1" && regenAppointmentTimingParse) {
     console.log("[llm-appointment-timing-parse] regen", regenAppointmentTimingParse);
   }
-  const regenStockInventoryInterest =
-    !!(extractInventoryStockIdMention(event.body ?? "") || regenInventoryEntityAvailabilityHint?.stockId) &&
-    isStockNumberInventoryInterestText(event.body ?? "");
+  // Same centralized precedence as the live path (decideStockNumberInterestTurn); called inline so
+  // no new mirrored regen local is introduced (route-parity ratchet counts `const regenXxx`).
+  const regenStockInventoryInterest = decideStockNumberInterestTurn({
+    parserStockId: regenInventoryEntityAvailabilityHint?.stockId ?? null,
+    deterministicStockId: extractInventoryStockIdMention(event.body ?? ""),
+    interestSignal: isStockNumberInventoryInterestText(event.body ?? "")
+  }).routeToStockInventory;
   const regenTradePayoffParserHint =
     /\b(lien|lein|payoff|lender|loan|title|owe|owe on it|bank)\b/i.test(regenTextLower) ||
     /\b(address|info|information|details)\b/i.test(regenTextLower) ||
@@ -67622,9 +67627,13 @@ if (authToken && signature) {
     shortlistPromptActive: hasActivePendingShortListPrompt(conv)
   });
   const availabilityPreferenceReply = !!availabilityPreferenceHint;
-  const stockInventoryInterestThisTurn =
-    !!(extractInventoryStockIdMention(event.body ?? "") || inventoryEntityAvailabilityHint?.stockId) &&
-    isStockNumberInventoryInterestText(event.body ?? "");
+  // Stock-number interest precedence centralized in routeStateReducer.decideStockNumberInterestTurn
+  // (shared with the regenerate path so the two can never drift).
+  const stockInventoryInterestThisTurn = decideStockNumberInterestTurn({
+    parserStockId: inventoryEntityAvailabilityHint?.stockId ?? null,
+    deterministicStockId: extractInventoryStockIdMention(event.body ?? ""),
+    interestSignal: isStockNumberInventoryInterestText(event.body ?? "")
+  }).routeToStockInventory;
   const inventoryEntityAvailabilityThisTurn =
     !!inventoryEntityAvailabilityHint && !!inventoryEntityParse?.isAvailabilityQuestion;
   const availabilityRouteEligible =

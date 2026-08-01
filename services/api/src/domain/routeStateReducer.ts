@@ -3043,6 +3043,44 @@ export function shouldSuppressCommittedBuyerAvailabilityRepitch(
   return true;
 }
 
+// --- Stock-number interest turn (centralized 2026-08-01) ---
+// A customer naming a dealer stock number ("still have T10-26?") routes into the inventory
+// availability arm. The eligibility expression lived inline in THREE places (live webhook, regen,
+// orchestrator) and so could drift; it is centralized here unchanged.
+//
+// Two inputs feed it and they are NOT interchangeable: `parserStockId` comes from the typed
+// inventory-entity parser (comprehension — the parser owns "did the customer mean a stock
+// number?"), while `deterministicStockId` is the structured-extraction fallback over the raw text.
+//
+// Fail-direction: if this decision goes FALSE on a real stock-number ask, the turn falls through to
+// the general composer, which still answers the customer conversationally — a soft miss. If it goes
+// TRUE on a non-stock-number, the deterministic availability arm hijacks the turn and answers a
+// question nobody asked ("I'm not seeing 2026 Other in stock right now") while ignoring what the
+// customer actually said. The over-fire is the worse direction, which is why the interest signal is
+// a KEEP-class gate (removing it would make any stock-shaped token fire the arm) and why the
+// extractor is letter-led. Applied identically in the live (/webhooks/twilio) and regenerate paths;
+// pinned by stock_number_interest_routing:eval.
+export type StockNumberInterestTurnInput = {
+  parserStockId: string | null; // typed inventory-entity parser's stock id for this turn
+  deterministicStockId: string | null; // extractInventoryStockIdMention over the raw body
+  interestSignal: boolean; // isStockNumberInventoryInterestText — KEEP-class over-fire gate
+};
+
+export type StockNumberInterestTurnDecision = {
+  routeToStockInventory: boolean;
+  stockId: string | null;
+};
+
+export function decideStockNumberInterestTurn(
+  input: StockNumberInterestTurnInput
+): StockNumberInterestTurnDecision {
+  const stockId = input.parserStockId || input.deterministicStockId || null;
+  return {
+    routeToStockInventory: !!stockId && input.interestSignal,
+    stockId,
+  };
+}
+
 // --- International (out-of-country) inbound lead: log + close (Joe ruling 2026-07-22) ---
 // Joe, on +6282245353758 (Indonesia): "leave it but make sure the crm is updated with
 // international lead and close it." So the SILENCE stays — we do not sell or ship overseas and
