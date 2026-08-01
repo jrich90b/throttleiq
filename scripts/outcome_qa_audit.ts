@@ -227,9 +227,31 @@ function compactTask(todo: AnyObj) {
   };
 }
 
-function customerFacingAfter(conv: AnyObj, outcomeAt: string): OutcomeCase["customerFacingAfterOutcome"] {
+/**
+ * The dealer-ride thank-you is published when the RIDE LEAD LANDS — the ingest
+ * arm publishes `dealerRideInitialThankYouDraft` and SMSes the salesperson the
+ * outcome prompt in the same breath ("the ride happened; thank them once while
+ * the outcome stays with the salesperson"). Staff answer that prompt whenever
+ * they get to it, so anchoring the customer-facing window to the OUTCOME
+ * timestamp with a 60s grace calls the thank-you missing for every ride where
+ * the salesperson took longer than a minute to reply — i.e. nearly all of them
+ * (2026-08-01: Charles Desalvo, draft at 18:35:34Z, outcome at 18:36:48Z, 74s
+ * apart → phantom P1 that failed the release gate). Anchor to the notify moment
+ * when we have it, keeping the same grace.
+ */
+function dealerRideFollowUpAnchorMs(conv: AnyObj): number | null {
+  const anchor = toMs(conv?.dealerRide?.staffNotify?.followUpSentAt);
+  return Number.isFinite(anchor) ? anchor : null;
+}
+
+function customerFacingAfter(
+  conv: AnyObj,
+  outcomeAt: string,
+  anchorMs: number | null = null
+): OutcomeCase["customerFacingAfterOutcome"] {
   const outcomeMs = Date.parse(outcomeAt);
   if (!Number.isFinite(outcomeMs)) return [];
+  const windowStartMs = Math.min(outcomeMs, anchorMs != null ? anchorMs : outcomeMs) - 60 * 1000;
   const messages = Array.isArray(conv?.messages) ? conv.messages : [];
   return messages
     .filter(msg => {
@@ -239,7 +261,7 @@ function customerFacingAfter(conv: AnyObj, outcomeAt: string): OutcomeCase["cust
       const body = normText(msg?.body);
       if (!body || isInternalActionLog(body)) return false;
       const msgMs = toMs(msg?.at);
-      return Number.isFinite(msgMs) && msgMs >= outcomeMs - 60 * 1000;
+      return Number.isFinite(msgMs) && msgMs >= windowStartMs;
     })
     .sort((a, b) => toMs(a?.at) - toMs(b?.at))
     .slice(0, 5)
@@ -379,7 +401,11 @@ function collectCases(store: LoadedStore, sinceHours: number): OutcomeCase[] {
       cadenceKind: normText(conv?.followUpCadence?.kind) || null,
       nextDueAt: toIso(conv?.followUpCadence?.nextDueAt),
       preferredContactMethod: normText(conv?.lead?.preferredContactMethod).toLowerCase() || null,
-      customerFacingAfterOutcome: customerFacingAfter(conv, updatedAt),
+      customerFacingAfterOutcome: customerFacingAfter(
+        conv,
+        updatedAt,
+        family === "dealer_ride" ? dealerRideFollowUpAnchorMs(conv) : null
+      ),
       openTasks,
       cueTags: cueTagsFor(note)
     };

@@ -18,6 +18,13 @@ function hasIssue(report: AnyObj, issue: string): boolean {
   return Array.isArray(report.findings) && report.findings.some((row: AnyObj) => row.issue === issue);
 }
 
+function hasIssueForConv(report: AnyObj, issue: string, convId: string): boolean {
+  return (
+    Array.isArray(report.findings) &&
+    report.findings.some((row: AnyObj) => row.issue === issue && String(row.caseId ?? "").includes(convId))
+  );
+}
+
 function hasSeedCue(report: AnyObj, cue: string): boolean {
   return (
     Array.isArray(report.parserSeedCandidates) &&
@@ -165,6 +172,44 @@ const store = {
         }
       },
       messages: []
+    },
+    {
+      // Charles Desalvo, 2026-08-01: the ride-lead ingest publishes the thank-you
+      // draft and SMSes the salesperson the outcome prompt together; the outcome
+      // came back 74s later. The thank-you EXISTS, so this must raise no finding —
+      // anchoring only to the outcome timestamp made it a phantom release-gate P1.
+      id: "conv_dealer_thanked_before_outcome",
+      leadKey: "+17160000005",
+      mode: "suggest",
+      leadOwner: { name: "Giovanni Boccabella" },
+      lead: {
+        leadRef: "DR3",
+        firstName: "Charles",
+        lastName: "Desalvo",
+        phone: "7160000005"
+      },
+      dealerRide: {
+        staffNotify: {
+          followUpSentAt: isoMinutesAgo(31),
+          outcome: {
+            status: "sold",
+            primaryStatus: "showed",
+            secondaryStatus: "sold",
+            note: "",
+            updatedAt: isoMinutesAgo(30)
+          }
+        }
+      },
+      messages: [
+        {
+          id: "msg_dealer_ride_thank_you",
+          direction: "out",
+          provider: "draft_ai",
+          at: isoMinutesAgo(31),
+          body:
+            "Hey Charles, it's Alexandra over at American Harley-Davidson. Thanks again for coming in for the test ride on the 2024 Street Glide. If any questions come up or you want to go over options, just text me anytime."
+        }
+      ]
     }
   ],
   todos: []
@@ -175,8 +220,18 @@ const report = buildOutcomeQaReport(store, {
   sinceHours: 24
 });
 
-assertCheck("outcome_count", report.summary.outcomeCount, 5);
+assertCheck("outcome_count", report.summary.outcomeCount, 6);
 assertCheck("missing_dealer_ride_thank_you_detected", hasIssue(report, "missing_dealer_ride_customer_thank_you"), true);
+assertCheck(
+  "missing_dealer_ride_thank_you_still_fires_when_absent",
+  hasIssueForConv(report, "missing_dealer_ride_customer_thank_you", "conv_dealer_missing"),
+  true
+);
+assertCheck(
+  "thank_you_published_before_outcome_is_not_a_miss",
+  hasIssueForConv(report, "missing_dealer_ride_customer_thank_you", "conv_dealer_thanked_before_outcome"),
+  false
+);
 assertCheck("assumed_next_steps_detected", hasIssue(report, "assumed_agreed_next_steps"), true);
 assertCheck("vague_noted_language_detected", hasIssue(report, "dealer_ride_vague_noted_language"), true);
 assertCheck("wrong_salesperson_identity_detected", hasIssue(report, "wrong_salesperson_identity"), true);

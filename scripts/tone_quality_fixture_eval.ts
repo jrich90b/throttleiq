@@ -188,6 +188,33 @@ const FIXTURES: Fixture[] = [
     expect: { minScore: 85, mustNotIncludeIssues: ["adf_direct_ask_unanswered"] }
   },
   {
+    // Dealer Lead App demo-ride lead (Charles Desalvo, 2026-08-01). The customer
+    // comment is just the salesperson's name; everything after "Marketing
+    // Questions:" is the STORE's own questionnaire, whose "Do you expect to make
+    // a motorcycle purchase in the near future?" made the scorer read a pricing
+    // ask that nobody made. The post-ride thank-you is the right reply, so this
+    // must score clean — it failed at 15 and zeroed the day's tone pass rate.
+    id: "adf_dealer_questionnaire_is_not_a_customer_pricing_ask",
+    inboundText:
+      "WEB LEAD (ADF) Source: Dealer Lead App Ref: 11716 Name: Charles Desalvo Email: chazbob24@gmail.com Phone: 7168614216 Year: 2024 Vehicle: Harley-Davidson Street Glide  Inquiry: Customer Comments: GIOVANNI BOCCABELLA Marketing Questions: Dealer Lead App - Type: Y SalesPerson: GIOVANNI BOCCABELLA-GIOVANNI BOCCABELLA - How many years have you owned your Harley-Davidson motorcycle? If you own more than one, think about the one you ve owned the longest More than 4 years - Do you expect to make a motorcycle purchase in the near future? Yes, in less than 3 months - Which model of motorcycle are you interested in? 2024,TOURING,STREET GLIDE Demo Bikes Ridden: 2024,TOURING,STREET GLIDE Email Opt-In:Yes-Brand of Bike Owned:Harley-Davidson-",
+    outboundText:
+      "Hey Charles, it's Alexandra over at American Harley-Davidson. Thanks again for coming in for the test ride on the 2024 Street Glide. If any questions come up or you want to go over options, just text me anytime. Reply STOP to opt out.",
+    expect: {
+      minScore: 85,
+      mustNotIncludeIssues: ["adf_direct_ask_unanswered", "intent_mismatch", "question_not_answered_first"]
+    }
+  },
+  {
+    // Guard the other direction: a REAL pricing question in the customer comment
+    // is still caught even though the questionnaire block follows it.
+    id: "adf_real_ask_before_dealer_questionnaire_still_caught",
+    inboundText:
+      "WEB LEAD (ADF) Source: Dealer Lead App Ref: 11717 Name: Pat Rider Email: pat@example.com Phone: 7160000009 Year: 2024 Vehicle: Harley-Davidson Street Glide  Inquiry: Customer Comments: What's the out the door price on this one? Marketing Questions: Dealer Lead App - Type: Y SalesPerson: GIOVANNI BOCCABELLA - Do you expect to make a motorcycle purchase in the near future? Yes, in less than 3 months",
+    outboundText:
+      "Hey Pat, it's Alexandra over at American Harley-Davidson. Thanks for reaching out about the 2024 Street Glide — what day works for you to stop in?",
+    expect: { mustIncludeIssues: ["adf_direct_ask_unanswered"] }
+  },
+  {
     id: "adf_genuine_specials_ask_still_pricing",
     inboundText:
       "WEB LEAD (ADF)\nSource: Website contact form\nRef: 20003\nName: Deal Hunter\nYear: 2026\nVehicle: Harley-Davidson Road Glide\n\nInquiry:\nAny specials or deals running on a Road Glide right now?",

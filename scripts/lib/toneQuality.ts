@@ -287,11 +287,45 @@ export function isAdfInboundText(text: string): boolean {
   );
 }
 
+/**
+ * The Dealer Lead App appends a DEALER-AUTHORED questionnaire after the
+ * customer's comment: "Marketing Questions: ... - Do you expect to make a
+ * motorcycle purchase in the near future? Yes, in less than 3 months - Which
+ * model of motorcycle are you interested in? ...". Those are the store's own
+ * survey prompts, not anything the customer typed — but they carry question
+ * marks and the word "purchase", so leaving them in the extracted customer text
+ * manufactures phantom asks (2026-08-01: Charles Desalvo's demo-ride lead, whose
+ * whole customer comment was the salesperson's name "GIOVANNI BOCCABELLA",
+ * scored `pricing_finance` / `adf_direct_ask_unanswered: pricing` and dragged the
+ * day's tone pass rate to 0). 87 of 876 ADF leads in the corpus carry the block
+ * and NONE has customer prose after it. Cut at the section header — same
+ * fingerprint approach as `isAdfDealProgressionNote`'s "(Step N)": a customer
+ * never types "Marketing Questions:".
+ */
+const ADF_DEALER_QUESTIONNAIRE_MARKER = /\bmarketing questions:\s*/i;
+
+/**
+ * Drop the dealer questionnaire from an ADF body before ANY tone judgement, so
+ * the store's own survey prompts can't set the turn's intent either. The lead
+ * header ("Year: / Vehicle: / Trade-In:") is kept, so model/trade signal is
+ * untouched — only the post-"Marketing Questions:" block goes.
+ */
+export function stripAdfDealerQuestionnaire(text: string): string {
+  const raw = String(text ?? "");
+  if (!isAdfInboundText(raw)) return raw;
+  const questionnaire = raw.match(ADF_DEALER_QUESTIONNAIRE_MARKER);
+  if (!questionnaire || questionnaire.index == null) return raw;
+  return raw.slice(0, questionnaire.index);
+}
+
 function extractAdfCustomerText(text: string): string {
   const raw = String(text ?? "");
   const marker = raw.match(/(?:^|\n)\s*(?:inquiry|your inquiry|customer comments?|comments?):\s*/i);
-  if (!marker || marker.index == null) return normalizeText(raw);
-  return normalizeText(raw.slice(marker.index + marker[0].length));
+  const body = marker && marker.index != null ? raw.slice(marker.index + marker[0].length) : raw;
+  const questionnaire = body.match(ADF_DEALER_QUESTIONNAIRE_MARKER);
+  const customerOnly =
+    questionnaire && questionnaire.index != null ? body.slice(0, questionnaire.index) : body;
+  return normalizeText(customerOnly);
 }
 
 function uniqueAskKinds(kinds: AdfDirectAskKind[]): AdfDirectAskKind[] {
@@ -713,8 +747,8 @@ export function outboundAcknowledgesHardship(text: string): boolean {
 }
 
 export function evaluateTurnToneQuality(input: ToneEvalInput): ToneEvalResult {
-  const rawInboundText = String(input.inboundText ?? "");
-  const inboundText = normalizeText(input.inboundText);
+  const rawInboundText = stripAdfDealerQuestionnaire(String(input.inboundText ?? ""));
+  const inboundText = normalizeText(rawInboundText);
   const outboundText = normalizeText(input.outboundText);
   const intent = detectPrimaryIntent(inboundText);
   const inboundIsQuestion = isQuestion(inboundText);
