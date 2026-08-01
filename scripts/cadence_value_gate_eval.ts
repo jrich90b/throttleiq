@@ -273,7 +273,10 @@ const eq = (id: string, actual: unknown, expected: unknown) => {
 
   // regen mirror: suppress keeps the prior draft (null); replace returns the offer body
   const regenIdx = idx.indexOf("// Proactive cadence VALUE GATE — regen mirror");
-  const regenBlock = regenIdx >= 0 ? idx.slice(regenIdx, regenIdx + 2600) : "";
+  // Window widened 2600 → 3400 when the repeat backstop was added (the block grew). It must stay
+  // large enough to reach the replace/suppress returns, but nowhere near the live tick (~19k later),
+  // so the "regen never records the ledger / never commits the anchor" negatives stay meaningful.
+  const regenBlock = regenIdx >= 0 ? idx.slice(regenIdx, regenIdx + 3400) : "";
   eq("regen_mirror_exists", regenIdx >= 0, true);
   eq("regen_mirror_flag_gated", /isCadenceValueGateEnabled\(\)/.test(regenBlock), true);
   eq("regen_replace_returns_offer_body", /return \{ body: valueGate\.message \};/.test(regenBlock), true);
@@ -298,6 +301,17 @@ const eq = (id: string, actual: unknown, expected: unknown) => {
     (idx.match(/customerEverEngaged: customerEngagedWithCadence\(conv\)/g) ?? []).length,
     2
   );
+  // REPEAT BACKSTOP parity (+16102170861 / +17163812367): the offer message is swapped in AFTER
+  // selectNonRepeatingCadenceMessage runs, so without this it is the ONE cadence line that never
+  // faces the "did we already say this?" check. BOTH paths must apply it, or a regen re-sends copy
+  // the live tick would have held. This is the identity-independent half of the dedup fix — it
+  // compares the outgoing COPY, so it still catches a repeat when promo naming drifts.
+  eq(
+    "both_paths_backstop_repeated_value_touch",
+    (idx.match(/wasCadenceLineUsedRecently\(conv, valueGate\.message\)/g) ?? []).length,
+    2
+  );
+  eq("tick_repeat_backstop_advances_and_continues", /value touch repeats a recent message/.test(tickBlock), true);
 
   if (failures.length) {
     console.error("FAIL cadence_value_gate eval:");
