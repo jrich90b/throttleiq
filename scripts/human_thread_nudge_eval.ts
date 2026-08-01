@@ -5,7 +5,8 @@
  * 1. decideHumanThreadNudge decision-table: fires ONLY on a human-owned (mode=human) OR handed-off
  *    (followUp.mode=manual_handoff) thread whose last delivered message is an outbound that has sat
  *    quiet >= N days — and never over an unanswered customer message, a dated staff promise, a
- *    pending draft, opt-out, closed, call-only, a booked appointment, the cap (2/thread), or
+ *    pending draft, opt-out, closed, call-only, a booked appointment, a NON-SALES department
+ *    handoff (apparel/parts/service — that team owns the thread), the cap (2/thread), or
  *    unspaced repeats. Production pins: Zackary +17165985414 (human mode, last outbound was an
  *    AGENT send — must still fire) and Michael Spence +17169306602 (suggest mode + manual_handoff —
  *    must fire under the widening).
@@ -81,6 +82,29 @@ eq("zackary_human_mode_agent_last_outbound_fires", D({ ...base, conversationMode
 // Michael Spence +17169306602: suggest mode + followUp.mode=manual_handoff (web-widget sales
 // handoff, price answered 7/06, silent since) — eligible under the widening.
 eq("spence_suggest_mode_handoff_fires", D({ ...base, conversationMode: "suggest", followUpMode: "manual_handoff" }).nudge, true);
+// Narendra +6282245353758 (open-critic 2026-08-01, duplicate_question_after_human_handoff): a
+// Motor Clothes WEB TEXT WIDGET lead -> followUp {mode:"manual_handoff", reason:"apparel_request"}
+// + an apparel staff todo. Joe then sent "Are you looking for factory racing t-shirts?"; the
+// customer never answered; 12 quiet days later the nudge re-asked Joe's own question back at him.
+// A non-sales department owns that thread — staff todo, never a customer bump.
+const narendra = {
+  ...base,
+  conversationMode: "suggest",
+  followUpMode: "manual_handoff",
+  followUpReason: "apparel_request",
+  lastMessageDirection: "out" as const,
+  lastMessageAtMs: NOW - 12 * DAY
+};
+eq("narendra_apparel_handoff_no", D(narendra), { nudge: false, reason: "non_sales_department_handoff" });
+eq("parts_handoff_no", D({ ...narendra, followUpReason: "parts_request" }).nudge, false);
+eq("service_handoff_no", D({ ...narendra, followUpReason: "service_request" }).nudge, false);
+// It is a CLASS exclusion, not a timing artifact — same verdict one day in.
+eq("dept_stop_precedes_clock", D({ ...narendra, lastMessageAtMs: NOW - 1 * DAY }).reason, "non_sales_department_handoff");
+// Regression pins — the widening Joe ruled in on 7/23 stays intact. A SALES handoff, an unknown/
+// absent reason, and a thread a rep personally took over (mode=human) all still fire.
+eq("spence_sales_handoff_still_fires", D({ ...narendra, followUpReason: "web_text_widget_sales" }).nudge, true);
+eq("unknown_reason_still_fires", D({ ...narendra, followUpReason: null }).nudge, true);
+eq("human_mode_beats_dept_reason", D({ ...narendra, conversationMode: "human" }).nudge, true);
 // A plain suggest-mode thread (no handoff) has its own cadence/auto-draft lane — never nudged.
 eq("suggest_no_handoff_no", D({ ...base, conversationMode: "suggest" }), { nudge: false, reason: "not_human_or_handoff" });
 eq("suggest_active_followup_no", D({ ...base, conversationMode: "suggest", followUpMode: "active" }), { nudge: false, reason: "not_human_or_handoff" });
@@ -111,8 +135,12 @@ const idx = fs.readFileSync(path.join(process.cwd(), "services/api/src/index.ts"
 const laneIdx = idx.indexOf("if (isHumanThreadNudgeEnabled()) {");
 const lane = laneIdx >= 0 ? idx.slice(laneIdx, laneIdx + 5200) : "";
 eq("tick_lane_exists_flag_gated", laneIdx >= 0, true);
-eq("lane_widened_to_manual_handoff", /nudgeConvMode !== "human" && nudgeFollowUpMode !== "manual_handoff"/.test(lane), true);
+// The lane's pre-filter is the SHARED eligible-class helper, not a restatement that can drift from
+// the pure decision's first branch.
+eq("lane_widened_to_manual_handoff", /if \(!isHumanThreadNudgeEligibleClass\(\(conv as any\)\.mode, conv\.followUp\?\.mode\)\) continue;/.test(lane), true);
 eq("lane_passes_followUpMode", /followUpMode: conv\.followUp\?\.mode \?\? null/.test(lane), true);
+// Without the reason the decision cannot tell an apparel handoff from a sales handoff (Narendra).
+eq("lane_passes_followUpReason", /followUpReason: conv\.followUp\?\.reason \?\? null/.test(lane), true);
 eq("lane_calls_pure_decision", /decideHumanThreadNudge\(\{/.test(lane), true);
 eq("lane_composes_via_llm", /composeHumanThreadNudgeWithLLM\(\{/.test(lane), true);
 eq("draft_mode_lands_in_queue", /appendOutbound\(conv, "salesperson", nudgeTo, nudgeMessage, "draft_ai"\)/.test(lane), true);

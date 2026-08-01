@@ -561,6 +561,7 @@ import {
 } from "./domain/priceDropWatch.js";
 import {
   decideHumanThreadNudge,
+  isHumanThreadNudgeEligibleClass,
   isHumanThreadNudgeEnabled,
   isHumanThreadNudgeAutosendEnabled,
   humanThreadNudgeQuietDays,
@@ -32767,9 +32768,7 @@ async function processDueFollowUpsUnlocked() {
     let humanNudges = 0;
     for (const conv of convs) {
       if (humanNudges >= 10) break;
-      const nudgeConvMode = String((conv as any).mode ?? "").toLowerCase();
-      const nudgeFollowUpMode = String(conv.followUp?.mode ?? "").toLowerCase();
-      if (nudgeConvMode !== "human" && nudgeFollowUpMode !== "manual_handoff") continue;
+      if (!isHumanThreadNudgeEligibleClass((conv as any).mode, conv.followUp?.mode)) continue;
       const delivered = (conv.messages ?? []).filter(
         (m: any) =>
           ["twilio", "human", "sendgrid", "web_widget", "sendgrid_adf"].includes(String(m?.provider ?? "")) &&
@@ -32784,6 +32783,7 @@ async function processDueFollowUpsUnlocked() {
       const nudgeDecision = decideHumanThreadNudge({
         conversationMode: (conv as any).mode ?? null,
         followUpMode: conv.followUp?.mode ?? null,
+        followUpReason: conv.followUp?.reason ?? null,
         suppressed: isSuppressed(conv.leadKey),
         conversationStatus: conv.status ?? null,
         closedAt: conv.closedAt ?? null,
