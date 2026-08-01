@@ -403,6 +403,33 @@ export function isNonBuyerSurveyAckByDesign(row: ReplayRow, judge: IntentVerdict
   return /no pressure at all/.test(draft) && /bike of your own down the road/.test(draft);
 }
 
+// Room58 "Standard" handoff ack BY DESIGN (+18283619458 Larry Silvers, 7/31 sweep, P1). Room58 -
+// Standard is the generic "Contact Us" web form: the customer picks no bike ("Full Line") and
+// writes NOTHING. Since 2026-03-12 (`c682179b`) that lead is deliberately NOT answered by the
+// agent — sendgridInbound's isRoom58Standard branch files a todo, stops the cadence, sets
+// followUpMode manual_handoff and sends only the pinned ack, because a human has to find out what
+// the customer actually wants. The judge grades it against a 1:1 sales reply, invents an ask the
+// customer never made ("likely requesting availability/pricing/next steps") and fails it MAJOR —
+// so a deliberate design re-fires as a P1 every night and can never be "fixed" in code.
+//
+// Fail-direction (why accepting a MAJOR is safe here, unlike the minor-only accepts above): the
+// gate is the BODY, not the severity. `isEmptyInquiryAdfBody` requires the Inquiry section to be
+// present and empty, so the instant a Room58 customer writes a real question the accept stops
+// matching and an unanswered ask fails exactly as it does today. The draft must also still be the
+// pinned ack copy, so if that copy is ever reworded — or the branch is changed to actually engage
+// the lead — this detector falls out and the rows surface again ([[scorer-copy-drift-design-accept]]).
+export function isRoom58StandardHandoffAckByDesign(
+  row: ReplayRow,
+  judge: IntentVerdict | null | undefined
+): boolean {
+  if (!judge || judge.addressed) return false;
+  const body = String(row.body ?? "");
+  if (!/source:\s*room58 - standard/i.test(body)) return false;
+  if (!isEmptyInquiryAdfBody(body)) return false;
+  const draft = String(row.draft ?? "").toLowerCase();
+  return /i got your inquiry/.test(draft) && /make sure the team follows up soon/.test(draft);
+}
+
 /** A row worth spending a judge call on: it produced a draft on an actionable inbound. */
 export function isJudgeWorthy(row: ReplayRow): boolean {
   if (!row.draft || !String(row.draft).trim()) return false;
@@ -492,6 +519,9 @@ export function adjustScore(score: TurnScore, row: ReplayRow): TurnScore & { adj
     return { ...score, pass: true, critical: false, adjustment: "design_accepted_handoff" };
   }
   if (!score.pass && isNonBuyerSurveyAckByDesign(row, score.judge)) {
+    return { ...score, pass: true, critical: false, adjustment: "design_accepted_handoff" };
+  }
+  if (!score.pass && isRoom58StandardHandoffAckByDesign(row, score.judge)) {
     return { ...score, pass: true, critical: false, adjustment: "design_accepted_handoff" };
   }
   if (!score.pass && isManagerQuotePricingPath(row, score.judge)) {
@@ -1263,6 +1293,61 @@ function selfTest() {
   assert(!adjustScore(scoreTurn(nonDlaAckRow, nonBuyerMinor), nonDlaAckRow).pass, "the no-pressure ack on a real sales question is NOT excused");
   const nonBuyerMajorScore = adjustScore(scoreTurn(nonBuyerAckRow, { ...nonBuyerMinor, severity: "major" }), nonBuyerAckRow);
   assert(!nonBuyerMajorScore.pass && nonBuyerMajorScore.critical, "a judge-major on the survey thread still fails critical");
+
+  // Room58 - Standard handoff ack: the generic "Contact Us" form with an EMPTY Inquiry. Pinned
+  // from the production turn +18283619458 (Larry Silvers, adf_ref 11353, 7/31 sweep) that the
+  // judge failed MAJOR/critical. The lead is deliberately handed to a human (c682179b), so the
+  // ack is the designed reply, not a deflection.
+  const room58Body =
+    "WEB LEAD (ADF)\nSource: Room58 - Standard\nRef: 11353\nName: Larry Silvers\nEmail: larry.ssrg@yahoo.com\nPhone: 8283619458\nYear: 2026\nVehicle: Harley-Davidson Full Line\n\nInquiry:";
+  const room58AckDraft =
+    "Hey Larry, it's Alexandra over at American Harley-Davidson. Thanks — I got your inquiry. I’ll make sure the team follows up soon.";
+  const room58Row = mk({ body: room58Body, draft: room58AckDraft });
+  const room58Major: IntentVerdict = {
+    addressed: false,
+    customerAsk:
+      "Interest in 2026 Harley-Davidson Full Line — likely requesting information or follow-up about availability/pricing/next steps",
+    why: "The agent's reply only acknowledges receipt and promises follow-up, but does not answer any specific information or take next-step action requested by a sales lead.",
+    severity: "major"
+  };
+  const room58Score = adjustScore(scoreTurn(room58Row, room58Major), room58Row);
+  assert(
+    room58Score.pass && room58Score.adjustment === "design_accepted_handoff",
+    "the pinned Room58 - Standard handoff ack on an empty Inquiry passes as accepted design"
+  );
+  // The BODY is the gate, not the severity: a Room58 customer who actually writes a question must
+  // still fail, or this accept would blind the sweep to a real unanswered ask.
+  const room58RealAsk = mk({
+    body: `${room58Body}\nIs the Low Rider ST still in stock, and what's your best out-the-door price?`,
+    draft: room58AckDraft
+  });
+  assert(
+    !isEmptyInquiryAdfBody(String(room58RealAsk.body)),
+    "a Room58 body carrying a real question is NOT the empty-Inquiry class"
+  );
+  assert(
+    !adjustScore(scoreTurn(room58RealAsk, room58Major), room58RealAsk).pass,
+    "the Room58 ack sent over a real customer question stays a miss"
+  );
+  // Scope: the same ack copy on a non-Room58 lead is NOT excused (only this source is handed off).
+  const nonRoom58AckRow = mk({
+    body: room58Body.replace("Room58 - Standard", "Room58 - Book test ride"),
+    draft: room58AckDraft
+  });
+  assert(
+    !adjustScore(scoreTurn(nonRoom58AckRow, room58Major), nonRoom58AckRow).pass,
+    "the handoff ack on a non-Standard Room58 lead is NOT excused"
+  );
+  // Copy drift must fail OPEN (the [[scorer-copy-drift-design-accept]] trap): reword the ack and
+  // the row surfaces again rather than being silently accepted.
+  const room58DriftedRow = mk({
+    body: room58Body,
+    draft: "Hey Larry, it's Alexandra over at American Harley-Davidson. Got it — someone will be in touch."
+  });
+  assert(
+    !adjustScore(scoreTurn(room58DriftedRow, room58Major), room58DriftedRow).pass,
+    "a reworded handoff ack falls out of the accept and surfaces again"
+  );
   // Human-owned SOURCE thread (staff takeover): the replay harness forces autopilot onto the
   // temp copy, so expected silence must be keyed on the row's sourceConversationMode — mirrors
   // the release-gate human-mode skips (c5ae6e32). Shapes pinned from the 2026-07-23 phantom

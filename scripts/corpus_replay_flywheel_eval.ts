@@ -62,12 +62,22 @@ assert.ok(
 //     including the judge-major and real-question fail-direction guards live in the self-test.
 assert.ok(
   /isEmptyInquiryAdfIntroByDesign\(row, score\.judge\)/.test(flywheel) &&
-    /isNonBuyerSurveyAckByDesign\(row, score\.judge\)/.test(flywheel),
-  "adjustScore hooks the empty-Inquiry ADF intro + non-buyer survey ack design accepts"
+    /isNonBuyerSurveyAckByDesign\(row, score\.judge\)/.test(flywheel) &&
+    /isRoom58StandardHandoffAckByDesign\(row, score\.judge\)/.test(flywheel),
+  "adjustScore hooks the empty-Inquiry ADF intro + non-buyer survey ack + Room58 handoff design accepts"
 );
 assert.ok(
   /severity !== "minor"\) return false/.test(flywheel),
-  "the new design accepts excuse judge-minor ONLY — a judge-major still fails"
+  "the judge-severity design accepts excuse judge-minor ONLY — a judge-major still fails"
+);
+// (5) The Room58 - Standard handoff ack is the ONE accept that may excuse a judge-MAJOR, because
+//     the lead is deliberately never answered by the agent (c682179b). It is gated on the BODY
+//     instead: an empty Inquiry from that one source. Both gates are pinned here so the accept can
+//     never be widened into "any punt passes" without this eval going red.
+assert.ok(
+  /isEmptyInquiryAdfBody\(body\)/.test(flywheel) &&
+    /source:\\s\*room58 - standard/i.test(flywheel),
+  "the Room58 handoff accept stays gated on an empty Inquiry from Room58 - Standard"
 );
 
 // (5) Stock-check-first (charter C4.3) design-accept must track BOTH unavailability drafts. The
