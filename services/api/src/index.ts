@@ -10953,7 +10953,7 @@ function buildSoftVisitScheduleInvite(conv: any, firstName: string): string | nu
   const label = String(conv?.scheduleSoft?.windowLabel ?? "").trim();
   if (!label) return null;
   const greeting = firstName ? `Hey ${firstName}, ` : "";
-  return `${greeting}just checking in — are you still thinking of stopping by ${label}? If so, what time works best so I can line it up?`;
+  return `${greeting}just checking back — are you still thinking of stopping by ${label}? If so, what time works best so I can line it up?`;
 }
 
 // Warm visit acknowledgment for a FRESH soft-visit commitment ("I'll be there Saturday").
@@ -10978,7 +10978,7 @@ function buildSoftVisitCommitmentAck(conv: any, firstName: string): string | nul
 function buildConditionalVisitCommitmentAck(firstName: string): string {
   const name = String(firstName ?? "").trim();
   const lead = name ? `Sounds good, ${name} — ` : "Sounds good — ";
-  return `${lead}no rush at all, we'll be here whenever you're ready. Holler if you need anything in the meantime!`;
+  return `${lead}no rush, we'll be here whenever you're ready. Holler if you need anything in the meantime!`;
 }
 
 /**
@@ -13123,7 +13123,7 @@ async function applyPostCallSummaryActions(opts: {
 }
 
 const FOLLOW_UP_MESSAGES = [
-  "Hey {name}, just checking in{labelClause}. Want me to put together price and payment numbers for you?",
+  "Hey {name}, just checking back{labelClause}. Want me to put together price and payment numbers for you?",
   "I can shoot over some photos or a walkaround video of{label} if you want a closer look.",
   "Want me to line up a quick side-by-side{onLabelClause} so it's easier to compare?",
   "I can also check what incentives are running{onLabelClause} and send over whatever applies.{offersLine}",
@@ -13136,7 +13136,7 @@ const FOLLOW_UP_MESSAGES = [
 ];
 
 const TEST_RIDE_FOLLOW_UP_MESSAGES = [
-  "Hey {name}, just checking in on the test ride for{label}. Still want to get out on it? Text me a day that works.",
+  "Hey {name}, just checking back on the test ride for{label}. Still want to get out on it? Text me a day that works.",
   "Happy to line up the test ride for{label} whenever you're ready. Want me to set something up this week?",
   "If the test ride for{label} is still on your list, I can get it set up quick.",
   "Checking back on the test ride for{label}. If timing shifted, just tell me what day works best.",
@@ -13207,7 +13207,7 @@ const buildWalkInCommentFollowUp = ({
     return `${intro} No pressure at all. If you want to revisit ${bikeWithArticle}, just text me and I’ll help from there.`;
   }
 
-  return `${intro} Just checking in on ${bikeWithArticle}. Want to go over options and next steps? I can help whenever you're ready.`;
+  return `${intro} Just checking back on ${bikeWithArticle}. Want to go over options and next steps? I can help whenever you're ready.`;
 };
 
 const FOLLOW_UP_VARIANTS_WITH_SLOTS: string[] = [
@@ -13224,7 +13224,7 @@ const SELL_FOLLOW_UP_VARIANTS_WITH_SLOTS: string[] = [
 
 const FOLLOW_UP_VARIANTS_NO_SLOTS: Record<number, string[]> = {
   0: [
-    "Hey {name}, just checking in{labelClause}. Want me to put together quick price and payment numbers?{extraLine}",
+    "Hey {name}, just checking back{labelClause}. Want me to put together quick price and payment numbers?{extraLine}",
     "I can send a couple options on{label} with ballpark payments so it's easier to compare.{extraLine}",
     "{name}, no rush if the timing is better later. Just text me when you want to pick this back up.{extraLine}"
   ],
@@ -13269,7 +13269,7 @@ const FOLLOW_UP_VARIANTS_NO_SLOTS_CHALLENGER: Record<number, string[]> = {
   4: [
     "Hey {name}, worth coming in to see{label} in person? Tell me what day works and I'll have it up front for you.",
     "Want to swing by and check out{label}, {name}? Just tell me what day's good and it's ready when you are.",
-    "No rush, {name}. Whenever you want to come in and see{label}, just say the word and I'll set it up."
+    "No rush, {name}. Whenever you want to come in and see{label}, just text me and I'll set it up."
   ]
 };
 
@@ -13669,7 +13669,7 @@ async function buildEarlyCadencePromotionOverride(args: {
     const promoLine = notes.length === 1 ? notes[0] : `${notes[0]} and ${notes[1]}`;
     return `Hey ${name}, quick update on the ${modelLabel}: ${promoLine}. Want me to send a short pricing and payment breakdown?`;
   }
-  return `Hey ${name}, just checking in on the ${modelLabel}. Want me to send photos or price and payment numbers?`;
+  return `Hey ${name}, just checking back on the ${modelLabel}. Want me to send photos or price and payment numbers?`;
 }
 
 function isCadencePreferenceClarifierMessage(message: string): boolean {
@@ -15567,7 +15567,7 @@ async function buildCadenceRegeneratedDraft(
       ? buildOffersLine(offersResolution.preferredUrl, { prefix: "Current offers:" })
       : "";
   const pricingLine =
-    getPricingAttempts(conv) > 0 ? " If you want me to run numbers, just say the word." : "";
+    getPricingAttempts(conv) > 0 ? " If you want me to run numbers, just let me know." : "";
   const tradeLine = tradeLabel ? ` If you want to go over the trade on ${tradeLabel}, just let me know.` : "";
   const paymentLine =
     getDialogState(conv) === "payments_answered"
@@ -15864,11 +15864,11 @@ const SELL_FOLLOW_UP_MESSAGES = [
 ];
 
 const TRADE_IN_FOLLOW_UP_MESSAGES = [
-  "Just checking in on your trade-in request. Want me to set a quick appraisal time for {bike}? What day works best?",
+  "Just checking back on your trade-in request. Want me to set a quick appraisal time for {bike}? What day works best?",
   "Quick follow-up on your trade-in appraisal for {bike}. If you want to move ahead, what day works best to stop in?",
   "No pressure on the trade-in request. Whenever you're ready, I can line up a quick appraisal for {bike}.",
   "If you'd still like a trade-in value, I can set an appraisal time for {bike}. What day works best?",
-  "Just checking back on the trade appraisal for {bike}. If timing changed, tell me what day works for you."
+  "Just checking back on the trade appraisal for {bike}. Let me know what day works for you."
 ];
 
 type EmailFollowUpCtx = {
@@ -15882,7 +15882,7 @@ type EmailFollowUpCtx = {
 
 const EMAIL_FOLLOW_UP_MESSAGES: Array<(ctx: EmailFollowUpCtx) => string> = [
   ({ name, label, bookingLine }) =>
-    `Hi ${name},\n\nJust checking in on ${label}. Want me to put together price and payment numbers for you?\n\n${bookingLine}\n\nThanks,`,
+    `Hi ${name},\n\nJust checking back on ${label}. Want me to put together price and payment numbers for you?\n\n${bookingLine}\n\nThanks,`,
   ({ name, label, bookingLine }) =>
     `Hi ${name},\n\nI can send over current photos and a short walkaround video of ${label}, plus what sets it apart from similar bikes.\n\n${bookingLine}\n\nThanks,`,
   ({ name, label, bookingLine, canTestRide }) =>
@@ -15892,7 +15892,7 @@ const EMAIL_FOLLOW_UP_MESSAGES: Array<(ctx: EmailFollowUpCtx) => string> = [
       offersLine ? `${offersLine}\n\n` : ""
     }${bookingLine}\n\nThanks,`,
   ({ name, label, bookingLine }) =>
-    `Hi ${name},\n\nJust checking in on ${label}. If you want to take a closer look, tell me what day works and I'll set it up.\n\n${bookingLine}\n\nThanks,`,
+    `Hi ${name},\n\nJust checking back on ${label}. If you want to take a closer look, tell me what day works and I'll set it up.\n\n${bookingLine}\n\nThanks,`,
   ({ name, label, bookingLine }) =>
     `Hi ${name},\n\nNo pressure at all. If you're still shopping for ${label}, I'm happy to help however I can.\n\n${bookingLine}\n\nThanks,`,
   ({ name, label, bookingLine }) =>
@@ -15900,7 +15900,7 @@ const EMAIL_FOLLOW_UP_MESSAGES: Array<(ctx: EmailFollowUpCtx) => string> = [
   ({ name, label, bookingLine }) =>
     `Hi ${name},\n\nIf you want to set a time to check out ${label}, I can get it on the calendar and keep it quick.\n\n${bookingLine}\n\nThanks,`,
   ({ name, label, bookingLine }) =>
-    `Hi ${name},\n\nStill happy to help with ${label}. If timing changed, just reply here and we'll pick it back up.\n\n${bookingLine}\n\nThanks,`,
+    `Hi ${name},\n\nStill happy to help with ${label}. Just reply here whenever you're ready and we'll pick it back up.\n\n${bookingLine}\n\nThanks,`,
   ({ name, label, bookingLine }) =>
     `Hi ${name},\n\nWhenever you're ready to revisit ${label}, just reply here and I'll help with next steps.\n\n${bookingLine}\n\nThanks,`
 ];
@@ -18395,7 +18395,7 @@ async function buildLongTermFollowUp(
     );
     const financeSender = bookedStaffFirst || resolveConversationAgentName(conv, "our finance team");
     const templates = [
-      `${greeting}this is ${financeSender} in finance at ${dealerName}. Just checking in — if you still want to move forward, we can revisit options like a co-signer, adjusted down payment, term, or a different bike. Want me to outline the easiest path?`,
+      `${greeting}this is ${financeSender} in finance at ${dealerName}. Just checking back — if you still want to move forward, we can revisit options like a co-signer, adjusted down payment, term, or a different bike. Want me to outline the easiest path?`,
       `${greeting}this is ${financeSender} in finance at ${dealerName}. Quick follow-up — if anything changed with your credit, down payment, or co-signer options, I can rework numbers for you.`,
       `${greeting}this is ${financeSender} in finance at ${dealerName}. I’m here if you want to revisit approval options, including co-signer or alternate bike/payment structures.`
     ];
@@ -18408,19 +18408,19 @@ async function buildLongTermFollowUp(
     const colorLabel = colorLabelRaw ? colorLabelRaw.charAt(0).toUpperCase() + colorLabelRaw.slice(1) : null;
     const itemLabel = colorLabel ? `${colorLabel} ${label}` : label;
     return {
-      body: `${greeting}just checking in — we do have a ${itemLabel} in stock now. Want to take a look?`,
+      body: `${greeting}just checking back — we do have a ${itemLabel} in stock now. Want to take a look?`,
       mediaUrls: [imagePick.url]
     };
   }
 
   if (canTestRide) {
     return {
-      body: `${greeting}just checking in — I’m here when you’re ready. Just reach out when the time is right.`
+      body: `${greeting}just checking back — I’m here when you’re ready. Just text me when the time is right.`
     };
   }
 
   return {
-    body: `${greeting}just checking in — I’m here when you’re ready. Just reach out when the time is right.`
+    body: `${greeting}just checking back — I’m here when you’re ready. Just text me when the time is right.`
   };
 }
 
@@ -20073,9 +20073,9 @@ function buildAppointmentOutcomeFollowUpMessage(conv: any, note: string): string
   const firstName = normalizeDisplayCase(conv?.lead?.firstName) || "there";
   const rideTarget = extractAppointmentOutcomeRideTarget(note);
   if (rideTarget) {
-    return `Hey ${firstName}, just checking in after the trike ride. If you want, we can have you come back in and ride a ${rideTarget} to compare. What day works for you?`;
+    return `Hey ${firstName}, just checking back after the trike ride. If you want, we can have you come back in and ride a ${rideTarget} to compare. What day works for you?`;
   }
-  return `Hey ${firstName}, just checking in after your visit. If you want to come back in and compare another option, send me a day that works for you.`;
+  return `Hey ${firstName}, just checking back after your visit. If you want to come back in and compare another option, send me a day that works for you.`;
 }
 
 function upsertOutcomeFollowUpTodo(args: {
@@ -23771,11 +23771,11 @@ function selectNonRepeatingCadenceMessage(
     if (recentNorms.some(prev => isCadenceNearDuplicateText(normalizedOption, prev))) continue;
     return option.trim();
   }
-  const withSuffix = `${trimmedCandidate} If timing changed, just let me know.`.trim();
+  const withSuffix = `${trimmedCandidate} Let me know your thoughts.`.trim();
   if (!recentNorms.some(prev => isCadenceNearDuplicateText(withSuffix, prev))) {
     return withSuffix;
   }
-  const fallback = "Quick follow-up — if timing changed, just let me know.";
+  const fallback = "Quick follow-up — are you still in the market? Let me know your thoughts.";
   if (!recentNorms.some(prev => isCadenceNearDuplicateText(fallback, prev))) {
     return fallback;
   }
@@ -23867,7 +23867,7 @@ function ensureUniqueDraft(
     : [
         "Got it — happy to help with pricing or a model comparison. Which model are you leaning toward?",
         "Thanks for the update — I can help with pricing or compare models if that’s useful.",
-        "Understood. If you want pricing details or a quick model comparison, just say the word."
+        "Understood. If you want pricing details or a quick model comparison, just let me know."
       ];
   for (const fb of fallbacks) {
     if (!used.has(normalizeOutboundText(fb))) return fb;
@@ -27668,8 +27668,8 @@ async function applyCustomerFollowUpDeferral(conv: any, decision: CustomerFollow
 function buildCustomerFollowUpDeferralReply(conv?: any): string {
   const firstName = normalizeDisplayCase(conv?.lead?.firstName);
   return firstName
-    ? `Sure ${firstName} — take your time, no rush at all.`
-    : "Sure — take your time, no rush at all.";
+    ? `Sure ${firstName} — take your time, no rush.`
+    : "Sure — take your time, no rush.";
 }
 
 /**
@@ -28432,7 +28432,7 @@ async function buildColorFinishFollowUpPrompt(
 ): Promise<string> {
   if (color) return "";
   const modelText = String(model ?? "").trim();
-  if (!modelText) return "Are you after a certain color?";
+  if (!modelText) return "Any particular color you're after?";
   const leadCondition = normalizeWatchCondition(conv.lead?.vehicle?.condition);
   const yearNum = Number(String(year ?? ""));
   const parsedYear = Number.isFinite(yearNum) ? yearNum : undefined;
@@ -28440,11 +28440,11 @@ async function buildColorFinishFollowUpPrompt(
   const assumeNew = !leadCondition && !!parsedYear && parsedYear === currentYear;
   const modelRecent = isModelInRecentYears(modelText, currentYear, 1);
   const condition = leadCondition ?? (assumeNew ? "new" : modelRecent ? undefined : "used");
-  if (condition !== "new") return "Are you after a certain color?";
+  if (condition !== "new") return "Any particular color you're after?";
   const finishEligible = await shouldAskFinishPreference(modelText, parsedYear, condition);
   return finishEligible
-    ? "Are you after a certain color or finish (chrome vs blacked-out)?"
-    : "Are you after a certain color?";
+    ? "Any particular color or finish you're after — chrome or blacked-out?"
+    : "Any particular color you're after?";
 }
 
 function extractMonthlyBudgetLimit(text: string): number | null {
@@ -33763,7 +33763,7 @@ async function processDueFollowUpsUnlocked() {
         ? buildOffersLine(offersResolution.preferredUrl, { prefix: "Current offers:" })
         : "";
     const pricingLine =
-      getPricingAttempts(conv) > 0 ? " If you want me to run numbers, just say the word." : "";
+      getPricingAttempts(conv) > 0 ? " If you want me to run numbers, just let me know." : "";
     const tradeLine = tradeLabel ? ` If you want to go over the trade on ${tradeLabel}, just let me know.` : "";
     const paymentLine =
       getDialogState(conv) === "payments_answered"
@@ -33885,7 +33885,7 @@ async function processDueFollowUpsUnlocked() {
           : `Hi ${firstName} — this is ${repName} at ${dealerName}. Congrats on your ${bikeModel}! If you need anything, just let me know.`,
         postSaleAccessoryOrEnjoyMessage({ firstName, repName, dealerName, bikeModel, isNewBike }),
         `Hi ${firstName} — ${repName} at ${dealerName}. Happy 1-year anniversary with your ${bikeModel}. If you’re ever thinking about trading in, let me know.`,
-        `Hi ${firstName} — ${repName} at ${dealerName}. Just checking in. How are you liking your ${bikeModel}? If you’re ever thinking about trading in, let me know.`
+        `Hi ${firstName} — ${repName} at ${dealerName}. Just checking back. How are you liking your ${bikeModel}? If you’re ever thinking about trading in, let me know.`
       ];
       message = smsTemplates[Math.min(cadence.stepIndex, smsTemplates.length - 1)];
     } else if (cadence.kind === "long_term") {
@@ -33911,16 +33911,16 @@ async function processDueFollowUpsUnlocked() {
     } else if (isTradeNoInterest) {
       const day2 = cadence.stepIndex === 0 ? await buildDay2Options(cfg) : null;
       if (day2) {
-        message = `Just checking in on your trade‑in estimate. What model are you interested in? I can set up a trade appraisal. I have ${day2.slots[0].startLocal} or ${day2.slots[1].startLocal} — do any of these times work?`;
+        message = `Just checking back on your trade‑in estimate. What model are you interested in? I can set up a trade appraisal. I have ${day2.slots[0].startLocal} or ${day2.slots[1].startLocal} — do any of these times work?`;
         setLastSuggestedSlots(conv, day2.slots);
       } else {
         message =
-          "Just checking in on your trade‑in estimate. What model are you interested in? I can set up a trade appraisal. What day and time works for you?";
+          "Just checking back on your trade‑in estimate. What model are you interested in? I can set up a trade appraisal. What day and time works for you?";
       }
       cadenceNoRepeatFallbacks = [
         "Quick follow-up on your trade estimate — if you want, I can line up a quick appraisal time.",
         "No rush on your trade estimate — if you'd like, I can help you set a quick appraisal.",
-        "If timing changed, that's fine — I can still help with your trade estimate whenever you're ready."
+        "That's no problem — I can still help with your trade estimate whenever you're ready."
       ];
     } else if (isTradeInAppraisalLead) {
       const template =
@@ -33964,7 +33964,7 @@ async function processDueFollowUpsUnlocked() {
       if (weatherStatus?.bad) {
         if (!pickupKnown) {
           const pickupNeedTown = [
-            `Just checking in — if you want us to pick up ${sellBikeLabel ?? "your bike"} for a trade evaluation, let me know where you’re located.`,
+            `Just checking back — if you want us to pick up ${sellBikeLabel ?? "your bike"} for a trade evaluation, let me know where you’re located.`,
             `Quick follow-up — if pickup is easier, send me your town and I can see if we can arrange a pickup for ${sellBikeLabel ?? "your bike"}.`,
             `Whenever you're ready, share your location and I can confirm pickup options for ${sellBikeLabel ?? "your bike"}.`
           ];
@@ -33978,7 +33978,7 @@ async function processDueFollowUpsUnlocked() {
           conv.pickup = { ...(conv.pickup ?? {}), stage: "need_town", updatedAt: nowIso() };
         } else if (pickupEligible) {
           const pickupWeather = [
-            `Just checking in — if the weather’s rough, we can pick up ${sellBikeLabel ?? "your bike"} for a trade evaluation. If you’d rather stop in, what day and time works for you?`,
+            `Just checking back — if the weather’s rough, we can pick up ${sellBikeLabel ?? "your bike"} for a trade evaluation. If you’d rather stop in, what day and time works for you?`,
             `If weather is getting in the way, we can pick up ${sellBikeLabel ?? "your bike"} for appraisal. If not, I can still set a quick in-person time.`,
             `If it's easier with the weather, we can do pickup for ${sellBikeLabel ?? "your bike"} and keep it simple.`
           ];
@@ -33991,7 +33991,7 @@ async function processDueFollowUpsUnlocked() {
           cadenceNoRepeatFallbacks = pickupWeather;
         } else {
           const inPersonWeather = [
-            `Just checking in — if you'd like a quick in-person appraisal on ${sellBikeLabel ?? "your bike"}, what day and time works for you?`,
+            `Just checking back — if you'd like a quick in-person appraisal on ${sellBikeLabel ?? "your bike"}, what day and time works for you?`,
             `Quick follow-up — if you want to move ahead on ${sellBikeLabel ?? "your bike"}, I can line up a quick in-person appraisal time.`,
             `No rush — whenever you're ready, I can set a quick in-person appraisal for ${sellBikeLabel ?? "your bike"}.`
           ];
@@ -34023,7 +34023,7 @@ async function processDueFollowUpsUnlocked() {
           );
           setLastSuggestedSlots(conv, day2.slots);
         } else {
-          message = `Just checking in — if you'd like a quick in‑person appraisal on ${
+          message = `Just checking back — if you'd like a quick in‑person appraisal on ${
             sellBikeLabel ?? "your bike"
           }, what day and time works for you?`;
         }
@@ -34034,7 +34034,7 @@ async function processDueFollowUpsUnlocked() {
         cadenceNoRepeatFallbacks = [
           `Quick follow-up on ${sellBikeLabel ?? "your bike"} — I can line up a quick appraisal whenever you're ready.`,
           `No pressure on ${sellBikeLabel ?? "your bike"} — if you want to move forward, I can set a time that works for you.`,
-          `If timing changed on ${sellBikeLabel ?? "your bike"}, just tell me what day works and I can help.`
+          `Whenever you're ready on ${sellBikeLabel ?? "your bike"}, just tell me what day works and I can help.`
         ];
       }
     } else if (isTestRideCadenceLead) {
@@ -34474,7 +34474,7 @@ async function processDueFollowUpsUnlocked() {
           ? `You can book an appointment here: ${bookingUrl}`
           : "If you'd like a trade appraisal, just reply with a day and time that works.";
         emailMessage =
-          `Hi ${name},\n\nJust checking in on your trade‑in estimate. ` +
+          `Hi ${name},\n\nJust checking back on your trade‑in estimate. ` +
           `If you’d like a trade appraisal, I can set a time. Also, which model are you interested in? ` +
           `${tradeBookingLine}\n\nThanks,`;
       } else if (isTradeInAppraisalLead) {
@@ -34482,14 +34482,14 @@ async function processDueFollowUpsUnlocked() {
           ? `You can book an appointment here: ${bookingUrl}`
           : "If you'd like to move ahead with the trade appraisal, just reply with a day and time that works.";
         emailMessage =
-          `Hi ${name},\n\nJust checking in on your trade-in request for ${sellBikeLabel ?? "your bike"}. ` +
+          `Hi ${name},\n\nJust checking back on your trade-in request for ${sellBikeLabel ?? "your bike"}. ` +
           `I can set a quick appraisal time whenever you're ready. ${tradeBookingLine}\n\nThanks,`;
       } else if (isSellMyBikeLead) {
         const tradeBookingLine = bookingUrl
           ? `You can book an appointment here: ${bookingUrl}`
           : "If you'd like a trade appraisal, just reply with a day and time that works.";
         emailMessage =
-          `Hi ${name},\n\nJust checking in — if you'd like a quick in‑person appraisal on ` +
+          `Hi ${name},\n\nJust checking back — if you'd like a quick in‑person appraisal on ` +
           `${sellBikeLabel ?? "your bike"}, I can set a time. ${tradeBookingLine}\n\nThanks,`;
       } else {
         const idx = Math.min(cadence.stepIndex, EMAIL_FOLLOW_UP_MESSAGES.length - 1);

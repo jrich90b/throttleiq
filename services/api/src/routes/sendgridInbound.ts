@@ -9306,9 +9306,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const isQuoteRequestLead = isQuoteRequestSourceLead({ inferredCta, leadSourceLower });
     if (initialAvailability === "in_stock") {
       draft = isQuoteRequestLead
-        ? `Thanks for your inquiry about the ${bikeLabel}. Happy to help with pricing, options, and availability — if you’d like to stop in and check it out, just say the word.`
+        ? `Thanks for your inquiry about the ${bikeLabel}. Happy to help with pricing, options, and availability — if you’d like to stop in and check it out, just let me know.`
         : `Thanks for your inquiry about the ${bikeLabel}. ` +
-          `If you’d like to stop in and check it out, just say the word.${questionTail ? " Any specific questions I can answer?" : ""}`;
+          `If you’d like to stop in and check it out, just let me know.${questionTail ? " Any specific questions I can answer?" : ""}`;
     } else if (initialAvailability === "on_hold") {
       draft =
         `Thanks for your inquiry about the ${bikeLabel}. ` +

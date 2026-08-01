@@ -345,7 +345,7 @@ export function buildCholoWatchAvailableReply(args: {
   return (
     `${opener} — something ${arrival} that's got that cholo style you're after: a ${bike}. ` +
     "Let me double-check the details, but want me to send a few pics or line up a time to come see it? " +
-    "If you're all set, just say the word and I'll take you off the list."
+    "If you're all set, just let me know and I'll take you off the list."
   );
 }
 
@@ -461,8 +461,8 @@ export function buildBuyerSurveyAck(
 ): string {
   const model = String(interestedModel ?? "").trim();
   const body = model
-    ? `Thanks for letting us know the ${model} is on your radar — great pick. Want to come in for a test ride, or I can pull together current availability and options whenever you're ready? Just say the word.`
-    : "Thanks for sharing what you're looking for. Want to come in for a test ride, or I can pull together current availability and options whenever you're ready? Just say the word.";
+    ? `Thanks for letting us know the ${model} is on your radar — great pick. Want to come in for a test ride, or I can pull together current availability and options whenever you're ready? Just let me know.`
+    : "Thanks for sharing what you're looking for. Want to come in for a test ride, or I can pull together current availability and options whenever you're ready? Just let me know.";
   return `${buildAgentIntro(firstName, agentName, dealerName)}${body}`;
 }
 

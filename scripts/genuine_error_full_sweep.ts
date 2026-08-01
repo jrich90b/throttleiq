@@ -24,7 +24,7 @@ function scrub(s: string): string {
 function isPlaceholder(label?: string | null): boolean { if (!label) return true; const t = label.trim().toLowerCase(); if (!t || ["null", "n/a", "na", "unknown", "tbd"].includes(t)) return true; if (t === "other" || /\bother\b/.test(t) || /\bfull\s*line(up)?\b/.test(t)) return true; if (/^harley[-\s]?davidson$/.test(t) || t === "harley") return true; return false; }
 
 // Mechanism attribution on the DRAFT text (what KIND of deflection/error).
-const FALLBACK_SIG = /happy to help with pricing or a model comparison|compare models if that|quick model comparison, just say the word/i;
+const FALLBACK_SIG = /happy to help with pricing or a model comparison|compare models if that|quick model comparison, just (?:say the word|let me know)/i;
 function mechanism(draft: string): string {
   if (FALLBACK_SIG.test(draft)) return "uniqueness_fallback_model";
   if (/which\s+(?:\w+\s+)?model|model are you (?:interested|leaning|looking)|exact bike you (?:want|wanted)/i.test(draft)) return "deflect_which_model_other";

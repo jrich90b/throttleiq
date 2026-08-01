@@ -883,9 +883,9 @@ function buildOutOfStockPreferencePrompt(args: {
 }): string {
   if (args.color) return "";
   if (args.requestedCondition === "new") {
-    return "Are you after a certain color or finish (chrome vs blacked-out)?";
+    return "Any particular color or finish you're after — chrome or blacked-out?";
   }
-  return "Are you after a certain color?";
+  return "Any particular color you're after?";
 }
 
 function extractColorMention(text?: string | null, knownColors?: string[]): string | null {
@@ -3666,7 +3666,7 @@ export async function orchestrateInbound(
           (sameModelFamily(modelForRange, leadRecordModelRaw) ? leadYearChain() : null)
         : leadYearChain() ?? deriveYearFromText(event.body ?? null) ?? null;
       const longTermInvite = wantsSoftTimeline
-        ? `I know you mentioned a ${longTermTimeframe || "longer-term"} timeline — no rush at all. ` +
+        ? `I know you mentioned a ${longTermTimeframe || "longer-term"} timeline — no rush. ` +
           `I’m here when you’re ready. `
         : "";
       const modelUnknown = isUnknownModel(modelForRange);

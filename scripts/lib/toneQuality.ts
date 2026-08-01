@@ -704,7 +704,7 @@ export function outboundAcknowledgesHardship(text: string): boolean {
     /\b(so |very |really |truly )?sorry\b/.test(t) ||
     /\bsorry to hear\b/.test(t) ||
     /\b(hope|hoping) (you|everything|things|all|she|he|they)\b/.test(t) ||
-    /\b(take care|get well|feel better|wishing you|thinking of you|sending|praying|stay strong|no rush at all|take your time|whenever you'?re ready|focus on)\b/.test(
+    /\b(take care|get well|feel better|wishing you|thinking of you|sending|praying|stay strong|no rush|take your time|whenever you'?re ready|focus on)\b/.test(
       t
     ) ||
     /\b(that'?s (so |really )?(tough|rough|hard|terrible|awful|unfortunate))\b/.test(t) ||
