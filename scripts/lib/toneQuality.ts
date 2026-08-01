@@ -712,6 +712,20 @@ function hasScheduleTimeCheckLanguage(text: string): boolean {
  * Deterministic + conservative — this is a SCORER signal that surfaces candidates for the nightly,
  * not a behavior driver, so it keys on unambiguous hardship language only. Slang collisions
  * ("sick bike", "killer deal") are avoided by requiring explicit medical/grief/emergency phrasing.
+ *
+ * WHY THE PRONOUN FORMS EXIST (Wesley Buzzard +17162913658, 2026-07-30). He wrote "I just lost
+ * her feb 11" and the net missed it entirely: every bereavement pattern here required the
+ * RELATION to be named ("lost my mother"). Once a customer has already said who they mean, the
+ * next clause is a pronoun — so the most natural way to disclose a death was invisible, and the
+ * nightly could never have surfaced the miss that the runtime fix (PR #397) addressed.
+ *
+ * The pronoun forms are gated because "her" doubles as a possessive: "I lost her number" is not
+ * a bereavement. "him"/"them" cannot be possessive, but "lost them" can mean objects, so the
+ * bare-pronoun forms all require a bereavement adverb ("just"/"recently") or an explicit cause
+ * ("lost him to cancer"). Fail direction is deliberate and one-way: this scorer only ever
+ * SURFACES a turn for review — it sends nothing, changes no reply, and gates no send — so a
+ * false positive costs one glance at the nightly while a false negative hides a reply like the
+ * one Wesley got.
  */
 export function customerDisclosedHardship(text: string): boolean {
   const t = normalizeText(text).toLowerCase();
@@ -722,9 +736,26 @@ export function customerDisclosedHardship(text: string): boolean {
     ) ||
     /\b(had|got into|been in|was in) (a|an) (bad )?(car )?(accident|wreck|crash)\b/.test(t) ||
     /\b(passed away|passed last|funeral|in hospice|terminally ill|on life support)\b/.test(t) ||
-    /\b(lost my|losing my) (wife|husband|spouse|partner|mom|mother|dad|father|son|daughter|child|brother|sister|grandfather|grandmother)\b/.test(
+    /\b(lost my|losing my) (wife|husband|spouse|partner|mom|mother|dad|father|son|daughter|child|brother|sister|grandfather|grandmother|grandpa|grandma|nephew|niece|uncle|aunt|cousin|best friend)\b/.test(
       t
     ) ||
+    // Bereavement with a pronoun object — the Wesley form. "just/recently" carries the meaning;
+    // without it, "lost her/them" is too often an object (a number, a set of keys, a sale).
+    /\b(?:just|recently)\s+lost\s+(?:him|them)\b/.test(t) ||
+    /\b(?:just|recently)\s+lost\s+her\b(?!\s+(?:number|phone|address|email|title|paperwork|registration|keys|card|info|contact|name|deposit|spot))/.test(
+      t
+    ) ||
+    /\blost\s+(?:her|him|them)\s+to\s+(?:cancer|covid|the virus|a stroke|a heart attack|an? (?:illness|infection|overdose))\b/.test(
+      t
+    ) ||
+    // "my late wife", "my mom passed in february", the service itself
+    /\bmy late (wife|husband|spouse|partner|mom|mother|dad|father|son|daughter|child|brother|sister|grandfather|grandmother|grandpa|grandma)\b/.test(
+      t
+    ) ||
+    /\b(?:my )?(wife|husband|spouse|partner|mom|mother|dad|father|son|daughter|brother|sister|grandfather|grandmother|grandpa|grandma) passed\b/.test(
+      t
+    ) ||
+    /\b(celebration of life|memorial service|obituary|laid to rest)\b/.test(t) ||
     /\b(family|medical|health) emergency\b/.test(t) ||
     /\bi'?ve had a (medical|health|family) (emergency|crisis)\b/.test(t)
   );

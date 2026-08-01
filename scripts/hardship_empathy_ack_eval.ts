@@ -187,6 +187,41 @@ assert.ok(
   !customerDisclosedHardship("That bike is sick! Killer deal too."),
   "scorer does NOT fire on slang ('sick' bike / 'killer' deal)"
 );
+// The gap that let Wesley's turn through the nightly: every bereavement pattern required the
+// RELATION to be named ("lost my mother"), but once a customer has said who they mean, the next
+// clause is a pronoun. His exact production text is the fixture.
+const WESLEY_TURN =
+  "Can u please send me a 2xl shirt please for my mom's birthday this year. " +
+  "I just lost her feb 11. It was the worst thing in my life to deal with.";
+assert.ok(
+  customerDisclosedHardship(WESLEY_TURN),
+  "scorer detects bereavement stated with a pronoun object (+17162913658, 2026-07-30)"
+);
+for (const positive of [
+  "I just lost him last month, so I've been slow to get back to you.",
+  "we recently lost her and I'm selling the bike",
+  "lost him to cancer in the spring",
+  "my late wife loved that bike",
+  "my mom passed in february",
+  "the celebration of life is Saturday so I can't make it in",
+  "I lost my grandma last week",
+  "lost my best friend in a crash"
+]) {
+  assert.ok(customerDisclosedHardship(positive), `scorer detects hardship: "${positive}"`);
+}
+// The ambiguity guard: "her" doubles as a possessive, and "lost them" is often objects. These
+// must stay silent — a scorer that cries wolf on lost paperwork gets ignored on real grief.
+for (const negative of [
+  "I lost her number, can you resend it?",
+  "I just lost her paperwork somewhere in the truck",
+  "I lost my keys and had to get a new fob",
+  "we lost them to another buyer last week",
+  "I lost my title and need a duplicate",
+  "That bike is sick! Killer deal too."
+]) {
+  assert.ok(!customerDisclosedHardship(negative), `scorer stays silent on: "${negative}"`);
+}
+
 assert.ok(outboundAcknowledgesHardship("I'm really sorry to hear that. We can hold it for you."), "ack recognized");
 assert.ok(
   !outboundAcknowledgesHardship("Those limited runs move quick — I'll have Stone reach out."),
@@ -200,6 +235,28 @@ const failed = evaluateTurnToneQuality({
 assert.ok(
   failed.issues.some(i => i.code === "hardship_ack_missing"),
   "unacknowledged hardship reply is flagged hardship_ack_missing"
+);
+
+// END-TO-END on the real miss: Wesley's turn + the bare apparel template is exactly what went
+// out on 2026-07-30, and the nightly scored it CLEAN because the disclosure was invisible. This
+// is the pin that proves the detection net would now catch a repeat — the runtime fix (PR #397)
+// and this scorer are the two independent halves, and both were blind at the same time.
+const wesleyScored = evaluateTurnToneQuality({
+  inboundText: WESLEY_TURN,
+  outboundText: "Thanks — I've received your apparel request. I'll have our apparel team reach out shortly."
+});
+assert.ok(
+  wesleyScored.issues.some(i => i.code === "hardship_ack_missing"),
+  "the apparel-handoff miss is now flagged hardship_ack_missing (it scored clean on 2026-07-30)"
+);
+const wesleyFixed = evaluateTurnToneQuality({
+  inboundText: WESLEY_TURN,
+  outboundText:
+    "Hey Wesley, it's Alexandra over at American Harley-Davidson. I'm really sorry to hear that. Thanks — I've received your apparel request. I'll have our apparel team reach out shortly."
+});
+assert.ok(
+  !wesleyFixed.issues.some(i => i.code === "hardship_ack_missing"),
+  "the reply the deployed fix now produces scores clean"
 );
 
 const acknowledged = evaluateTurnToneQuality({
