@@ -94,6 +94,7 @@ import {
   parseInventoryStatusWithLLM,
   parseVehicleInfoRequestWithLLM,
   parseVehicleFactQuestionWithLLM,
+  parseAffectWithLLM,
   isVehicleFactQuestionParserConfidentNone,
   parseFirstTimeRiderGuidanceWithLLM,
   parseWalkInOutcomeWithLLM,
@@ -2035,6 +2036,8 @@ import {
 } from "../domain/firstTouchAutoSend.js";
 import { sendEmail } from "../domain/emailSender.js";
 import { upsertContact } from "../domain/contactsStore.js";
+import { applyAffectParseSnapshot } from "../domain/affectSnapshot.js";
+import { applyHardshipAckToHandoffTemplate } from "../domain/hardshipEmpathyAck.js";
 
 const upload = multer({ storage: multer.memoryStorage() });
 export const sendgridInboundMiddleware = upload.any();
@@ -4894,7 +4897,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     llmVehicleInfo,
     llmVehicleFact,
     llmInventoryStatus,
-    llmFirstTimeRiderGuidance
+    llmFirstTimeRiderGuidance,
+    llmAffect
   ] = await Promise.all([
     safeParser("dialog_act", () =>
       parseDialogActWithLLM({
@@ -5032,8 +5036,36 @@ export async function handleSendgridInbound(req: Request, res: Response) {
             lead: activeAdfLeadProfile
           })
         )
+      : Promise.resolve(null),
+    // Affect (hardship/frustration/humor). The SMS lane has always parsed this; the ADF lane
+    // never did, so `conv.lastAffect` on an email-originated thread was whatever an older SMS
+    // turn left behind — and a hardship disclosed IN the ADF was invisible to the reply. Wesley
+    // Buzzard (+17162913658, 2026-07-30) asked for a shirt for his late mother's birthday and got
+    // the flat apparel-handoff template. Joins the existing parallel batch, so no added latency.
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_AFFECT_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY
+      ? safeParser("affect", () =>
+          parseAffectWithLLM({
+            text: effectiveInquiry,
+            history: adfHistory,
+            lead: activeAdfLeadProfile
+          })
+        )
       : Promise.resolve(null)
   ]);
+  // Same acceptance gate as /webhooks/twilio and /conversations/:id/regenerate (domain/affectSnapshot).
+  const adfAcceptedAffect = applyAffectParseSnapshot(conv, llmAffect, event.providerMessageId);
+  // Fixed department/handoff templates (parts, apparel, service, credit, …) early-return their own
+  // ack and never reach the orchestrator's finalize hook where the hardship acknowledgment is
+  // applied — and they all set manual_handoff first, which vetoes it there. So they opt IN, at the
+  // two publish funnels every one of those arms funnels through. Intro-aware: applyInitialAdfPrefix
+  // has already run by this point, so the ack lands AFTER the agent introduction, never before it.
+  const withAdfHardshipAck = (text: string): string =>
+    applyHardshipAckToHandoffTemplate({
+      draft: text,
+      needsEmpathy: !!adfAcceptedAffect?.needsEmpathy
+    });
   const dialogActConfidenceMin = Number(process.env.LLM_DIALOG_ACT_CONFIDENCE_MIN ?? 0.68);
   const intentConfidenceMin = Number(process.env.LLM_INTENT_CONFIDENCE_MIN ?? 0.75);
   const journeyIntentConfidence =
@@ -6424,7 +6456,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     text: string,
     approvedDeterministicTemplate = false
   ): { ok: boolean; draft?: string; reason?: string } => {
-    const invariant = applyAdfReplyInvariant(text, approvedDeterministicTemplate);
+    const invariant = applyAdfReplyInvariant(withAdfHardshipAck(text), approvedDeterministicTemplate);
     if (!invariant.allow) {
       const reason = invariant.reason ?? "draft_invariant_blocked";
       blockAdfDraftForInvariant(reason);
@@ -6460,7 +6492,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     if (relayOnlyMarketplaceLead) {
       return { ok: false, reason: "marketplace_relay" };
     }
-    const invariant = applyAdfReplyInvariant(text);
+    const invariant = applyAdfReplyInvariant(withAdfHardshipAck(text));
     if (!invariant.allow) {
       const reason = invariant.reason ?? "draft_invariant_blocked";
       blockAdfDraftForInvariant(reason);

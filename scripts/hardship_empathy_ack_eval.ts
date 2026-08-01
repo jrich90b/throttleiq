@@ -16,6 +16,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
   HARDSHIP_EMPATHY_ACK,
+  applyHardshipAckToHandoffTemplate,
   draftAlreadyAcknowledgesHardship,
   prependHardshipAck,
   shouldPrependHardshipAck
@@ -108,6 +109,74 @@ assert.ok(
 assert.ok(
   /needsEmpathy:\s*regenAcceptedAffect\?\.needsEmpathy\s*\?\?\s*null/.test(idx),
   "regenerate ctx threads regenAcceptedAffect.needsEmpathy"
+);
+
+// ---- Department/handoff templates opt IN (Wesley Buzzard +17162913658, 2026-07-30 21:10Z) ----
+// Room58 Contact-Us ADF: "Can u please send me a 2xl shirt please for my mom's birthday this year.
+// I just lost her feb 11. It was the worst thing in my life to deal with." — the apparel arm sent
+// the bare template. These arms early-return before orchestrator finalize AND set manual_handoff,
+// so the generic wrongContext veto would suppress the ack; they carry no empathy beat of their own.
+const APPAREL_TEMPLATE = "Thanks — I’ve received your apparel request. I’ll have our apparel team reach out shortly.";
+assert.equal(
+  applyHardshipAckToHandoffTemplate({ draft: APPAREL_TEMPLATE, needsEmpathy: true }),
+  `${HARDSHIP_EMPATHY_ACK} ${APPAREL_TEMPLATE}`,
+  "apparel handoff template leads with the hardship ack (manual_handoff must NOT swallow it)"
+);
+assert.equal(
+  applyHardshipAckToHandoffTemplate({ draft: APPAREL_TEMPLATE, needsEmpathy: false }),
+  APPAREL_TEMPLATE,
+  "no affect signal → the template is byte-identical (no copy drift)"
+);
+assert.equal(
+  (applyHardshipAckToHandoffTemplate({ draft: APPAREL_TEMPLATE, needsEmpathy: true }).match(
+    /really sorry to hear that/gi
+  ) ?? []).length,
+  1,
+  "exactly one acknowledgment"
+);
+assert.equal(
+  applyHardshipAckToHandoffTemplate({
+    draft: `${HARDSHIP_EMPATHY_ACK} ${APPAREL_TEMPLATE}`,
+    needsEmpathy: true
+  }),
+  `${HARDSHIP_EMPATHY_ACK} ${APPAREL_TEMPLATE}`,
+  "already-acknowledged template is left alone (no double-ack)"
+);
+// INTRO ORDERING: applyInitialAdfPrefix runs BEFORE the publish funnel, so the ack must land after
+// the agent introduction — never "I'm really sorry to hear that. Hey Wesley, it's Alexandra …".
+for (const intro of [
+  "Hey Wesley, it’s Alexandra over at American Harley-Davidson.",
+  "Hi Wesley — This is Alexandra at American Harley-Davidson."
+]) {
+  assert.equal(
+    applyHardshipAckToHandoffTemplate({ draft: `${intro} ${APPAREL_TEMPLATE}`, needsEmpathy: true }),
+    `${intro} ${HARDSHIP_EMPATHY_ACK} ${APPAREL_TEMPLATE}`,
+    `ack follows the agent intro: "${intro}"`
+  );
+}
+assert.equal(
+  applyHardshipAckToHandoffTemplate({ draft: "   ", needsEmpathy: true }),
+  "   ",
+  "blank draft is returned untouched"
+);
+
+// ---- Source guards: all THREE lanes wire the shared applier (parser-first in both paths) ----
+const sendgrid = fs.readFileSync("services/api/src/routes/sendgridInbound.ts", "utf8");
+assert.ok(
+  /parseAffectWithLLM/.test(sendgrid),
+  "the ADF/email lane runs the affect parser (it never did — +17162913658)"
+);
+assert.ok(
+  /applyHardshipAckToHandoffTemplate/.test(sendgrid),
+  "the ADF publish funnels apply the handoff hardship ack"
+);
+assert.ok(
+  (idx.match(/withDepartmentHardshipAck/g) ?? []).length >= 2,
+  "BOTH /webhooks/twilio and /conversations/:id/regenerate department arms apply it"
+);
+assert.ok(
+  /hardshipWrongContext\s*=\s*String\(ctx\?\.followUp\?\.mode[\s\S]{0,40}===\s*"manual_handoff"/.test(orch),
+  "the orchestrator's generic manual_handoff suppression is UNCHANGED (mention-handoff owns its own ack)"
 );
 
 // ---- Detection net (tone scorer) ----
