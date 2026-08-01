@@ -135,6 +135,19 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     });
   });
 
+  // Added 2026-08-01 with the followUpCadence quiet-window un-stacking. Sampled once PER TRIGGER,
+  // because the point of this referee is that the two triggers answer the same question
+  // differently — a single sample would hide exactly the divergence it exists to make visible.
+  for (const trigger of ["inventory_watch_alert", "soft_visit_window"] as const) {
+    add(`cadenceQuietWindow:${trigger}`, conv => {
+      if (typeof reducer.decideCadenceQuietWindow !== "function") return undefined;
+      return reducer.decideCadenceQuietWindow({
+        trigger,
+        cadenceStatus: conv?.followUpCadence?.status ?? null
+      });
+    });
+  }
+
   return registry;
 }
 

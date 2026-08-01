@@ -3,8 +3,10 @@ import * as path from "node:path";
 import type { InboundMessageEvent } from "./types.js";
 import { maybeMarkEngagedFromInbound } from "./engagement.js";
 import {
+  decideCadenceQuietWindow,
   decideHeldDraftRelease,
   isRealReplyProvider,
+  type CadenceQuietTrigger,
   type HeldDraftReleaseEvent
 } from "./routeStateReducer.js";
 import { fileURLToPath } from "node:url";
@@ -4896,6 +4898,48 @@ export function pauseFollowUpCadence(conv: Conversation, untilIso: string, reaso
   }
   conv.updatedAt = nowIso();
   scheduleSave();
+}
+
+// The ONE place that hushes the proactive cadence after the agent has just reached out — the four
+// former copies (three inventory-watch alert sites + the soft-visit window) now ask
+// `decideCadenceQuietWindow` instead of each deciding for themselves. See that referee in
+// routeStateReducer.ts for the two divergences it preserves and why.
+//
+// `quietUntilIso` is supplied by the caller (watch alerts hold ~7 days; a soft visit holds until
+// the day-before reminder), which keeps the decision itself clock-free and comparable.
+//
+// Deliberately does NOT touch `conv.updatedAt` or call `scheduleSave()` on the quiet path: every
+// call site already stamps + saves around this, and startFollowUpCadence does its own. Adding
+// another write here would change persisted timestamps, which a cleanup must not do.
+export function applyCadenceQuietWindow(
+  conv: Conversation,
+  input: {
+    trigger: CadenceQuietTrigger;
+    quietUntilIso: string;
+    anchorAtIso: string;
+    timeZone: string;
+    reason?: string | null;
+  }
+): void {
+  const decision = decideCadenceQuietWindow({
+    trigger: input.trigger,
+    cadenceStatus: conv.followUpCadence?.status ?? null,
+    reason: input.reason
+  });
+  if (decision.restartCadence) {
+    if (decision.clearStoppedCadenceFirst) conv.followUpCadence = undefined;
+    startFollowUpCadence(conv, input.anchorAtIso, input.timeZone);
+  }
+  if (!decision.quiet) return;
+  // Only ever quiets a cadence that is genuinely running — never resurrects a closed/absent one.
+  if (conv.followUpCadence?.status !== "active") return;
+  conv.followUpCadence.pausedUntil = input.quietUntilIso;
+  conv.followUpCadence.pauseReason = decision.reason;
+  conv.followUpCadence.nextDueAt = input.quietUntilIso;
+  if (decision.resetScheduleInvites) {
+    conv.followUpCadence.scheduleInviteCount = 0;
+    conv.followUpCadence.scheduleMuted = false;
+  }
 }
 
 export function resetScheduleInviteCounter(conv: Conversation) {

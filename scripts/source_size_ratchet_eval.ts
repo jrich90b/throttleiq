@@ -48,7 +48,10 @@ type Ceiling = {
 const CEILINGS: Ceiling[] = [
   {
     file: "services/api/src/index.ts",
-    max: 71_671,
+    // 71_671 -> 71_667. First ratchet DOWN: the followUpCadence quiet-window un-stacking replaced
+    // four copies of the "hush the cadence after we just reached out" block with calls to
+    // applyCadenceQuietWindow (conversationStore) / decideCadenceQuietWindow (routeStateReducer).
+    max: 71_667,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

@@ -3389,6 +3389,99 @@ export function decideFinanceDeclinedCadence(
   };
 }
 
+// How long the proactive cadence goes QUIET after we just reached out — one referee for what were
+// four independent copies of the same block.
+//
+// THE FIGHT, concretely. Four places in index.ts each decided for themselves how to hush the
+// follow-up cadence right after the agent had already contacted the customer:
+//
+//   deliverDuePendingWatchAlerts        (~7146)  "we just texted them the bike they were watching"
+//   processInventoryWatchlist           (~7446)  same, from the feed sweep
+//   notifyInventoryWatchersForAvailableItem (~7643)  same, from a hold/sold clearing
+//   applySoftVisitCadenceWindow        (~10980)  "they said they'd stop by Saturday"
+//
+// The first three were byte-identical copy-paste; the fourth is a near-twin that drifted. Nothing
+// arbitrated between them, so a change to one silently left the other three behind — exactly the
+// shape that produced PR #398 (two writers of `followUpCadence` disagreeing 37 seconds apart).
+//
+// TWO REAL DIVERGENCES this referee makes VISIBLE rather than papering over. Both are preserved
+// exactly as they behave in production today; neither is "fixed" here, because a cleanup must not
+// smuggle in a behavior change:
+//
+//   1. RESTARTING A STOPPED CADENCE. The three watch sites blank `followUpCadence` before calling
+//      startFollowUpCadence, because that function refuses to overwrite a cadence whose status is
+//      already "active" or "stopped". The soft-visit site does NOT blank it, so on a STOPPED
+//      cadence its startFollowUpCadence call quietly no-ops and the customer's stated visit never
+//      gets a quiet window. That is very likely a latent bug, and it is now one line
+//      (`clearStoppedCadenceFirst`) instead of an absence nobody could see. Flagged for Joe.
+//   2. THE INVITE BUDGET. Only the soft-visit site resets scheduleInviteCount/scheduleMuted — a
+//      fresh visit commitment re-opens the "what time works?" budget. The watch sites leave it
+//      alone. Deliberate, and now stated.
+//
+// FAIL DIRECTION. Quieting is the SAFE direction: it only ever DELAYS a proactive touch, never
+// sends one. We have just messaged this customer, so the failure we must avoid is chasing them
+// again on top of that message. So an unrecognized trigger still quiets. What this must never do
+// is quiet a cadence that isn't running: `quiet` is gated on the cadence actually being active
+// after any restart, so a closed/absent conversation is left alone rather than resurrected.
+//
+// PURE + CLOCK-FREE: the caller computes `quietUntilIso` (the watch sites use now+7d, the
+// soft-visit site uses the day-before-visit reminder) and passes it in, so this stays sampleable
+// by the decision-equivalence harness.
+export type CadenceQuietTrigger =
+  | "inventory_watch_alert" // we just sent the "your bike is here" text
+  | "soft_visit_window"; // the customer committed to coming in on a day
+
+export type CadenceQuietInput = {
+  trigger: CadenceQuietTrigger;
+  /** Current `followUpCadence.status`. Absent/blank = there is no cadence at all. */
+  cadenceStatus?: string | null;
+  /** Caller-supplied pause reason; falls back to the trigger's own default. */
+  reason?: string | null;
+};
+
+export type CadenceQuietDecision = {
+  /** Try to (re)start a cadence first, so there is something to quiet. */
+  restartCadence: boolean;
+  /** Discard the stopped cadence before restarting — without this, startFollowUpCadence no-ops. */
+  clearStoppedCadenceFirst: boolean;
+  /** Apply the quiet window (only ever to a cadence that is active once the restart has run). */
+  quiet: boolean;
+  /** Pause reason to record. */
+  reason: string;
+  /** Re-open the schedule-invite budget (soft visit only). */
+  resetScheduleInvites: boolean;
+  why: string;
+};
+
+const CADENCE_QUIET_DEFAULT_REASON: Record<CadenceQuietTrigger, string> = {
+  inventory_watch_alert: "inventory_watch_match",
+  soft_visit_window: "soft_visit_window"
+};
+
+export function decideCadenceQuietWindow(input: CadenceQuietInput): CadenceQuietDecision {
+  const status = String(input.cadenceStatus ?? "").trim().toLowerCase();
+  const missingOrStopped = !status || status === "stopped";
+  const isSoftVisit = input.trigger === "soft_visit_window";
+  const reason =
+    String(input.reason ?? "").trim() ||
+    CADENCE_QUIET_DEFAULT_REASON[input.trigger] ||
+    CADENCE_QUIET_DEFAULT_REASON.inventory_watch_alert;
+
+  return {
+    restartCadence: missingOrStopped,
+    // Divergence (1) above: the soft-visit path never blanked a stopped cadence, so its restart
+    // is a no-op on exactly that state. Preserved as-is.
+    clearStoppedCadenceFirst: missingOrStopped && !isSoftVisit,
+    quiet: true,
+    reason,
+    // Divergence (2) above: only a fresh visit commitment re-opens the invite budget.
+    resetScheduleInvites: isSoftVisit,
+    why: missingOrStopped
+      ? `no live cadence to quiet — restart first, then hold for ${reason}`
+      : `hold the running cadence for ${reason}`
+  };
+}
+
 // Who may release a HELD draft — one referee for what were six independent decisions.
 //
 // `draftHeld` is the "being fixed" marker: the quality gate withheld a reply, so staff see a card
