@@ -48,9 +48,14 @@ export const READINESS_TARGETS = {
   },
   portability: {
     evalViolations: 0,
-    // Ratchet, not a wish: the count measured when this section shipped (2026-07-30). It may
-    // only go DOWN. Every AH literal removed from services/api/src lowers the budget.
-    ahHardcodeBudget: 112
+    // Ratchet, not a wish: the count measured when this section shipped. It may only go DOWN.
+    // Every AH literal removed from services/api/src lowers the budget.
+    //
+    // 112 -> 133 on 2026-08-01. This is MEASUREMENT CATCHING UP, NOT a regression: the pattern
+    // only matched "american harley" WITH A SPACE, so the no-space/domain form (americanharley,
+    // americanharley-davidson.com) was invisible — 21 real literals the budget never counted.
+    // Same class of blind spot as the funnel section reading NOT_MEASURED off a 1-day window.
+    ahHardcodeBudget: 133
   },
   operability: {
     cleanStreakDays: 7,
@@ -256,7 +261,9 @@ export function evaluateReadiness(input: ReadinessInput): ReadinessScore {
         id: "portability",
         label: "Portability: the universal tier is dealer-agnostic",
         detail: port
-          ? `${port.universal} universal / ${port.dealer} dealer-pinned, ${port.violations.length} eval violation(s), ${hardcodes ?? "?"} AH literals in api source`
+          ? `${port.universal} universal / ${port.dealer} dealer-pinned, ${port.violations.length} eval violation(s), ${hardcodes ?? "?"} AH literals in api source` +
+            " — note: the literal count cannot see hardcoded ASSUMPTIONS (id formats, city names);" +
+            " behavioural portability comes from stranger_dealer_test + stock_id_shapes"
           : "portability scan unavailable",
         metrics: portMetrics
       },
@@ -451,9 +458,18 @@ function readWidestFunnelWindow(reportRoot: string): any | null {
  * Deliberately crude and deliberately over-inclusive: a dealer-name fallback is still a
  * literal a stranger dealer inherits. Comment-only lines are excluded so prose about
  * American Harley doesn't inflate the debt. Returns null if the tree isn't there.
+ *
+ * The separator is OPTIONAL on purpose. Matching only "american harley" with a space missed the
+ * host/domain form entirely — `americanharley`, `americanharley-davidson.com` — hiding 21 literals
+ * from the budget (found 2026-07-30 by the stranger-dealer audit, fixed 2026-08-01).
+ *
+ * KNOWN LIMIT, stated so nobody mistakes a green ratchet for portability: this counts dealer NAMES.
+ * It cannot see a hardcoded ASSUMPTION — "our stock numbers start with a letter", "our city is
+ * Buffalo or North Tonawanda" — because those contain no AH literal. Behavioural portability is
+ * covered by stranger_dealer_test:eval and stock_id_shapes:eval, not by this number.
  */
 export function countAhHardcodes(root = "services/api/src"): number | null {
-  const AH = /american harley|north tonawanda/i;
+  const AH = /american[\s-]?harley|north tonawanda/i;
   const COMMENT = /^\s*(\/\/|\*|\/\*)/;
   if (!fs.existsSync(root)) return null;
   let count = 0;

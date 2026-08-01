@@ -1,4 +1,5 @@
 import { GENERIC_AGENT_DISPLAY_NAME } from "./agentVoice.js";
+import { extractStockIdFromText, getLearnedStockIdShapes } from "./stockIdShapes.js";
 
 export type RequestedScheduleWindowMode = "after" | "before" | "any_time" | "window" | "none";
 
@@ -970,17 +971,14 @@ export function extractDealerLeadAppDemoBikeLabel(textRaw: string | null | undef
 }
 
 // Structured extraction (deterministic, AGENTS.md-allowed): pull a dealer stock number token out of
-// a message. Every stock id in the live feed is LETTER-LED (observed shapes: A9-99, A99-99, A999-99,
-// AA9-99 across all 71 units), so the prefix must contain at least one alpha. Without that, an
-// all-digit prefix made customer phone numbers and date ranges read as stock numbers — "Itz
-// 716-713-8288" yielded "716-713" and hijacked the turn into the inventory-availability arm
-// (+17164233031, msg_30b26a65c146e_1777309569346). The trailing/leading guards keep a match from
-// being carved out of a longer digit-dash run, e.g. "713-8288" inside "(716) 713-8288".
+// a message. The SHAPE is learned from the dealer's own inventory feed rather than hardcoded — see
+// stockIdShapes.ts for why (an "our stock numbers start with a letter" rule is an American Harley
+// fact, not a universal one, and the AH-literal ratchet cannot see a shape assumption). Only the
+// universal exclusions are fixed: a phone number, a calendar date, and a quantity range are not
+// stock numbers at any dealer. Those alone fix the defect that started this — "Itz 716-713-8288"
+// yielding "716-713" (+17164233031, msg_30b26a65c146e_1777309569346) — with or without a feed.
 export function extractInventoryStockIdMention(textRaw: string | null | undefined): string | null {
-  const match = String(textRaw ?? "").match(
-    /(?<![A-Z0-9-])(?=[A-Z0-9]{0,4}[A-Z])[A-Z0-9]{1,5}-\d{1,4}(?![-\d])/i
-  );
-  return match?.[0] ? match[0].toUpperCase() : null;
+  return extractStockIdFromText(textRaw, getLearnedStockIdShapes());
 }
 
 export function isStockNumberInventoryInterestText(textRaw: string | null | undefined): boolean {

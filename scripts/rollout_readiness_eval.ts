@@ -16,6 +16,8 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import {
   FUNNEL_SNAPSHOT_DIRS,
@@ -185,6 +187,21 @@ check("countAhHardcodes actually counts the live tree and stays within budget", 
     `AH literals in services/api/src rose to ${n}, over the ${T.portability.ahHardcodeBudget} ratchet — remove the hardcode or justify a new budget`
   );
   assert.equal(countAhHardcodes("services/api/does-not-exist"), null, "a missing tree reads null, not 0");
+});
+
+check("the AH scan sees the no-space host/domain form, not just 'american harley'", () => {
+  // Guards the 2026-08-01 fix: the pattern used to require a space, so `americanharley` and
+  // `americanharley-davidson.com` were invisible and 21 real literals went uncounted. Narrowing
+  // it back would silently flatter the portability score.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ah-hardcode-scan-"));
+  try {
+    fs.writeFileSync(path.join(dir, "a.ts"), 'const host = "americanharley-davidson.com";\n');
+    assert.equal(countAhHardcodes(dir), 1, "the no-space domain form must count as a literal");
+    fs.writeFileSync(path.join(dir, "a.ts"), '// americanharley-davidson.com is our host\n');
+    assert.equal(countAhHardcodes(dir), 0, "comment-only prose still must not inflate the debt");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // --- Section 3: operability. ---
