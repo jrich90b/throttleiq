@@ -44,6 +44,10 @@ export type WriteSite = {
   wholesale: boolean;
   /** Is this write downstream of a `decide*`/`resolve*` call? See isWriteGuarded. */
   guarded: boolean;
+  /** Enclosing top-level function — the clustering key (one function = one decision point). */
+  fn: string;
+  /** Set when the write went through a local alias (`const appt = conv.appointment`). */
+  viaAlias: string | null;
 };
 
 export type FieldContention = {
@@ -100,34 +104,135 @@ const IGNORED_FIELDS = new Set([
 
 export type SourceFile = { path: string; text: string };
 
+/**
+ * ALIAS BINDINGS — the biggest thing the first cut missed.
+ *
+ * A huge amount of state is mutated through a local alias: `const appt = conv.appointment;` then
+ * `appt.status = "none"`. That mutates `conv.appointment` exactly as surely as writing the long
+ * path, but a pattern keyed on `conv.` never sees it. `index.ts` alone has 11 such bindings for
+ * `appointment` and 4 for `followUpCadence`, and — the reason this matters — **four of the six
+ * appointment teardown sites are alias-only**, so the cancel path was invisible to the queue.
+ *
+ * Only OBJECT aliases count. `const stockId = conv.lead.stockId` binds a scalar; reassigning it
+ * cannot mutate the conversation (and `const` forbids it anyway). The detectable shape is
+ * `alias.<prop> = …`, which is a mutation of the aliased object.
+ *
+ * An alias is attributed to the MOST RECENT preceding binding of that name in the same file, so a
+ * name reused across functions resolves to the right field instead of leaking across scopes.
+ */
+function collectAliasBindings(lines: string[]): { line: number; alias: string; field: string }[] {
+  const bindings: { line: number; alias: string; field: string }[] = [];
+  const pattern = new RegExp(
+    `\\b(?:const|let)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*(?:${STATE_ROOTS.join("|")})\\??\\.([A-Za-z_][A-Za-z0-9_]*)\\s*(?:;|$|\\?\\?|\\|\\|)`
+  );
+  for (const [i, line] of lines.entries()) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("//") || trimmed.startsWith("*")) continue;
+    const match = pattern.exec(trimmed);
+    if (match && !IGNORED_FIELDS.has(match[2])) {
+      bindings.push({ line: i, alias: match[1], field: match[2] });
+    }
+  }
+  return bindings;
+}
+
+/**
+ * Top-level function boundaries, used to cluster writes by DECISION POINT rather than by line
+ * distance.
+ *
+ * This replaced a 15-line proximity heuristic, which got `financeOutcome` wrong: its three writes
+ * are the three mutually-exclusive branches of ONE `if/else` inside
+ * `applyFinanceOutcomeStatusFromSignal` — i.e. the referee's own implementation — and the detector
+ * scored them as three competing writers. Branches inside one function cannot fight each other; a
+ * caller invokes the function as a unit. The contention that matters is between CALL SITES.
+ */
+function collectFunctionBoundaries(lines: string[]): { line: number; name: string }[] {
+  const out: { line: number; name: string }[] = [];
+  const decl =
+    /^(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_][A-Za-z0-9_]*)|^(?:export\s+)?const\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:async\s*)?\(/;
+  for (const [i, line] of lines.entries()) {
+    const match = decl.exec(line);
+    if (match) out.push({ line: i, name: match[1] ?? match[2] ?? "?" });
+  }
+  return out;
+}
+
+function enclosingFunction(boundaries: { line: number; name: string }[], lineIndex: number): string {
+  let name = "(top-level)";
+  for (const b of boundaries) {
+    if (b.line <= lineIndex) name = b.name;
+    else break;
+  }
+  return name;
+}
+
+/**
+ * `x.field = x.field ?? {}` / `|| {}` — idempotent lazy-init, not a value write. Counting these
+ * produced pure noise: every `financeOutcomeNotify` and `crm` "writer" was one of these.
+ */
+function isLazyInit(trimmed: string, field: string): boolean {
+  return new RegExp(`\\.${field}\\s*=\\s*[^=]*\\.${field}\\s*(?:\\?\\?|\\|\\|)\\s*\\{\\s*\\}`).test(trimmed);
+}
+
 export function findWriteSites(files: SourceFile[]): Map<string, WriteSite[]> {
   const byField = new Map<string, WriteSite[]>();
+  const push = (field: string, site: WriteSite) => {
+    const existing = byField.get(field);
+    if (existing) existing.push(site);
+    else byField.set(field, [site]);
+  };
+
   for (const file of files) {
     const lines = file.text.split("\n");
+    const aliases = collectAliasBindings(lines);
+    const boundaries = collectFunctionBoundaries(lines);
+
     for (const [i, line] of lines.entries()) {
       const trimmed = line.trim();
       if (trimmed.startsWith("//") || trimmed.startsWith("*")) continue; // comments are not writes
+
+      const makeSite = (field: string, viaAlias: string | null): WriteSite => ({
+        file: file.path,
+        line: i + 1,
+        snippet: trimmed.slice(0, 140),
+        // Wholesale = the whole field is replaced with a fresh object, no sub-path. Must catch
+        // BOTH shapes: multi-line `conv.x = {` AND single-line
+        // `conv.appointment = { status: "none", updatedAt: nowIso() };` — production is full of
+        // the latter, and an end-of-line-only test scored every one of them as a harmless poke.
+        wholesale: false,
+        guarded: isWriteGuarded(lines, i),
+        fn: enclosingFunction(boundaries, i),
+        viaAlias
+      });
+
+      // 1) Direct writes: conv.field = / conv.field.sub = / (conv as any).field =
       for (const root of STATE_ROOTS) {
         const pattern = buildAssignmentPattern(root);
         let match: RegExpExecArray | null;
         while ((match = pattern.exec(line))) {
           const field = match[1];
           if (IGNORED_FIELDS.has(field)) continue;
-          const site: WriteSite = {
-            file: file.path,
-            line: i + 1,
-            snippet: trimmed.slice(0, 140),
-            // Wholesale = the whole field is replaced with a fresh object, no sub-path. Must catch
-            // BOTH shapes: multi-line `conv.x = {` AND single-line
-            // `conv.appointment = { status: "none", updatedAt: nowIso() };` — production is full of
-            // the latter, and an end-of-line-only test scored every one of them as a harmless poke.
-            wholesale: !match[2] && /=\s*\{/.test(trimmed),
-            guarded: isWriteGuarded(lines, i)
-          };
-          const existing = byField.get(field);
-          if (existing) existing.push(site);
-          else byField.set(field, [site]);
+          if (isLazyInit(trimmed, field)) continue;
+          const site = makeSite(field, null);
+          site.wholesale = !match[2] && /=\s*\{/.test(trimmed);
+          push(field, site);
         }
+      }
+
+      // 2) Aliased writes: `const appt = conv.appointment` … `appt.status = …`
+      for (const binding of aliases) {
+        if (binding.line >= i) continue; // the binding must precede the write
+        // most-recent binding of this alias name wins
+        const shadowed = aliases.some(
+          other => other.alias === binding.alias && other.line > binding.line && other.line < i
+        );
+        if (shadowed) continue;
+        const aliasWrite = new RegExp(
+          `\\b${binding.alias}\\.[A-Za-z_][A-Za-z0-9_]*(?:\\??\\.[A-Za-z_][A-Za-z0-9_]*)*\\s*\\??=(?!=|>)`
+        );
+        if (!aliasWrite.test(trimmed)) continue;
+        if (isLazyInit(trimmed, binding.field)) continue;
+        push(binding.field, makeSite(binding.field, binding.alias));
       }
     }
   }
@@ -190,9 +295,22 @@ export const WRITER_CLUSTER_GAP_LINES = 15;
 export function countWriters(sites: WriteSite[], gap: number = WRITER_CLUSTER_GAP_LINES): WriteSite[] {
   const sorted = [...sites].sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
   const leaders: WriteSite[] = [];
+  const seenFn = new Set<string>();
   let lastFile = "";
   let lastLine = -Infinity;
   for (const site of sorted) {
+    // PRIMARY: one enclosing function = one writer, however many branches it contains. A caller
+    // invokes it as a unit, so its internal branches cannot disagree with each other.
+    const fnKey = `${site.file}::${site.fn}`;
+    if (site.fn && site.fn !== "(top-level)") {
+      if (seenFn.has(fnKey)) continue;
+      seenFn.add(fnKey);
+      leaders.push(site);
+      lastFile = site.file;
+      lastLine = site.line;
+      continue;
+    }
+    // FALLBACK: no resolvable enclosing function — fall back to line proximity.
     if (site.file !== lastFile || site.line - lastLine > gap) leaders.push(site);
     lastFile = site.file;
     lastLine = site.line;

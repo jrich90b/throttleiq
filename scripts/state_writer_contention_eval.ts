@@ -144,4 +144,92 @@ const file = (path: string, text: string): SourceFile => ({ path, text });
   assert.equal(unstackingQueue(single).length, 0, "a single clustered writer is not contention");
 }
 
+// --- ALIAS WRITES (added 2026-08-01): the biggest blind spot of the first cut ---
+// Four of the six appointment teardown sites mutate through `const appt = conv.appointment`, so a
+// pattern keyed on `conv.` never saw the cancel path at all.
+{
+  const sites = findWriteSites([
+    file(
+      "alias.ts",
+      [
+        "function cancelIt(conv) {",
+        "  const appt = conv.appointment;",
+        '  appt.status = "none";',
+        "  appt.bookedEventId = null;",
+        "}"
+      ].join("\n")
+    )
+  ]);
+  const appointment = sites.get("appointment") ?? [];
+  assert.equal(appointment.length, 2, "writes through an object alias are attributed to the field");
+  assert.equal(appointment[0].viaAlias, "appt", "the alias is recorded for diagnosis");
+}
+{
+  // A SCALAR alias cannot mutate the conversation — `const` forbids reassignment anyway.
+  const sites = findWriteSites([
+    file("scalar.ts", ["const stockId = conv.lead.stockId;", "let x = 1;", "x = 2;"].join("\n"))
+  ]);
+  assert.equal(sites.get("lead"), undefined, "a scalar alias is not a write surface");
+}
+{
+  // Re-binding the same name in a later function must not leak the earlier field.
+  const sites = findWriteSites([
+    file(
+      "shadow.ts",
+      [
+        "function a(conv) {",
+        "  const x = conv.appointment;",
+        '  x.status = "none";',
+        "}",
+        "function b(conv) {",
+        "  const x = conv.scheduler;",
+        '  x.mode = "off";',
+        "}"
+      ].join("\n")
+    )
+  ]);
+  assert.equal((sites.get("appointment") ?? []).length, 1, "first binding attributed correctly");
+  assert.equal((sites.get("scheduler") ?? []).length, 1, "re-bound alias resolves to the NEW field, not the old one");
+}
+
+// --- LAZY INIT is not a value write ---
+// Every `financeOutcomeNotify` and `crm` "writer" was one of these; counting them was pure noise.
+{
+  const sites = findWriteSites([
+    file("lazy.ts", "(conv as any).financeOutcomeNotify = (conv as any).financeOutcomeNotify ?? {};")
+  ]);
+  assert.equal(sites.get("financeOutcomeNotify"), undefined, "idempotent `x = x ?? {}` init is not contention");
+}
+
+// --- BRANCHES INSIDE ONE FUNCTION ARE ONE WRITER ---
+// financeOutcome's three writes are the three arms of one if/else inside
+// applyFinanceOutcomeStatusFromSignal — the referee's own implementation. A caller invokes the
+// function as a unit, so its branches cannot disagree with each other.
+{
+  const body = [
+    "function applyOutcome(conv, status) {",
+    '  if (status === "declined") {',
+    "    conv.financeOutcome = { status };",
+    ...Array(20).fill("    noop();"),
+    '  } else if (status === "needs_info") {',
+    "    conv.financeOutcome = { status };",
+    ...Array(20).fill("    noop();"),
+    "  } else {",
+    "    conv.financeOutcome = { status };",
+    "  }",
+    "}",
+    "function somethingElse(conv) {",
+    "  conv.financeOutcome = { status: 2 };",
+    "}"
+  ].join("\n");
+  const ranked = rankContention([file("fn.ts", body)], { minWrites: 3 });
+  const finance = ranked.find(f => f.field === "financeOutcome")!;
+  assert.equal(finance.writes, 4, "all four raw writes are seen");
+  assert.equal(
+    finance.writers,
+    2,
+    "three branches of one function collapse to ONE writer; the separate function is the second"
+  );
+}
+
 console.log("PASS state-writer contention — writer clustering, referee proof, over-count guards, queue ordering");
