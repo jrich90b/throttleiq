@@ -282,6 +282,16 @@ export type MissedCallRow = {
   lapsed: LapsedMove;
 };
 
+/**
+ * Every move that came DUE for an owner in the period, whether actioned or missed. The
+ * denominator — without it the KPI is a raw count, and a raw count mostly measures lead
+ * volume, not diligence.
+ */
+export type OwnerDueRow = {
+  ownerId?: string | null;
+  ownerName?: string | null;
+};
+
 export type MissedCallsByOwner = {
   ownerId: string | null;
   ownerName: string;
@@ -290,6 +300,13 @@ export type MissedCallsByOwner = {
   oldestDaysLate: number;
   chartMisses: number;
   reengageMisses: number;
+  /** Moves that came due for this owner in the period (missed + actioned). */
+  due: number | null;
+  /**
+   * missed / due, 0..1, rounded to 3dp — THE comparable number. Null when no denominator was
+   * supplied, so a caller can never accidentally render a rate it did not measure.
+   */
+  missRate: number | null;
 };
 
 export type MissedCallsSummary = {
@@ -300,11 +317,19 @@ export type MissedCallsSummary = {
 };
 
 /**
- * Roll lapsed moves up per salesperson, worst first. Pure and total-preserving:
+ * Roll lapsed moves up per salesperson. Pure and total-preserving:
  * `total === unassigned + sum(byOwner.missed)` always holds, so the number can never
  * quietly lose misses.
+ *
+ * Pass `dueRows` — every move that came due in the period — to get a MISS RATE. Sorting then
+ * uses the rate, because a raw count ranks by lead volume: on the live store Giovanni carries
+ * roughly half the leads AND roughly half the misses (105 of 184), which says nothing about
+ * diligence. Rank by rate or the metric loses its first argument.
  */
-export function summarizeMissedCalls(rows: MissedCallRow[]): MissedCallsSummary {
+export function summarizeMissedCalls(
+  rows: MissedCallRow[],
+  dueRows?: OwnerDueRow[]
+): MissedCallsSummary {
   const byKey = new Map<string, MissedCallsByOwner>();
   let unassigned = 0;
   let total = 0;
@@ -327,7 +352,9 @@ export function summarizeMissedCalls(rows: MissedCallRow[]): MissedCallsSummary 
         missed: 0,
         oldestDaysLate: 0,
         chartMisses: 0,
-        reengageMisses: 0
+        reengageMisses: 0,
+        due: null,
+        missRate: null
       } as MissedCallsByOwner);
     entry.missed += 1;
     const late = Number(row.lapsed.daysLate);
@@ -337,8 +364,30 @@ export function summarizeMissedCalls(rows: MissedCallRow[]): MissedCallsSummary 
     byKey.set(key, entry);
   }
 
+  // Attach the denominator, then the rate.
+  if (dueRows) {
+    const dueByKey = new Map<string, number>();
+    for (const d of dueRows) {
+      const name = String(d?.ownerName ?? "").trim();
+      const id = String(d?.ownerId ?? "").trim();
+      if (!name && !id) continue; // unowned work has no one to rate
+      const k = id || name;
+      dueByKey.set(k, (dueByKey.get(k) ?? 0) + 1);
+    }
+    for (const [k, entry] of byKey) {
+      const due = dueByKey.get(k);
+      if (!Number.isFinite(due) || (due as number) <= 0) continue;
+      entry.due = due as number;
+      // Clamped: a miss set larger than the measured due set would otherwise read >100%.
+      entry.missRate = Math.round(Math.min(1, entry.missed / (due as number)) * 1000) / 1000;
+    }
+  }
+
   const byOwner = [...byKey.values()].sort(
-    (a, b) => b.missed - a.missed || b.oldestDaysLate - a.oldestDaysLate
+    (a, b) =>
+      (b.missRate ?? -1) - (a.missRate ?? -1) ||
+      b.missed - a.missed ||
+      b.oldestDaysLate - a.oldestDaysLate
   );
   return { total, unassigned, byOwner };
 }

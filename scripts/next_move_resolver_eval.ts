@@ -301,4 +301,38 @@ assert.equal(summary.byOwner[0].reengageMisses, 1);
 assert.equal(summary.byOwner[0].oldestDaysLate, 40, "the oldest miss shows how long the worst one sat");
 assert.deepEqual(summarizeMissedCalls([]), { total: 0, unassigned: 0, byOwner: [] }, "empty is clean");
 
+// --- 9) MISS RATE. A raw count ranks by lead volume, not diligence: on the live store the
+//        top owner carries ~half the leads AND ~half the misses. Rank by rate. ---
+const missRows = [
+  { ownerName: "Giovanni Boccabella", lapsed: { kind: "chart" as const, dueAt: daysAgo(20), daysLate: 20 } },
+  { ownerName: "Giovanni Boccabella", lapsed: { kind: "chart" as const, dueAt: daysAgo(15), daysLate: 15 } },
+  { ownerName: "Stone Giuga", lapsed: { kind: "chart" as const, dueAt: daysAgo(12), daysLate: 12 } }
+];
+// Giovanni missed 2 of 20 (10%); Stone missed 1 of 4 (25%) — Stone is the worse performer
+// despite a third of the raw count.
+const dueRows = [
+  ...Array.from({ length: 20 }, () => ({ ownerName: "Giovanni Boccabella" })),
+  ...Array.from({ length: 4 }, () => ({ ownerName: "Stone Giuga" }))
+];
+const rated = summarizeMissedCalls(missRows, dueRows);
+assert.equal(rated.byOwner[0].ownerName, "Stone Giuga", "rank by RATE, not raw count");
+assert.equal(rated.byOwner[0].missRate, 0.25);
+assert.equal(rated.byOwner[0].due, 4);
+assert.equal(rated.byOwner[1].ownerName, "Giovanni Boccabella");
+assert.equal(rated.byOwner[1].missRate, 0.1, "the high-volume owner has the LOWER miss rate");
+assert.equal(rated.byOwner[1].missed, 2, "the raw count is still reported alongside the rate");
+
+// No denominator supplied => no rate invented. A caller can never render a rate we did not measure.
+const unrated = summarizeMissedCalls(missRows);
+assert.equal(unrated.byOwner[0].missRate, null, "without due rows there is no rate");
+assert.equal(unrated.byOwner[0].due, null);
+
+// The rate is clamped: more misses than measured due must never read over 100%.
+const clamped = summarizeMissedCalls(missRows, [{ ownerName: "Giovanni Boccabella" }]);
+assert.equal(clamped.byOwner[0].missRate, 1, "miss rate is clamped to 100%");
+
+// Unowned work has nobody to rate, and still never inflates a person's denominator.
+const withUnowned = summarizeMissedCalls(missRows, [...dueRows, { ownerName: "" }, { ownerId: "" }]);
+assert.equal(withUnowned.byOwner.find(o => o.ownerName === "Stone Giuga")!.due, 4, "unowned due rows are not charged to anyone");
+
 console.log("next_move_resolver:eval OK — decision table + fail direction pinned (Joe 7/31 rulings)");
