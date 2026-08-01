@@ -140,6 +140,25 @@ export function hasCustomerReceivedOutbound(
 }
 
 /**
+ * Drop the outbounds the customer never actually received, keeping every inbound. Same
+ * allowlist (and therefore the same fail direction) as `hasCustomerReceivedOutbound`: an
+ * unknown provider is treated as NOT received.
+ *
+ * Use this wherever a consumer is answering "what has this customer actually heard from us?".
+ * A `draft_ai` row is a proposal, not a message: the staff may never approve it (1,051 of 1,134
+ * in the americanharley store are `draftStatus: "stale"`). Feeding one to a reviewer as a prior
+ * `out:` turn invents a conversation that never happened — see `buildCustomerReceivedHistory`.
+ */
+export function keepCustomerReceivedOutbounds<T extends { direction?: string | null; provider?: string | null }>(
+  messages: ReadonlyArray<T> | null | undefined
+): T[] {
+  if (!Array.isArray(messages)) return [];
+  return messages.filter(
+    m => m?.direction !== "out" || CUSTOMER_FACING_OUTBOUND_PROVIDERS.has(String(m?.provider ?? ""))
+  );
+}
+
+/**
  * Should an inbound ADF's reply introduce the agent ("Hey Zackary, it's Alexandra over at American
  * Harley-Davidson.")?
  *

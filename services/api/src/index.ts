@@ -1012,7 +1012,7 @@ import {
   isPendingIncomingInventoryNotifyTodoSummary,
   shouldHandlePendingIncomingInventoryTurn
 } from "./domain/pendingIncomingInventory.js";
-import { buildEffectiveHistory } from "./domain/effectiveContext.js";
+import { buildCustomerReceivedHistory, buildEffectiveHistory } from "./domain/effectiveContext.js";
 import { isWorkerDrivenTicks, isWorkerTickTask, type WorkerTickTask } from "./domain/workerTasks.js";
 import {
   buildEscalationDigest,
@@ -5194,7 +5194,9 @@ async function runDraftQualityJudgeShadow(
     const verdict = await judgeDraftQualityWithLLM({
       draft: draftText,
       inbound,
-      history: buildHistory(conv, 8),
+      // RECEIVED-only thread: an unsent draft_ai row is not something the customer heard, and
+      // judging a candidate for consistency with one manufactures unfixable holds.
+      history: buildDraftJudgeHistory(conv, 8),
       lead: conv.lead,
       channel
     });
@@ -5411,7 +5413,7 @@ async function gateDraftBeforePublish(
       (await judgeDraftQualityWithLLM({
         draft: candidate,
         inbound,
-        history: buildHistory(conv, 8),
+        history: buildDraftJudgeHistory(conv, 8),
         lead: conv.lead,
         channel
       }));
@@ -21722,6 +21724,17 @@ function getNonVoiceMessages(conv: any) {
 
 function buildHistory(conv: any, limit = 20) {
   return buildEffectiveHistory(conv, limit);
+}
+
+/**
+ * Thread context for the DRAFT-QUALITY JUDGE only — received turns only. The judge asks "is this
+ * draft right for this customer, given what they've heard from us"; an unsent `draft_ai` row is
+ * not something they heard. See `buildCustomerReceivedHistory` for the case that motivated it.
+ * Every other `buildHistory` consumer (the comprehension parsers, the draft generator) keeps the
+ * full effective history on purpose.
+ */
+function buildDraftJudgeHistory(conv: any, limit = 8) {
+  return buildCustomerReceivedHistory(conv, limit);
 }
 
 function getRecentMessagesText(conv: any, limit = 12): string {
