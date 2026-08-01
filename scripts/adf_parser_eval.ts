@@ -261,7 +261,91 @@ const sellOnlySingleVehicleAdf = tradeOnlySingleVehicleAdf
   .replace("Road King Special", "Fat Bob 114")
   .replace("<year>2019</year>", "<year>2020</year>");
 
+// Room58 "Request details" / "Book test ride" forms auto-populate the structured trade-in vehicle
+// with the SAME model the customer is asking about — a form-mapping artifact, not a reported trade.
+// Beth Bremer (Ref 11449, 2026-06-13): Vehicle "FXD Super Glide" / Trade-In "Super Glide", and her
+// actual typed question ("I'm a smaller female... is the super glide a good option?") got answered
+// with "Thanks for using our trade-in estimator on your Super Glide". A human rescued the live
+// thread; the 2026-07-31 replay sweep reproduces the bad draft as a `critical`.
+const room58MirroredTradeAdf = `<?xml version="1.0" encoding="UTF-8"?>
+<?adf version="1.0"?>
+<adf>
+ <prospect>
+   <requestdate>2026-06-13T05:50:27+00:00</requestdate>
+   <id sequence="1" source="Room58 - Request details">11449</id>
+   <vehicle interest="buy" status="NEW">
+     <year>2026</year>
+     <make>HARLEY-DAVIDSON</make>
+     <model>FXD Super Glide</model>
+     <vin></vin>
+   </vehicle>
+   <vehicle interest="trade-in">
+     <make>HARLEY-DAVIDSON</make>
+     <model>Super Glide</model>
+     <vin></vin>
+     <odometer unit="MILES"></odometer>
+   </vehicle>
+   <customer>
+     <contact>
+       <name part="first">Beth</name>
+       <name part="last">Bremer</name>
+       <email>beth.bremer@gmail.com</email>
+       <phone type="cellphone">3088830093</phone>
+       <comment><![CDATA[I sold my sportster several years back am interested in buying something that can travel a little bit further. I'm a smaller female and don't want a big cruiser, but am interested in something a little more long range than a sportster. Is the super glide a good option?]]></comment>
+     </contact>
+   </customer>
+ </prospect>
+</adf>`;
+
+// Same mirror shape on a "Book test ride" form (Sanjeev Goms, Ref 11546) — the trade field mirrors
+// with sloppy whitespace ("Sportster  S" vs "Sportster S"), which must still read as a mirror.
+const room58MirroredTradeTestRideAdf = room58MirroredTradeAdf
+  .replace("Room58 - Request details", "Room58 - Book test ride")
+  .replace("<model>FXD Super Glide</model>", "<model>Sportster S</model>")
+  .replace("<model>Super Glide</model>", "<model>Sportster  S</model>")
+  .replace(/<comment>[\s\S]*<\/comment>/, "<comment><![CDATA[Test ride request for Sportster S. Preferred date: 29/6/2026. Preferred time: 12 pm.]]></comment>");
+
+// FALSE-POSITIVE GUARD 1: a REAL trade that happens to name the same model keeps its own year, so
+// it carries independent identity and must survive (trading a 2015 Iron 883 toward a 2022 Iron 883).
+const sameModelRealTradeAdf = `<?xml version="1.0" encoding="UTF-8"?>
+<?adf version="1.0"?>
+<adf>
+ <prospect>
+   <requestdate>2026-06-20T12:00:00+00:00</requestdate>
+   <id sequence="1" source="Room58 - Request details">11500</id>
+   <vehicle interest="buy" status="USED">
+     <year>2022</year>
+     <make>HARLEY-DAVIDSON</make>
+     <model>Iron 883</model>
+   </vehicle>
+   <vehicle interest="trade-in">
+     <year>2015</year>
+     <make>HARLEY-DAVIDSON</make>
+     <model>Iron 883</model>
+     <odometer unit="MILES">18000</odometer>
+   </vehicle>
+   <customer>
+     <contact>
+       <name part="first">Dale</name>
+       <phone type="cellphone">7165550101</phone>
+     </contact>
+   </customer>
+ </prospect>
+</adf>`;
+
+// FALSE-POSITIVE GUARD 2: the customer TYPED that they want to trade. Even with a bare mirrored
+// field, their own words win and the trade stays (Dante Turello shape: "...I'd be looking to
+// trade in as well").
+const mirroredFieldButCustomerSaidTradeAdf = room58MirroredTradeAdf.replace(
+  /<comment>[\s\S]*<\/comment>/,
+  "<comment><![CDATA[Interested in the Super Glide, and I'd be looking to trade in my current bike as well.]]></comment>"
+);
+
 const markLead = parseAdfXml(markNicholsTradeAcceleratorAdf);
+const room58MirrorLead = parseAdfXml(room58MirroredTradeAdf);
+const room58MirrorTestRideLead = parseAdfXml(room58MirroredTradeTestRideAdf);
+const sameModelRealTradeLead = parseAdfXml(sameModelRealTradeAdf);
+const mirroredButSaidTradeLead = parseAdfXml(mirroredFieldButCustomerSaidTradeAdf);
 const tradeOnlyLead = parseAdfXml(tradeOnlySingleVehicleAdf);
 const sellOnlyLead = parseAdfXml(sellOnlySingleVehicleAdf);
 const matthewLead = parseAdfXml(matthewWallValueMyTradeAdf);
@@ -316,7 +400,41 @@ const checks: Check[] = [
   // interest="sell" behaves the same as trade-in.
   { id: "sell_only_no_interest_model", actual: sellOnlyLead.vehicleModel, expected: undefined },
   { id: "sell_only_trade_model", actual: sellOnlyLead.tradeVehicle?.model, expected: "Fat Bob 114" },
-  { id: "sell_only_trade_year", actual: sellOnlyLead.tradeVehicle?.year, expected: "2020" }
+  { id: "sell_only_trade_year", actual: sellOnlyLead.tradeVehicle?.year, expected: "2020" },
+  // Room58 form mirror: the phantom trade is dropped, and the bike of interest is untouched so the
+  // first touch can answer the question the customer actually typed.
+  { id: "room58_mirror_drops_phantom_trade", actual: room58MirrorLead.tradeVehicle, expected: undefined },
+  { id: "room58_mirror_keeps_interest_model", actual: room58MirrorLead.vehicleModel, expected: "FXD Super Glide" },
+  { id: "room58_mirror_keeps_interest_year", actual: room58MirrorLead.year, expected: "2026" },
+  {
+    id: "room58_mirror_keeps_customer_question",
+    actual: (room58MirrorLead.comment ?? "").toLowerCase().includes("is the super glide a good option"),
+    expected: true
+  },
+  // Whitespace-sloppy mirror on a test-ride form is still a mirror.
+  {
+    id: "room58_mirror_test_ride_drops_phantom_trade",
+    actual: room58MirrorTestRideLead.tradeVehicle,
+    expected: undefined
+  },
+  {
+    id: "room58_mirror_test_ride_keeps_interest_model",
+    actual: room58MirrorTestRideLead.vehicleModel,
+    expected: "Sportster S"
+  },
+  // A real same-model trade carries its own year/mileage — never dropped.
+  { id: "same_model_real_trade_kept", actual: sameModelRealTradeLead.tradeVehicle?.model, expected: "Iron 883" },
+  { id: "same_model_real_trade_year_kept", actual: sameModelRealTradeLead.tradeVehicle?.year, expected: "2015" },
+  { id: "same_model_real_trade_interest_year", actual: sameModelRealTradeLead.year, expected: "2022" },
+  // The customer's own words beat the form mapping — bare mirror, but they said "trade in".
+  {
+    id: "mirrored_field_but_customer_said_trade_kept",
+    actual: mirroredButSaidTradeLead.tradeVehicle?.model,
+    expected: "Super Glide"
+  },
+  // A DISTINCT structured trade is untouched by the mirror guard (regression pin on the
+  // long-standing Trade Accelerator shape).
+  { id: "distinct_trade_unaffected_by_mirror_guard", actual: markLead.tradeVehicle?.model, expected: "FLHCS Heritage Class" }
 ];
 
 let passed = 0;
