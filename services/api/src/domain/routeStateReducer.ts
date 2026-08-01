@@ -1301,6 +1301,12 @@ export type ProactiveCadenceValueInput = {
   hasNationalOfferMatch?: boolean | null; // a genuine national offer applies to their bike (new trigger)
   hasTestRideOffer?: boolean | null; // a real test-ride opportunity to extend
   hasPriceDrop?: boolean | null; // price cut on an interested unit (future trigger; wire when built)
+  /**
+   * The customer has actually engaged at least once — customerEngagedWithCadence (conversationStore):
+   * any real inbound message, or a voice call they genuinely participated in. OMITTED/false = never
+   * engaged, and a never-engaged lead is NOT pitched a national offer (see below).
+   */
+  customerEverEngaged?: boolean | null;
 };
 
 export type ProactiveCadenceValueDecision =
@@ -1315,7 +1321,24 @@ export function decideProactiveCadenceValue(
   // Later stage: fire ONLY on a genuine value trigger. Precedence: concrete inventory news first,
   // then a real offer, then a test-ride opportunity, then a price drop.
   if (input.hasNewInventoryMatch) return { fire: true, valueKind: "new_inventory", reason: "matching_inventory" };
-  if (input.hasNationalOfferMatch) return { fire: true, valueKind: "national_offer", reason: "matching_national_offer" };
+  // A national offer is the one value kind that VOLUNTEERS PAYMENT FIGURES ("from $406/month with
+  // 10% down for 96 months"), so it additionally requires that the customer has ever engaged.
+  //
+  // Production miss (+16102170861, Seth Farrand — open-critic unsolicited_financing_quote_on_trade_lead):
+  // a "Trade Accelerator - Trade In" lead who asked what his 2018 Street Glide S was WORTH and then
+  // never wrote back once got a touring-program monthly payment pitched at him on 7/21 (sent) and
+  // again on 8/1 (drafted). The offer matched only because the lead card's buy-side vehicle (a 2026
+  // Road Glide) is a touring model — the gate never asked whether he had said anything at all.
+  //
+  // FAIL DIRECTION: removing this condition fails toward TEXTING PAYMENT NUMBERS at a silent lead —
+  // a money claim nobody asked for. Keeping it fails toward silence on a promo, which the next step
+  // re-offers the moment they reply. Same shape as the leadUnitUnavailable guard (Joe ruling
+  // 2026-07-28, Jason Roorda +17165104578) — unit-specific money talk is gated, not the whole touch.
+  // Deliberately gates ONLY this arm: inventory news, a test-ride invite and a price drop are all
+  // still sayable to a quiet lead. Omitted signal = not engaged = quiet (fail-safe default).
+  if (input.hasNationalOfferMatch && input.customerEverEngaged) {
+    return { fire: true, valueKind: "national_offer", reason: "matching_national_offer" };
+  }
   if (input.hasTestRideOffer) return { fire: true, valueKind: "test_ride", reason: "test_ride_opportunity" };
   if (input.hasPriceDrop) return { fire: true, valueKind: "price_drop", reason: "price_drop" };
   // No value this cycle → stay quiet (the anti-spam gate).

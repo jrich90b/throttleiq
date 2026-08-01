@@ -123,6 +123,33 @@ const eq = (id: string, actual: unknown, expected: unknown) => {
     "send"
   );
 
+  // --- never-engaged lead is never volunteered payment figures (+16102170861, Seth Farrand) ----
+  // A national offer is the one value kind that quotes money. Seth asked what his 2018 Street Glide S
+  // was WORTH (Trade Accelerator lead), never replied once, and got "$406/month with 10% down for up
+  // to 96 months" on 7/21 and again on 8/1. NOTE the two axes are independent: cadenceKind "engaged"
+  // is about STEP SCOPING (how early the gate starts) and can only make the gate more permissive —
+  // it is NOT a substitute for "has this person ever spoken to us".
+  const neverEngagedOffer = await evaluateProactiveCadenceValueGate({ ...base, customerEverEngaged: false });
+  eq("never_engaged_offer_suppresses", neverEngagedOffer.action, "suppress");
+  eq("never_engaged_offer_reason", (neverEngagedOffer as any).reason, "no_value_trigger_stay_quiet");
+  // Scoped to the money arm: the same silent lead still gets a price drop and a test-ride invite.
+  eq(
+    "never_engaged_price_drop_still_fires",
+    (await evaluateProactiveCadenceValueGate({ ...base, customerEverEngaged: false, priceDropMessage: "Price dropped $1,500" })).action,
+    "replace"
+  );
+  eq(
+    "never_engaged_test_ride_still_sends",
+    (await evaluateProactiveCadenceValueGate({ ...base, customerEverEngaged: false, hasTestRideOffer: true })).action,
+    "send"
+  );
+  // Early steps stay ungated — this is a later-stage money gate, not a global mute on quiet leads.
+  eq(
+    "never_engaged_early_step_unchanged",
+    (await evaluateProactiveCadenceValueGate({ ...base, customerEverEngaged: false, stepIndex: 2 })).action,
+    "send"
+  );
+
   // --- engaged-cadence scoping (production pin +17165146963, 2026-07-17): the customer replied
   // 7/15 (stepIndex re-anchored to 0), and two days later the pipeline drafted "If the timing
   // shifted, all good. Shoot me a day that works..." — engaged step ~1, contentless, judge-
@@ -262,6 +289,15 @@ const eq = (id: string, actual: unknown, expected: unknown) => {
   eq("both_paths_pass_test_ride_context", (idx.match(/hasTestRideOffer: (testRideValueContext|regenTestRideValueContext)/g) ?? []).length, 2);
   // engaged scoping parity: BOTH paths pass the persisted cadence kind to the shared applier
   eq("both_paths_pass_cadence_kind", (idx.match(/cadenceKind: String\(cadence\.kind \?\? ""\)/g) ?? []).length, 2);
+  // Payment-figure parity (+16102170861): BOTH paths read "has this customer ever spoken to us"
+  // through the ONE shared pure helper, or the live tick and the regen draft disagree about whether
+  // a silent lead may be quoted money. The gate's default is quiet, so a path that DROPS this line
+  // fails safe (it stops offering) rather than dangerous — this pin catches that silent regression.
+  eq(
+    "both_paths_pass_engagement_signal",
+    (idx.match(/customerEverEngaged: customerEngagedWithCadence\(conv\)/g) ?? []).length,
+    2
+  );
 
   if (failures.length) {
     console.error("FAIL cadence_value_gate eval:");

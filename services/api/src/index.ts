@@ -15627,6 +15627,9 @@ async function buildCadenceRegeneratedDraft(
       alreadySentOfferTitles: (conv.nationalOfferTouches ?? []).map((t: { title: string }) => t.title),
       hasTestRideOffer: regenTestRideValueContext,
       priceDropMessage: regenInterestPriceDrop?.message ?? null,
+      // Never volunteer payment figures to a lead who has never said a word (+16102170861,
+      // Seth Farrand) — same shared read as the live tick.
+      customerEverEngaged: customerEngagedWithCadence(conv),
       // Never pitch a held/sold unit's numbers (Joe ruling 2026-07-28, Jason Roorda) — same
       // shared read as the live tick.
       leadUnitUnavailable: await leadUnitUnavailableForValueGate(conv)
@@ -34403,6 +34406,9 @@ async function processDueFollowUpsUnlocked() {
         alreadySentOfferTitles: (conv.nationalOfferTouches ?? []).map(t => t.title),
         hasTestRideOffer: testRideValueContext,
         priceDropMessage: interestPriceDrop?.message ?? null,
+        // Never volunteer payment figures to a lead who has never said a word (+16102170861,
+        // Seth Farrand) — same shared read as the regenerate cadence builder.
+        customerEverEngaged: customerEngagedWithCadence(conv),
         // Never pitch a held/sold unit's numbers (Joe ruling 2026-07-28, Jason Roorda
         // +17165104578) — same shared read as the regenerate cadence builder.
         leadUnitUnavailable: await leadUnitUnavailableForValueGate(conv)

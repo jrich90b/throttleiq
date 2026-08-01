@@ -398,6 +398,14 @@ export async function evaluateProactiveCadenceValueGate(args: {
    * unit-specific by construction, so neither is sayable about a bike we can't sell.
    */
   leadUnitUnavailable?: boolean;
+  /**
+   * The customer has ever engaged (customerEngagedWithCadence) — any real inbound message, or a
+   * voice call they actually took part in. A national offer quotes PAYMENT FIGURES, so we only
+   * volunteer one to a lead who has spoken to us at least once (+16102170861, Seth Farrand: a
+   * never-replied trade-appraisal lead was texted "$406/month with 10% down for 96 months").
+   * Omitted = not engaged: fail toward quiet, never toward an unsolicited money claim.
+   */
+  customerEverEngaged?: boolean;
 }): Promise<CadenceValueGateResult> {
   if (!isCadenceValueGateEnabled()) return { action: "send", reason: "gate_disabled" };
   if (args.isPostSale) return { action: "send", reason: "post_sale_exempt" };
@@ -411,15 +419,20 @@ export async function evaluateProactiveCadenceValueGate(args: {
   // Ordered AFTER hasValueOverride on purpose: the availability/held-inventory overrides ARE the
   // correct thing to say about a gone unit, and they own that turn when they fire.
   if (args.leadUnitUnavailable) return { action: "suppress", reason: "lead_unit_unavailable" };
-  const offer = await findNationalOfferForVehicle(args.vehicleLabel, {
-    excludeTitles: args.alreadySentOfferTitles ?? [],
-    firstName: args.firstName,
-    condition: args.vehicleCondition ?? "unknown",
-    riderEligibility: args.riderEligibility ?? "not_evident"
-  });
+  // A never-engaged lead is never pitched payment figures, so skip the matcher entirely — same
+  // reason the held-unit guard sits above it: we spend no LLM call quoting a lead we won't quote.
+  const offer = args.customerEverEngaged
+    ? await findNationalOfferForVehicle(args.vehicleLabel, {
+        excludeTitles: args.alreadySentOfferTitles ?? [],
+        firstName: args.firstName,
+        condition: args.vehicleCondition ?? "unknown",
+        riderEligibility: args.riderEligibility ?? "not_evident"
+      })
+    : null;
   const decision = decideProactiveCadenceValue({
     isLaterStage: true,
     hasNationalOfferMatch: !!offer,
+    customerEverEngaged: !!args.customerEverEngaged,
     hasTestRideOffer: !!args.hasTestRideOffer,
     hasPriceDrop: !!String(args.priceDropMessage ?? "").trim()
   });

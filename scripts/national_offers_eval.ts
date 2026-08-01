@@ -40,13 +40,41 @@ eq("early_touch_fires_even_with_no_value", D({ isLaterStage: false, hasNationalO
 eq("later_no_value_stays_quiet", D({ isLaterStage: true }), { fire: false, valueKind: null, reason: "no_value_trigger_stay_quiet" });
 eq("later_all_false_stays_quiet", D({ isLaterStage: true, hasNewInventoryMatch: false, hasNationalOfferMatch: false, hasTestRideOffer: false, hasPriceDrop: false }), { fire: false, valueKind: null, reason: "no_value_trigger_stay_quiet" });
 eq("later_inventory_fires", D({ isLaterStage: true, hasNewInventoryMatch: true }), { fire: true, valueKind: "new_inventory", reason: "matching_inventory" });
-eq("later_offer_fires", D({ isLaterStage: true, hasNationalOfferMatch: true }), { fire: true, valueKind: "national_offer", reason: "matching_national_offer" });
+eq("later_offer_fires", D({ isLaterStage: true, hasNationalOfferMatch: true, customerEverEngaged: true }), { fire: true, valueKind: "national_offer", reason: "matching_national_offer" });
 eq("later_testride_fires", D({ isLaterStage: true, hasTestRideOffer: true }), { fire: true, valueKind: "test_ride", reason: "test_ride_opportunity" });
 eq("later_pricedrop_fires", D({ isLaterStage: true, hasPriceDrop: true }), { fire: true, valueKind: "price_drop", reason: "price_drop" });
 // precedence: inventory > offer > test_ride > price_drop
 eq("precedence_inventory_over_offer", D({ isLaterStage: true, hasNewInventoryMatch: true, hasNationalOfferMatch: true, hasTestRideOffer: true }).valueKind, "new_inventory");
-eq("precedence_offer_over_testride", D({ isLaterStage: true, hasNationalOfferMatch: true, hasTestRideOffer: true, hasPriceDrop: true }).valueKind, "national_offer");
+eq("precedence_offer_over_testride", D({ isLaterStage: true, hasNationalOfferMatch: true, hasTestRideOffer: true, hasPriceDrop: true, customerEverEngaged: true }).valueKind, "national_offer");
 eq("precedence_testride_over_pricedrop", D({ isLaterStage: true, hasTestRideOffer: true, hasPriceDrop: true }).valueKind, "test_ride");
+
+// --- 1a. a NEVER-ENGAGED lead is never volunteered payment figures --------------------------
+// Production miss +16102170861 (Seth Farrand), open-critic unsolicited_financing_quote_on_trade_lead:
+// a "Trade Accelerator - Trade In" lead asked what his 2018 Street Glide S was WORTH, never wrote
+// back once, and was texted "from $406/month with 10% down for up to 96 months" on 7/21 (sent) and
+// again on 8/1 (drafted) — because the offer matched the BUY-side bike on his lead card (a 2026
+// Road Glide, a touring model). Live-verified on the box: customerEngagedWithCadence(conv) === false
+// (the ADF is provider sendgrid_adf, and his only call went to voicemail), yet the gate fired.
+// The national-offer arm is the ONLY value kind that quotes money, so it is the only one gated.
+eq(
+  "never_engaged_lead_no_offer_touch",
+  D({ isLaterStage: true, hasNationalOfferMatch: true, customerEverEngaged: false }),
+  { fire: false, valueKind: null, reason: "no_value_trigger_stay_quiet" }
+);
+// Fail-safe default: an omitted engagement signal reads as NOT engaged (quiet), never as engaged.
+eq(
+  "missing_engagement_signal_defaults_quiet",
+  D({ isLaterStage: true, hasNationalOfferMatch: true }),
+  { fire: false, valueKind: null, reason: "no_value_trigger_stay_quiet" }
+);
+// Scoped to the money arm only — a silent lead still hears about real inventory, a test ride and
+// a price drop. Over-gating here would re-create the taper/ghosting failure, not fix it.
+eq("never_engaged_still_gets_inventory", D({ isLaterStage: true, hasNewInventoryMatch: true, customerEverEngaged: false }).valueKind, "new_inventory");
+eq("never_engaged_still_gets_testride", D({ isLaterStage: true, hasNationalOfferMatch: true, hasTestRideOffer: true, customerEverEngaged: false }).valueKind, "test_ride");
+eq("never_engaged_still_gets_pricedrop", D({ isLaterStage: true, hasNationalOfferMatch: true, hasPriceDrop: true, customerEverEngaged: false }).valueKind, "price_drop");
+// Engagement is not a bypass of the OTHER guards: an early touch is still ungated, and an engaged
+// lead with no offer match still stays quiet.
+eq("engaged_lead_no_match_still_quiet", D({ isLaterStage: true, hasNationalOfferMatch: false, customerEverEngaged: true }).fire, false);
 
 // --- 1b. NEW-bike promo scope (Joe 2026-07-22): national promo offers only reach a
 //         lead whose unit is NEW; used/unknown-condition leads only see offers that
