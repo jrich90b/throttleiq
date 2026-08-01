@@ -102,6 +102,46 @@ for (const line of goldStandard) {
   assert.equal(hits.length, 0, `gold-standard rep line must be clean, got hits [${hits.join(", ")}]: ${line}`);
 }
 
+// --- 4) RETIRED TEMPLATE PHRASES (Joe, 2026-08-01) ------------------------------------------
+// The denylist above steers the LLM. It cannot touch copy we HARDCODE ourselves — and mining the
+// 525 staff draft-edits showed the worst offenders were exactly that: our own template strings.
+// Each phrase below was used by the agent repeatedly and typed by our reps ZERO times across
+// 1,151 distinct hand-written messages; where staff edited a draft containing one, they removed
+// it ~100% of the time. Their replacements are our reps' verified wording ("just checking back",
+// "just text me", "just let me know", "Let me know your thoughts", "no rush").
+//
+// This is a SOURCE guard, not a runtime one: it fails the build if a retired phrase reappears in
+// customer-facing template copy. Comments are stripped first, so discussing a phrase in a code
+// comment stays legal — only shipped strings count.
+const RETIRED_TEMPLATE_PHRASES: { phrase: string; instead: string }[] = [
+  { phrase: "just say the word", instead: '"just text me" / "just let me know"' },
+  { phrase: "if timing changed", instead: '"are you still in the market?" / "let me know your thoughts"' },
+  { phrase: "are you after a certain color", instead: '"any particular color you\'re after?"' },
+  { phrase: "no rush at all", instead: '"no rush"' },
+  { phrase: "just checking in", instead: '"just checking back" (Scott\'s wording)' }
+];
+
+/** Strip // line comments and block comments so only shipped string content is scanned. */
+function stripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/^\s*\/\/.*$/gm, " ");
+}
+
+const COPY_SOURCES = [
+  "services/api/src/index.ts",
+  "services/api/src/domain/orchestrator.ts",
+  "services/api/src/domain/agentVoice.ts",
+  "services/api/src/routes/sendgridInbound.ts"
+];
+for (const file of COPY_SOURCES) {
+  const body = stripComments(fs.readFileSync(file, "utf8")).toLowerCase();
+  for (const { phrase, instead } of RETIRED_TEMPLATE_PHRASES) {
+    assert.ok(
+      !body.includes(phrase),
+      `${file} still ships the retired phrase "${phrase}" — our reps never write it. Use ${instead}.`
+    );
+  }
+}
+
 console.log(
-  `PASS voice banned-phrase eval (source guard + ${COMPUTER_LIKE_PHRASES.length} phrases detected + boundary precision + ${goldStandard.length} gold-standard clean lines)`
+  `PASS voice banned-phrase eval (source guard + ${COMPUTER_LIKE_PHRASES.length} phrases detected + boundary precision + ${goldStandard.length} gold-standard clean lines + ${RETIRED_TEMPLATE_PHRASES.length} retired template phrases across ${COPY_SOURCES.length} files)`
 );

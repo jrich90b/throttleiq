@@ -380,7 +380,10 @@ export function isEmptyInquiryAdfIntroByDesign(row: ReplayRow, judge: IntentVerd
   const draft = String(row.draft ?? "").toLowerCase();
   if (!/thanks for your inquiry about the /.test(draft)) return false;
   return (
+    // Copy swept to rep voice 2026-08-01 ("just say the word" -> "just let me know"); match BOTH
+    // so this detector keeps seeing the boilerplate in historical rows AND in new drafts.
     /just say the word/.test(draft) ||
+    /just let me know/.test(draft) ||
     /currently on hold, but i can text you first/.test(draft) ||
     /no longer available, but i can help/.test(draft)
   );

@@ -32,9 +32,21 @@ let n = 0;
 const daysOut = (phrase: string): number | null => {
   const r = parseRequestedDateOnly(phrase, TZ);
   if (!r) return null;
-  const now = new Date();
   const target = Date.UTC(r.year, r.month - 1, r.day, 12);
-  const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 12);
+  // "Today" must be measured in the DEALER's timezone — the same one parseRequestedDateOnly
+  // resolved against. Reading it off UTC made every assertion here off by one after 8pm Eastern
+  // (UTC has already rolled over), so the gate failed every evening on correct product code.
+  // Caught 2026-08-01 00:44 UTC / 20:44 EDT: "10 days" measured as 9.
+  const [y, m, d] = new Intl.DateTimeFormat("en-CA", {
+    timeZone: TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  })
+    .format(new Date())
+    .split("-")
+    .map(Number);
+  const today = Date.UTC(y, m - 1, d, 12);
   return Math.round((target - today) / 86400000);
 };
 
