@@ -910,6 +910,7 @@ import {
   mentionsUnresolvedTimeframe,
   isImplausibleAppointmentDueAt,
   startFollowUpCadence,
+  applyCadenceQuietWindow,
   resolveNoShowFollowUpDueAt,
   pauseFollowUpCadence,
   stopFollowUpCadence,
@@ -7067,6 +7068,16 @@ function buildPendingWatchAlertEntry(
   };
 }
 
+// How long the proactive cadence stays quiet after a watch alert has just gone out: a week, so we
+// don't chase a customer we literally just texted about their bike. The three watch-alert paths all
+// computed this identically off the wall clock; kept on the wall clock here so the un-stacking is
+// byte-for-byte behavior-preserving. The DECISION about what to do with it lives in
+// routeStateReducer.decideCadenceQuietWindow, which stays clock-free.
+const WATCH_ALERT_QUIET_DAYS = 7;
+function watchAlertQuietUntilIso(): string {
+  return new Date(Date.now() + WATCH_ALERT_QUIET_DAYS * 24 * 60 * 60 * 1000).toISOString();
+}
+
 // Deliver a conversation's capped-off watch alerts as ONE bundled text once the daily-cap window
 // has expired (Joe ruling 7/23: same-day extras queue, "remainder goes next day" — bundled).
 // Every entry is re-verified at delivery time: watch still active, unit still in the CURRENT feed
@@ -7143,16 +7154,12 @@ function deliverDuePendingWatchAlerts(
   recordConversationWatchAlert(conv, ctx.nowIso);
   setFollowUpMode(conv, "holding_inventory", "inventory_watch_match");
   setDialogState(conv, "inventory_watch_matched");
-  if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
-    conv.followUpCadence = undefined;
-    startFollowUpCadence(conv, ctx.nowIso, ctx.tz);
-  }
-  if (conv.followUpCadence && conv.followUpCadence.status === "active") {
-    const pauseUntil = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-    conv.followUpCadence.pausedUntil = pauseUntil;
-    conv.followUpCadence.pauseReason = "inventory_watch_match";
-    conv.followUpCadence.nextDueAt = pauseUntil;
-  }
+  applyCadenceQuietWindow(conv, {
+    trigger: "inventory_watch_alert",
+    quietUntilIso: watchAlertQuietUntilIso(),
+    anchorAtIso: ctx.nowIso,
+    timeZone: ctx.tz
+  });
   conv.updatedAt = ctx.nowIso;
   saveConversation(conv);
   recordRouteOutcome("manual", "inventory_watch_pending_alerts_delivered", {
@@ -7443,16 +7450,12 @@ async function processInventoryWatchlist(targetConvId?: string, opts?: { include
       recordConversationWatchAlert(conv, nowIso); // starts the one-text-per-day window
       setFollowUpMode(conv, "holding_inventory", "inventory_watch_match");
       setDialogState(conv, "inventory_watch_matched");
-      if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
-        conv.followUpCadence = undefined;
-        startFollowUpCadence(conv, nowIso, tz);
-      }
-      if (conv.followUpCadence && conv.followUpCadence.status === "active") {
-        const pauseUntil = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-        conv.followUpCadence.pausedUntil = pauseUntil;
-        conv.followUpCadence.pauseReason = "inventory_watch_match";
-        conv.followUpCadence.nextDueAt = pauseUntil;
-      }
+      applyCadenceQuietWindow(conv, {
+        trigger: "inventory_watch_alert",
+        quietUntilIso: watchAlertQuietUntilIso(),
+        anchorAtIso: nowIso,
+        timeZone: tz
+      });
       conv.updatedAt = nowIso;
       saveConversation(conv);
     }
@@ -7640,16 +7643,13 @@ async function notifyInventoryWatchersForAvailableItem(
     recordConversationWatchAlert(conv, nowIsoValue); // starts the one-text-per-day window
     setFollowUpMode(conv, "holding_inventory", opts?.reason ?? "inventory_watch_match");
     setDialogState(conv, "inventory_watch_matched");
-    if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
-      conv.followUpCadence = undefined;
-      startFollowUpCadence(conv, nowIsoValue, tz);
-    }
-    if (conv.followUpCadence && conv.followUpCadence.status === "active") {
-      const pauseUntil = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-      conv.followUpCadence.pausedUntil = pauseUntil;
-      conv.followUpCadence.pauseReason = opts?.reason ?? "inventory_watch_match";
-      conv.followUpCadence.nextDueAt = pauseUntil;
-    }
+    applyCadenceQuietWindow(conv, {
+      trigger: "inventory_watch_alert",
+      quietUntilIso: watchAlertQuietUntilIso(),
+      anchorAtIso: nowIsoValue,
+      timeZone: tz,
+      reason: opts?.reason ?? null
+    });
     conv.updatedAt = nowIsoValue;
     saveConversation(conv);
     notified += 1;
@@ -10977,16 +10977,12 @@ async function applySoftVisitCadenceWindow(conv: any, text: string, timeZone: st
     windowLabel: window?.label
   };
   if (!window) return false;
-  if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
-    startFollowUpCadence(conv, now, timeZone);
-  }
-  if (conv.followUpCadence?.status === "active") {
-    conv.followUpCadence.pausedUntil = window.reminderAt;
-    conv.followUpCadence.pauseReason = "soft_visit_window";
-    conv.followUpCadence.nextDueAt = window.reminderAt;
-    conv.followUpCadence.scheduleInviteCount = 0;
-    conv.followUpCadence.scheduleMuted = false;
-  }
+  applyCadenceQuietWindow(conv, {
+    trigger: "soft_visit_window",
+    quietUntilIso: window.reminderAt,
+    anchorAtIso: now,
+    timeZone
+  });
   if (conv.followUp?.mode !== "holding_inventory" && conv.followUp?.mode !== "manual_handoff") {
     setFollowUpMode(conv, "active", "soft_visit_window");
   }
