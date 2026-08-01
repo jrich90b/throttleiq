@@ -104,9 +104,13 @@ assert.match(report, /SILENCE \/ NO-REPLY/, "the report must have a silence sect
 assert.match(report, /held drafts/, "the report must count held drafts separately");
 const store = fs.readFileSync("services/api/src/domain/conversationStore.ts", "utf8");
 assert.match(store, /export function isUnansweredInboundConversation/, "the silence predicate must be exported");
+// Re-pinned 2026-08-01: clearing moved into the single referee releaseHeldDraft when draftHeld was
+// un-stacked from six clear-sites. Scoped to saveOperatorDraft specifically — a bare "does
+// releaseHeldDraft appear" check would pass even if THIS site stopped releasing, since other sites
+// call it too.
 assert.match(
   store,
-  /if \(\(conv as any\)\.draftHeld\) \(conv as any\)\.draftHeld = null;/,
+  /discardPendingDrafts\(conv, "operator_draft_replaced"\)[\s\S]{0,400}?releaseHeldDraft\(conv, "operator_draft"\)/,
   "saveOperatorDraft must clear a stale held marker"
 );
 

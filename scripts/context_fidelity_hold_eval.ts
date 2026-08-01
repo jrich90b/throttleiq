@@ -91,12 +91,24 @@ assert.ok(
 // marker + closes the task. A reply is a console log ("human"), a live SMS ("twilio"), or an email
 // ("sendgrid") — but NOT a draft_ai re-publish. (Regression guard: only "human" used to clear it, so a
 // real Twilio reply left the flag stuck — Nicholas Braun, 2026-06-24.)
+// Re-pinned 2026-08-01: the clearing moved into releaseHeldDraft (the single referee) when draftHeld
+// was un-stacked from six independent clear-sites. The BEHAVIOR this guards is unchanged and is now
+// asserted directly — appendOutbound releases on any real reply, and the helper closes the task —
+// rather than by matching the old inline source text.
+// Scoped to the appendOutbound site specifically: the guard and the release must sit TOGETHER. A
+// bare "does releaseHeldDraft appear anywhere" check passes even if THIS site stops releasing, because
+// the console-send site calls it too — verified by deleting this call and watching the assertion still
+// pass, which is why it is written this way.
 assert.ok(
   /CONTEXT_FIDELITY_HELD_TODO_MARKER/.test(store) &&
-    /providerKey === "human" \|\| providerKey === "twilio" \|\| providerKey === "sendgrid"/.test(store) &&
-    /conv\.draftHeld = null/.test(store) &&
-    /markTodoDone/.test(store),
-  "appendOutbound must clear draftHeld + close the held task on ANY real customer reply (console human, live twilio SMS, or sendgrid email) — not just provider 'human'"
+    /isRealReplyProvider\(providerKey\)\s*\)?\s*\{[\s\S]{0,200}?releaseHeldDraft\(conv, "real_reply"\)/.test(store),
+  "appendOutbound must release the hold on ANY real customer reply (console human, live twilio SMS, or sendgrid email) — not just provider 'human'"
+);
+// …and the single release helper is what clears the flag AND closes the paired task, so no caller can
+// get half of it right.
+assert.ok(
+  /export function releaseHeldDraft[\s\S]{0,600}draftHeld = null[\s\S]{0,400}markTodoDone/.test(store),
+  "releaseHeldDraft clears the marker and closes the held task together"
 );
 assert.ok(
   !/providerKey === "draft_ai"[^|]*draftHeld = null/.test(store),

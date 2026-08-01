@@ -492,7 +492,8 @@ import {
   POST_SALE_DAY_OFFSETS,
   inferDisplayWalkIn,
   inferWalkIn,
-  startPostSaleCadence
+  startPostSaleCadence,
+  releaseHeldDraft
 } from "./domain/conversationStore.js";
 import {
   getSchedulerConfig,
@@ -5684,8 +5685,7 @@ async function publishCustomerReplyDraft(args: {
     });
     return { ok: false, reason: "draft_quality_held", held: true };
   }
-  // A passing draft supersedes any prior held state on this conversation.
-  if (args.conv.draftHeld) args.conv.draftHeld = null;
+  releaseHeldDraft(args.conv, "ai_draft_passed"); // a passing draft supersedes any prior hold
 
   // Context-fidelity hold: score the about-to-publish draft for "answering out of context". Shadow logs
   // would-holds (CONTEXT_FIDELITY_HOLD_SHADOW). When CONTEXT_FIDELITY_HOLD_ENABLED is on, ENFORCE —
@@ -33012,7 +33012,7 @@ async function processDueFollowUpsUnlocked() {
       conv.heldDraftEscalatedAt = now.toISOString();
       // Clear the held limbo so the console shows a normal, replyable conversation (the task carries the
       // context). The customer's ask stands; the withheld weak draft is NOT restored — staff replies fresh.
-      (conv as any).draftHeld = null;
+      releaseHeldDraft(conv, "escalated_to_human");
       saveConversation(conv);
       heldDraftsEscalated += 1;
       recordRouteOutcome("manual", "held_draft_escalated_to_human", {
