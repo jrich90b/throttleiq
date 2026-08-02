@@ -386,6 +386,7 @@ import {
   isTruncatedDraftBody,
   type CadenceQualityGateDecision
 } from "./domain/draftQualityGate.js";
+import { resolveNoResponseTrace } from "./domain/noResponseTrace.js";
 import { daysSinceLastCustomerReply } from "./domain/cadenceQualityFacts.js";
 import {
   decideContextFidelityHold,
@@ -5392,29 +5393,16 @@ async function runNoResponseJudgeShadow(
     });
     if (!verdict) return;
     const decision = decideNoResponseJudge({ enabled: isNoResponseJudgeEnabled(), verdict });
-    // Log a wrongful silence (action != pass) OR a social-reciprocation opportunity (a warm closer
-    // the agent stayed silent on — surfaced separately so staff can decide whether to reciprocate).
-    const isSocialReciprocation = verdict.category === "social_reciprocation";
-    if (decision.action !== "pass" || isSocialReciprocation) {
+    // Which finding this is (wrongful silence vs a social-reciprocation opportunity) and whether to
+    // record it at all is a pure mapping — domain/noResponseTrace.ts, gradeable without an LLM.
+    const trace = resolveNoResponseTrace({ verdict, decision, inboundText: text });
+    if (trace) {
       recordDecisionTrace({
         scope,
-        stage:
-          decision.action !== "pass"
-            ? decision.live
-              ? "no_response.flag"
-              : "no_response.shadow"
-            : "no_response.social_reciprocation",
+        stage: trace.stage,
         convId: conv.id,
         leadKey: conv.leadKey,
-        detail: {
-          action: decision.action,
-          live: decision.live,
-          category: verdict.category,
-          shouldRespond: verdict.shouldRespond,
-          confidence: verdict.confidence ?? null,
-          reason: String(verdict.reason ?? "").slice(0, 180),
-          inboundPreview: text.slice(0, 140)
-        }
+        detail: trace.detail
       });
     }
     // STEP 1 is shadow-only: never produce a reply here, even when decision.live is true.
@@ -61174,6 +61162,10 @@ if (authToken && signature) {
         : (responseControlParse?.confidence ?? null)
       }
     );
+    // Shadow: a parser decided this turn wanted no reply (ack / response-control / "I'll send you a
+    // time"). This is the BIGGEST silence terminal in the live handler and it was unjudged, so a
+    // parser miss here produced silence that nothing ever looked at again.
+    void runNoResponseJudgeShadow(conv, String(event.body ?? ""), "live");
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
@@ -64444,6 +64436,10 @@ if (authToken && signature) {
     delete conv.emailDraft;
     saveConversation(conv);
     logRouteOutcome("short_ack_no_reply");
+    // Shadow: we read this as a bare "ok/thanks" and said nothing. Usually right — but this is a
+    // LEXICAL test, so the turn that is an ack AND a question ("ok thanks, what time do you close?")
+    // lands here too and gets silence. Judge it. See the coverage note on the judge itself.
+    void runNoResponseJudgeShadow(conv, String(event.body ?? ""), "live");
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
