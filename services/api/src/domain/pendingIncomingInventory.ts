@@ -341,6 +341,45 @@ export function isPendingIncomingInventoryNotifyTodoSummary(summary: string | nu
 }
 
 /**
+ * Does a REACHED voice attempt leave this task open? Pure gate for
+ * markOpenCallTodosDoneForCompletedVoiceAttempt, which closes EVERY open `reason: "call"` task on
+ * the conversation the moment a call connects — a blunt closer the task-fulfillment module's own
+ * header already calls out (taskFulfillmentAutoClose.ts).
+ *
+ * LIVE CASE (Joe Catalano, +17164324480, operator-reported "Should this have created a watch?"):
+ * his 2026 CVO Street Glide ships 8/25, and the arrival-notify task was correctly created and
+ * DATED off that arrival (dueAt 2026-08-25T13:00Z). On 8/1 at 14:53Z a call connected on that
+ * thread and one minute later the blunt closer marked the 8/25 reminder done — 24 days before the
+ * bike is due. The parser-first fulfillment judge had ALREADY read the same task at 12:27Z that
+ * morning and ruled `not_fulfilled` ("never communicated that the unit has arrived"); the blunt
+ * closer overrode it. From the operator's side nothing is left that fires when the bike lands, so
+ * the promise the dealer made ("I'll let you know as soon as it's here") dies silently.
+ *
+ * SCOPE — arrival-notify tasks that are STILL DATED IN THE FUTURE, nothing else. An ordinary
+ * call-back task ("Call requested: get off at three thirty", due tomorrow 9am, staff call today) is
+ * genuinely fulfilled by the call and must keep closing: 45 of the 102 early-closed call tasks in
+ * the live store are that pattern, and all but this one are ~1 day early. Once the arrival date has
+ * PASSED, a reached call closes the task exactly as it does today — the guard only protects the
+ * window while the unit is still in transit.
+ *
+ * FAIL DIRECTION: keeping it open leaves a task staff can close by hand (noise); closing it early
+ * loses the follow-through entirely and the customer is never told their bike arrived. Fail-safe is
+ * to KEEP — the same policy taskFulfillmentAutoClose states for its own uncertain verdicts. This is
+ * a side-effect/state gate on OUR OWN generated task summary, not customer comprehension, so
+ * deterministic is correct here per AGENTS.md.
+ */
+export function shouldVoiceAttemptKeepArrivalNotifyTaskOpen(input: {
+  summary?: string | null;
+  dueAt?: string | null;
+  nowMs: number;
+}): boolean {
+  if (!isPendingIncomingInventoryNotifyTodoSummary(input?.summary)) return false;
+  const dueAtMs = Date.parse(String(input?.dueAt ?? "").trim());
+  if (!Number.isFinite(dueAtMs)) return false; // undated ⇒ today's behavior, unchanged
+  return dueAtMs > input.nowMs;
+}
+
+/**
  * Pure dedup planner for the pending-incoming notify task. Given a conversation's OPEN todos,
  * pick the single survivor (the richest copy — longest summary, so any appended ask like a
  * parts/color question isn't lost; ties keep the first) and list the redundant copies to retire.
