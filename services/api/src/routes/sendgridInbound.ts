@@ -149,6 +149,8 @@ import {
   shouldRouteRoom58PriceHandoff
 } from "../domain/adfPolicy.js";
 import { isInternalNoteFollowUpTopic, buildWalkInSpecRecapClause } from "../domain/walkInFollowUpTopic.js";
+// SHADOW judge on this lane's drafts (Joe Step 2, 2026-08-02) — fire-and-forget, never awaited.
+import { runEmailLaneJudgeShadow } from "../domain/emailLaneJudgeShadow.js";
 import {
   isDealerLocationQuestionText,
   isFirstTimeRiderGuidanceParserAccepted,
@@ -4825,21 +4827,23 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       });
       if (recap.draft && recap.kind) {
         const recapProfile = await getDealerProfile();
+        const recapDraftText = buildPhoneLogRecapDraft({
+          firstName: normalizeDisplayCase(conv.lead?.firstName),
+          agentName: resolveDealerAgentName(recapProfile),
+          // Neutral generic on a missing profile, never a dealership literal — this ships to
+          // dealer #2 (portability ratchet, countAhHardcodes).
+          dealerName: recapProfile?.dealerName ?? GENERIC_DEALER_DISPLAY_NAME,
+          unitLabel: phoneLogRecapUnitLabel(conv.lead?.vehicle),
+          kind: recap.kind
+        });
         appendOutbound(
           conv,
           "dealership",
           leadKey,
-          buildPhoneLogRecapDraft({
-            firstName: normalizeDisplayCase(conv.lead?.firstName),
-            agentName: resolveDealerAgentName(recapProfile),
-            // Neutral generic on a missing profile, never a dealership literal — this ships to
-            // dealer #2 (portability ratchet, countAhHardcodes).
-            dealerName: recapProfile?.dealerName ?? GENERIC_DEALER_DISPLAY_NAME,
-            unitLabel: phoneLogRecapUnitLabel(conv.lead?.vehicle),
-            kind: recap.kind
-          }),
+          recapDraftText,
           "draft_ai"
         );
+        runEmailLaneJudgeShadow(conv, recapDraftText);
       }
     }
     // A duplicate/late phone-log re-sync must not downgrade a more-specific
@@ -5769,6 +5773,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       if (invariant.allow) {
         resubmissionAck = invariant.draftText;
         appendOutbound(conv, "dealership", leadKey, invariant.draftText, "draft_ai");
+        runEmailLaneJudgeShadow(conv, invariant.draftText);
       }
     }
     conv.updatedAt = new Date().toISOString();
@@ -6020,6 +6025,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       } else {
         // Delivery failed — never lose the message: fall back to the held draft the operator sends.
         appendOutbound(conv, "dealership", leadKey, invariant.draftText, "draft_ai", undefined, mediaUrls);
+        runEmailLaneJudgeShadow(conv, invariant.draftText);
         console.warn("[first_touch_autosend send failed -> held draft]", {
           convId: conv?.id ?? null,
           reason: sendResult.reason
@@ -6027,6 +6033,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       }
     } else {
       appendOutbound(conv, "dealership", leadKey, invariant.draftText, "draft_ai", undefined, mediaUrls);
+      runEmailLaneJudgeShadow(conv, invariant.draftText);
     }
     // Shadow log (behind FIRST_TOUCH_ACK_AUTOSEND_DEBUG): record the ACTUAL ack + risk context +
     // the decision so it stays reviewable message-by-message. Measures POTENTIAL (enabled:true) so
@@ -6513,6 +6520,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       return { ok: true, draft: conv.emailDraft };
     }
     appendOutbound(conv, "dealership", leadKey, invariant.draftText, "draft_ai", undefined, mediaUrls);
+    runEmailLaneJudgeShadow(conv, invariant.draftText);
     // Evidence stream (LOG-ONLY, behind FIRST_TOUCH_ACK_AUTOSEND_DEBUG — never sends). This is the
     // MAIN first-touch ack path and may carry LLM-composed text, so it ALWAYS stays a staff draft
     // and is NOT auto-send-eligible (isDeterministicReply:false → wouldSend honestly false). We log
