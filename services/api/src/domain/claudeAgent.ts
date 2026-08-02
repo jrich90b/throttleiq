@@ -1,4 +1,5 @@
 import type { AgentTask } from "./agentTaskStore.js";
+import { anthropicMessagesRequest } from "./anthropicRequest.js";
 
 export type ClaudeAgentResult =
   | {
@@ -57,27 +58,21 @@ export async function runClaudeAgentTask(task: AgentTask): Promise<ClaudeAgentRe
     .join("\n");
 
   try {
-    const resp = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01"
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens,
-        temperature: 0.2,
-        system,
-        messages: [{ role: "user", content: user }]
-      })
+    // Shared caller (anthropicRequest.ts) — one place handles a model's request-shape quirks.
+    const result = await anthropicMessagesRequest({
+      apiKey,
+      model,
+      maxTokens: max_tokens,
+      temperature: 0.2,
+      system,
+      messages: [{ role: "user", content: user }]
     });
-    const data: any = await resp.json().catch(() => null);
-    if (!resp.ok) {
+    const data: any = result.data;
+    if (!result.ok) {
       return {
         ok: false,
         reason: "api_error",
-        error: String(data?.error?.message ?? data?.message ?? `Anthropic request failed with ${resp.status}`)
+        error: String(data?.error?.message ?? data?.message ?? `Anthropic request failed with ${result.status}`)
       };
     }
     const summary = parseClaudeText(data);

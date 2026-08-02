@@ -9,10 +9,11 @@
  * model that didn't write it checks every change" — and only genuine disagreement / judgment calls escalate
  * to a human.
  *
- * reviewLoopFixWithLLM = the Claude reviewer (raw fetch + tool-use, no SDK; mirrors claudeAgent.ts).
+ * reviewLoopFixWithLLM = the Claude reviewer (tool-use via the shared anthropicRequest caller, no SDK).
  * decidePreShipGate = the PURE gate: ship only on a clean approve + green gates; otherwise ESCALATE. The
  * conservative default — no review available (no key) or any doubt — is ESCALATE, never silently ship.
  */
+import { anthropicMessagesRequest, extractAnthropicToolInput } from "./anthropicRequest.js";
 
 export type PreShipReviewParse = {
   verdict: "approve" | "hold";
@@ -138,24 +139,24 @@ export async function reviewLoopFixWithLLM(args: {
   ].join("\n");
 
   try {
-    const resp = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({
-        model,
-        // Room for real prose in reasons+concerns; at 700 the trailing explanation fields were the
-        // first thing a truncation dropped.
-        max_tokens: 1200,
-        temperature: 0,
-        tool_choice: { type: "tool", name: "pre_ship_review" },
-        tools: [{ name: "pre_ship_review", description: "Return the independent pre-ship review.", input_schema: PRE_SHIP_REVIEW_SCHEMA }],
-        messages: [{ role: "user", content: prompt }]
-      })
+    // Shared caller (anthropicRequest.ts): claude-opus-5 rejects `temperature`, and this fetch
+    // used to hardcode it — a 400 here returns null, which escalates EVERY ship as "no review
+    // available". Pointing ANTHROPIC_PRESHIP_MODEL at Opus without this would have switched
+    // auto-merge off across every routine with nothing saying why.
+    const result = await anthropicMessagesRequest({
+      apiKey,
+      model,
+      // Room for real prose in reasons+concerns; at 700 the trailing explanation fields were the
+      // first thing a truncation dropped.
+      maxTokens: 1200,
+      temperature: 0,
+      toolName: "pre_ship_review",
+      toolDescription: "Return the independent pre-ship review.",
+      inputSchema: PRE_SHIP_REVIEW_SCHEMA,
+      messages: [{ role: "user", content: prompt }]
     });
-    const data: any = await resp.json().catch(() => null);
-    if (!resp.ok) return null;
-    const block = Array.isArray(data?.content) ? data.content.find((b: any) => b?.type === "tool_use" && b?.name === "pre_ship_review") : null;
-    const p = block?.input;
+    if (!result.ok) return null;
+    const p = extractAnthropicToolInput(result.data, "pre_ship_review");
     if (!p || typeof p !== "object") return null;
     const oneOf = <T extends string>(v: any, allowed: T[], dflt: T): T => (allowed.includes(String(v) as T) ? (String(v) as T) : dflt);
     return {
