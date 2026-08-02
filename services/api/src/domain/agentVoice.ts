@@ -56,6 +56,74 @@ export function buildPersonaSelfIntroPattern(agentName: string | null | undefine
 }
 
 /**
+ * Every self-intro shape this codebase actually emits, matched for ONE given name:
+ *   `buildAgentIntroPhrase` → "it's {name} over at {dealer}"  (also "it's {name} at …")
+ *   the ADF/manual openers    → "This is {name} at {dealer}"
+ *   older hand-written copy   → "I'm {name} at {dealer}"
+ * Anchored on the dealer clause (`at`/`over at`) for the "it's"/"I'm" shapes on purpose: a bare
+ * "it's Mike" also matches "it's Mike's bike", and this name ends up SIGNED ON A TEXT TO THE
+ * CUSTOMER. Missing an intro is harmless (the caller keeps today's answer); matching the wrong
+ * token is not — so the pattern is deliberately narrow.
+ */
+export function buildAgentSelfIntroPattern(agentName: string | null | undefined): RegExp | null {
+  const clean = String(agentName ?? "").trim();
+  if (!clean) return null;
+  const escaped = clean
+    .split(/\s+/)
+    .map(part => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("\\s+");
+  const tail = /\w$/.test(clean) ? "\\b" : "";
+  return new RegExp(`\\b(?:this is\\s+${escaped}${tail}|(?:it'?s|i'?m)\\s+${escaped}${tail}\\s+(?:over\\s+)?at\\b)`, "i");
+}
+
+/**
+ * Has this customer already been introduced BY NAME to the rep who owns the thread?
+ *
+ * THE MISS (agent-watch, 2026-08-02). `resolveConversationAgentName` hands the thread to the
+ * `leadOwner` only when the thread is a walk-in or a manual takeover. On an ordinary lead the owner
+ * often introduced themselves anyway — through the CRM, an imported history row, or a hand-sent
+ * text — and those rows carry no `actorUserName`, so the historic-backfill scan skips them and the
+ * next draft signs with the configured persona instead. The customer heard "This is {owner} at …"
+ * in May and gets "it's {persona} over at …" in August, on the same thread. 26 threads in the
+ * americanharley store are in that state, and the live quality judge flags the flip as a real
+ * defect ("introduces a new staff name inconsistent with prior thread") — it was the single most
+ * common self-heal reason on 8/1-8/2.
+ *
+ * The evidence bar is deliberately high, because the return value gets SIGNED ON A CUSTOMER TEXT:
+ *  - the name must be the thread's OWN `leadOwner` — never a name scraped out of free text, so a
+ *    stray capitalized token can never become the sender;
+ *  - the intro must appear in an outbound the customer actually RECEIVED
+ *    (`keepCustomerReceivedOutbounds` — an unapproved `draft_ai` row is a proposal, not a message
+ *    the customer got; same lesson as `buildCustomerReceivedHistory`).
+ * No evidence → null → the caller keeps exactly today's behaviour. The fail direction is
+ * "stay with the persona", which is the status quo.
+ */
+export function resolveIntroducedOwnerFirstName(args: {
+  ownerName?: string | null;
+  messages:
+    | ReadonlyArray<{ direction?: string | null; provider?: string | null; body?: string | null } | null | undefined>
+    | null
+    | undefined;
+}): string | null {
+  const ownerRaw = String(args.ownerName ?? "").trim();
+  if (!ownerRaw || /^(our team|sales team|team)$/i.test(ownerRaw)) return null;
+  const ownerFirst = ownerRaw.split(/\s+/).filter(Boolean)[0] ?? "";
+  if (!ownerFirst) return null;
+  const messages = Array.isArray(args.messages) ? args.messages.filter(Boolean) : [];
+  if (!messages.length) return null;
+  // Match on the FIRST name alone: reps sign texts "This is Giovanni at …", never with a surname.
+  const introPattern = buildAgentSelfIntroPattern(ownerFirst);
+  if (!introPattern) return null;
+  const received = keepCustomerReceivedOutbounds(
+    messages as Array<{ direction?: string | null; provider?: string | null; body?: string | null }>
+  );
+  const introduced = received.some(
+    m => m?.direction === "out" && introPattern.test(String(m?.body ?? ""))
+  );
+  return introduced ? ownerFirst : null;
+}
+
+/**
  * Footer identity line for the public marketing-unsubscribe page: the configured
  * dealerName, else the neutral generic — never a hardcoded dealership literal.
  */
