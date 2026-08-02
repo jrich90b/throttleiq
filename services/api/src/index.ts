@@ -567,7 +567,7 @@ import {
   isCadenceValueGateEnabled,
   leadUnitConditionForOfferMatch,
   leadRiderTrainingEligibilityForOffer,
-  leadShowedMoneyInterest,
+  leadShowedMoneyInterest, leadFinanceDeclined,
   vehicleLabelForOfferMatch
 } from "./domain/nationalOffers.js";
 import {
@@ -15676,7 +15676,7 @@ async function buildCadenceRegeneratedDraft(
       customerEverEngaged: customerEngagedWithCadence(conv),
       // …and never quote RATES/PAYMENTS to a lead who never raised money themselves
       // (+16813891971, +12109976639) — same shared read as the live tick.
-      showedMoneyInterest: leadShowedMoneyInterest(conv),
+      showedMoneyInterest: leadShowedMoneyInterest(conv), financeDeclined: leadFinanceDeclined(conv),
       // Never pitch a held/sold unit's numbers (Joe ruling 2026-07-28, Jason Roorda) — same
       // shared read as the live tick.
       leadUnitUnavailable: await leadUnitUnavailableForValueGate(conv)
@@ -34309,7 +34309,8 @@ async function processDueFollowUpsUnlocked() {
         // …and never quote RATES/PAYMENTS to a lead who never raised money themselves
         // (+16813891971 "just shopping around", +12109976639 "cover the difference outright").
         // A straight discount still gets through. Same shared read as the regen builder.
-        showedMoneyInterest: leadShowedMoneyInterest(conv),
+        // …nor to one we already DECLINED for financing (+17163812367) — see filterOffersForFinanceDeclined.
+        showedMoneyInterest: leadShowedMoneyInterest(conv), financeDeclined: leadFinanceDeclined(conv),
         // Never pitch a held/sold unit's numbers (Joe ruling 2026-07-28, Jason Roorda
         // +17165104578) — same shared read as the regenerate cadence builder.
         leadUnitUnavailable: await leadUnitUnavailableForValueGate(conv)

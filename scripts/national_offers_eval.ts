@@ -28,6 +28,8 @@ import {
   filterOffersForMoneyInterest,
   offerQuotesFinancingTerms,
   leadShowedMoneyInterest,
+  leadFinanceDeclined,
+  filterOffersForFinanceDeclined,
   type NationalOffer
 } from "../services/api/src/domain/nationalOffers.ts";
 
@@ -106,6 +108,9 @@ eq("cond_empty_conv", C({}), "unknown");
 // …vs the two legitimate finance leads, which MUST keep getting offers:
 //   +17164812815 bucket finance_prequal, lastIntent pricing (she asked for the payment #)
 //   +17163812367 bucket finance_prequal (arrived on a credit application)
+// NOTE (2026-08-02): +17163812367 passes THIS gate and always should — he did raise money. He was
+// later declined, and 1f below is the separate gate that stops the rate quote. Interest and outcome
+// are different questions; don't collapse them into this one.
 // Signal is persisted structured state only — no new parser, no customer prose.
 const M = leadShowedMoneyInterest;
 eq("money_finance_prequal_bucket", M({ classification: { bucket: "finance_prequal" } }), true);
@@ -267,6 +272,67 @@ eq("prompt_hard_rule_new_bike_scope", /NEW motorcycles unless the offer EXPLICIT
 // exact negative few-shot so the matcher keeps refusing the same-family over-stretch.
 eq("prompt_hard_rule_model_specific_scope", /When an offer names SPECIFIC MODELS[\s\S]{0,200}NOT to other models in the SAME family/.test(llm), true);
 eq("prompt_fewshot_breakout_not_low_rider_offer", /"2026 Breakout"[\s\S]{0,120}Low Rider S\/ST[\s\S]{0,120}"applies":false/.test(llm), true);
+// --- 1f. DECLINED FINANCE: never re-quote a rate to a lead we already turned down ---------------
+// Production miss (operator-reported 2026-08-02, +17163812367 Curtis Samuel). He arrived on an HDFS
+// credit application; on 7/23 Joe texted "Looks like we did not get an approval through Harley...
+// not enough credit history. Is a qualified co-signer an option?" and Curtis replied "No". The
+// thread's financeOutcome went to {"status":"declined","updatedAt":"2026-07-23T16:16:05.182Z"}.
+// The cadence then sent the used-finance promo TWICE (nationalOfferTouches 7/25 15:00Z and 7/26
+// 14:53Z): "that 2018 Street Glide qualifies for used financing starting at 7.29% APR with $0 down".
+// Every prior pre-filter passed him — engaged, bucket finance_prequal (so leadShowedMoneyInterest is
+// TRUE, and 1e above deliberately pins him as a legitimate finance lead), used unit. Interest was
+// never the issue; the OUTCOME was. Fail direction: suppress → quiet, never a fabricated approval.
+const FD = leadFinanceDeclined;
+eq("declined_reads_persisted_outcome", FD({ financeOutcome: { status: "declined" } }), true);
+eq("declined_curtis_real_persisted_state", FD({
+  financeOutcome: { status: "declined", updatedAt: "2026-07-23T16:16:05.182Z", reasonText: "asked the customer if they had a co-signer" }
+} as any), true);
+eq("approved_is_not_declined", FD({ financeOutcome: { status: "approved" } }), false);
+// Still working the deal — the lender is waiting on documents, not a turn-down. Its own checklist
+// task owns that lane; widening the gate here would silence a live finance conversation.
+eq("needs_more_info_is_not_declined", FD({ financeOutcome: { status: "needs_more_info" } }), false);
+eq("no_finance_outcome_is_not_declined", FD({}), false);
+eq("null_finance_outcome_is_not_declined", FD({ financeOutcome: null }), false);
+
+// The filter drops rate/payment offers for a declined lead; a straight discount still passes,
+// because the bike really is cheaper and that says nothing about their credit.
+const OFFERS_MIXED = [
+  { title: "Used Motorcycle Financing (7.29% APR)", offerType: "financing_apr" },
+  { title: "Grand American Touring Monthly Payment", offerType: "monthly_payment" },
+  { title: "$1,000 Customer Cash", offerType: "customer_cash" }
+] as NationalOffer[];
+eq(
+  "declined_lead_sees_only_straight_discounts",
+  filterOffersForFinanceDeclined(OFFERS_MIXED, true).map(o => o.title),
+  ["$1,000 Customer Cash"]
+);
+eq(
+  "not_declined_lead_sees_every_offer",
+  filterOffersForFinanceDeclined(OFFERS_MIXED, false).map(o => o.title),
+  OFFERS_MIXED.map(o => o.title)
+);
+// The exact promo Curtis got, against his exact state — the regression this eval exists to stop.
+eq(
+  "curtis_never_sees_the_729_apr_promo_again",
+  filterOffersForFinanceDeclined(
+    [{ title: "Used Motorcycle Financing (7.29% APR)", offerType: "financing_apr" } as NationalOffer],
+    FD({ financeOutcome: { status: "declined" } })
+  ).length,
+  0
+);
+// Self-releasing: an approval restores the offers, so a rescued deal is not silenced forever.
+eq(
+  "approval_restores_offers",
+  filterOffersForFinanceDeclined(OFFERS_MIXED, FD({ financeOutcome: { status: "approved" } })).length,
+  3
+);
+// FAIL DIRECTION: an unclassifiable offer is treated as quoting money, so it is dropped too.
+eq(
+  "declined_lead_drops_unclassified_offer",
+  filterOffersForFinanceDeclined([{ title: "Mystery", offerType: "" } as NationalOffer], true).length,
+  0
+);
+
 const indexSrc = fs.readFileSync(path.join(process.cwd(), "services/api/src/index.ts"), "utf8");
 eq(
   "both_paths_pass_vehicle_condition",
@@ -278,10 +344,17 @@ eq(
   (indexSrc.match(/riderEligibility: leadRiderTrainingEligibilityForOffer\(conv\)/g) ?? []).length,
   2
 );
+// Route parity: the live follow-up tick AND /conversations/:id/regenerate must both read the
+// declined outcome, or a regenerated draft re-quotes the rate the live tick refused to send.
+eq(
+  "both_paths_pass_finance_declined",
+  (indexSrc.match(/financeDeclined: leadFinanceDeclined\(conv\)/g) ?? []).length,
+  2
+);
 
 if (failures.length) {
   console.error("FAIL national_offers eval:");
   for (const f of failures) console.error(f);
   process.exit(1);
 }
-console.log("PASS national_offers eval — value gate (11 decision cases), NEW-bike promo scope (condition resolver + offer filter + two-path wiring), rider-training grad scope (offer detector + lead eligibility + filter + two-path wiring), HTML strip, dark-by-default flag + parser source guards");
+console.log("PASS national_offers eval — value gate (11 decision cases), NEW-bike promo scope (condition resolver + offer filter + two-path wiring), rider-training grad scope (offer detector + lead eligibility + filter + two-path wiring), declined-finance scope (outcome reader + offer filter + two-path wiring), HTML strip, dark-by-default flag + parser source guards");

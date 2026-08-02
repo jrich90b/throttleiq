@@ -126,6 +126,11 @@ export async function findNationalOfferForVehicle(
      * only non-financing offers (a straight discount) can apply.
      */
     showedMoneyInterest?: boolean;
+    /**
+     * The lead's finance application was DECLINED (leadFinanceDeclined). Omitted = not declined.
+     * A declined lead never sees an offer that quotes financing terms (2026-08-02, +17163812367).
+     */
+    financeDeclined?: boolean;
   }
 ): Promise<NationalOfferMatch | null> {
   if (!isNationalOffersEnabled()) return null;
@@ -139,16 +144,21 @@ export async function findNationalOfferForVehicle(
   //   never sees a Riding Academy graduate offer (the +17164812815 grad-APR miss).
   // - Money scope (2026-08-01): a lead who never raised financing/payments/budget themselves only
   //   sees straight discounts, never an offer quoting a rate or a monthly payment.
-  const offers = filterOffersForMoneyInterest(
-    filterOffersForRiderEligibility(
-      filterOffersForLeadCondition(
-        filterOffersForDedup(await getNationalOffers(), opts?.excludeTitles ?? []),
-        condition
+  // - DECLINED scope (2026-08-02): a lead we already turned down for financing never sees a rate
+  //   or payment offer again (the +17163812367 miss — see filterOffersForFinanceDeclined).
+  const offers = filterOffersForFinanceDeclined(
+    filterOffersForMoneyInterest(
+      filterOffersForRiderEligibility(
+        filterOffersForLeadCondition(
+          filterOffersForDedup(await getNationalOffers(), opts?.excludeTitles ?? []),
+          condition
+        ),
+        opts?.riderEligibility ?? "not_evident"
       ),
-      opts?.riderEligibility ?? "not_evident"
+      // Omitted = never raised money = only straight discounts survive (fail toward quiet).
+      !!opts?.showedMoneyInterest
     ),
-    // Omitted = never raised money = only straight discounts survive (fail toward quiet).
-    !!opts?.showedMoneyInterest
+    !!opts?.financeDeclined
   );
   if (offers.length === 0) return null;
   const match = await matchNationalOfferToLeadWithLLM({
@@ -415,6 +425,47 @@ export function filterOffersForMoneyInterest(
   return offers.filter(o => !offerQuotesFinancingTerms(o));
 }
 
+// === Declined-finance gate (2026-08-02, operator-reported +17163812367) ==========================
+// Curtis Samuel arrived on an HDFS credit application. On 7/23 Joe told him "we did not get an
+// approval through Harley... not enough credit history" and asked about a co-signer; Curtis replied
+// "No", and the thread's financeOutcome went to "declined". The cadence then texted him the used
+// finance promo TWICE — 7/25 and again 7/26 ("that 2018 Street Glide qualifies for used financing
+// starting at 7.29% APR with $0 down"). Every existing pre-filter passed him: he is engaged, his
+// bucket is finance_prequal so leadShowedMoneyInterest is true, and the unit is used.
+//
+// The miss is that "raised money themselves" is a question about INTEREST, and this is a question
+// about OUTCOME. Quoting a rate to someone we have already turned down reads as though we forgot the
+// conversation. A straight discount is still perfectly sayable — the bike is still cheaper — so the
+// gate is scoped to offers that quote financing terms, exactly like the money-interest gate.
+//
+// FAIL DIRECTION: suppress → the cadence stays quiet (or finds another value trigger); it never
+// invents an approval. Self-releasing: financeOutcome.status flipping to "approved" restores offers.
+
+/**
+ * Was this lead's finance application DECLINED? Reads only persisted structured state — the
+ * financeOutcome the outcome parser already wrote (status/updatedAt/reasonText), never a fresh
+ * read of customer prose. "needs_more_info" is deliberately NOT declined: the lender is still
+ * working the deal, and that lane already has its own checklist task.
+ */
+export function leadFinanceDeclined(conv: {
+  financeOutcome?: { status?: string } | null;
+}): boolean {
+  return String(conv?.financeOutcome?.status ?? "").trim().toLowerCase() === "declined";
+}
+
+/**
+ * A lead we already declined for financing never sees an offer that quotes financing terms; a
+ * straight discount still passes. Deterministic pre-filter ahead of the LLM matcher, the same
+ * shape as the condition / rider-eligibility / money-interest filters above.
+ */
+export function filterOffersForFinanceDeclined(
+  offers: NationalOffer[],
+  financeDeclined: boolean
+): NationalOffer[] {
+  if (!financeDeclined) return offers;
+  return offers.filter(o => !offerQuotesFinancingTerms(o));
+}
+
 /** The lead's bike-of-interest label for offer matching (lead vehicle, else the inventory watch). */
 export function vehicleLabelForOfferMatch(conv: { lead?: any; inventoryWatch?: any }): string {
   const v = (conv?.lead?.vehicle ?? {}) as any;
@@ -504,6 +555,11 @@ export async function evaluateProactiveCadenceValueGate(args: {
    * engaged, and still had no business being quoted a rate.
    */
   showedMoneyInterest?: boolean;
+  /**
+   * The lead's finance application was DECLINED (leadFinanceDeclined). Omitted = not declined.
+   * A declined lead never sees a rate/payment offer again (+17163812367, operator-reported 8/2).
+   */
+  financeDeclined?: boolean;
 }): Promise<CadenceValueGateResult> {
   if (!isCadenceValueGateEnabled()) return { action: "send", reason: "gate_disabled" };
   if (args.isPostSale) return { action: "send", reason: "post_sale_exempt" };
@@ -525,7 +581,8 @@ export async function evaluateProactiveCadenceValueGate(args: {
         firstName: args.firstName,
         condition: args.vehicleCondition ?? "unknown",
         riderEligibility: args.riderEligibility ?? "not_evident",
-        showedMoneyInterest: !!args.showedMoneyInterest
+        showedMoneyInterest: !!args.showedMoneyInterest,
+        financeDeclined: !!args.financeDeclined
       })
     : null;
   const decision = decideProactiveCadenceValue({
