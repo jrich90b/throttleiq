@@ -3657,3 +3657,178 @@ export function decideAppointmentTeardown(
       : `appointment torn down (${cause}) — record fully cleared`
   };
 }
+
+// ===================================================================================================
+// THE APPOINTMENT OUTCOME RECORD — "what happened at the visit, and may a new answer overwrite the
+// one already on the record?"
+//
+// WHAT WAS FIGHTING. Nine independent places wrote `appointment.staffNotify.outcome` (and its
+// dealer-ride twin), each hand-building the record and each assigning it WHOLESALE:
+//
+//   the conversation-header outcome form      staff picks primary + secondary in the console
+//   the public tokenized outcome form         the link we text the rep after the appointment
+//   the todo-done modal                       staff closes the appointment todo with an outcome
+//   the dealer-ride staff SMS reply           the rep answers the outcome prompt by text
+//   the finance signal, declined              a parsed finance call/console result
+//   the finance signal, needs-more-info       same lane, other branch
+//   the finance signal, approved              same lane, other branch
+//   the context-note booking read             a staff note read as cancel / reschedule
+//   the context-note outcome read             a staff note read as an attendance outcome
+//
+// Nobody arbitrated, and the records drifted into two different SHAPES. Three writers run the
+// input through normalizeAppointmentOutcomeInput() and store the modern pair
+// (`primaryStatus` + `secondaryStatus`) alongside the legacy `status`. The other six store a bare
+// `{ status, note, updatedAt }` and no pair at all.
+//
+// THE DISAGREEMENT THAT MATTERS (preserved here, NOT fixed here). Every downstream reader of
+// attendance — isShowedAppointmentOutcome, isMissedAppointmentOutcome / canAssertMissedAppointment
+// above, and customerVisitConfirmed in visitFraming.ts — asks `primaryStatus` FIRST and only falls
+// back to the legacy `status` when the pair is blank. Because each writer replaces the whole
+// object, a bare-shape write silently DELETES a recorded attendance and hands the question back to
+// the legacy fallback, which can answer differently:
+//
+//   staff clicks "Did not show"       -> { status: "no_show", primaryStatus: "did_not_show", ... }
+//   a finance call then lands declined-> { status: "financing_declined", note, updatedAt }
+//   the attendance answer flips MISSED -> SHOWED, because the legacy showed-family list contains
+//   "financing_declined". The recorded no-show is gone and canAssertMissedAppointment stops being
+//   able to acknowledge the miss to the customer.
+//
+// The reverse runs too: a context note parsed as "cancelled" lands on a recorded showed/sold and
+// the attendance answer flips SHOWED -> MISSED, which is licence to tell a customer who bought a
+// bike that he failed to appear.
+//
+// The readers do not even agree with each other about the resulting record: customerVisitConfirmed
+// in visitFraming.ts accepts only showed/showed_up from the legacy field, so the same overwritten
+// record reads SHOWED here and NOT-A-VISIT there. Pinned in appointment_outcome_record:eval.
+//
+// TODAY'S BEHAVIOR IS PRESERVED EXACTLY: `record` is still the incoming write, whole, with no
+// carry-forward. What changes is that the referee now NAMES the collision it just performed
+// (`attendanceBefore` / `attendanceAfter` / `attendanceFlipped` / `dropsRecordedAttendance`), so it
+// is visible and pinned instead of buried in nine branches. Fixing it is a behavior change and
+// belongs to Joe.
+//
+// FAIL DIRECTION: this referee only SHAPES a record staff explicitly asked us to store — it never
+// invents, suppresses or infers an outcome, and an unrecognized status keeps the caller's value
+// verbatim. Its attendance readout mirrors the two helpers above exactly, so "unknown" (blank/
+// unrecognized) is reported rather than guessed, and a blank never counts as a flip.
+//
+// PURE and CLOCK-FREE: the caller passes `nowIso`.
+// ===================================================================================================
+
+/** Where an outcome write came from. Named so a divergence can be attributed to a lane. */
+export type AppointmentOutcomeSource =
+  | "staff_console_header"
+  | "staff_outcome_link"
+  | "staff_todo_modal"
+  | "staff_outcome_sms"
+  | "finance_signal"
+  | "context_note_booking"
+  | "context_note_outcome";
+
+/** What every downstream attendance reader ultimately resolves the record to. */
+export type AppointmentAttendanceAnswer = "showed" | "missed" | "unknown";
+
+export type AppointmentOutcomeRecordInput = {
+  source: AppointmentOutcomeSource;
+  /** The record already on the conversation, if any. Read-only — never mutated. */
+  existing?: { status?: string | null; primaryStatus?: string | null; secondaryStatus?: string | null } | null;
+  incoming: {
+    status: string;
+    /** Only the three normalized lanes supply the modern pair; the rest legitimately omit it. */
+    primaryStatus?: string | null;
+    secondaryStatus?: string | null;
+    note?: string | null;
+  };
+  nowIso: string;
+};
+
+export type AppointmentOutcomeRecordDecision = {
+  /** The record to store. Byte-for-byte what the nine sites wrote before — full replacement. */
+  record: {
+    status: string;
+    primaryStatus?: string;
+    secondaryStatus?: string;
+    note?: string;
+    updatedAt: string;
+  };
+  /** Attendance as the readers would answer it on the OLD record. */
+  attendanceBefore: AppointmentAttendanceAnswer;
+  /** Attendance as they will answer it on the NEW one. */
+  attendanceAfter: AppointmentAttendanceAnswer;
+  /** A recorded attendance is being replaced by a DIFFERENT recorded attendance. */
+  attendanceFlipped: boolean;
+  /** The old record carried an explicit primaryStatus and this write does not — the pair is lost. */
+  dropsRecordedAttendance: boolean;
+  /** True when this lane stores the bare legacy shape rather than the normalized pair. */
+  bareLegacyShape: boolean;
+  divergence: string | null;
+  why: string;
+};
+
+/**
+ * Resolves a stored outcome to the single question "did the customer show up?", exactly the way
+ * isShowedAppointmentOutcome / isMissedAppointmentOutcome above do it: explicit `primaryStatus`
+ * wins outright, the legacy `status` is consulted only when the pair is blank, and anything
+ * unrecognized stays "unknown" rather than being guessed.
+ */
+export function readAppointmentAttendance(
+  outcome: { status?: string | null; primaryStatus?: string | null } | null | undefined
+): AppointmentAttendanceAnswer {
+  if (!outcome) return "unknown";
+  const primary = String(outcome.primaryStatus ?? "").trim().toLowerCase();
+  const legacy = String(outcome.status ?? "").trim().toLowerCase();
+  if (isShowedAppointmentOutcome(primary || null, legacy || null)) return "showed";
+  if (isMissedAppointmentOutcome(primary || null, legacy || null)) return "missed";
+  return "unknown";
+}
+
+export function decideAppointmentOutcomeRecord(
+  input: AppointmentOutcomeRecordInput
+): AppointmentOutcomeRecordDecision {
+  const status = String(input.incoming.status ?? "").trim();
+  const primaryStatus = String(input.incoming.primaryStatus ?? "").trim();
+  const secondaryStatus = String(input.incoming.secondaryStatus ?? "").trim();
+  const note = String(input.incoming.note ?? "").trim();
+
+  // Full replacement — this is what all nine sites do today and what the un-stacking preserves.
+  const record: AppointmentOutcomeRecordDecision["record"] = {
+    status,
+    updatedAt: input.nowIso
+  };
+  if (primaryStatus) record.primaryStatus = primaryStatus;
+  if (secondaryStatus) record.secondaryStatus = secondaryStatus;
+  if (note) record.note = note;
+
+  const attendanceBefore = readAppointmentAttendance(input.existing ?? null);
+  const attendanceAfter = readAppointmentAttendance(record);
+  const attendanceFlipped =
+    attendanceBefore !== "unknown" &&
+    attendanceAfter !== "unknown" &&
+    attendanceBefore !== attendanceAfter;
+
+  const hadRecordedPair = !!String(input.existing?.primaryStatus ?? "").trim();
+  const dropsRecordedAttendance = hadRecordedPair && !primaryStatus;
+  const bareLegacyShape = !primaryStatus;
+
+  let divergence: string | null = null;
+  if (dropsRecordedAttendance && attendanceFlipped) {
+    divergence = "bare_outcome_write_flips_recorded_attendance";
+  } else if (dropsRecordedAttendance) {
+    divergence = "bare_outcome_write_drops_recorded_attendance";
+  } else if (attendanceFlipped) {
+    divergence = "outcome_write_flips_recorded_attendance";
+  }
+
+  return {
+    record,
+    attendanceBefore,
+    attendanceAfter,
+    attendanceFlipped,
+    dropsRecordedAttendance,
+    bareLegacyShape,
+    divergence,
+    why: divergence
+      ? `${input.source} overwrote a recorded outcome (${attendanceBefore} -> ${attendanceAfter})`
+      : `${input.source} recorded outcome "${status || "(blank)"}"`
+  };
+}
