@@ -123,29 +123,29 @@ for (const context of TAG_LANES) {
   }
 }
 
-// --- THE PRESERVED DIVERGENCE -------------------------------------------------------------------
-// The manual-context prompt resumes a STOPPED cadence, and one tagged for a different context.
-// This is today's live behavior and the un-stacking must not silently "fix" it.
+// --- THE RULING: every lane starts a fresh day one -----------------------------------------------
+// Joe, 2026-08-01: "Start fresh." The manual-context prompt used to resume a STOPPED chase, and one
+// tagged for a different context. Two things went wrong with that: the inherited next-touch date
+// could already be in the PAST, so the very next scheduler pass texted the customer immediately
+// instead of walking the day-one ramp; and a lead already nine touches deep sat at the give-up
+// threshold, so the "new" buyer chase sent ONE message and shut itself off.
 for (const context of PROMPT_LANES) {
   for (const [label, existing] of [
     ["a stopped chase", cadence({ contextTag: context, status: "stopped" })],
     ["a foreign-tagged chase", cadence({ contextTag: "finance_docs", status: "active" })]
   ] as const) {
     const decision = decideManualCadenceRestart({ context, existing, nowIso: NOW });
-    eq(decision.keepPlaceInLine, true, `${context}: ${label} KEEPS its place (divergence, as-is)`);
-    eq(decision.stepIndex, 4, `${context}: ${label} resumes mid-sequence (divergence, as-is)`);
+    eq(decision.keepPlaceInLine, false, `${context}: ${label} now STARTS OVER`);
+    eq(decision.stepIndex, 0, `${context}: ${label} => back to step 0, the full ramp restored`);
+    eq(decision.anchorAt, NOW, `${context}: ${label} => a fresh anchor`);
     eq(
       decision.keepNextDueAt,
-      "2026-07-20T13:00:00.000Z",
-      `${context}: ${label} carries the OLD due date forward (divergence, as-is)`
+      null,
+      `${context}: ${label} => the stale (possibly past-due) date is dropped, so no instant text`
     );
-    eq(
-      decision.divergence,
-      "manual_context_prompt_keeps_the_place_of_a_stopped_or_foreign_cadence",
-      `${context}: the disagreement is NAMED on the decision, not buried in a branch`
-    );
+    eq(decision.divergence, null, `${context}: the prompt-lane disagreement is gone`);
   }
-  // ...but a COMPLETED cadence starts over even here — that is the one thing all four lanes agree on.
+  // A completed cadence starts over too — the one thing every lane always agreed on.
   const done = decideManualCadenceRestart({
     context,
     existing: cadence({ contextTag: context, status: "completed" }),
@@ -153,6 +153,32 @@ for (const context of PROMPT_LANES) {
   });
   eq(done.keepPlaceInLine, false, `${context}: a completed chase always starts over`);
   eq(done.stepIndex, 0, `${context}: a completed chase restarts at step 0`);
+}
+
+// The one case that must STILL resume: the chase is live and running for this very reason. Pressing
+// the button again there is a no-op, not a reason to re-chase someone from day one.
+for (const context of PROMPT_LANES) {
+  const live = decideManualCadenceRestart({
+    context,
+    existing: cadence({ contextTag: context, status: "active" }),
+    nowIso: NOW
+  });
+  eq(live.keepPlaceInLine, true, `${context}: a LIVE same-reason chase keeps its place`);
+  eq(live.stepIndex, 4, `${context}: and its position in the sequence`);
+}
+
+// THE PROPERTY THE RULING IS REALLY ABOUT: after a staff restart that starts over, no lane can hand
+// back a next-touch date that is already in the past — that was the "texts them immediately" bug.
+for (const context of [...PROMPT_LANES, "manual_quote_delivered", "finance_docs"]) {
+  const decision = decideManualCadenceRestart({
+    context,
+    existing: cadence({ contextTag: "something_else", status: "stopped", nextDueAt: "2026-01-01T13:00:00.000Z" }),
+    nowIso: NOW
+  });
+  if (!decision.keepPlaceInLine) {
+    eq(decision.keepNextDueAt, null, `${context}: a stale due date never survives a fresh start`);
+    eq(decision.anchorAt, NOW, `${context}: the ramp is re-anchored to now`);
+  }
 }
 
 // --- THE SECOND PRESERVED DIVERGENCE: who carries the old record forward -------------------------
@@ -177,21 +203,23 @@ for (const context of PROMPT_LANES) {
   eq(promptLane.scheduleInviteCount, 0, "buyer_interest starts the invite counter at zero");
 }
 
-// --- the harm this divergence causes, stated as a fact the eval can hold ------------------------
-// A never-replied lead resumed at the taper threshold sends one touch and then ends. Pinning the
-// step the referee hands back is what makes that visible if anyone changes the rule.
+// --- the harm the ruling removes, stated as a fact the eval can hold ----------------------------
+// This was the sharpest version of the bug: a lead already at the disengagement-taper threshold got
+// its "new" buyer chase resumed AT that threshold, so it sent one touch and shut itself off. Staff
+// pressed the button and got a single message out of it. Now it starts at day one with the whole
+// ramp ahead of it.
 {
   const atTaper = decideManualCadenceRestart({
     context: "buyer_interest",
     existing: cadence({ contextTag: "manual_quote_delivered", status: "stopped", stepIndex: DISENGAGED_TAPER_AFTER_TOUCHES }),
     nowIso: NOW
   });
-  eq(
-    atTaper.stepIndex,
-    DISENGAGED_TAPER_AFTER_TOUCHES,
-    "the prompt lane resumes AT the disengagement-taper threshold — one touch then done"
+  eq(atTaper.stepIndex, 0, "a staff restart no longer lands on the taper threshold — full ramp restored");
+  ok(
+    atTaper.stepIndex < DISENGAGED_TAPER_AFTER_TOUCHES,
+    "and is strictly below the give-up point, so the chase cannot end after one message"
   );
-  ok(atTaper.divergence != null, "and it is reported as a divergence, not as normal business");
+  eq(atTaper.divergence, null, "with no disagreement left to report on this lane");
 }
 
 // --- FAIL DIRECTION: no cadence, junk state, or an unknown context all land on day one -----------
