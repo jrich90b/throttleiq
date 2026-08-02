@@ -493,8 +493,21 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 //   same closeout, down to a five-line hold-match condition duplicated character for character.
 //   Both now ask `decideSoldCloseout` through `applySoldCloseout`. `status` 6 -> 5, `closedReason`
 //   6 -> 5, `hold` 6 -> 5. A CODE change, not a measurement change.
+// 153 -> 152: the booking-ENDPOINT un-stacking (this commit). The three HTTP endpoints that create
+//   a calendar event (/scheduler/book, /public/booking/book, /conversations/:id/appointment) each
+//   ran their own copy of the same "write the confirmed record" field list; all three now ask
+//   `decideAppointmentBookingRecord` through `applyAppointmentBookingRecord`. A CODE change, not a
+//   measurement change.
+//   ONLY -1, and the reason is worth recording rather than hiding: THREE unrefereed writers went
+//   away, but removing those blocks un-collapsed two bare `appointment.updatedAt = <now>` stamps
+//   (index.ts ~39731, ~41973) that had been merged into them by the adjacency rule, so they now
+//   count as writers in their own right. `appointment` 15 -> 14. A modification timestamp cannot
+//   fight another writer over a DECISION — every writer stamps it and last-write-wins is exactly
+//   right — so this is the same BOOKKEEPING-counted-as-contention class the detector's CUT 3
+//   already fixed for value-preserving defaults. Filed as detector CUT 4; NOT folded in here,
+//   because a measurement change and a code change in one commit make the ratchet unreadable.
 // RATCHET DOWN ONLY.
-const UNREFEREED_WRITER_BASELINE = 153;
+const UNREFEREED_WRITER_BASELINE = 152;
 
 {
   const sourceFiles: SourceFile[] = [];

@@ -4615,6 +4615,111 @@ export function decideAppointmentConfirmRecord(
   };
 }
 
+// ===================================================================================================
+// A BOOKING ENDPOINT JUST CREATED THE CALENDAR EVENT — "what does the appointment record become?"
+//
+// The sibling question to `decideAppointmentConfirmRecord` above, and a DIFFERENT one. That referee
+// owns the three lanes where a CONVERSATION TURN stamps `confirmed`. This one owns the three HTTP
+// endpoints that book a real Google event and then write the record:
+//
+//   POST /scheduler/book                 the booking widget — the customer picked one of our slots
+//   POST /public/booking/book            the public booking link we text a lead
+//   POST /conversations/:id/appointment  the console — a salesperson books the lead in by hand
+//
+// WHAT WAS FIGHTING. All three ran the same eleven-line block of hand-maintained field writes, and
+// the lists had drifted apart. They agree on status/whenText/whenIso/updatedAt/acknowledged and the
+// three booked-event ids. They disagree on two things:
+//
+//   DIVERGENCE 1 — the `reschedulePending` latch. The staff lane CLEARS it; the two customer lanes
+//     leave it standing. That latch is what routes a lead's NEXT message into the reschedule arm
+//     (pendingRescheduleCarriesTurnIntent, and the regen twin at index.ts ~55663). So a lead who was
+//     mid-reschedule and then books a new time through the public link stays flagged as owing a
+//     rebook: their next message carrying any time-ish word can be answered as "let's find you
+//     another time" for the appointment they JUST made. Two downstream guards already carry local
+//     armor against exactly this "confirmed AND reschedule-pending" contradiction (the stale-latch
+//     comments at index.ts ~55689 and ~62982). The already-ruled principle from the sibling referee
+//     is that a lane holding a REAL calendar event clears the latch — all three of these do — but
+//     it is PRESERVED EXACTLY here, because this is a cleanup and not a fix. Named on the decision.
+//
+//   DIVERGENCE 2 — `matchedSlot`. The staff lane records the slot it booked; the two customer lanes
+//     do not, so their record cannot say which salesperson/calendar window was taken. Lower stakes
+//     (a breadcrumb, not something we assert to a customer). Also preserved and named.
+//
+// `confirmedBy` differs too — "salesperson" for the console lane, "customer" for the two the
+// customer drives — but that is the lane's INPUT, not a disagreement about the same question.
+//
+// FAIL DIRECTION. Refusing to stamp is the SAFE answer: an unrecorded booking costs a re-ask, while
+// a wrong "confirmed" tells a customer they are on the calendar when nothing holds the slot. An
+// unrecognized lane therefore refuses and the caller must not write.
+//
+// PURE + CLOCK-FREE: times, slots and event ids stay caller-side; this decides only the SHAPE.
+// ===================================================================================================
+
+export type AppointmentBookingLane =
+  | "scheduler_widget_booking" // POST /scheduler/book — customer picked a suggested slot
+  | "public_link_booking" // POST /public/booking/book — customer used the public booking link
+  | "staff_console_booking"; // POST /conversations/:id/appointment — a salesperson booked it
+
+/** The lanes the CUSTOMER drives. See `confirmedBy` above — an input, not a disagreement. */
+const APPOINTMENT_BOOKING_CUSTOMER_LANES = new Set<string>([
+  "scheduler_widget_booking",
+  "public_link_booking"
+]);
+
+export type AppointmentBookingRecordInput = {
+  lane: AppointmentBookingLane | string;
+  /** The stored `appointment.reschedulePending` latch, exactly as it is right now. */
+  reschedulePending?: boolean | null;
+};
+
+export type AppointmentBookingRecordDecision = {
+  /** Stamp the record. False means the caller must not write anything. */
+  record: boolean;
+  status: "confirmed";
+  confirmedBy: "customer" | "salesperson";
+  /** Customer's word on file — suppresses the 24h YES/NO confirmation reminder. */
+  acknowledged: boolean;
+  /** Clear the reschedule latch alongside the booking. Staff lane only today (divergence 1). */
+  clearReschedulePending: boolean;
+  /** Store which slot was taken. Staff lane only today (divergence 2). */
+  recordMatchedSlot: boolean;
+  /** Names the preserved disagreement when this lane is the odd one out for THIS input. */
+  divergence: string | null;
+  why: string;
+};
+
+export function decideAppointmentBookingRecord(
+  input: AppointmentBookingRecordInput
+): AppointmentBookingRecordDecision {
+  const lane = String(input.lane ?? "").trim();
+  const customerDriven = APPOINTMENT_BOOKING_CUSTOMER_LANES.has(lane);
+  const recognized = customerDriven || lane === "staff_console_booking";
+  const latched = input.reschedulePending === true;
+
+  return {
+    record: recognized,
+    status: "confirmed",
+    confirmedBy: customerDriven ? "customer" : "salesperson",
+    // All three booked a real calendar event against a time the customer or the rep chose, so the
+    // robotic "Reply YES to confirm" reminder would re-ask what was just settled.
+    acknowledged: true,
+    clearReschedulePending: recognized && !customerDriven,
+    recordMatchedSlot: recognized && !customerDriven,
+    // Divergence 1, named but NOT acted on — and only when the latch is actually standing, so the
+    // flag marks leads genuinely in the contradictory state rather than every customer booking.
+    divergence:
+      recognized && customerDriven && latched
+        ? "customer_lane_booking_leaves_the_reschedule_latch_standing"
+        : null,
+    why: !recognized
+      ? `unrecognized appointment-booking lane "${lane}" — refused, nothing may be stamped`
+      : customerDriven
+        ? `${lane}: the customer booked a real calendar event — their word is on file, but the ` +
+          "reschedule latch and the matched slot are left as-is"
+        : `${lane}: a salesperson booked the lead in — latch cleared and the taken slot recorded`
+  };
+}
+
 /**
  * Should a Traffic Log Pro walk-in note start an inventory watch?
  *

@@ -435,6 +435,37 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     }, ["decideAppointmentConfirmRecord"]);
   }
 
+  // Added 2026-08-02 with the booking-ENDPOINT un-stacking (the sibling of the block above: those
+  // are conversation turns, these are the three HTTP endpoints that book a real calendar event).
+  // Sampled once PER LANE, because the whole point of this referee is that the staff console lane
+  // clears the reschedule latch and records the matched slot while the two customer lanes do
+  // neither — a single sample would hide exactly that. PROBE: the lane is held fixed per sample and
+  // the only stored state consulted is the lead's actual reschedulePending latch, so between a
+  // baseline and a candidate run only the arbitration itself can move the fingerprint.
+  for (const lane of [
+    "scheduler_widget_booking",
+    "public_link_booking",
+    "staff_console_booking"
+  ] as const) {
+    add(`appointmentBookingRecord:${lane}`, conv => {
+      if (!conv?.appointment || typeof reducer.decideAppointmentBookingRecord !== "function") {
+        return undefined;
+      }
+      const decision = reducer.decideAppointmentBookingRecord({
+        lane, // PROBE
+        reschedulePending: conv.appointment?.reschedulePending
+      });
+      return {
+        record: decision.record,
+        confirmedBy: decision.confirmedBy,
+        acknowledged: decision.acknowledged,
+        clearReschedulePending: decision.clearReschedulePending,
+        recordMatchedSlot: decision.recordMatchedSlot,
+        divergence: decision.divergence
+      };
+    }, ["decideAppointmentBookingRecord"]);
+  }
+
   return registry;
 }
 
