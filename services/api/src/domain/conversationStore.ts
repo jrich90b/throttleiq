@@ -6,10 +6,13 @@ import {
   decideCadenceQuietWindow,
   decideHeldDraftRelease,
   decideAppointmentTeardown,
+  decideManualCadenceRestart,
   isRealReplyProvider,
   type CadenceQuietTrigger,
   type HeldDraftReleaseEvent,
-  type AppointmentTeardownCause
+  type AppointmentTeardownCause,
+  type ManualCadenceRestartContext,
+  type ManualCadenceRestartDecision
 } from "./routeStateReducer.js";
 import { fileURLToPath } from "node:url";
 import { dataPath } from "./dataDir.js";
@@ -4833,6 +4836,50 @@ export function scheduleLongTermFollowUp(
   };
   conv.updatedAt = nowIso();
   scheduleSave();
+}
+
+// The ONE place that rebuilds a lead's follow-up cadence when STAFF's own outreach turns the chase
+// back on (quote delivered, credit-app needs info, the manual-context prompt). Three sites used to
+// hand-build this object; they now all ask `decideManualCadenceRestart` whether the lead keeps its
+// place in the sequence — see that referee in routeStateReducer.ts for the two divergences it
+// preserves and why the safe default is to start over.
+//
+// Deliberately does NOT touch conv.updatedAt or call scheduleSave(): every caller sits inside a
+// larger handler that owns the save, and adding one here would change write timing.
+export function applyManualCadenceRestart(
+  conv: Conversation,
+  input: {
+    context: ManualCadenceRestartContext;
+    kind: "standard" | "engaged";
+    nowIso: string;
+    timeZone: string;
+  }
+): ManualCadenceRestartDecision {
+  const existing = conv.followUpCadence ?? null;
+  const decision = decideManualCadenceRestart({
+    context: input.context,
+    existing,
+    nowIso: input.nowIso
+  });
+  const carried = decision.carryExistingRecord ? existing : null;
+  conv.followUpCadence = {
+    ...((carried ?? {}) as Partial<FollowUpCadence>),
+    status: "active",
+    anchorAt: decision.anchorAt,
+    nextDueAt:
+      decision.keepNextDueAt ??
+      computeFollowUpDueAt(decision.anchorAt, FOLLOW_UP_DAY_OFFSETS[0], input.timeZone),
+    stepIndex: decision.stepIndex,
+    kind: input.kind,
+    contextTag: input.context,
+    contextTagUpdatedAt: input.nowIso,
+    pausedUntil: undefined,
+    pauseReason: undefined,
+    stopReason: undefined,
+    scheduleInviteCount: decision.scheduleInviteCount,
+    scheduleMuted: decision.scheduleMuted
+  } as FollowUpCadence;
+  return decision;
 }
 
 export function stopFollowUpCadence(conv: Conversation, reason: string) {

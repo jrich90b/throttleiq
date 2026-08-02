@@ -54,7 +54,10 @@ const CEILINGS: Ceiling[] = [
     // 71_667 -> 71_617. The appointment-teardown un-stacking: five hand-maintained copies of the
     // "un-book this appointment" field list replaced by applyAppointmentTeardown
     // (conversationStore) / decideAppointmentTeardown (routeStateReducer).
-    max: 71_604,
+    // 71_604 -> 71_576. The manual-outbound cadence-restart un-stacking: two of the three
+    // hand-built "does this lead keep its place in the follow-up sequence?" blocks replaced by
+    // applyManualCadenceRestart (conversationStore) / decideManualCadenceRestart (routeStateReducer).
+    max: 71_576,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

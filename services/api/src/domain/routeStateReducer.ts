@@ -3884,3 +3884,141 @@ export function decideAppointmentOutcomeRecord(
       : `${input.source} recorded outcome "${status || "(blank)"}"`
   };
 }
+
+// ===================================================================================================
+// THE MANUAL-OUTBOUND CADENCE RESTART — "when staff's own outreach turns the follow-up chase back on,
+// does this lead keep its place in the sequence, or start over at day one?"
+//
+// WHAT WAS FIGHTING. Three independent places rebuilt `followUpCadence` wholesale when a staff
+// action put a lead back on a context-tagged chase:
+//
+//   activateManualQuoteDeliveredFollowUp   staff texted the customer their quote   (manual_quote_delivered)
+//   the credit-app "needs info" handler    staff asked for missing finance docs     (finance_docs)
+//   the manual-context prompt              staff picked "seller intake" / "buyer interest"
+//
+// All three answer the same question — reuse the cadence already on the lead, or lay down a fresh
+// day-one one — and two of them answer it one way while the third answers it another.
+//
+// THE DISAGREEMENT THAT MATTERS (preserved here, NOT fixed here). The quote and finance lanes keep
+// a lead's place ONLY when the existing cadence is still ACTIVE and is already running for the SAME
+// context. Anything else — a stopped cadence, or one tagged for a different context — is treated as
+// finished business and the lead restarts at step 0 with a fresh anchor.
+//
+// The manual-context prompt keeps the place of ANY cadence that has not COMPLETED. So a lead whose
+// chase was stopped at step 9 (manual handoff, a hold, an opt-out reason since cleared) and who
+// staff then tag "buyer interest" comes back at step 9, carrying the OLD anchor and the OLD due
+// date. Two consequences, both real: the stale due date can be in the past, so the very next
+// scheduler tick fires immediately instead of on the day-one ramp staff just asked for; and
+// stepIndex 9 is at DISENGAGED_TAPER_AFTER_TOUCHES, so on a lead that never replied
+// advanceFollowUpCadence sends ONE touch and then completes the cadence as "disengaged_taper" —
+// the buyer-interest chase staff just switched on is over after a single message.
+//
+// FAIL DIRECTION. Keeping a place we should not keep resumes a lead deep in a sequence and can fire
+// an overdue touch immediately — it fails toward MESSAGING a customer. Starting over when we could
+// have resumed only costs the lead a few extra days of nurture. So the safe default for anything
+// unrecognized is START OVER: `keepPlaceInLine` is false unless a named rule says otherwise.
+// ===================================================================================================
+
+export type ManualCadenceRestartContext =
+  | "manual_quote_delivered" // staff sent the customer their quote
+  | "finance_docs" // staff asked for missing credit-app info
+  | "seller_photo_details_request" // manual-context prompt: seller intake
+  | "buyer_interest"; // manual-context prompt: buyer interest
+
+/** The lanes that today keep the place of ANY not-completed cadence, whatever it was tagged for. */
+const MANUAL_CONTEXT_PROMPT_CONTEXTS = new Set<string>([
+  "seller_photo_details_request",
+  "buyer_interest"
+]);
+
+export type ManualCadenceRestartInput = {
+  context: ManualCadenceRestartContext | string;
+  /** The cadence already on the lead, exactly as stored. */
+  existing?: {
+    status?: string | null;
+    contextTag?: string | null;
+    anchorAt?: string | null;
+    nextDueAt?: string | null;
+    stepIndex?: number | null;
+    scheduleInviteCount?: number | null;
+    scheduleMuted?: boolean | null;
+  } | null;
+  /** Caller-supplied clock — the referee never reads Date.now(). */
+  nowIso: string;
+};
+
+export type ManualCadenceRestartDecision = {
+  /** Resume where the lead left off (anchor + step + due date) instead of restarting at day one. */
+  keepPlaceInLine: boolean;
+  anchorAt: string;
+  stepIndex: number;
+  /** Non-null: keep this due date. Null: the caller computes a fresh day-one date from `anchorAt`. */
+  keepNextDueAt: string | null;
+  /**
+   * Carry the OLD cadence record's leftover fields (deferredMessage, lastSentAt/lastSentStep,
+   * usedVariants, and the schedule-invite counters) onto the new one. This is the SECOND preserved
+   * disagreement: the quote and finance lanes carry them from whatever cadence was there, even one
+   * they just decided was finished business; the manual-context prompt only carries them when it
+   * kept the lead's place.
+   */
+  carryExistingRecord: boolean;
+  scheduleInviteCount: number;
+  scheduleMuted: boolean;
+  /** Names the preserved disagreement when this lane is the odd one out for THIS input. */
+  divergence: string | null;
+  why: string;
+};
+
+export function decideManualCadenceRestart(
+  input: ManualCadenceRestartInput
+): ManualCadenceRestartDecision {
+  const context = String(input.context ?? "").trim();
+  const existing = input.existing ?? null;
+  const now = String(input.nowIso ?? "").trim();
+  const status = String(existing?.status ?? "").trim().toLowerCase();
+  const existingTag = String(existing?.contextTag ?? "").trim().toLowerCase();
+
+  const promptLane = MANUAL_CONTEXT_PROMPT_CONTEXTS.has(context);
+  /** The majority rule: still running, and running for THIS context. */
+  const sameContextActive = !!existing && status === "active" && existingTag === context.toLowerCase();
+  /** The manual-context prompt's looser rule: anything that has not completed. */
+  const anyNotCompleted = !!existing && status !== "completed";
+
+  const keepPlaceInLine = promptLane ? anyNotCompleted : sameContextActive;
+  const carryExistingRecord = promptLane ? keepPlaceInLine : !!existing;
+
+  const anchorAt = keepPlaceInLine ? String(existing?.anchorAt ?? "").trim() || now : now;
+  const storedStep = Number(existing?.stepIndex);
+  const stepIndex =
+    keepPlaceInLine && Number.isFinite(storedStep) ? Math.max(0, storedStep) : 0;
+  const keepNextDueAt = keepPlaceInLine
+    ? String(existing?.nextDueAt ?? "").trim() || null
+    : null;
+
+  const carrySource = carryExistingRecord ? existing : null;
+  const scheduleInviteCount = Number.isFinite(Number(carrySource?.scheduleInviteCount))
+    ? Number(carrySource?.scheduleInviteCount)
+    : 0;
+  const scheduleMuted = carrySource?.scheduleMuted === true;
+
+  const divergence =
+    promptLane && keepPlaceInLine && !sameContextActive
+      ? "manual_context_prompt_keeps_the_place_of_a_stopped_or_foreign_cadence"
+      : !promptLane && !!existing && !sameContextActive
+        ? "quote_and_finance_lanes_carry_a_finished_cadence_record_forward"
+        : null;
+
+  return {
+    keepPlaceInLine,
+    anchorAt,
+    stepIndex,
+    keepNextDueAt,
+    carryExistingRecord,
+    scheduleInviteCount,
+    scheduleMuted,
+    divergence,
+    why: keepPlaceInLine
+      ? `${context}: resumed the existing cadence at step ${stepIndex}`
+      : `${context}: started a fresh day-one cadence`
+  };
+}

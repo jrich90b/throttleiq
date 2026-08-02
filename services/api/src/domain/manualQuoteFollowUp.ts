@@ -1,6 +1,5 @@
 import {
-  computeFollowUpDueAt,
-  FOLLOW_UP_DAY_OFFSETS,
+  applyManualCadenceRestart,
   setFollowUpMode,
   type Conversation
 } from "./conversationStore.js";
@@ -31,35 +30,16 @@ export function activateManualQuoteDeliveredFollowUp(
 
   const updatedAt = String(opts?.nowIso ?? "").trim() || new Date().toISOString();
   const timezone = String(opts?.timezone ?? "").trim() || "America/New_York";
-  const existingCadence = conv.followUpCadence ?? null;
-  const reuseExistingQuoteCadence =
-    existingCadence?.status === "active" &&
-    String(existingCadence?.contextTag ?? "").trim().toLowerCase() === "manual_quote_delivered";
-  const anchorAt = reuseExistingQuoteCadence
-    ? String(existingCadence?.anchorAt ?? "").trim() || updatedAt
-    : updatedAt;
 
   setFollowUpMode(conv, "active", "manual_quote_delivered");
-  conv.followUpCadence = {
-    ...(existingCadence ?? {}),
-    status: "active",
-    anchorAt,
-    nextDueAt:
-      (reuseExistingQuoteCadence ? String(existingCadence?.nextDueAt ?? "").trim() : "") ||
-      computeFollowUpDueAt(anchorAt, FOLLOW_UP_DAY_OFFSETS[0], timezone),
-    stepIndex:
-      reuseExistingQuoteCadence && Number.isFinite(Number(existingCadence?.stepIndex))
-        ? Math.max(0, Number(existingCadence?.stepIndex))
-        : 0,
+  // Does this lead keep its place in the follow-up sequence? One referee decides for all three
+  // manual-outbound restart lanes — see decideManualCadenceRestart in routeStateReducer.ts.
+  applyManualCadenceRestart(conv, {
+    context: "manual_quote_delivered",
     kind: "engaged",
-    contextTag: "manual_quote_delivered",
-    contextTagUpdatedAt: updatedAt,
-    pausedUntil: undefined,
-    pauseReason: undefined,
-    stopReason: undefined,
-    scheduleInviteCount: existingCadence?.scheduleInviteCount ?? 0,
-    scheduleMuted: existingCadence?.scheduleMuted ?? false
-  };
+    nowIso: updatedAt,
+    timeZone: timezone
+  });
   conv.manualContext = {
     status: "inferred",
     contextTag: "manual_quote_delivered",
