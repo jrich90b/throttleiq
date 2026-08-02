@@ -22,6 +22,11 @@ import {
 } from "./inboundReplyActionPrompt.js";
 import { anthropicMessagesRequest, extractAnthropicText, extractAnthropicToolInput } from "./anthropicRequest.js";
 import { runJudgeShadowArm } from "./judgeShadowArm.js";
+import {
+  DRAFT_QUALITY_JUDGE_JSON_SCHEMA,
+  buildDraftQualityJudgePrompt,
+  coerceDraftQualityOverall
+} from "./draftQualityJudgePrompt.js";
 import { decideDraftModelArm, type DraftModelArm } from "./routeStateReducer.js";
 import { passesModelRelevanceGuard } from "./turnUnderstandingAuthority.js";
 import { appendParserCaptureRecord, buildParserCaptureRecord } from "./parserCapture.js";
@@ -4272,21 +4277,6 @@ const OPEN_CRITIC_JSON_SCHEMA: { [key: string]: unknown } = {
   }
 };
 
-const DRAFT_QUALITY_JUDGE_JSON_SCHEMA: { [key: string]: unknown } = {
-  type: "object",
-  additionalProperties: false,
-  required: ["intent_ok", "tone_ok", "disposition_ok", "safety_ok", "overall", "confidence", "reason", "steering"],
-  properties: {
-    intent_ok: { type: "boolean" },
-    tone_ok: { type: "boolean" },
-    disposition_ok: { type: "boolean" },
-    safety_ok: { type: "boolean" },
-    overall: { type: "string", enum: ["good", "needs_regenerate", "hold"] },
-    confidence: { type: "number" },
-    reason: { type: "string" },
-    steering: { type: "string" }
-  }
-};
 
 const RESPONSE_CONTROL_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   type: "object",
@@ -10796,61 +10786,16 @@ export async function judgeDraftQualityWithLLM(args: {
 
   const history = (args.history ?? []).slice(-8).map(h => `${h.direction}: ${h.body}`);
   const lead = args.lead ?? {};
-  const prompt = [
-    "You are a strict QA reviewer for a Harley dealership's AI sales agent. You read the DRAFT reply",
-    "the agent wants to send and the CUSTOMER message it is replying to, and you judge the draft on",
-    "four axes. Return only JSON matching the provided schema.",
-    "",
-    "Axes (each a boolean — true = passes):",
-    "- intent_ok: does the draft actually ADDRESS what the customer asked / needs this turn? A fluent",
-    "  reply that answers a DIFFERENT thing, dodges the question, or talks past the ask fails this.",
-    "- tone_ok: is it on-voice — warm, natural, like a helpful person texting a friend? Stiff/corporate",
-    "  (\"This is X. Per your inquiry...\"), robotic, or over-eager hard-sell fails. A 'Reply STOP' footer",
-    "  on SMS is fine. Sparing emoji is fine.",
-    "- disposition_ok: is it right for the customer's emotional state? If they're stressed, frustrated,",
-    "  grieving, or money-tight → acknowledge before pitching. If they're not ready / just looking →",
-    "  don't push a visit hard. If they're committed to a bike → don't undercut their choice. If they",
-    "  just want info → answer it, don't pivot to scheduling.",
-    "- safety_ok: no FABRICATED facts (a specific price, stock #, or availability the agent can't know),",
-    "  no confirming a booking that isn't booked, no compliance problem.",
-    "",
-    "overall:",
-    "- \"good\": all four axes pass; send as-is.",
-    "- \"needs_regenerate\": a recoverable problem — tone is off, it's awkward, it half-missed but the",
-    "  right info/approach is available; a re-draft would likely fix it.",
-    "- \"hold\": it answers the WRONG thing, fabricates a fact, or is unsafe — a re-draft of the same",
-    "  logic may not fix it; a human (or a code fix) should look. When unsure between regenerate and",
-    "  hold, prefer needs_regenerate.",
-    "",
-    "Rules:",
-    "- Judge the DRAFT, not the customer. Be fair: do not fail a draft that is genuinely fine.",
-    "- steering: one short instruction for a re-draft (e.g. \"answer the price question directly\",",
-    "  \"warm it up — drop the corporate intro\", \"acknowledge the stress before suggesting a visit\").",
-    "  Empty string when overall is good.",
-    "- confidence is 0..1; use >= 0.8 only when the verdict is clear.",
-    "",
-    "Examples:",
-    '- customer: "What is the asking price?" | draft: "Doing well—hope your day is going great too!" ->',
-    '  {"intent_ok":false,"tone_ok":true,"disposition_ok":false,"safety_ok":true,"overall":"hold",',
-    '   "confidence":0.95,"reason":"answers small talk, ignores the price question","steering":"answer the price question or say you will get the exact price"}',
-    '- customer: "what is the out the door price" | draft: "Great question — let me grab the exact',
-    '  out-the-door number from my manager and text it right over. Anything else you want me to include?" ->',
-    '  {"intent_ok":true,"tone_ok":true,"disposition_ok":true,"safety_ok":true,"overall":"good","confidence":0.9,"reason":"addresses the price ask without fabricating a number","steering":""}',
-    '- customer: "my wife just passed, putting this on hold" | draft: "No problem! Want to come in',
-    '  Saturday at 10 to check it out?" ->',
-    '  {"intent_ok":false,"tone_ok":false,"disposition_ok":false,"safety_ok":true,"overall":"hold","confidence":0.95,"reason":"pushes a visit on a grieving customer who asked to pause","steering":"acknowledge their loss with empathy, no scheduling, leave the door open"}',
-    '- customer: "is it still available" | draft: "Yes it is! When can you come in?" ->',
-    '  {"intent_ok":true,"tone_ok":true,"disposition_ok":true,"safety_ok":true,"overall":"good","confidence":0.82,"reason":"confirms availability and invites a visit appropriately","steering":""}',
-    "",
-    `Channel: ${args.channel ?? "sms"}`,
-    `Known lead: ${JSON.stringify({
-      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
-      source: lead?.source ?? null
-    })}`,
-    history.length ? `Recent thread:\n${history.join("\n")}` : "Recent thread: (none)",
-    `Customer's latest message: ${inbound}`,
-    `DRAFT reply to judge: ${draft}`
-  ].join("\n");
+  // Prompt surface lives in draftQualityJudgePrompt.ts so the backtest can run the EXACT same
+  // judgment against challenger models — a hand-copied prompt would drift (the PR #432 lesson).
+  const prompt = buildDraftQualityJudgePrompt({
+    draft,
+    inbound,
+    historyLines: history,
+    leadModel: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+    leadSource: lead?.source ?? null,
+    channel: args.channel
+  });
 
   const runParse = async (model: string): Promise<any | null> =>
     requestStructuredJson({
@@ -10869,9 +10814,7 @@ export async function judgeDraftQualityWithLLM(args: {
     (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
   if (!parsed) return null;
 
-  const overallRaw = String(parsed.overall ?? "").toLowerCase();
-  const overall: DraftQualityJudgeParse["overall"] =
-    overallRaw === "hold" || overallRaw === "needs_regenerate" ? overallRaw : "good";
+  const overall: DraftQualityJudgeParse["overall"] = coerceDraftQualityOverall(parsed.overall);
   const confidence =
     typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
       ? Math.max(0, Math.min(1, parsed.confidence))

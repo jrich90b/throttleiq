@@ -101,7 +101,10 @@ const CEILINGS: Ceiling[] = [
     // (domain/anthropicRequest.ts): the open critic's `requestStructuredJsonAnthropic` wrapper and
     // the draft A/B arm's inline fetch both left this file. That is where the claude-opus-5
     // `temperature` 400 was hiding twice over.
-    max: 16_654,
+    // 16_654 -> 16_597. The draft-quality judge's schema + prompt moved to
+    // domain/draftQualityJudgePrompt.ts so the model-comparison backtest can run the EXACT
+    // production judgment against challenger models instead of a hand-copy (the PR #432 drift).
+    max: 16_597,
     note: "every parser prompt + JSON schema; second-largest and on the same trajectory"
   }
 ];
