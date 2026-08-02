@@ -4547,3 +4547,130 @@ export function decideAppointmentConfirmRecord(
           "reminder stays armed and the latch is left as-is"
   };
 }
+
+/**
+ * Should a Traffic Log Pro walk-in note start an inventory watch?
+ *
+ * ONE referee for a question the ADF intake lane used to answer with its own inline
+ * `parser || regex` pair (`hasWatchIntentFromParser || hasWatchIntentFromText`,
+ * sendgridInbound.ts). Larry Godzich (+17164327329) is the miss that forced it: both arms ask
+ * whether the CUSTOMER asked to be notified, and a salesperson's third-person CRM log never does
+ * — see walkInInventoryWant.ts for the full write-up and the corpus numbers.
+ *
+ * TWO INDEPENDENT ARMS, and the order matters:
+ *   1. `explicitWatchPhrase` — the KEEP arm. A literal "watch for" / "let me know when" in the
+ *      note wins on its own, exactly as it does today. Nothing here may veto it: its fail
+ *      direction is a lead we promised to text never getting one.
+ *   2. the parser arm — additive only, and OFF until `wantParserEnabled`. It can add watches the
+ *      regex cannot see and can never remove one. Unclear, low-confidence, a non-`open_search`
+ *      lane, or the parser being absent all collapse to today's behavior.
+ *
+ * A family-only label ("trike models", "a Sportster") never mints a watch on the parser arm —
+ * we would be guessing which bike, so we ask (Joe ruling 2026-07-11 #4). The explicit arm keeps
+ * its existing pending-clarify path for that case downstream.
+ */
+export type WalkInInventoryWatchInput = {
+  /** A literal notify verb was found in the note. The KEEP arm — wins on its own. */
+  explicitWatchPhrase: boolean;
+  /**
+   * The legacy customer-speech intent arm (`parseIntentWithLLM` availability +
+   * explicit_request, already confidence-gated by the caller). Preserved so this referee is a
+   * behavior-preserving swap when the new arm is off.
+   */
+  intentParserWatchRequest: boolean;
+  /** `unmetInventoryWant` from the walk-in outcome parser. Only "open_search" is watchable. */
+  want?: string | null;
+  /** The note says the wanted bike is ours to sell/show right now. */
+  wantSatisfiableFromNote?: boolean | null;
+  /** `wantConfidence` from the same parse. Absent = no parser answer. */
+  wantConfidence?: number | null;
+  /** Floor for the parser arm. Deliberately higher than the parser's own accept floor. */
+  wantConfidenceMin: number;
+  /** Flag gate. False = shadow only: the verdict is computed and logged, never acted on. */
+  wantParserEnabled: boolean;
+  /** Resolved model label, if any. Blank = we could not name a bike. */
+  modelLabel?: string | null;
+  /** The label names a family, not a model ("trike", "Sportster") — ask rather than guess. */
+  familyOnlyModel?: boolean | null;
+  /** Accepted walk-in outcome state; a deal in motion is not a shopping list. */
+  walkInState?: string | null;
+};
+
+export type WalkInInventoryWatchDecision = {
+  /** Feeds the lane's existing `hasWatchIntent`. False = today's behavior in every branch. */
+  watch: boolean;
+  /** What the parser arm WOULD have said, regardless of the flag — this is the shadow signal. */
+  parserArmWouldWatch: boolean;
+  /** Which arm carried it: the KEEP regex, the legacy intent parser, or the want parser. */
+  source: "explicit_phrase" | "intent_parser" | "want_parser" | "none";
+  why: string;
+};
+
+/** Walk-in states that mean a deal is already in motion — never a reason to start shopping. */
+const WALK_IN_DEAL_PROGRESS_STATES = new Set<string>([
+  "deal_finalizing",
+  "deposit_left",
+  "sold_delivered",
+  "cosigner_required"
+]);
+
+export function decideWalkInInventoryWatchTurn(
+  input: WalkInInventoryWatchInput
+): WalkInInventoryWatchDecision {
+  const want = String(input.want ?? "").trim().toLowerCase();
+  const state = String(input.walkInState ?? "").trim().toLowerCase();
+  const confidence =
+    typeof input.wantConfidence === "number" && Number.isFinite(input.wantConfidence)
+      ? input.wantConfidence
+      : null;
+  const floor =
+    typeof input.wantConfidenceMin === "number" && Number.isFinite(input.wantConfidenceMin)
+      ? input.wantConfidenceMin
+      : 1;
+
+  // The parser arm, evaluated even when the flag is off so the shadow log has something to say.
+  const parserArmWouldWatch =
+    want === "open_search" &&
+    input.wantSatisfiableFromNote !== true &&
+    confidence !== null &&
+    confidence >= floor &&
+    !!String(input.modelLabel ?? "").trim() &&
+    input.familyOnlyModel !== true &&
+    !WALK_IN_DEAL_PROGRESS_STATES.has(state);
+
+  if (input.explicitWatchPhrase) {
+    return {
+      watch: true,
+      parserArmWouldWatch,
+      source: "explicit_phrase",
+      why: "the note carries an explicit notify verb — the KEEP arm, unchanged and never vetoed"
+    };
+  }
+  if (input.intentParserWatchRequest) {
+    return {
+      watch: true,
+      parserArmWouldWatch,
+      source: "intent_parser",
+      why: "the customer-speech intent parser read an explicit availability request"
+    };
+  }
+  if (parserArmWouldWatch && input.wantParserEnabled) {
+    return {
+      watch: true,
+      parserArmWouldWatch,
+      source: "want_parser",
+      why: `staff note records an unmet open search for "${String(input.modelLabel).trim()}" we cannot fill today`
+    };
+  }
+
+  return {
+    watch: false,
+    parserArmWouldWatch,
+    source: "none",
+    why: parserArmWouldWatch
+      ? "want parser would watch, but the flag is off — shadow only, today's behavior stands"
+      : want === "open_search"
+        ? "open search, but it did not clear the guards (confidence / model / family-only / deal in motion / already ours)"
+        : `no watchable want (${want || "unclassified"}) and no explicit notify verb`
+  };
+}

@@ -64,11 +64,55 @@ function referencedExamplesAreNonEmpty(constName: string): boolean {
   return false;
 }
 
+/**
+ * A parser may also hand off its ENTIRE prompt to an extracted builder
+ * (`const prompt = buildWalkInOutcomePrompt({...})`). Same de-tangle pressure as the examples
+ * case above, one step further — and the same rule: the reference is not taken on faith. We
+ * resolve the named builder to a real exported function in a domain module and re-run the
+ * contract checks against ITS body, so a parser cannot satisfy the contract by calling something
+ * that builds no prompt.
+ */
+function extractedPromptBody(builderName: string): string | null {
+  const domainDir = path.join(process.cwd(), "services/api/src/domain");
+  for (const file of fs.readdirSync(domainDir)) {
+    if (!file.endsWith(".ts")) continue;
+    const full = path.join(domainDir, file);
+    const text = fs.readFileSync(full, "utf8");
+    if (!new RegExp(`export function ${builderName}\\b`).test(text)) continue;
+    const sf = ts.createSourceFile(full, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    let body: string | null = null;
+    const visit = (node: ts.Node) => {
+      if (ts.isFunctionDeclaration(node) && node.name?.text === builderName) {
+        // The module-level examples constant is spread into the prompt, so carry the whole
+        // module: the builder body alone would not show the few-shots it splices in.
+        body = text;
+        return;
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+    if (body) return body;
+  }
+  return null;
+}
+
+/** The parser's own body, plus the extracted prompt module it delegates to (if any). */
+function promptSurface(body: string): string {
+  const builder = body.match(/\bprompt\s*=\s*(build[A-Za-z0-9_]*Prompt)\s*\(/);
+  if (!builder) return body;
+  const extracted = extractedPromptBody(builder[1]);
+  return extracted ? `${body}\n${extracted}` : body;
+}
+
 function hasFewShotExamples(body: string): boolean {
   const referenced = body.match(/\bexamples\s*=\s*([A-Z][A-Z0-9_]*)\s*;/);
+  // An extracted prompt builder splices its few-shots in directly (`...WALK_IN_OUTCOME_EXAMPLES`)
+  // rather than through a local named `examples`. Still resolved, never taken on faith.
+  const spread = body.match(/\.\.\.([A-Z][A-Z0-9_]*(?:EXAMPLES|FEW_SHOTS?))\b/);
   return (
     /\bexamples\s*=\s*\[/.test(body) ||
     (!!referenced && referencedExamplesAreNonEmpty(referenced[1])) ||
+    (!!spread && referencedExamplesAreNonEmpty(spread[1])) ||
     /"Examples:"/.test(body) ||
     /"Voice-style examples:"/.test(body) ||
     /"Good examples:"/.test(body) ||
@@ -90,16 +134,19 @@ const blocks = functionBlocks(source);
 const structuredBlocks = blocks.filter(block => block.body.includes("requestStructuredJson("));
 
 for (const block of structuredBlocks) {
+  // The schema/schemaName contract is about the CALL, so it stays scoped to the parser body.
+  // The prompt contract follows the prompt wherever the de-tangle program moved it.
+  const prompt = promptSurface(block.body);
   if (!/schemaName:\s*"[^"]+"/.test(block.body)) {
     failures.push(`${block.name} is missing schemaName in requestStructuredJson.`);
   }
   if (!/schema:\s*[A-Z0-9_]+_JSON_SCHEMA/.test(block.body)) {
     failures.push(`${block.name} is missing a *_JSON_SCHEMA contract.`);
   }
-  if (!/Return only JSON/.test(block.body)) {
+  if (!/Return only JSON/.test(prompt)) {
     failures.push(`${block.name} prompt must explicitly require JSON-only output.`);
   }
-  if (!hasFewShotExamples(block.body)) {
+  if (!hasFewShotExamples(prompt)) {
     failures.push(`${block.name} has strict schema output but no prompt few-shot examples.`);
   }
 }

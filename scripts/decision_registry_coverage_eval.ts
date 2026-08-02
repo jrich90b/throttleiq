@@ -91,7 +91,8 @@ for (const fn of [
   "decideReservationHandoffTurn",
   "decideStockNumberInterestTurn",
   "decidePriceAnswerAnchor",
-  "decidePriceObjectionTurn"
+  "decidePriceObjectionTurn",
+  "decideWalkInInventoryWatchTurn"
 ]) {
   NOT_PROJECTABLE[fn] = TURN_TEXT_REASON;
 }

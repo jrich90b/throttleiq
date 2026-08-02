@@ -9,6 +9,7 @@ import {
   resolveRoutingParserDecision,
   resolveTurnPrimaryIntent,
   shouldProposeDaySlotsForNamedDay,
+  decideWalkInInventoryWatchTurn,
   shouldTreatInboundAsTestRideBikeSelection
 } from "../services/api/src/domain/routeStateReducer.ts";
 
@@ -1080,3 +1081,207 @@ if (daySlotProposalPassed !== daySlotProposalCases.length) {
 }
 
 console.log(`\nAll ${daySlotProposalCases.length} day-slot-proposal checks passed.`);
+
+// --- decideWalkInInventoryWatchTurn: should a walk-in STAFF note start a watch? ---------------
+// Larry Godzich +17164327329, Traffic Log Pro ref 11695, 2026-07-27. Operator, 2026-08-01: "THIS
+// SHOULD HAVE TRIGGERED A WATCH FROM THE ADF." Both old arms ask whether the CUSTOMER asked to be
+// notified; a salesperson's third-person CRM log never does, so the answer was structurally no.
+// The table below is the whole contract: which arm carries which note, and — the load-bearing
+// half — which "want" notes must NOT mint a watch, because a wrong watch becomes an unsolicited
+// text weeks later. See services/api/src/domain/walkInInventoryWant.ts for the corpus numbers.
+type WalkInWatchCase = {
+  id: string;
+  input: Parameters<typeof decideWalkInInventoryWatchTurn>[0];
+  expectWatch: boolean;
+  expectSource: ReturnType<typeof decideWalkInInventoryWatchTurn>["source"];
+  /** What the parser arm would say regardless of the flag — the shadow signal. */
+  expectParserArm?: boolean;
+};
+
+// The production turn's parse, as the fix expects to read it.
+const LARRY_WANT: Parameters<typeof decideWalkInInventoryWatchTurn>[0] = {
+  explicitWatchPhrase: false,
+  intentParserWatchRequest: false,
+  want: "open_search",
+  wantSatisfiableFromNote: false,
+  wantConfidence: 0.92,
+  wantConfidenceMin: 0.8,
+  wantParserEnabled: true,
+  modelLabel: "Tri Glide",
+  familyOnlyModel: false,
+  walkInState: "none"
+};
+
+const walkInWatchCases: WalkInWatchCase[] = [
+  {
+    // THE PRODUCTION TURN. Today's shipped code returns watch=false here.
+    id: "larry_open_search_staff_note_watches_when_enabled",
+    input: LARRY_WANT,
+    expectWatch: true,
+    expectSource: "want_parser",
+    expectParserArm: true
+  },
+  {
+    // DARK BY DEFAULT: identical input, flag off => today's behavior, and the shadow still fires.
+    id: "larry_flag_off_is_todays_behavior_but_shadow_still_says_would_watch",
+    input: { ...LARRY_WANT, wantParserEnabled: false },
+    expectWatch: false,
+    expectSource: "none",
+    expectParserArm: true
+  },
+  {
+    // The KEEP arm is untouched and wins on its own — with the new parser silent AND disabled.
+    id: "explicit_notify_verb_still_wins_alone",
+    input: {
+      ...LARRY_WANT,
+      explicitWatchPhrase: true,
+      want: "none",
+      wantConfidence: null,
+      wantParserEnabled: false
+    },
+    expectWatch: true,
+    expectSource: "explicit_phrase",
+    expectParserArm: false
+  },
+  {
+    // The legacy customer-speech intent arm also survives unchanged.
+    id: "legacy_intent_parser_arm_preserved",
+    input: {
+      ...LARRY_WANT,
+      intentParserWatchRequest: true,
+      want: "none",
+      wantConfidence: null,
+      wantParserEnabled: false
+    },
+    expectWatch: true,
+    expectSource: "intent_parser",
+    expectParserArm: false
+  },
+  {
+    id: "below_confidence_floor_never_watches",
+    input: { ...LARRY_WANT, wantConfidence: 0.6 },
+    expectWatch: false,
+    expectSource: "none",
+    expectParserArm: false
+  },
+  {
+    id: "absent_want_confidence_never_watches",
+    input: { ...LARRY_WANT, wantConfidence: null },
+    expectWatch: false,
+    expectSource: "none",
+    expectParserArm: false
+  },
+  // --- the four wrong-watch lanes, each pinned to the real note that taught it ----------------
+  {
+    // +17165238728 "…we need to order one for him" — a factory order, not an arrival alert.
+    id: "order_lane_never_watches",
+    input: { ...LARRY_WANT, want: "order", modelLabel: "Street Glide Limited" },
+    expectWatch: false,
+    expectSource: "none",
+    expectParserArm: false
+  },
+  {
+    // +17165832512 "Should be delivered 7/22" — already allocated; a watch would double up.
+    id: "incoming_allocated_never_watches",
+    input: { ...LARRY_WANT, want: "incoming_allocated", modelLabel: "Street Glide" },
+    expectWatch: false,
+    expectSource: "none",
+    expectParserArm: false
+  },
+  {
+    // +17169570162 "call him when we get it through service" — one known unit, a callback.
+    id: "specific_unit_never_watches",
+    input: { ...LARRY_WANT, want: "specific_unit", modelLabel: "Road Glide Special" },
+    expectWatch: false,
+    expectSource: "none",
+    expectParserArm: false
+  },
+  {
+    // +17162626218 "Wants to test ride 2026 Street Glide 3" — we have it; nothing to search for.
+    id: "no_want_never_watches",
+    input: { ...LARRY_WANT, want: "none", modelLabel: "Street Glide 3" },
+    expectWatch: false,
+    expectSource: "none",
+    expectParserArm: false
+  },
+  {
+    // The note says the bike is already ours to sell them — a want we can fill is not a watch.
+    id: "satisfiable_from_note_never_watches",
+    input: { ...LARRY_WANT, wantSatisfiableFromNote: true },
+    expectWatch: false,
+    expectSource: "none",
+    expectParserArm: false
+  },
+  {
+    // +17165100025 "Looking for trike models" — a family, not a model. Ask, never guess
+    // (Joe ruling 2026-07-11 #4); guessing is how a watch fires on the wrong bike.
+    id: "family_only_label_never_watches_on_the_parser_arm",
+    input: { ...LARRY_WANT, modelLabel: "trike", familyOnlyModel: true },
+    expectWatch: false,
+    expectSource: "none",
+    expectParserArm: false
+  },
+  {
+    id: "no_model_label_never_watches_on_the_parser_arm",
+    input: { ...LARRY_WANT, modelLabel: "" },
+    expectWatch: false,
+    expectSource: "none",
+    expectParserArm: false
+  },
+  // --- a deal already in motion is not a shopping list ----------------------------------------
+  ...(["deal_finalizing", "deposit_left", "sold_delivered", "cosigner_required"] as const).map(
+    (state): WalkInWatchCase => ({
+      id: `deal_in_motion_${state}_never_watches`,
+      input: { ...LARRY_WANT, walkInState: state },
+      expectWatch: false,
+      expectSource: "none",
+      expectParserArm: false
+    })
+  ),
+  {
+    // An unrecognized lane string must read as "no watch", never as the watchable one.
+    id: "unknown_want_string_fails_closed",
+    input: { ...LARRY_WANT, want: "something_new_from_a_future_prompt" },
+    expectWatch: false,
+    expectSource: "none",
+    expectParserArm: false
+  },
+  {
+    // Nothing may veto the KEEP arm — not a deal in motion, not a family-only label, not the flag.
+    id: "keep_arm_is_never_vetoed_by_the_new_guards",
+    input: {
+      ...LARRY_WANT,
+      explicitWatchPhrase: true,
+      walkInState: "deal_finalizing",
+      familyOnlyModel: true,
+      modelLabel: "trike",
+      wantParserEnabled: false
+    },
+    expectWatch: true,
+    expectSource: "explicit_phrase",
+    expectParserArm: false
+  }
+];
+
+let walkInWatchPassed = 0;
+for (const c of walkInWatchCases) {
+  const actual = decideWalkInInventoryWatchTurn(c.input);
+  const ok =
+    actual.watch === c.expectWatch &&
+    actual.source === c.expectSource &&
+    (c.expectParserArm === undefined || actual.parserArmWouldWatch === c.expectParserArm);
+  if (ok) walkInWatchPassed += 1;
+  console.log(
+    `${ok ? "PASS" : "FAIL"} ${c.id} expected=${c.expectWatch}/${c.expectSource} ` +
+      `actual=${actual.watch}/${actual.source} parserArm=${actual.parserArmWouldWatch}`
+  );
+}
+
+if (walkInWatchPassed !== walkInWatchCases.length) {
+  console.error(
+    `\n${walkInWatchCases.length - walkInWatchPassed} failures out of ${walkInWatchCases.length} walk-in inventory-watch cases`
+  );
+  process.exit(1);
+}
+
+console.log(`\nAll ${walkInWatchCases.length} walk-in inventory-watch checks passed.`);

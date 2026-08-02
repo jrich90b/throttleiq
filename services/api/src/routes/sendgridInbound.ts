@@ -65,7 +65,7 @@ import { buildAdfResubmissionAck, detectAdfFormResubmission } from "../domain/ad
 import { buildMarketplaceRelayFirstTouchReply, buildMarketplaceRelayTaskSummary } from "../domain/marketplaceRelay.js";
 import { isHtmlClientNoticeOnly } from "../domain/inboundMailActionability.js";
 import { buildTradeAdfAck } from "../domain/tradeAdfReply.js";
-import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn, shouldCloseEventPromoLeadOnIntake, resolveRideChallengeEventTouch, decideIncomingInventoryPurpose } from "../domain/routeStateReducer.js";
+import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn, shouldCloseEventPromoLeadOnIntake, resolveRideChallengeEventTouch, decideIncomingInventoryPurpose, decideWalkInInventoryWatchTurn } from "../domain/routeStateReducer.js";
 import { buildLongTermTimelineMessage } from "../domain/longTermMessage.js";
 import { orchestrateInbound } from "../domain/orchestrator.js";
 import { collectRecentStaffCorrections } from "../domain/feedbackSteering.js";
@@ -151,6 +151,9 @@ import {
 import { isInternalNoteFollowUpTopic, buildWalkInSpecRecapClause } from "../domain/walkInFollowUpTopic.js";
 // SHADOW judge on this lane's drafts (Joe Step 2, 2026-08-02) — fire-and-forget, never awaited.
 import { runEmailLaneJudgeShadow } from "../domain/emailLaneJudgeShadow.js";
+// The watch-phrase helpers moved to the domain module so the eval exercises the regex that runs.
+import { extractWatchDirectiveSegment, hasWatchIntentPhrase } from "../domain/walkInInventoryWant.js";
+import { isFamilyOnlyModelLabel } from "../domain/modelFamily.js";
 import {
   isDealerLocationQuestionText,
   isFirstTimeRiderGuidanceParserAccepted,
@@ -2267,25 +2270,6 @@ function extractWalkInModelHint(text?: string | null): string | undefined {
     return "Pan America 1250 Limited";
   }
   return undefined;
-}
-
-function extractWatchDirectiveSegment(text?: string | null): string {
-  const source = String(text ?? "");
-  if (!source) return "";
-  const m = source.match(
-    /\b(?:watch(?:ing)? for|keep an eye out for|please watch for|open to watch for|watch)\b([\s\S]*?)(?=(?:\b(?:step\s*\d+|email opt-?in|view lead)\b|[.;]|$))/i
-  );
-  return String(m?.[1] ?? "").replace(/\s+/g, " ").trim();
-}
-
-function hasWatchIntentPhrase(text?: string | null): boolean {
-  const source = String(text ?? "").toLowerCase();
-  if (!source.trim()) return false;
-  return (
-    /\b(keep an eye out(?: for)?|watch(?:ing)? for|please watch|open to watch for|notify me|let me know when|text me when|if you get one|when you get one|as soon as one comes in)\b/i.test(
-      source
-    ) || /\bif one comes in\b/i.test(source)
-  );
 }
 
 function extractTrafficLogProStep(text?: string | null): number | null {
@@ -7382,6 +7366,18 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     );
     const walkInCallbackStatusRequest =
       walkInParserExplicitCallbackRequest || hasWalkInCallbackStatusRequestText(walkInCallbackContextText);
+    // Hoisted above the watch gate (was just below it): decideWalkInInventoryWatchTurn needs the
+    // accepted walk-in state, and re-deriving it here instead would be a second writer of the
+    // same judgement. Same four lines, moved — nothing between here and their old home touches
+    // llmWalkInOutcome.
+    const walkInOutcomeConfidence =
+      typeof llmWalkInOutcome?.confidence === "number" ? llmWalkInOutcome.confidence : 0;
+    const walkInOutcomeConfidenceMin = Number(process.env.LLM_WALKIN_OUTCOME_CONFIDENCE_MIN ?? 0.72);
+    const walkInOutcomeAccepted =
+      !!llmWalkInOutcome &&
+      walkInOutcomeConfidence >= walkInOutcomeConfidenceMin &&
+      llmWalkInOutcome.explicitState;
+    const walkInState = walkInOutcomeAccepted ? llmWalkInOutcome?.state ?? "none" : "none";
     const hasWatchIntentFromParser =
       !!llmIntent &&
       llmIntent.intent === "availability" &&
@@ -7420,7 +7416,38 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
     const hasWatchIntentFromText =
       hasWatchIntentPhrase(commentLower) || !!watchDirectiveSegment;
-    const hasWatchIntent = hasWatchIntentFromParser || hasWatchIntentFromText;
+    // ONE referee for "should this walk-in note start a watch" (decideWalkInInventoryWatchTurn).
+    // The two old arms are unchanged inputs to it; the third — the staff-note inventory-want
+    // parser that Larry Godzich (+17164327329) asked for — is DARK until
+    // WALKIN_INVENTORY_WANT_WATCH=1, so this swap is behavior-preserving until Joe flips it.
+    const walkInWantParserEnabled = process.env.WALKIN_INVENTORY_WANT_WATCH === "1";
+    const walkInWatchDecision = decideWalkInInventoryWatchTurn({
+      explicitWatchPhrase: hasWatchIntentFromText,
+      intentParserWatchRequest: hasWatchIntentFromParser,
+      want: llmWalkInOutcome?.unmetInventoryWant ?? null,
+      wantSatisfiableFromNote: llmWalkInOutcome?.wantIsSatisfiableFromNote ?? null,
+      wantConfidence: llmWalkInOutcome?.wantConfidence ?? null,
+      // Deliberately above the parser's own 0.72 accept floor: this arm mints a side effect that
+      // becomes a proactive text weeks later, so it may only fire when the note is unambiguous.
+      wantConfidenceMin: Number(process.env.WALKIN_INVENTORY_WANT_CONFIDENCE_MIN ?? 0.8),
+      wantParserEnabled: walkInWantParserEnabled,
+      modelLabel,
+      familyOnlyModel: isFamilyOnlyModelLabel(modelLabel),
+      walkInState
+    });
+    // Shadow: what the dark arm WOULD have added, so a week of these can be read before flipping.
+    if (walkInWatchDecision.parserArmWouldWatch && walkInWatchDecision.source !== "want_parser") {
+      console.log("[walkin_want_watch shadow]", {
+        convId: conv.id,
+        enabled: walkInWantParserEnabled,
+        wouldWatch: true,
+        alreadyWatchedBy: walkInWatchDecision.source,
+        model: modelLabel,
+        want: llmWalkInOutcome?.unmetInventoryWant ?? null,
+        wantConfidence: llmWalkInOutcome?.wantConfidence ?? null
+      });
+    }
+    const hasWatchIntent = walkInWatchDecision.watch;
     const pricingFollowupIntentFromParser = pricingInquiryIntentFromParser;
     const pricingFollowupIntentFromText =
       /\b(follow up|follow-up|check in|circle back|touch base)\b[\s\S]{0,40}\b(pricing|price|numbers?)\b/i.test(
@@ -7511,14 +7538,6 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       conv.updatedAt = new Date().toISOString();
       saveConversation(conv);
     }
-    const walkInOutcomeConfidence =
-      typeof llmWalkInOutcome?.confidence === "number" ? llmWalkInOutcome.confidence : 0;
-    const walkInOutcomeConfidenceMin = Number(process.env.LLM_WALKIN_OUTCOME_CONFIDENCE_MIN ?? 0.72);
-    const walkInOutcomeAccepted =
-      !!llmWalkInOutcome &&
-      walkInOutcomeConfidence >= walkInOutcomeConfidenceMin &&
-      llmWalkInOutcome.explicitState;
-    const walkInState = walkInOutcomeAccepted ? llmWalkInOutcome?.state ?? "none" : "none";
     const hasDealFinalizingSignal = walkInState === "deal_finalizing";
     const hasDepositSignal = walkInState === "deposit_left";
     const hasSoldSignal = walkInState === "sold_delivered";

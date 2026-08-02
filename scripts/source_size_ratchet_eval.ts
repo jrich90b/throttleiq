@@ -104,7 +104,14 @@ const CEILINGS: Ceiling[] = [
     // 16_654 -> 16_597. The draft-quality judge's schema + prompt moved to
     // domain/draftQualityJudgePrompt.ts so the model-comparison backtest can run the EXACT
     // production judgment against challenger models instead of a hand-copy (the PR #432 drift).
-    max: 16_597,
+    // 16_597 -> 16_491. The walk-in outcome parser's JSON schema, its 17 few-shots and its whole
+    // prompt builder moved to domain/walkInInventoryWant.ts, next to the watch-phrase helpers that
+    // gate the same decision — so the inventory-want fields Larry Godzich (+17164327329) needed
+    // could be added to the prompt surface without touching this file's budget at all.
+    // NOTE (rebase, 2026-08-02): PR #438 was authored against a 16_723 ceiling and proposed 16_617.
+    // Main had since ratcheted to 16_597, so landing 16_617 verbatim would have RAISED the ceiling
+    // and undone two reductions — the #418 trap. Reconciled to the real post-merge count.
+    max: 16_491,
     note: "every parser prompt + JSON schema; second-largest and on the same trajectory"
   }
 ];
