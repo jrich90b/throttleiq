@@ -387,6 +387,7 @@ import {
   isTruncatedDraftBody,
   type CadenceQualityGateDecision
 } from "./domain/draftQualityGate.js";
+import { sampleCadenceQualityConsensus, cadenceQualityConsensusSamples } from "./domain/cadenceQualityConsensus.js";
 import { resolveNoResponseTrace } from "./domain/noResponseTrace.js";
 import { daysSinceLastCustomerReply } from "./domain/cadenceQualityFacts.js";
 import {
@@ -5301,23 +5302,20 @@ async function runCadenceQualityJudgeShadow(
     const text = String(message ?? "").trim();
     if (!text) return null;
     const cadenceKind = conv.followUpCadence?.kind ?? null;
-    const verdict = await judgeCadenceQualityWithLLM({
-      message: text,
-      channel,
-      cadenceKind,
-      history: buildHistory(conv, 8),
-      lead: conv.lead,
-      // The unit the customer actually BOUGHT. Without it the judge graded a post-sale touch
-      // against the ADF inquiry vehicle only, so naming the RIGHT bike read as a mismatch and
-      // the touch was suppressed (+17168614216, 2026-08-01). See cadenceQualityFacts.ts.
-      sale: conv.sale,
-      daysSinceLastInbound: daysSinceLastCustomerReply(conv)
-    });
-    if (!verdict) return null;
-    // ENFORCE (flag-gated) is the LIVE cadence gate: when on, the decision uses the enforce floor (0.90)
-    // and live=true so a `suppress` verdict actually holds the touch back. Off → shadow (live=false,
-    // default floor) exactly as before.
+    // A LIVE suppression votes (majority of N) — one sample is not reproducible (74% self-agreement;
+    // see domain/cadenceQualityConsensus.ts). Shadow keeps ONE sample. `sale` = the unit actually
+    // BOUGHT, without which a post-sale touch naming the right bike read as a mismatch and was
+    // suppressed (+17168614216, 2026-08-01) — see cadenceQualityFacts.ts.
     const enforce = isCadenceQualityEnforceEnabled();
+    const consensus = await sampleCadenceQualityConsensus(
+      () => judgeCadenceQualityWithLLM({
+        message: text, channel, cadenceKind, history: buildHistory(conv, 8),
+        lead: conv.lead, sale: conv.sale, daysSinceLastInbound: daysSinceLastCustomerReply(conv)
+      }),
+      { samples: enforce ? cadenceQualityConsensusSamples() : 1, floor: cadenceQualityEnforceFloor() }
+    );
+    const verdict = consensus.verdict;
+    if (!verdict) return null;
     const decision = decideCadenceQualityGate({
       enabled: enforce,
       verdict,
