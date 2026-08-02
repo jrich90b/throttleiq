@@ -4,6 +4,7 @@ import type { InboundMessageEvent } from "./types.js";
 import { maybeMarkEngagedFromInbound } from "./engagement.js";
 import {
   decideCadenceQuietWindow,
+  decideCadenceStart,
   decideHeldDraftRelease,
   decideAppointmentTeardown,
   decideManualCadenceRestart,
@@ -4541,8 +4542,12 @@ export function startFollowUpCadence(
   timeZone: string,
   opts?: { kind?: "standard" | "long_term" }
 ) {
-  if (conv.status === "closed") return;
-  if (conv.followUpCadence?.status === "active" || conv.followUpCadence?.status === "stopped") return;
+  const decision = decideCadenceStart({
+    lane: "standard_ramp",
+    conversationStatus: conv.status,
+    existing: conv.followUpCadence
+  });
+  if (!decision.start) return;
   // A far-out / not-interested-now lead opens on the slow LONG_TERM_DAY_OFFSETS schedule
   // (first touch ~30 days) instead of the day-1 standard ramp. Same content path
   // (buildLongTermFollowUp); only the timing differs.
@@ -4555,8 +4560,8 @@ export function startFollowUpCadence(
     nextDueAt,
     stepIndex: 0,
     kind,
-    scheduleInviteCount: 0,
-    scheduleMuted: false
+    scheduleInviteCount: decision.scheduleInviteCount,
+    scheduleMuted: decision.scheduleMuted
   };
   conv.updatedAt = nowIso();
   scheduleSave();
@@ -4799,7 +4804,13 @@ export function shouldHoldSoftVisitForOutcome(conv: any, nowMs: number): boolean
 }
 
 export function startPostSaleCadence(conv: Conversation, anchorAtIso: string, timeZone: string) {
-  if (conv.closedReason !== "sold" && !conv.sale?.soldAt) return;
+  const decision = decideCadenceStart({
+    lane: "post_sale",
+    conversationStatus: conv.status,
+    existing: conv.followUpCadence,
+    sold: conv.closedReason === "sold" || Boolean(conv.sale?.soldAt)
+  });
+  if (!decision.start) return;
   const nextDueAt = computePostSaleDueAt(anchorAtIso, POST_SALE_DAY_OFFSETS[0], timeZone);
   conv.followUpCadence = {
     status: "active",
@@ -4807,8 +4818,8 @@ export function startPostSaleCadence(conv: Conversation, anchorAtIso: string, ti
     nextDueAt,
     stepIndex: 0,
     kind: "post_sale",
-    scheduleInviteCount: 0,
-    scheduleMuted: false
+    scheduleInviteCount: decision.scheduleInviteCount,
+    scheduleMuted: decision.scheduleMuted
   };
   conv.updatedAt = nowIso();
   scheduleSave();
@@ -4820,7 +4831,12 @@ export function scheduleLongTermFollowUp(
   message: string,
   opts?: { anchorAtIso?: string; contextTag?: string }
 ) {
-  if (conv.status === "closed") return;
+  const decision = decideCadenceStart({
+    lane: "deferred_long_term",
+    conversationStatus: conv.status,
+    existing: conv.followUpCadence
+  });
+  if (!decision.start) return;
   const anchorAtIso = String(opts?.anchorAtIso ?? dueAtIso).trim() || dueAtIso;
   conv.followUpCadence = {
     status: "active",
@@ -4831,8 +4847,8 @@ export function scheduleLongTermFollowUp(
     deferredMessage: message,
     contextTag: opts?.contextTag,
     contextTagUpdatedAt: opts?.contextTag ? nowIso() : undefined,
-    scheduleInviteCount: 0,
-    scheduleMuted: false
+    scheduleInviteCount: decision.scheduleInviteCount,
+    scheduleMuted: decision.scheduleMuted
   };
   conv.updatedAt = nowIso();
   scheduleSave();

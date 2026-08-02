@@ -4037,3 +4037,146 @@ export function decideManualCadenceRestart(
       : `${context}: started a fresh day-one cadence`
   };
 }
+
+// ===================================================================================================
+// STARTING A CHASE — "may we lay a brand-new follow-up cadence over this lead right now, and what
+// does the new one inherit from the one it replaces?"
+//
+// WHAT WAS FIGHTING. Three exported entry points in conversationStore build a whole fresh
+// `followUpCadence` object, and each one carried its OWN admission test:
+//
+//   startFollowUpCadence     the day-one ramp (and the long_term variant)   ~25 call sites
+//   startPostSaleCadence     the after-the-sale owner sequence               4 call sites
+//   scheduleLongTermFollowUp "check back with me in the spring"              8 call sites
+//
+// They disagree, and the disagreement is not theoretical — several call sites branch straight
+// between two of them on the SAME turn:
+//
+//     if (nearTerm) startFollowUpCadence(conv, now, tz);
+//     else          scheduleLongTermFollowUp(conv, untilIso, "future_timeframe");
+//
+// A lead already six touches into a live chase who says "now" keeps that chase (startFollowUpCadence
+// refuses to overwrite one that is active OR stopped). The same lead saying "in the spring" has the
+// whole record thrown away and rebuilt at step 0. Same decision point, opposite answers, decided
+// only by which branch the turn fell into — the shape that produced #398, #414 and #423.
+//
+// THE THREE DIVERGENCES, PRESERVED HERE, NOT FIXED HERE:
+//
+//   1. REPLACING A LIVE CHASE. startFollowUpCadence never does. The other two always do, without
+//      looking. For post-sale that is correct and load-bearing — the customer has bought, so the
+//      pre-sale chase MUST die — and it is why post-sale is also the one lane that ignores
+//      `conv.status === "closed"`: a sold conversation is closed with reason "sold", and refusing
+//      to start there would leave every buyer with no owner sequence at all.
+//
+//   2. THE INVITE BUDGET GOES BACK TO ZERO. All three lanes open the new cadence at
+//      `scheduleInviteCount: 0, scheduleMuted: false`. On the two replacing lanes that means a
+//      customer who was muted for having already been asked three times "what time works for you?"
+//      becomes askable again the moment the chase is re-shaped. That one is fail-UNSAFE — it fails
+//      toward messaging — and it is named on the decision as `divergence` so the follow-up ruling
+//      has somewhere to land. Behaviour is UNCHANGED by this PR.
+//
+//   3. THE CLOSED CHECK. Two lanes refuse on a closed conversation, post-sale does not (see 1).
+//
+// FAIL DIRECTION. Refusing to start is the SAFE answer: a chase that never starts costs the lead
+// some nurture, while a chase started wrongly texts a customer who should have been left alone. So
+// every unrecognized lane refuses — `start` is false unless a named lane says otherwise.
+//
+// PURE + CLOCK-FREE: the caller passes the conversation's stored state in and computes the dates
+// itself, so this stays sampleable by the decision-equivalence harness.
+// ===================================================================================================
+
+export type CadenceStartLane =
+  | "standard_ramp" // startFollowUpCadence — the day-one ramp, or its long_term variant
+  | "post_sale" // startPostSaleCadence — the after-the-sale owner sequence
+  | "deferred_long_term"; // scheduleLongTermFollowUp — a dated "check back with me" touch
+
+/** The lanes that lay a new cadence over one that is still running. See divergence 1 above. */
+const CADENCE_START_REPLACING_LANES = new Set<string>(["post_sale", "deferred_long_term"]);
+
+export type CadenceStartInput = {
+  lane: CadenceStartLane | string;
+  /** `conv.status`. "closed" means the thread is finished. */
+  conversationStatus?: string | null;
+  /** The cadence already on the lead, exactly as stored. Absent/blank status = no cadence at all. */
+  existing?: {
+    status?: string | null;
+    scheduleInviteCount?: number | null;
+    scheduleMuted?: boolean | null;
+  } | null;
+  /**
+   * post_sale only: has this lead actually bought? (`closedReason === "sold" || sale.soldAt`).
+   * The caller resolves it because the two source fields live in different places on the record.
+   */
+  sold?: boolean | null;
+};
+
+export type CadenceStartDecision = {
+  /** Lay down the new cadence. False means the caller returns without touching the record. */
+  start: boolean;
+  /** True when this start is throwing away a cadence that is still running. Divergence 1. */
+  replacesActiveCadence: boolean;
+  /** Invite budget the new cadence opens with. Today always fresh — divergence 2. */
+  scheduleInviteCount: number;
+  scheduleMuted: boolean;
+  /** Names the preserved disagreement when this lane is the odd one out for THIS input. */
+  divergence: string | null;
+  why: string;
+};
+
+export function decideCadenceStart(input: CadenceStartInput): CadenceStartDecision {
+  const lane = String(input.lane ?? "").trim();
+  const conversationClosed =
+    String(input.conversationStatus ?? "").trim().toLowerCase() === "closed";
+  const existingStatus = String(input.existing?.status ?? "").trim().toLowerCase();
+  const hasActiveCadence = existingStatus === "active";
+  // startFollowUpCadence refuses on "stopped" too: someone or something deliberately ended that
+  // chase, and quietly reviving it is the fail-unsafe direction.
+  const hasCadenceRecord = hasActiveCadence || existingStatus === "stopped";
+
+  let start: boolean;
+  let why: string;
+  switch (lane) {
+    case "standard_ramp":
+      start = !conversationClosed && !hasCadenceRecord;
+      why = start
+        ? "standard_ramp: no cadence on the lead — started the day-one ramp"
+        : conversationClosed
+          ? "standard_ramp: refused — the conversation is closed"
+          : `standard_ramp: refused — a ${existingStatus} cadence already owns this lead`;
+      break;
+    case "post_sale":
+      // No closed check on purpose: a sold conversation IS closed (reason "sold").
+      start = input.sold === true;
+      why = start
+        ? "post_sale: the lead bought — started the owner sequence"
+        : "post_sale: refused — nothing on this lead says it sold";
+      break;
+    case "deferred_long_term":
+      start = !conversationClosed;
+      why = start
+        ? "deferred_long_term: scheduled the dated check-back touch"
+        : "deferred_long_term: refused — the conversation is closed";
+      break;
+    default:
+      start = false;
+      why = `unrecognized cadence-start lane "${lane}" — refused`;
+      break;
+  }
+
+  const replacesActiveCadence = start && hasActiveCadence && CADENCE_START_REPLACING_LANES.has(lane);
+
+  // Divergence 2, named but NOT yet acted on: the two replacing lanes wipe a live chase's invite
+  // budget, so a customer already muted for over-asking becomes askable again. Preserved exactly.
+  const mutedCadenceReplaced = replacesActiveCadence && input.existing?.scheduleMuted === true;
+
+  return {
+    start,
+    replacesActiveCadence,
+    scheduleInviteCount: 0,
+    scheduleMuted: false,
+    divergence: mutedCadenceReplaced
+      ? "replacing_lane_reopens_a_muted_schedule_invite_budget"
+      : null,
+    why
+  };
+}
