@@ -256,5 +256,8 @@ export function buildFinanceNeedsMoreInfoTaskSummary(input: {
   if (items.length) return `${header}\n${items.map(i => `- ${i}`).join("\n")}`;
   const reason = String(input.reasonText ?? "").replace(/\s+/g, " ").trim();
   if (reason) return `${header}\n- ${reason}`;
-  return `${header}\n- Item(s) not captured on the call — confirm with the lender.`;
+  // Lane-neutral on purpose (2026-08-02): this task now opens from EVERY finance-outcome surface —
+  // staff SMS, the console, the public outcome form — not just a call, so the copy must not claim
+  // there was one.
+  return `${header}\n- Item(s) not captured — confirm with the lender.`;
 }
