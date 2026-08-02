@@ -14,7 +14,7 @@ import OpenAI, { toFile } from "openai";
 import { google } from "googleapis";
 import sharp from "sharp";
 import { orchestrateInbound, evaluateTestRideInventoryGate, buildBlockedTestRideInventoryDraft } from "./domain/orchestrator.js";
-import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildWatchAvailableReply, buildCholoWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, hasCustomerReceivedOutbound } from "./domain/agentVoice.js";
+import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildWatchAvailableReply, buildCholoWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, resolveIntroducedOwnerFirstName, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, hasCustomerReceivedOutbound } from "./domain/agentVoice.js";
 import {
   postSaleVehicleIsNew,
   postSaleAccessoryOrEnjoyMessage,
@@ -22213,7 +22213,7 @@ function resolveConversationAgentName(conv: any, fallbackName?: string): string 
   const manualTakeover =
     String(conv?.manualSender?.source ?? "").trim().toLowerCase() === "manual_takeover";
   const walkInLead = Boolean(conv?.lead?.walkIn);
-  if (manualTakeover || walkInLead) {
+  if (manualTakeover || walkInLead || resolveIntroducedOwnerFirstName({ ownerName: conv?.leadOwner?.name, messages: conv?.messages })) {
     const ownerNameRaw = String(conv?.leadOwner?.name ?? "").trim();
     if (ownerNameRaw && !/^(our team|sales team|team)$/i.test(ownerNameRaw) && !matchesLeadIdentity(ownerNameRaw)) {
       const first = ownerNameRaw.split(/\s+/).filter(Boolean)[0] ?? "";
