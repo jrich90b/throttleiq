@@ -140,19 +140,24 @@ assert.ok(
   "the SMS send site must pass the outbound media count"
 );
 
-// (3) FINANCE needs-more-info => an OPEN business-manager checklist task off the CALL lane.
+// (3) FINANCE needs-more-info => an OPEN business-manager checklist task, from EVERY lane.
+// 2026-08-02: this was opt-in and wired on the finance-CALL lane only, so the other EIGHT callers of
+// applyFinanceOutcomeStatusFromSignal recorded needs_more_info and left NOTHING open
+// (+17163852815, +19074412693: "I don't see a financing outcome task"). The opt-in flag is gone —
+// the branch itself opens the task, which is what makes the guarantee lane-independent.
+// Re-introducing a gate here would silently restore the bug, so the absence is asserted.
 assert.ok(
   /function openFinanceNeedsMoreInfoManagerTask/.test(index) &&
     /buildFinanceNeedsMoreInfoTaskSummary\(/.test(index),
   "the needs-more-info business-manager task must exist and use the pure summary builder"
 );
 assert.ok(
-  /if \(opts\?\.openNeedsInfoManagerTask\) \{ await openFinanceNeedsMoreInfoManagerTask\(conv, \{/.test(flat),
-  "the checklist task is opt-in so only the finance-CALL outcome lane opens it (ruling scope)"
+  !/openNeedsInfoManagerTask/.test(flat),
+  "the checklist must NOT be gated on an opt-in flag — every needs_more_info lane opens it"
 );
 assert.ok(
-  /requiredItems: parsedFinanceOutcome\.requiredItems \?\? \[\], openNeedsInfoManagerTask: true/.test(flat),
-  "the voice finance-outcome lane must pass the parsed lender items and opt in"
+  /requiredItems: parsedFinanceOutcome\.requiredItems \?\? \[\]/.test(flat),
+  "the voice lane still passes the parsed lender items (the only lane that can itemize them)"
 );
 
 console.log(

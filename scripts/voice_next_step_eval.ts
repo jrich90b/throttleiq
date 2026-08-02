@@ -267,8 +267,11 @@ push(
 );
 
 // Nothing at all => an explicit "confirm with the lender" line, so the task is still actionable.
+// The copy is LANE-NEUTRAL (2026-08-02): this task now opens from EVERY finance-outcome surface
+// (staff SMS, the console, the public outcome form), so it must not claim there was a call.
 const bare = buildFinanceNeedsMoreInfoTaskSummary({ requiredItems: null, reasonText: null, customerName: null });
-push("bare_never_empty", /\n- Item\(s\) not captured on the call — confirm with the lender\./.test(bare));
+push("bare_never_empty", /\n- Item\(s\) not captured — confirm with the lender\./.test(bare));
+push("bare_does_not_assume_a_call", !/on the call/.test(bare));
 
 // A runaway parse can't produce a wall of text.
 const flood = buildFinanceNeedsMoreInfoTaskSummary({

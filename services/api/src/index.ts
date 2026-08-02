@@ -12768,11 +12768,9 @@ async function applyPostCallSummaryActions(opts: {
         outcomeStatus,
         reasonText || summaryText || customerText || transcriptText,
         sourceId,
-        // Itemized lender needs heard on the call → the business-manager checklist task.
-        {
-          requiredItems: parsedFinanceOutcome.requiredItems ?? [],
-          openNeedsInfoManagerTask: true
-        }
+        // Itemized lender needs heard on the call → the business-manager checklist task. Every
+        // lane opens that task now; this one is just the only one that can itemize it.
+        { requiredItems: parsedFinanceOutcome.requiredItems ?? [] }
       );
     }
   }
@@ -19421,9 +19419,6 @@ async function applyFinanceOutcomeStatusFromSignal(
     syncAppointmentOutcome?: boolean;
     /** Itemized lender needs parsed off a finance CALL — drives the business-manager checklist. */
     requiredItems?: string[] | null;
-    /** Opt-in: only the finance-CALL outcome lane opens the checklist task (Joe's ruling scope).
-     *  Console/staff-SMS outcome updates keep their existing note + notify behavior. */
-    openNeedsInfoManagerTask?: boolean;
   }
 ): Promise<void> {
   const nowIsoValue = nowIso();
@@ -19480,16 +19475,20 @@ async function applyFinanceOutcomeStatusFromSignal(
       `Finance outcome parsed from call: needs more info${reasonText ? ` (${reasonText})` : ""}.`,
       sourceId
     );
-    // Joe ruling 7/23: a finance CALL that ends "needs more info" must leave an OPEN business-manager
-    // task that LISTS what the lender is waiting on — the internal note above is a log line, not a
-    // work item.
-    if (opts?.openNeedsInfoManagerTask) {
-      await openFinanceNeedsMoreInfoManagerTask(conv, {
-        requiredItems: opts?.requiredItems ?? [],
-        reasonText,
-        sourceMessageId: sourceId
-      });
-    }
+    // Joe ruling 7/23: an outcome of "needs more info" must leave an OPEN business-manager task
+    // that LISTS what the lender is waiting on — the internal note above is a log line, not a work
+    // item. Originally opt-in and wired on the finance-CALL lane only; of the nine lanes that reach
+    // this branch, the other eight left nothing open (+17163852815, +19074412693: "I don't see a
+    // financing outcome task"). The STAFF-SMS lane is the worst of them — it also runs
+    // markOutcomeRelatedTodosDone(includeFinance), so a manager texting back "needs more info"
+    // closed the outstanding finance todos and opened nothing in their place. What the lender wants
+    // does not depend on which surface told us, so the gate is gone. Created ONCE per conversation
+    // (needsInfoTaskAt); a lane with no itemized list still opens the task with the reason.
+    await openFinanceNeedsMoreInfoManagerTask(conv, {
+      requiredItems: opts?.requiredItems ?? [],
+      reasonText,
+      sourceMessageId: sourceId
+    });
     await notifyBusinessManagerFinanceOutcome(conv, "needs_more_info", reasonText || undefined);
   } else {
     setFollowUpMode(conv, "manual_handoff", "credit_app_approved");
