@@ -330,6 +330,12 @@ export function isWriteGuarded(
   for (let i = lineIndex; i >= start; i--) {
     const line = lines[i];
     if (line === undefined) continue;
+    // STOP AT THE FUNCTION BOUNDARY. A column-0 `}` closes the PREVIOUS top-level function, so
+    // anything above it is a different function and cannot be refereeing this write. Without this
+    // the lookback leaks: a new unrefereed write parked a few lines below someone else's
+    // `decide*` call read as guarded, which is how a re-stack could slip past the ratchet
+    // (found by sabotage-testing it, 2026-08-01).
+    if (/^\}/.test(line)) return false;
     const trimmed = line.trim();
     if (trimmed.startsWith("//") || trimmed.startsWith("*")) continue;
     if (REFEREE_CALL.test(trimmed)) return true;

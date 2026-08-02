@@ -314,15 +314,19 @@ const file = (path: string, text: string): SourceFile => ({ path, text });
 // TO RAISE IT: don't. A change that genuinely cannot be refereed is the strongest possible argument
 // that the field is already too contended to touch safely.
 //
-// KNOWN HOLE, found by sabotage-testing this ratchet rather than assuming it worked. "Refereed"
-// means a `decide*`/`resolve*` call sits within 40 lines ABOVE the write — proximity, not proof of
-// a real relationship. So a new write parked just below an UNRELATED referee call reads as guarded
-// and slips through: a simulated re-stack inserted a few lines under `applyCadenceQuietWindow` did
-// NOT move this number, while the same write in a file with no nearby referee did (168 -> 169).
-// The ratchet therefore catches the ordinary case and can be evaded by an unlucky (or deliberate)
-// insertion point. That is the detector's documented under-reporting, inherited here: a number that
-// holds is good evidence, never a proof of no re-stacking. Tightening it means teaching
-// `isWriteGuarded` that the referee has to be about THIS field.
+// THE HOLE THIS USED TO HAVE, and how it was closed. "Refereed" means a `decide*`/`resolve*` call
+// sits within 40 lines ABOVE the write. That lookback used to run straight past the end of the
+// enclosing function, so a new unrefereed write parked a few lines BELOW someone else's referee
+// call read as guarded and slipped through — a simulated re-stack under `applyCadenceQuietWindow`
+// did not move this number at all. `isWriteGuarded` now stops at a column-0 `}`, which is the
+// previous top-level function closing, so a referee only ever guards writes in its OWN function.
+// Same sabotage now moves the count (177 -> 178).
+//
+// WHEN THIS NUMBER MAY GO UP — the ONLY case, and it is not this one's escape hatch: the DETECTOR's
+// own logic changed and is now measuring more honestly. That re-baseline must land in the SAME
+// commit as the logic change, with the delta explained (168 -> 164 when #425 stopped counting
+// writes that cannot arbitrate; 164 -> 177 when the lookback stopped leaking across functions).
+// A number that rises because someone added CODE is a re-stack, full stop — fix the code.
 //
 // FAIL DIRECTION: a scan that finds nothing FAILS rather than passing silently — a ratchet that
 // quietly stops measuring is worse than no ratchet, because it reads as "no re-stacking happened".
@@ -332,8 +336,10 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 // record, and the manual cadence restart. Take this number from a clean checkout, never from the
 // shared anomaly-review tree — that clone is often mid-edit by the loop and reads ~4 lower.
 // 168 -> 164: PR #425 taught the detector that a write which cannot arbitrate is not a writer.
+// 164 -> 177: the referee lookback stopped leaking across function boundaries (this commit) —
+// 13 writes were being credited to a referee in a DIFFERENT function. A measurement fix, not a regression.
 // RATCHET DOWN ONLY.
-const UNREFEREED_WRITER_BASELINE = 164;
+const UNREFEREED_WRITER_BASELINE = 177;
 
 {
   const sourceFiles: SourceFile[] = [];
