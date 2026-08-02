@@ -3537,6 +3537,107 @@ export function decideCadenceQuietWindow(input: CadenceQuietInput): CadenceQuiet
   };
 }
 
+// What counts as a DEAD CHASE that a re-engagement trigger may overwrite — one referee for what
+// were four independent answers.
+//
+// THE SHAPE OF THE PILE. `startFollowUpCadence` refuses to lay a new chase over a lead that already
+// carries an `active` or `stopped` cadence (see `decideCadenceStart`), because quietly reviving a
+// chase somebody deliberately ended is the fail-unsafe direction. So every re-engagement trigger
+// that DOES mean to revive one first BLANKS the record (`conv.followUpCadence = undefined`) to
+// defeat that guard. Four places did that, each with its own hand-rolled test for which cadences
+// are dead enough to throw away, and the tests did not agree.
+//
+// TWO PRESERVED DIVERGENCES — both real today, both left exactly as they are (this is a
+// behavior-PRESERVING un-stacking; the referee makes the disagreement visible and named, it does
+// not settle it):
+//   1. `finance_no_contact` is the only trigger that also treats a `completed` chase as dead.
+//      On the other three a completed cadence is left standing, `startFollowUpCadence` is never
+//      called, and the trigger's own `pauseFollowUpCadence` then no-ops (it requires `active`) —
+//      i.e. the trigger silently does nothing. That is the SAFE direction (fewer proactive texts),
+//      which is why it is preserved rather than "fixed".
+//   2. `manual_hold_clear` is the only trigger that forces a SURVIVING non-dead cadence back to
+//      `active` where it stands instead of leaving it alone. A walk-in note saying the hold is over
+//      is an explicit staff instruction to resume the chase, so it overrides a pause the same way
+//      it overrides the hold.
+//
+// FAIL DIRECTION. Every output here can only ever START or RESUME proactive texting, so the
+// dangerous direction is reviving too much. An unrecognized trigger therefore gets the STRICTEST
+// answer (stopped-only, no in-place reactivation) rather than the most permissive one — a caller
+// that forgets to register its trigger loses a revival, it never gains one.
+//
+// PURE + CLOCK-FREE: the caller supplies the anchor and timezone to the applier; this decides only
+// which record may be discarded, so it stays sampleable by the decision-equivalence harness.
+export type CadenceRevivalTrigger =
+  | "health_recovery_delay" // customer told us they're unwell — push the chase out, restart if dead
+  | "customer_followup_deferral" // "take your time" — re-tag as engaged and hold
+  | "finance_no_contact" // voicemail on a manual finance handoff — keep the lead moving
+  | "manual_hold_clear"; // walk-in note says the hold is over — resume the chase
+
+export type CadenceRevivalInput = {
+  trigger: CadenceRevivalTrigger | string;
+  /** Is there a cadence record on the lead at all? False = nothing to overwrite. */
+  hasCadence: boolean;
+  /** Current `followUpCadence.status`, exactly as stored. Blank when there is no cadence. */
+  cadenceStatus?: string | null;
+};
+
+export type CadenceRevivalDecision = {
+  /** Discard the dead record first — without this, `startFollowUpCadence` no-ops. */
+  replaceDeadCadence: boolean;
+  /** Lay down a fresh day-one ramp (nothing there, or what was there is dead). */
+  startFresh: boolean;
+  /** Force a SURVIVING non-dead cadence back to `active` where it stands. Divergence 2. */
+  reactivateInPlace: boolean;
+  /** Names the preserved disagreement when this trigger is the odd one out for THIS input. */
+  divergence: string | null;
+  why: string;
+};
+
+/**
+ * Statuses each trigger is willing to throw away. `stopped` is the universal one — that is the
+ * status `startFollowUpCadence`'s own guard blocks on, and defeating it is why these sites blank
+ * the record at all. Only the finance lane adds `completed` (divergence 1).
+ */
+const CADENCE_REVIVAL_DEAD_STATUSES: Record<CadenceRevivalTrigger, ReadonlySet<string>> = {
+  health_recovery_delay: new Set(["stopped"]),
+  customer_followup_deferral: new Set(["stopped"]),
+  finance_no_contact: new Set(["stopped", "completed"]),
+  manual_hold_clear: new Set(["stopped"])
+};
+
+export function decideCadenceRevival(input: CadenceRevivalInput): CadenceRevivalDecision {
+  const trigger = String(input.trigger ?? "").trim() as CadenceRevivalTrigger;
+  const status = String(input.cadenceStatus ?? "").trim().toLowerCase();
+  // Unrecognized trigger falls back to the strictest table, never the most permissive — see the
+  // fail-direction note above.
+  const deadStatuses =
+    CADENCE_REVIVAL_DEAD_STATUSES[trigger] ?? CADENCE_REVIVAL_DEAD_STATUSES.health_recovery_delay;
+  const hasCadence = Boolean(input.hasCadence);
+  const isDead = hasCadence && deadStatuses.has(status);
+  const reactivateInPlace = trigger === "manual_hold_clear" && hasCadence && !isDead;
+
+  const divergence =
+    isDead && status === "completed"
+      ? "finance_no_contact_alone_revives_a_completed_chase"
+      : reactivateInPlace
+        ? "manual_hold_clear_alone_forces_a_surviving_chase_back_to_active"
+        : null;
+
+  return {
+    replaceDeadCadence: isDead,
+    startFresh: !hasCadence || isDead,
+    reactivateInPlace,
+    divergence,
+    why: !hasCadence
+      ? `${trigger}: no cadence on the lead — start the day-one ramp`
+      : isDead
+        ? `${trigger}: the ${status} chase is dead — discard it and start over`
+        : reactivateInPlace
+          ? `${trigger}: staff cleared the hold — put the ${status} chase back to work as it stands`
+          : `${trigger}: a ${status} chase is not dead — leave it alone`
+  };
+}
+
 // Who may release a HELD draft — one referee for what were six independent decisions.
 //
 // `draftHeld` is the "being fixed" marker: the quality gate withheld a reply, so staff see a card
