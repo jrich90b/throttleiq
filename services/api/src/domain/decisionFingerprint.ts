@@ -297,6 +297,30 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     }, ["decideManualCadenceRestart"]);
   }
 
+  // Added 2026-08-02 with the cadence-START un-stacking. Sampled once PER LANE, because the whole
+  // point of this referee is that the three lanes answer "may I lay a new chase over this lead?"
+  // differently — standard_ramp never overwrites, the other two always do. A single sample would
+  // hide exactly that. PROBE: the lane and `sold` are held at fixed values per sample, so the only
+  // thing that can move the fingerprint between a baseline and a candidate run is the arbitration
+  // itself, applied to the conversation status + cadence this lead actually has stored.
+  for (const lane of ["standard_ramp", "post_sale", "deferred_long_term"] as const) {
+    add(`cadenceStart:${lane}`, conv => {
+      if (typeof reducer.decideCadenceStart !== "function") return undefined;
+      const decision = reducer.decideCadenceStart({
+        lane, // PROBE
+        conversationStatus: conv?.status ?? null,
+        existing: conv?.followUpCadence ?? null,
+        sold: conv?.closedReason === "sold" || Boolean(conv?.sale?.soldAt)
+      });
+      return {
+        start: decision.start,
+        replacesActiveCadence: decision.replacesActiveCadence,
+        scheduleMuted: decision.scheduleMuted,
+        divergence: decision.divergence
+      };
+    }, ["decideCadenceStart"]);
+  }
+
   return registry;
 }
 

@@ -472,8 +472,13 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 //     the arbitration. Field-scoped and call-only, so it credits exactly one write today
 //     (`conv.scheduleSoft` under `applySoftVisitCadenceWindow`) rather than the 37 a loose
 //     "any apply*" rule would have waved through.
+// 168 -> 165: the cadence-START un-stacking (this commit). startFollowUpCadence,
+//   startPostSaleCadence and scheduleLongTermFollowUp each carried their own admission test for
+//   "may I lay a new chase over this lead?"; all three now ask `decideCadenceStart`. A CODE change,
+//   not a measurement change — the detector is untouched. Measured on this branch with nothing else
+//   modified in the tree (`git status` showed only the four files of this PR).
 // RATCHET DOWN ONLY.
-const UNREFEREED_WRITER_BASELINE = 168;
+const UNREFEREED_WRITER_BASELINE = 165;
 
 {
   const sourceFiles: SourceFile[] = [];
