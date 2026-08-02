@@ -3555,3 +3555,105 @@ export function decideHeldDraftRelease(input: HeldDraftReleaseInput): HeldDraftR
       return { release: true, reason: "unrecognized event — failing toward releasing the hold" };
   }
 }
+
+// ---------------------------------------------------------------------------
+// APPOINTMENT TEARDOWN — one referee for "when an appointment stops being an
+// appointment, what actually gets cleared?"
+//
+// WHAT WAS FIGHTING. Five independent places in index.ts un-booked an appointment, each with its
+// own hand-written list of fields to null out:
+//
+//   cancelBookedAppointmentForConversation   the customer texted "cancel"
+//   the calendar reconcile sweep             the Google event was cancelled/deleted out from under us
+//   the staff event-edit endpoint             staff cancelled or marked no-show in the console
+//   manual-outbound schedule (confirm path)   staff set a time, the calendar refused the booking
+//   manual-outbound schedule (parse path)     same, via the other branch of the same handler
+//
+// Nobody arbitrated, so the lists drifted. Three of the five clear the whole record; the two
+// manual-outbound paths clear the BOOKING but leave the REQUESTED TIME behind.
+//
+// THE DIVERGENCE, PRESERVED HERE RATHER THAN FIXED (the un-stacking is behavior-preserving; the
+// question goes to Joe). After a manual-outbound booking failure the record says status "none"
+// with no event id — but `whenText` ("Saturday at 2:00 PM"), `confirmedBy: "salesperson"` and
+// `matchedSlot` are all still set. buildAppointmentStatusReply reads whenText when there is no
+// whenIso, so if that customer then asks "are we still on?" they are told "I'm seeing an
+// appointment note for Saturday at 2:00 PM, but I'll have the team confirm it" — a half-affirmed
+// time that was never booked. An identically-unbooked lead torn down by any of the other three
+// paths gets the neutral "I'll have the team confirm your appointment status." Same state, two
+// different things said to the customer. Pinned as-is by appointment_teardown:eval so it cannot
+// drift further while the question is open.
+//
+// FAIL DIRECTION. A teardown that clears too LITTLE leaves a phantom appointment we may assert to
+// a customer, or count in the funnel — the failure above. A teardown that clears too MUCH loses
+// the requested time, which is recoverable (the manual-outbound paths also open a staff call todo
+// carrying that time). So the safe default for an unrecognized cause is CLEAR EVERYTHING.
+//
+// PURE + CLOCK-FREE by contract: the caller stamps updatedAt and owns its own side effects
+// (cancelling the Google event, opening the staff todo, setting dialog state). This referee owns
+// only the field set.
+export type AppointmentTeardownCause =
+  | "customer_cancelled" // customer asked us to cancel a booked appointment
+  | "calendar_event_gone" // reconcile sweep: the Google event is cancelled/deleted
+  | "staff_cancelled" // staff cancelled the event from the console
+  | "staff_no_show" // staff marked the appointment a no-show
+  | "manual_outbound_book_failed"; // staff set a time the calendar would not accept
+
+export type AppointmentTeardownInput = {
+  cause: AppointmentTeardownCause;
+  /**
+   * Only the customer-cancel path lets its caller choose whether a reschedule is pending
+   * (today it always passes false). Everyone else's answer is fixed by the cause.
+   */
+  reschedulePendingOverride?: boolean | null;
+};
+
+export type AppointmentTeardownDecision = {
+  /** Always "none" — that is what teardown means. */
+  status: "none";
+  /** whenIso + every booked* field. Always cleared; a stale event id is never safe. */
+  clearBookedEvent: boolean;
+  /** whenText + confirmedBy — the human-readable requested time. FALSE on the diverging paths. */
+  clearRequestedTime: boolean;
+  /** matchedSlot — the concrete calendar slot we had matched. FALSE on the diverging paths. */
+  clearMatchedSlot: boolean;
+  reschedulePending: boolean;
+  /** bookedSentAt / followUpSentAt / lastEventId / outcomeToken — the staff prompt state. */
+  clearStaffPromptState: boolean;
+  /** Close open appointment-class todos. FALSE where the caller instead OPENS a staff call todo. */
+  closeAppointmentTodos: boolean;
+  /** Names the preserved disagreement when this cause is one of the odd ones out. */
+  divergence: string | null;
+  why: string;
+};
+
+export function decideAppointmentTeardown(
+  input: AppointmentTeardownInput
+): AppointmentTeardownDecision {
+  const cause = input.cause;
+  const bookFailed = cause === "manual_outbound_book_failed";
+
+  const reschedulePending =
+    cause === "customer_cancelled"
+      ? input.reschedulePendingOverride === true
+      : cause === "staff_no_show"
+        ? false
+        : true;
+
+  return {
+    status: "none",
+    clearBookedEvent: true,
+    // Divergence: the manual-outbound failure paths keep the requested time on the record.
+    clearRequestedTime: !bookFailed,
+    clearMatchedSlot: !bookFailed,
+    reschedulePending,
+    clearStaffPromptState: true,
+    // Divergence: those same two paths open a staff CALL todo instead of closing the open ones.
+    closeAppointmentTodos: !bookFailed,
+    divergence: bookFailed
+      ? "manual_outbound_book_failed_retains_requested_time"
+      : null,
+    why: bookFailed
+      ? "calendar refused a staff-set time — booking dropped, requested time kept for the staff call todo"
+      : `appointment torn down (${cause}) — record fully cleared`
+  };
+}

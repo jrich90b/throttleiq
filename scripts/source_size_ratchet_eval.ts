@@ -51,7 +51,10 @@ const CEILINGS: Ceiling[] = [
     // 71_671 -> 71_667. First ratchet DOWN: the followUpCadence quiet-window un-stacking replaced
     // four copies of the "hush the cadence after we just reached out" block with calls to
     // applyCadenceQuietWindow (conversationStore) / decideCadenceQuietWindow (routeStateReducer).
-    max: 71_667,
+    // 71_667 -> 71_617. The appointment-teardown un-stacking: five hand-maintained copies of the
+    // "un-book this appointment" field list replaced by applyAppointmentTeardown
+    // (conversationStore) / decideAppointmentTeardown (routeStateReducer).
+    max: 71_617,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

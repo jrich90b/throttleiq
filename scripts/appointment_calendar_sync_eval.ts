@@ -18,6 +18,7 @@ import {
   decideCalendarEventReconcile,
   CALENDAR_SYNC_MIN_DRIFT_MS
 } from "../services/api/src/domain/appointmentCalendarSync.ts";
+import { decideAppointmentTeardown } from "../services/api/src/domain/routeStateReducer.ts";
 
 const T3PM = "2026-07-17T19:00:00.000Z";
 const T4PM = "2026-07-17T20:00:00.000Z";
@@ -72,10 +73,29 @@ assert.match(
   /catch \{\s*\n?\s*continue; \/\/ fetch failure => noop for this conv; never clear on a read error/,
   "a fetch failure must skip the conversation, never clear it"
 );
-assert.match(
-  idx,
-  /markOpenTodosDoneForConversationByClass\(conv\.id, \["appointment"\]\);\s*\n\s*\}\s*\n\s*appt\.updatedAt/,
-  "the cancel arm closes the appointment-class todos like the console PATCH does"
+// The cancel arm closes the appointment-class todos, like the console PATCH does.
+//
+// RE-PINNED TO BEHAVIOR 2026-08-01 (appointment-teardown un-stacking). This used to match an exact
+// two-line source layout, which broke the moment the five teardown sites were centralized behind
+// one referee — the behavior was unchanged, only the shape. Asserted now as (a) the referee's
+// actual answer for THIS cause and (b) the sweep's ORDERING, which is the technique the
+// source-pin ratchet asks for. Verified by deleting the todo-close from the sweep: still red.
+assert.equal(
+  decideAppointmentTeardown({ cause: "calendar_event_gone" }).closeAppointmentTodos,
+  true,
+  "a Google-side cancel closes the appointment-class todos like the console PATCH does"
+);
+const sweepTeardownAt = idx.indexOf('applyAppointmentTeardown(appt, { cause: "calendar_event_gone" })');
+assert.ok(sweepTeardownAt > 0, "the reconcile sweep tears the appointment down through the shared referee");
+const sweepTodoCloseAt = idx.indexOf(
+  'markOpenTodosDoneForConversationByClass(conv.id, ["appointment"])',
+  sweepTeardownAt
+);
+const sweepStampAt = idx.indexOf("appt.updatedAt = now.toISOString()", sweepTeardownAt);
+assert.ok(sweepStampAt > sweepTeardownAt, "the sweep stamps updatedAt after tearing the appointment down");
+assert.ok(
+  sweepTodoCloseAt > sweepTeardownAt && sweepTodoCloseAt < sweepStampAt,
+  "the cancel arm closes the appointment-class todos before it stamps updatedAt"
 );
 
 console.log("PASS appointment calendar-sync eval (Kody move case + drift/cancel/uncertainty table + throttled capped sweep wiring)");
