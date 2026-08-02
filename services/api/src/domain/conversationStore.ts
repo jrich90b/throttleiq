@@ -3,12 +3,15 @@ import * as path from "node:path";
 import type { InboundMessageEvent } from "./types.js";
 import { maybeMarkEngagedFromInbound } from "./engagement.js";
 import {
+  decideAppointmentConfirmRecord,
   decideCadenceQuietWindow,
   decideCadenceStart,
   decideHeldDraftRelease,
   decideAppointmentTeardown,
   decideManualCadenceRestart,
   isRealReplyProvider,
+  type AppointmentConfirmLane,
+  type AppointmentConfirmRecordDecision,
   type CadenceQuietTrigger,
   type HeldDraftReleaseEvent,
   type AppointmentTeardownCause,
@@ -4357,13 +4360,19 @@ export function confirmAppointmentIfMatchesSuggested(
     if (relaxed.length === 1) {
       const single = relaxed[0];
       console.log("[appt-match] matched (relaxed):", single.startLocal ?? single.start);
+      const decision = decideAppointmentConfirmRecord({
+        lane: "customer_slot_match",
+        reschedulePending: conv.appointment?.reschedulePending
+      });
+      if (!decision.confirm) return false;
       conv.appointment = conv.appointment ?? { status: "none", updatedAt: nowIso() };
-      conv.appointment.status = "confirmed";
+      conv.appointment.status = decision.status;
       conv.appointment.whenText = String(single.startLocal ?? single.start ?? "").trim();
       conv.appointment.whenIso = single.start;
-      conv.appointment.confirmedBy = "customer";
+      conv.appointment.confirmedBy = decision.confirmedBy;
       conv.appointment.updatedAt = nowIso();
-      conv.appointment.acknowledged = false;
+      conv.appointment.acknowledged = decision.acknowledged;
+      if (decision.clearReschedulePending) conv.appointment.reschedulePending = false;
       conv.appointment.sourceMessageId = sourceMessageId;
       conv.appointment.matchedSlot = single;
 
@@ -4377,13 +4386,19 @@ export function confirmAppointmentIfMatchesSuggested(
       if (byTime.length === 1) {
         const single = byTime[0];
         console.log("[appt-match] matched (time-only):", single.startLocal ?? single.start);
+        const decision = decideAppointmentConfirmRecord({
+          lane: "customer_slot_match",
+          reschedulePending: conv.appointment?.reschedulePending
+        });
+        if (!decision.confirm) return false;
         conv.appointment = conv.appointment ?? { status: "none", updatedAt: nowIso() };
-        conv.appointment.status = "confirmed";
+        conv.appointment.status = decision.status;
         conv.appointment.whenText = String(single.startLocal ?? single.start ?? "").trim();
         conv.appointment.whenIso = single.start;
-        conv.appointment.confirmedBy = "customer";
+        conv.appointment.confirmedBy = decision.confirmedBy;
         conv.appointment.updatedAt = nowIso();
-        conv.appointment.acknowledged = false;
+        conv.appointment.acknowledged = decision.acknowledged;
+        if (decision.clearReschedulePending) conv.appointment.reschedulePending = false;
         conv.appointment.sourceMessageId = sourceMessageId;
         conv.appointment.matchedSlot = single;
 
@@ -4399,13 +4414,19 @@ export function confirmAppointmentIfMatchesSuggested(
 
   console.log("[appt-match] matched:", match.startLocal ?? match.start);
 
+  const decision = decideAppointmentConfirmRecord({
+    lane: "customer_slot_match",
+    reschedulePending: conv.appointment?.reschedulePending
+  });
+  if (!decision.confirm) return false;
   conv.appointment = conv.appointment ?? { status: "none", updatedAt: nowIso() };
-  conv.appointment.status = "confirmed";
+  conv.appointment.status = decision.status;
   conv.appointment.whenText = String(match.startLocal ?? match.start ?? "").trim();
   conv.appointment.whenIso = match.start;
-  conv.appointment.confirmedBy = "customer";
+  conv.appointment.confirmedBy = decision.confirmedBy;
   conv.appointment.updatedAt = nowIso();
-  conv.appointment.acknowledged = false;
+  conv.appointment.acknowledged = decision.acknowledged;
+  if (decision.clearReschedulePending) conv.appointment.reschedulePending = false;
   conv.appointment.sourceMessageId = sourceMessageId;
   conv.appointment.matchedSlot = match;
 
@@ -6031,6 +6052,31 @@ export function updateHoldingFromInbound(conv: Conversation, inboundText: string
   if (wantsHold || (mentionsPending && isUsed)) {
     setFollowUpMode(conv, "holding_inventory", "customer_waiting_for_specific_used_unit");
   }
+}
+
+// The ONE place that stamps an appointment's CONFIRMED record — status + who confirmed + whether
+// the customer's word is on file (`acknowledged`) + whether the reschedule latch clears. Asks
+// `decideAppointmentConfirmRecord` (routeStateReducer) so the three confirm lanes cannot drift;
+// see that referee for the two divergences it preserves. Booking fields (event id, slot, times)
+// stay with the caller — they are IO results, not arbitration.
+//
+// Deliberately does NOT touch conv.updatedAt or call scheduleSave(): every caller sits inside a
+// larger handler that owns the save (mirrors applyManualCadenceRestart).
+export function applyAppointmentConfirmRecord(
+  conv: Conversation,
+  lane: AppointmentConfirmLane
+): AppointmentConfirmRecordDecision {
+  const decision = decideAppointmentConfirmRecord({
+    lane,
+    reschedulePending: conv.appointment?.reschedulePending
+  });
+  if (!decision.confirm) return decision;
+  conv.appointment = conv.appointment ?? { status: "none", updatedAt: nowIso() };
+  conv.appointment.status = decision.status;
+  conv.appointment.confirmedBy = decision.confirmedBy;
+  conv.appointment.acknowledged = decision.acknowledged;
+  if (decision.clearReschedulePending) conv.appointment.reschedulePending = false;
+  return decision;
 }
 
 export function markAppointmentAcknowledged(conv: Conversation) {

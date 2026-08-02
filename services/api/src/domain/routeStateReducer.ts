@@ -4257,3 +4257,107 @@ export function decideCadenceStart(input: CadenceStartInput): CadenceStartDecisi
     why
   };
 }
+
+// ===================================================================================================
+// MARKING AN APPOINTMENT CONFIRMED — "when we stamp an appointment `confirmed`, what else does the
+// record get: is the customer's word on file (`acknowledged`), and does the reschedule latch clear?"
+//
+// WHAT WAS FIGHTING. Three independent places stamp `appointment.status = "confirmed"`, each
+// deciding the companion fields for itself:
+//
+//   confirmAppointmentIfMatchesSuggested   customer's TEXT matched a slot we suggested — no
+//     (conversationStore, 3 branches)      calendar write happens here
+//   the confirm-book path (index.ts)       customer's ack booked a real calendar event
+//   the voice post-summary path (index.ts) a rep's call produced an exact slot; calendar booked
+//
+// `decideCustomerAckConfirmBooking` (above) already referees WHETHER that booking turn happens.
+// Nobody refereed what the confirmed RECORD contains — and the three writers disagree:
+//
+//   DIVERGENCE 1 — `acknowledged`. The two booked lanes set it TRUE; the slot-match lane sets it
+//     FALSE. `acknowledged` is what suppresses the automatic 24h "Reply YES to confirm or NO to
+//     reschedule" reminder (transitionSafety.shouldSuppressAppointmentConfirmationReminder — the
+//     Peter Meredith "boomed him" ruling, 2026-07-20). This split is CORRECT and load-bearing, and
+//     the reason is the calendar: the booked lanes have a real event the customer just agreed to,
+//     so the robotic reminder would re-ask what was just answered. The slot-match lane has NO
+//     calendar event yet — its confirm is provisional, the booking happens downstream, and if the
+//     record were pre-acknowledged the reminder for the eventual real booking would be suppressed
+//     by a stamp made before that booking existed. Fail direction: acknowledged=false only ever
+//     means ONE extra reminder; acknowledged=true wrongly means a customer who half-committed
+//     never gets nudged and no-shows.
+//
+//   DIVERGENCE 2 — the `reschedulePending` latch. The two booked lanes CLEAR it; the slot-match
+//     lane leaves it standing. So a lead mid-reschedule whose text matches a suggested slot ends
+//     up `confirmed` WITH `reschedulePending=true` — a contradiction two downstream guards already
+//     carry local armor against (the stale-latch comments at index.ts ~55689 and ~62982 exist
+//     because this state occurs). Preserved EXACTLY here (this is a cleanup, not a fix): named on
+//     the decision as `divergence` so the follow-up ruling has an anchor.
+//
+// All three lanes agree on `confirmedBy: "customer"` — even the voice lane, where a human books
+// the calendar but the TIME is the customer's own words from the call.
+//
+// FAIL DIRECTION. Refusing to stamp is the SAFE answer: an unconfirmed appointment costs at most a
+// re-ask, while a wrong confirm tells the customer "you're all set" for a slot nothing holds. An
+// unrecognized lane therefore refuses, and the caller must not write.
+//
+// PURE + CLOCK-FREE: the caller passes the stored latch state in; dates/slots stay caller-side.
+// ===================================================================================================
+
+export type AppointmentConfirmLane =
+  | "customer_slot_match" // customer's text matched a suggested slot — record only, no calendar yet
+  | "customer_confirm_booking" // customer's ack booked the calendar event
+  | "voice_summary_booking"; // rep's call summary booked the calendar event
+
+/** The lanes whose confirm carries a REAL calendar event. See divergences 1 and 2 above. */
+const APPOINTMENT_CONFIRM_BOOKED_LANES = new Set<string>([
+  "customer_confirm_booking",
+  "voice_summary_booking"
+]);
+
+export type AppointmentConfirmRecordInput = {
+  lane: AppointmentConfirmLane | string;
+  /** The stored `appointment.reschedulePending` latch, exactly as it is right now. */
+  reschedulePending?: boolean | null;
+};
+
+export type AppointmentConfirmRecordDecision = {
+  /** Stamp the record. False means the caller must not write anything. */
+  confirm: boolean;
+  status: "confirmed";
+  confirmedBy: "customer";
+  /** Customer's word on file — suppresses the 24h YES/NO reminder. Booked lanes only. */
+  acknowledged: boolean;
+  /** Clear the reschedule latch alongside the confirm. Booked lanes only (divergence 2). */
+  clearReschedulePending: boolean;
+  /** Names the preserved disagreement when this lane is the odd one out for THIS input. */
+  divergence: string | null;
+  why: string;
+};
+
+export function decideAppointmentConfirmRecord(
+  input: AppointmentConfirmRecordInput
+): AppointmentConfirmRecordDecision {
+  const lane = String(input.lane ?? "").trim();
+  const booked = APPOINTMENT_CONFIRM_BOOKED_LANES.has(lane);
+  const recognized = booked || lane === "customer_slot_match";
+  const latched = input.reschedulePending === true;
+
+  return {
+    confirm: recognized,
+    status: "confirmed",
+    confirmedBy: "customer",
+    acknowledged: booked,
+    clearReschedulePending: booked,
+    // Divergence 2, named but NOT acted on: a slot-match confirm on a lead whose reschedule latch
+    // is set leaves the record saying "confirmed" AND "reschedule pending" at once.
+    divergence:
+      recognized && !booked && latched
+        ? "slot_match_confirm_leaves_the_reschedule_latch_standing"
+        : null,
+    why: !recognized
+      ? `unrecognized appointment-confirm lane "${lane}" — refused, nothing may be stamped`
+      : booked
+        ? `${lane}: confirmed against a real calendar event — customer's word on file, latch cleared`
+        : `${lane}: provisional confirm from the customer's text — no calendar event yet, so the ` +
+          "reminder stays armed and the latch is left as-is"
+  };
+}

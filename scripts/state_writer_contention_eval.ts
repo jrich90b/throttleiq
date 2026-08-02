@@ -477,8 +477,12 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 //   "may I lay a new chase over this lead?"; all three now ask `decideCadenceStart`. A CODE change,
 //   not a measurement change — the detector is untouched. Measured on this branch with nothing else
 //   modified in the tree (`git status` showed only the four files of this PR).
+// 165 -> 162: the appointment-CONFIRM un-stacking (this commit). The slot-match confirm
+//   (conversationStore), the confirm-book path and the voice post-summary path (index.ts) each
+//   decided the confirmed record's companion fields for themselves; all three now ask
+//   `decideAppointmentConfirmRecord`. A CODE change, not a measurement change.
 // RATCHET DOWN ONLY.
-const UNREFEREED_WRITER_BASELINE = 165;
+const UNREFEREED_WRITER_BASELINE = 162;
 
 {
   const sourceFiles: SourceFile[] = [];
