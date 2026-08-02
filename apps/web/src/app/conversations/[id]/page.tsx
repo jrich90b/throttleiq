@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { SideNavIcon } from "../../components/UiIcon";
+import { buildRepLeadContext } from "../../../lib/leadContext";
 
 type Message = {
   id: string;
@@ -21,6 +22,8 @@ type Message = {
 type Conversation = {
   id: string;
   leadKey: string;
+  /** The lead card. Already in the /conversations/:id payload — the rep just never saw it. */
+  lead?: { vehicle?: { year?: string | number | null; model?: string | null; description?: string | null; stockId?: string | null } | null } | null;
   mode?: "autopilot" | "suggest" | "human";
   status?: "open" | "closed";
   closedAt?: string | null;
@@ -100,6 +103,9 @@ export default function ConversationPage() {
     if (!conv) return null;
     return findPendingDraft(conv.messages);
   }, [conv]);
+
+  // Read-only projection of what the agent already knows about this lead.
+  const repContext = useMemo(() => buildRepLeadContext(conv?.lead, conv?.messages), [conv]);
 
   async function load() {
     if (!id) return;
@@ -263,6 +269,42 @@ export default function ConversationPage() {
           );
         })}
       </div>
+
+      {/* What the agent knows, sitting where the rep is about to type. 45% of outbound is typed by a
+          person and 32% never touches a draft, so this context otherwise never reaches them — Dennis
+          Daffron was asked "what bike were you inquiring about?" with the answer on his lead card.
+          Every row is omitted when we cannot say something specific: silent, never wrong. */}
+      {repContext.hasAnything ? (
+        <div className="mt-6 border rounded-lg p-3 text-sm border-slate-300 bg-slate-50 text-slate-900">
+          <div className="font-medium text-slate-900">Before you reply</div>
+          <div className="mt-1 space-y-1">
+            {repContext.bike ? (
+              <div>
+                <span className="text-slate-600">Their bike:</span>{" "}
+                <span className="font-medium">{repContext.bike}</span>
+              </div>
+            ) : null}
+            {repContext.lastQuote ? (
+              <div>
+                <span className="text-slate-600">Last price we quoted:</span>{" "}
+                <span className="font-medium">{repContext.lastQuote.amount}</span>
+                {repContext.lastQuote.at ? (
+                  <span className="text-slate-600">
+                    {" "}
+                    on {new Date(repContext.lastQuote.at).toLocaleDateString()}
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
+            {repContext.openQuestion ? (
+              <div className="text-amber-900">
+                <span className="font-medium">Still waiting on an answer:</span>{" "}
+                <span>&ldquo;{repContext.openQuestion.text}&rdquo;</span>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
 
       {conv.draftHeld && conv.draftHeld.heldKind !== "context_fidelity" ? (
         <div className="mt-6 border rounded-lg p-4 text-sm border-amber-300 bg-amber-50 text-amber-900">
