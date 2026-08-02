@@ -5,9 +5,11 @@ import { maybeMarkEngagedFromInbound } from "./engagement.js";
 import {
   decideCadenceQuietWindow,
   decideHeldDraftRelease,
+  decideAppointmentTeardown,
   isRealReplyProvider,
   type CadenceQuietTrigger,
-  type HeldDraftReleaseEvent
+  type HeldDraftReleaseEvent,
+  type AppointmentTeardownCause
 } from "./routeStateReducer.js";
 import { fileURLToPath } from "node:url";
 import { dataPath } from "./dataDir.js";
@@ -4940,6 +4942,58 @@ export function applyCadenceQuietWindow(
     conv.followUpCadence.scheduleInviteCount = 0;
     conv.followUpCadence.scheduleMuted = false;
   }
+}
+
+/**
+ * Wipes the staff-prompt bookkeeping off an appointment (the "we already texted the rep" markers
+ * and the outcome-reply token). Lifted out of index.ts with the teardown un-stacking so the field
+ * set and its referee live together, and so an eval can exercise the real code rather than a copy.
+ */
+export function clearAppointmentStaffPromptState(appt: any): boolean {
+  const notify = appt?.staffNotify;
+  if (!notify || typeof notify !== "object") return false;
+  let changed = false;
+  for (const key of ["bookedSentAt", "followUpSentAt", "lastEventId", "outcomeToken"]) {
+    if (Object.prototype.hasOwnProperty.call(notify, key)) {
+      delete notify[key];
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+// The ONE place that un-books an appointment — the five former teardown sites (customer cancel,
+// calendar reconcile, staff console cancel/no-show, and both manual-outbound booking-failure
+// branches) each hand-maintained their own field list, and the lists had drifted apart. They now
+// ask `decideAppointmentTeardown` instead. See that referee in routeStateReducer.ts for the
+// divergence it preserves and the fail direction.
+//
+// Deliberately does NOT stamp `updatedAt`, close/open todos, cancel the Google event or touch
+// dialog state: those differ by cause, every call site already does its own, and adding a write
+// here would change persisted timestamps — which a cleanup must not do.
+export function applyAppointmentTeardown(
+  appt: any,
+  input: { cause: AppointmentTeardownCause; reschedulePendingOverride?: boolean | null }
+): ReturnType<typeof decideAppointmentTeardown> {
+  const decision = decideAppointmentTeardown(input);
+  if (!appt) return decision;
+  appt.status = decision.status;
+  if (decision.clearBookedEvent) {
+    appt.whenIso = null;
+    appt.bookedEventId = null;
+    appt.bookedEventLink = null;
+    appt.bookedSalespersonId = null;
+    appt.bookedSalespersonName = null;
+    appt.bookedCalendarId = null;
+  }
+  if (decision.clearRequestedTime) {
+    appt.whenText = undefined;
+    appt.confirmedBy = undefined;
+  }
+  if (decision.clearMatchedSlot) appt.matchedSlot = undefined;
+  appt.reschedulePending = decision.reschedulePending;
+  if (decision.clearStaffPromptState) clearAppointmentStaffPromptState(appt);
+  return decision;
 }
 
 export function resetScheduleInviteCounter(conv: Conversation) {

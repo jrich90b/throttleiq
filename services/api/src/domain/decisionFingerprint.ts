@@ -218,6 +218,27 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     }, ["decideCadenceQuietWindow"]);
   }
 
+  // Added 2026-08-01 with the appointment-teardown un-stacking. Sampled once PER CAUSE — this
+  // referee is a pure function of the cause (no stored state), and the whole point of it is that
+  // one of the five causes answers differently from the other four. A single sample would hide
+  // exactly that. PROBE technique: the cause is held at a fixed value per sample, so what varies
+  // between a baseline and a candidate run is only the referee's own table.
+  for (const cause of [
+    "customer_cancelled",
+    "calendar_event_gone",
+    "staff_cancelled",
+    "staff_no_show",
+    "manual_outbound_book_failed"
+  ] as const) {
+    add(`appointmentTeardown:${cause}`, conv => {
+      if (!conv?.appointment || typeof reducer.decideAppointmentTeardown !== "function") return undefined;
+      return reducer.decideAppointmentTeardown({
+        cause,
+        reschedulePendingOverride: cause === "customer_cancelled" ? false : undefined
+      });
+    }, ["decideAppointmentTeardown"]);
+  }
+
   return registry;
 }
 

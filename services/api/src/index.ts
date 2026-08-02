@@ -493,7 +493,9 @@ import {
   inferDisplayWalkIn,
   inferWalkIn,
   startPostSaleCadence,
-  releaseHeldDraft
+  releaseHeldDraft,
+  applyAppointmentTeardown,
+  clearAppointmentStaffPromptState
 } from "./domain/conversationStore.js";
 import {
   getSchedulerConfig,
@@ -19680,19 +19682,6 @@ function isConfirmedCalendarAppointment(appt: any): boolean {
   );
 }
 
-function clearAppointmentStaffPromptState(appt: any): boolean {
-  const notify = appt?.staffNotify;
-  if (!notify || typeof notify !== "object") return false;
-  let changed = false;
-  for (const key of ["bookedSentAt", "followUpSentAt", "lastEventId", "outcomeToken"]) {
-    if (Object.prototype.hasOwnProperty.call(notify, key)) {
-      delete notify[key];
-      changed = true;
-    }
-  }
-  return changed;
-}
-
 function isBookedAppointmentCancellationText(text: string | null | undefined): boolean {
   const normalized = String(text ?? "").trim().toLowerCase();
   if (!normalized) return false;
@@ -19729,20 +19718,12 @@ async function cancelBookedAppointmentForConversation(
     console.warn("[appointment-cancel] calendar cancel failed:", err?.message ?? err);
   }
 
-  appt.status = "none";
-  appt.whenText = undefined;
-  appt.whenIso = null;
-  appt.confirmedBy = undefined;
-  appt.bookedEventId = null;
-  appt.bookedEventLink = null;
-  appt.bookedSalespersonId = null;
-  appt.bookedSalespersonName = null;
-  appt.bookedCalendarId = null;
-  appt.matchedSlot = undefined;
-  appt.reschedulePending = args?.reschedulePending ?? false;
+  const teardown = applyAppointmentTeardown(appt, {
+    cause: "customer_cancelled",
+    reschedulePendingOverride: args?.reschedulePending ?? false
+  });
   appt.updatedAt = new Date().toISOString();
-  clearAppointmentStaffPromptState(appt);
-  if (conv?.id) {
+  if (conv?.id && teardown.closeAppointmentTodos) {
     markOpenTodosDoneForConversationByClass(conv.id, ["appointment"]);
   }
   changed = true;
@@ -33112,19 +33093,10 @@ async function processDueFollowUpsUnlocked() {
           appt.whenIso = decision.whenIso;
           appt.whenText = formatSlotLocal(decision.whenIso, tzForSync);
         } else {
-          appt.status = "none";
-          appt.whenText = undefined;
-          appt.whenIso = null;
-          appt.confirmedBy = undefined;
-          appt.bookedEventId = null;
-          appt.bookedEventLink = null;
-          appt.bookedSalespersonId = null;
-          appt.bookedSalespersonName = null;
-          appt.bookedCalendarId = null;
-          appt.matchedSlot = undefined;
-          appt.reschedulePending = true;
-          clearAppointmentStaffPromptState(appt);
-          markOpenTodosDoneForConversationByClass(conv.id, ["appointment"]);
+          const teardown = applyAppointmentTeardown(appt, { cause: "calendar_event_gone" });
+          if (teardown.closeAppointmentTodos) {
+            markOpenTodosDoneForConversationByClass(conv.id, ["appointment"]);
+          }
         }
         appt.updatedAt = now.toISOString();
         conv.updatedAt = now.toISOString();
@@ -40288,19 +40260,10 @@ app.patch("/calendar/events/:calendarId/:eventId", requirePermission("canEditApp
       if (!currentEventId || currentEventId !== eventId) continue;
 
       if (status === "cancelled" || status === "no_show") {
-        appt.status = "none";
-        appt.whenText = undefined;
-        appt.whenIso = null;
-        appt.confirmedBy = undefined;
-        appt.bookedEventId = null;
-        appt.bookedEventLink = null;
-        appt.bookedSalespersonId = null;
-        appt.bookedSalespersonName = null;
-        appt.bookedCalendarId = null;
-        appt.matchedSlot = undefined;
-        appt.reschedulePending = status === "cancelled";
-        clearAppointmentStaffPromptState(appt);
-        if (conv?.id) {
+        const teardown = applyAppointmentTeardown(appt, {
+          cause: status === "cancelled" ? "staff_cancelled" : "staff_no_show"
+        });
+        if (conv?.id && teardown.closeAppointmentTodos) {
           markOpenTodosDoneForConversationByClass(conv.id, ["appointment"]);
         }
       } else {
@@ -53720,15 +53683,9 @@ app.post("/conversations/:id/send", async (req, res) => {
       setDialogState(conv, "schedule_booked");
       const booked = await maybeBookManualOutboundAppointmentEvent(opts);
       if (!booked || !String(conv.appointment?.bookedEventId ?? "").trim()) {
-        conv.appointment.status = "none";
-        conv.appointment.whenIso = null;
-        conv.appointment.bookedEventId = null;
-        conv.appointment.bookedEventLink = null;
-        conv.appointment.bookedSalespersonId = null;
-        conv.appointment.bookedSalespersonName = null;
-        conv.appointment.bookedCalendarId = null;
-        conv.appointment.reschedulePending = true;
-        clearAppointmentStaffPromptState(conv.appointment);
+        // Divergence lives here: this teardown keeps whenText/confirmedBy/matchedSlot. Preserved
+        // by the referee, named as `manual_outbound_book_failed_retains_requested_time`.
+        applyAppointmentTeardown(conv.appointment, { cause: "manual_outbound_book_failed" });
         setDialogState(conv, "schedule_request");
         addTodo(
           conv,
@@ -53770,15 +53727,8 @@ app.post("/conversations/:id/send", async (req, res) => {
         const requestedWhen = appt.whenIso
           ? formatSlotLocal(String(appt.whenIso), schedulerTimezone)
           : "the requested time";
-        appt.status = "none";
-        appt.whenIso = null;
-        appt.bookedEventId = null;
-        appt.bookedEventLink = null;
-        appt.bookedSalespersonId = null;
-        appt.bookedSalespersonName = null;
-        appt.bookedCalendarId = null;
-        appt.reschedulePending = true;
-        clearAppointmentStaffPromptState(appt);
+        // Same divergence as the confirm branch above — same referee, same preserved answer.
+        applyAppointmentTeardown(appt, { cause: "manual_outbound_book_failed" });
         setDialogState(conv, "schedule_request");
         addTodo(
           conv,
