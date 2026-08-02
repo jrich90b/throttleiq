@@ -22,7 +22,8 @@
  * appointment, an UNANSWERED customer message (that stays the owner's "needs YOUR reply" task —
  * the agent can't answer deal specifics), a pending draft, or a pending dated staff promise
  * ("I'll send numbers Monday" → the promise task owns the follow-up, no "just checking in" over
- * it). Capped per thread (max 2) with spacing between nudges.
+ * it), or a thread that has been quiet so long there is nothing left to continue (the ceiling
+ * below). Capped per thread (max 2) with spacing between nudges.
  *
  * FAIL DIRECTION: every uncertain state → no nudge (silence). A missed bump costs a little
  * momentum; a wrong bump talks over a human deal. Flags:
@@ -34,6 +35,27 @@
 export const HUMAN_THREAD_NUDGE_QUIET_DAYS_DEFAULT = 3;
 export const HUMAN_THREAD_NUDGE_MAX_COUNT_DEFAULT = 2;
 export const HUMAN_THREAD_NUDGE_SPACING_DAYS_DEFAULT = 5;
+
+/**
+ * The OTHER end of the quiet clock (Joe 2026-08-01, condition 3 of three before the feature is
+ * re-enabled). A nudge is a ~3-day bump that continues a warm thread in the rep's voice with ZERO
+ * new facts; past a month there is no thread left to continue, so the same message becomes a cold
+ * re-open of a dead lead wearing a bump's label — and a cold re-open needs a reason to exist
+ * (value-gated), which this composer is forbidden from inventing.
+ *
+ * 30 days is where the incident's own data separates cleanly. The 16 threads nudged on 2026-07-31
+ * carried quiet days of 131, 130, 110, 87, 21, 13, 11, 10, 10, 8, 8, 7, 6, 6, 3, 3: twelve genuine
+ * quiet threads at 21 days or less, then a gap to four dead ones at 87+. A 30-day ceiling keeps
+ * every legitimate bump and blocks exactly those four (e.g. Amy Szyminski +17168615133, a March
+ * JOB APPLICATION bumped 131 days later with "any other details you want me to pass along to the
+ * hiring team?"). It also matches the store's own follow-up standard, which stops at day 30.
+ *
+ * Unlike the other knobs this one is NOT caller-supplied by default: a safety ceiling that has to
+ * be wired at each call site is a ceiling that can be forgotten at one, so the decision applies it
+ * whether or not the caller passes it. Overriding it is possible but never to "no ceiling" — a
+ * missing, non-numeric, or non-positive value falls back to this default.
+ */
+export const HUMAN_THREAD_NUDGE_MAX_QUIET_DAYS_DEFAULT = 30;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -104,6 +126,11 @@ export interface HumanThreadNudgeInput {
   quietDays: number;
   maxCount: number;
   spacingDays: number;
+  /**
+   * Upper end of the quiet clock — omit it and HUMAN_THREAD_NUDGE_MAX_QUIET_DAYS_DEFAULT applies
+   * anyway (the ceiling is a safety stop, not an opt-in). Junk falls back to the default.
+   */
+  maxQuietDays?: number | null;
 }
 
 export type HumanThreadNudgeDecision = { nudge: false; reason: string } | { nudge: true; quietDays: number };
@@ -166,6 +193,12 @@ export function decideHumanThreadNudge(input: HumanThreadNudgeInput): HumanThrea
   if (!Number.isFinite(lastAtMs)) return { nudge: false, reason: "no_message_anchor" };
   const quietMs = input.nowMs - lastAtMs;
   if (quietMs < input.quietDays * DAY_MS) return { nudge: false, reason: "not_quiet_long_enough" };
+  // ...and the ceiling at the other end (Joe 2026-08-01). A thread this cold is not being
+  // continued, it is being re-opened, and this composer has no facts to re-open it with.
+  const maxQuiet = Number(input.maxQuietDays);
+  const maxQuietDays =
+    Number.isFinite(maxQuiet) && maxQuiet > 0 ? maxQuiet : HUMAN_THREAD_NUDGE_MAX_QUIET_DAYS_DEFAULT;
+  if (quietMs > maxQuietDays * DAY_MS) return { nudge: false, reason: "quiet_too_long" };
   const count = Number(input.nudgeCount ?? 0);
   if (count >= input.maxCount) return { nudge: false, reason: "cap_reached" };
   if (count > 0) {
