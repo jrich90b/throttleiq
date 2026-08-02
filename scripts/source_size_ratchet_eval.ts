@@ -92,7 +92,11 @@ const CEILINGS: Ceiling[] = [
     // 16_825 -> 16_723. Two extractions land together here: the conversation-state prompt
     // (conversationStateParserPrompt.ts, #436) and the inbound-reply-action JSON schema + its 23
     // few-shots (domain/inboundReplyActionPrompt.ts), so each prompt surface is editable on its own.
-    max: 16_723,
+    // 16_723 -> 16_654. Every Anthropic request builder in the repo collapsed into ONE caller
+    // (domain/anthropicRequest.ts): the open critic's `requestStructuredJsonAnthropic` wrapper and
+    // the draft A/B arm's inline fetch both left this file. That is where the claude-opus-5
+    // `temperature` 400 was hiding twice over.
+    max: 16_654,
     note: "every parser prompt + JSON schema; second-largest and on the same trajectory"
   }
 ];

@@ -166,13 +166,21 @@ noShip({ ...clean, lawOk: false }, true, "law violation (e.g. new free-text rege
   assert.match(s, /reasons: \{ type: "string", minLength: \d+ \}/, "an empty reasons string is schema-invalid");
   assert.match(s, /required: \["reasons", "concerns"/, "prose fields come FIRST so a truncation cannot eat them");
   assert.match(s, /EXPLAIN YOURSELF/, "the prompt explicitly demands an explanation");
-  assert.match(s, /max_tokens: 1200/, "enough budget for real prose");
+  // `max_tokens: 1200` became `maxTokens: 1200` when this call moved onto the shared Anthropic
+  // caller (domain/anthropicRequest.ts, which owns the wire-format name). Same 1200-token budget —
+  // the pin follows the value, not the spelling.
+  assert.match(s, /maxTokens: 1200/, "enough budget for real prose");
 }
 
 // --- reviewer source guards: independent (Claude), typed, conservative defaults. ---
 const src = fs.readFileSync("services/api/src/domain/preShipReview.ts", "utf8");
-assert.match(src, /api\.anthropic\.com\/v1\/messages/, "reviewer is a DIFFERENT lineage (Claude) than the OpenAI generator");
-assert.match(src, /tool_choice: \{ type: "tool", name: "pre_ship_review" \}/, "typed structured review via tool-use");
+// Both pins used to read the raw fetch that lived here. It moved to the shared Anthropic caller
+// (the [[source-size-ratchet-breaks-eval-source-pins]] trap), so they follow the call one hop —
+// the INTENT is unchanged: a Claude reviewer, typed via forced tool-use. THE LINEAGE RULE IS THE
+// POINT: a judge from the same family as the generator shares its blind spots, which is exactly
+// why this reviewer was built on Claude while the agent runs on OpenAI.
+assert.match(src, /anthropicMessagesRequest/, "reviewer is a DIFFERENT lineage (Claude) than the OpenAI generator");
+assert.match(src, /toolName: "pre_ship_review"/, "typed structured review via tool-use");
 assert.match(src, /verdict: oneOf\(p\.verdict, \["approve", "hold"\], "hold"\)/, "parse failure defaults to HOLD (conservative)");
 assert.match(src, /oneOf\(p\.risk, \["low", "medium", "high"\], "high"\)/, "parse failure defaults to HIGH risk (conservative)");
 assert.match(src, /if \(!review\) return \{ ship: false, escalate: true/, "no review => escalate, never ship");

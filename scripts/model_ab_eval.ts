@@ -73,7 +73,16 @@ assert.match(
   "anthropic arm stays dark (falls back to control) until ANTHROPIC_API_KEY is set"
 );
 assert.match(src, /async function generateDraftViaAnthropic\(/, "anthropic draft helper must exist");
-assert.match(src, /api\.anthropic\.com\/v1\/messages/, "anthropic helper calls the Messages API");
+// Was: a pin that this file contains the literal Messages API URL. The URL moved to the shared
+// caller (domain/anthropicRequest.ts) when every Anthropic request builder was collapsed into one
+// — the [[source-size-ratchet-breaks-eval-source-pins]] trap, caught loudly by ci:eval. The pin's
+// INTENT was "this helper really does call Anthropic", so it now follows the call one hop and the
+// owning module is pinned in anthropic_request_contract:eval.
+assert.match(
+  src,
+  /generateDraftViaAnthropic[\s\S]{0,900}anthropicMessagesRequest\(\{/,
+  "anthropic draft helper must reach Anthropic through the shared caller"
+);
 assert.match(
   src,
   /draftProvider === "anthropic"[\s\S]{0,700}generateViaOpenAI\(draftModelControl\(\)\)/,

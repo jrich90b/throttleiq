@@ -351,11 +351,19 @@ assert.match(llm, /export async function critiqueConversationHandlingWithLLM/, "
 assert.match(llm, /OPEN_CRITIC_JSON_SCHEMA/, "the critic uses a typed structured-output schema");
 // Cross-model: the critic prefers Claude (a different lineage than the OpenAI generator) and falls back
 // to OpenAI when no Anthropic key / forced. Claude via raw fetch + tool-use (no SDK dependency).
-assert.match(llm, /async function requestStructuredJsonAnthropic/, "a Claude structured-output helper exists (cross-model judging)");
-assert.match(llm, /api\.anthropic\.com\/v1\/messages/, "the Claude helper calls the Anthropic API directly (no SDK dep)");
-assert.match(llm, /tool_choice: \{ type: "tool", name: args\.schemaName \}/, "Claude structured output uses forced tool-use");
+// These three used to be pinned against llmDraft.ts. The Claude request builder moved to the
+// shared caller when all four hand-rolled Anthropic builders collapsed into one — the
+// [[source-size-ratchet-breaks-eval-source-pins]] trap. Repointed to the owning file; the INTENT
+// (a real Claude structured call, raw fetch, forced tool-use) is unchanged.
+const anthropicCaller = fs.readFileSync("services/api/src/domain/anthropicRequest.ts", "utf8");
+assert.match(anthropicCaller, /export async function anthropicMessagesRequest/, "a Claude structured-output helper exists (cross-model judging)");
+assert.match(anthropicCaller, /api\.anthropic\.com\/v1\/messages/, "the Claude helper calls the Anthropic API directly (no SDK dep)");
+assert.match(anthropicCaller, /tool_choice\s*=\s*\{ type: "tool", name: args\.toolName \}/, "Claude structured output uses forced tool-use");
 assert.match(llm, /const useClaude =/, "the critic selects a provider (cross-model by default)");
-assert.match(llm, /requestStructuredJsonAnthropic\(\{[\s\S]*?schemaName: "open_critic"/, "the critic routes to Claude for the open-critic judgment");
+assert.match(llm, /anthropicMessagesRequest\(\{[\s\S]*?toolName: "open_critic"/, "the critic routes to Claude for the open-critic judgment");
+// New, and the reason this whole change exists: a failed Claude call falls through to OpenAI
+// SILENTLY, so it must say so out loud or an "upgrade" to a model we cannot call reads as success.
+assert.match(llm, /llm-open-critic-claude\][\s\S]{0,80}fell back to OpenAI/, "a failed Claude critique must log the fallback");
 assert.match(llm, /OpenAI fallback: the no-Claude-key path AND resilience/, "the critic falls back to OpenAI (safe before the key lands / on a Claude outage)");
 const sweep3 = fs.readFileSync("scripts/open_critic_sweep.ts", "utf8");
 assert.match(sweep3, /critiqueConversationHandlingWithLLM/, "the open-critic sweep runs the critic over recent convs");

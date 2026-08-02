@@ -20,6 +20,8 @@ import {
   INBOUND_REPLY_ACTION_PARSER_JSON_SCHEMA,
   INBOUND_REPLY_ACTION_EXAMPLES
 } from "./inboundReplyActionPrompt.js";
+import { anthropicMessagesRequest, extractAnthropicText, extractAnthropicToolInput } from "./anthropicRequest.js";
+import { runJudgeShadowArm } from "./judgeShadowArm.js";
 import { decideDraftModelArm, type DraftModelArm } from "./routeStateReducer.js";
 import { passesModelRelevanceGuard } from "./turnUnderstandingAuthority.js";
 import { appendParserCaptureRecord, buildParserCaptureRecord } from "./parserCapture.js";
@@ -72,43 +74,20 @@ async function generateDraftViaAnthropic(args: {
   const maxTokens = Number(process.env.ANTHROPIC_DRAFT_MAX_TOKENS) || 1024;
   const tempRaw = Number(process.env.ANTHROPIC_DRAFT_TEMPERATURE);
   const temperature = Number.isFinite(tempRaw) ? tempRaw : 0.6;
-  const controller = new AbortController();
-  const timer = setTimeout(
-    () => controller.abort(),
-    Number(process.env.ANTHROPIC_DRAFT_TIMEOUT_MS) || 20000
-  );
-  try {
-    const resp = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01"
-      },
-      body: JSON.stringify({
-        model: args.model,
-        max_tokens: maxTokens,
-        temperature,
-        system: args.instructions,
-        messages: [{ role: "user", content: args.input }]
-      }),
-      signal: controller.signal
-    });
-    if (!resp.ok) throw new Error(`anthropic: HTTP ${resp.status}`);
-    const data: any = await resp.json();
-    if (data?.stop_reason === "refusal") throw new Error("anthropic: refusal");
-    const text = Array.isArray(data?.content)
-      ? data.content
-          .filter((b: any) => b?.type === "text")
-          .map((b: any) => String(b?.text ?? ""))
-          .join("")
-          .trim()
-      : "";
-    if (!text) throw new Error("anthropic: empty draft");
-    return text;
-  } finally {
-    clearTimeout(timer);
-  }
+  const result = await anthropicMessagesRequest({
+    apiKey,
+    model: args.model,
+    maxTokens,
+    temperature,
+    system: args.instructions,
+    messages: [{ role: "user", content: args.input }],
+    timeoutMs: Number(process.env.ANTHROPIC_DRAFT_TIMEOUT_MS) || 20000
+  });
+  if (!result.ok) throw new Error(`anthropic: HTTP ${result.status}`);
+  if (result.data?.stop_reason === "refusal") throw new Error("anthropic: refusal");
+  const text = extractAnthropicText(result.data);
+  if (!text) throw new Error("anthropic: empty draft");
+  return text;
 }
 
 type ManualReplyExample = {
@@ -5033,73 +5012,6 @@ async function requestStructuredJson(args: {
     }
   }
 
-  return null;
-}
-
-// Anthropic (Claude) structured-output sibling of requestStructuredJson — used for CROSS-MODEL judging
-// (Net 3's open critic). A model is systematically blind to errors rooted in its own understanding, so a
-// judge from a DIFFERENT lineage than the generator (OpenAI) catches the failure modes OpenAI misses.
-// Uses Claude tool-use (a forced tool call whose input_schema = our JSON schema) for guaranteed structured
-// JSON. Raw fetch (mirrors claudeAgent.ts) — no SDK dependency. Returns the parsed object or null.
-async function requestStructuredJsonAnthropic(args: {
-  model: string;
-  prompt: string;
-  schemaName: string;
-  schema: { [key: string]: unknown };
-  maxOutputTokens?: number;
-  debugTag?: string;
-  debug?: boolean;
-}): Promise<any | null> {
-  const apiKey = String(process.env.ANTHROPIC_API_KEY ?? "").trim();
-  if (!apiKey) return null;
-  try {
-    const resp = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01"
-      },
-      body: JSON.stringify({
-        model: args.model,
-        max_tokens: args.maxOutputTokens ?? 400,
-        temperature: 0,
-        tool_choice: { type: "tool", name: args.schemaName },
-        tools: [
-          {
-            name: args.schemaName,
-            description: "Return the structured result for this judgment.",
-            input_schema: args.schema
-          }
-        ],
-        messages: [{ role: "user", content: args.prompt }]
-      })
-    });
-    const data: any = await resp.json().catch(() => null);
-    if (!resp.ok) {
-      if (args.debug) {
-        console.error(`[${args.debugTag ?? "llm-json-anthropic"}] request failed`, {
-          model: args.model,
-          status: resp.status,
-          error: String(data?.error?.message ?? data?.message ?? "")
-        });
-      }
-      return null;
-    }
-    const block = Array.isArray(data?.content)
-      ? data.content.find((b: any) => b?.type === "tool_use" && b?.name === args.schemaName)
-      : null;
-    const input = block?.input;
-    if (input && typeof input === "object") return input;
-    if (args.debug) {
-      console.warn(`[${args.debugTag ?? "llm-json-anthropic"}] no tool_use block`, { model: args.model });
-    }
-  } catch (error) {
-    if (args.debug) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`[${args.debugTag ?? "llm-json-anthropic"}] request threw`, { model: args.model, error: message });
-    }
-  }
   return null;
 }
 
@@ -10424,6 +10336,9 @@ export async function judgeShouldRespondWithLLM(args: {
   const catRaw = String(parsed.category ?? "").toLowerCase();
   const category: ShouldRespondJudgeParse["category"] =
     catRaw === "answer_needed" || catRaw === "social_reciprocation" ? catRaw : "no_reply";
+  // Shadow only — never awaited, never consumed (judgeShadowArm.ts). Same prompt at each
+  // challenger, both verdicts logged, so any flip rests on measured disagreement.
+  runJudgeShadowArm({ operation: "should_respond_judge", prompt, schemaName: "should_respond_judge", schema: SHOULD_RESPOND_JUDGE_JSON_SCHEMA, primaryModel: primaryModel, primaryVerdict: category, verdictField: "category" });
   return {
     // should_respond is authoritative for answer_needed only; never force a reply on the others.
     shouldRespond: parsed.should_respond === true && category === "answer_needed",
@@ -10809,15 +10724,25 @@ export async function critiqueConversationHandlingWithLLM(args: {
 
   let parsed: any = null;
   if (useClaude) {
-    parsed = await requestStructuredJsonAnthropic({
+    const claude = await anthropicMessagesRequest({
+      apiKey: String(process.env.ANTHROPIC_API_KEY ?? ""),
       model: claudeModel,
-      prompt,
-      schemaName: "open_critic",
-      schema: OPEN_CRITIC_JSON_SCHEMA,
-      maxOutputTokens: 400,
-      debugTag: "llm-open-critic-claude",
-      debug
+      maxTokens: 400,
+      temperature: 0,
+      toolName: "open_critic",
+      inputSchema: OPEN_CRITIC_JSON_SCHEMA,
+      messages: [{ role: "user", content: prompt }]
     });
+    parsed = claude.ok ? extractAnthropicToolInput(claude.data, "open_critic") : null;
+    // LOUD on failure: the OpenAI fallback below is silent by design, so without this a rejected
+    // Claude request reads as a successful Claude critique (the claude-opus-5 temperature 400).
+    if (!parsed) {
+      console.warn("[llm-open-critic-claude] fell back to OpenAI", {
+        model: claudeModel,
+        status: claude.status,
+        error: String(claude.data?.error?.message ?? "").slice(0, 200)
+      });
+    }
   }
   if (!parsed) {
     // OpenAI fallback: the no-Claude-key path AND resilience if the Claude call fails/returns null.
@@ -10951,6 +10876,9 @@ export async function judgeDraftQualityWithLLM(args: {
     typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
       ? Math.max(0, Math.min(1, parsed.confidence))
       : undefined;
+  // Shadow only — never awaited, never consumed (judgeShadowArm.ts). Same prompt at each
+  // challenger, both verdicts logged, so any flip rests on measured disagreement.
+  runJudgeShadowArm({ operation: "draft_quality_judge", prompt, schemaName: "draft_quality_judge", schema: DRAFT_QUALITY_JUDGE_JSON_SCHEMA, primaryModel: primaryModel, primaryVerdict: overall, verdictField: "overall" });
   return {
     intentOk: parsed.intent_ok !== false,
     toneOk: parsed.tone_ok !== false,
@@ -11073,6 +11001,9 @@ export async function judgeCadenceQualityWithLLM(args: {
     typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
       ? Math.max(0, Math.min(1, parsed.confidence))
       : undefined;
+  // Shadow only — never awaited, never consumed (judgeShadowArm.ts). Same prompt at each
+  // challenger, both verdicts logged, so any flip rests on measured disagreement.
+  runJudgeShadowArm({ operation: "cadence_quality_judge", prompt, schemaName: "cadence_quality_judge", schema: CADENCE_QUALITY_JUDGE_JSON_SCHEMA, primaryModel: primaryModel, primaryVerdict: overall, verdictField: "overall" });
   return {
     sendWorthy: parsed.send_worthy !== false,
     stateFit: parsed.state_fit !== false,
