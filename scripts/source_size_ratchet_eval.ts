@@ -60,7 +60,11 @@ const CEILINGS: Ceiling[] = [
     // The cadence-quality judge's input assembly also moved out: the inline "days since the customer
     // last replied" walk is now daysSinceLastCustomerReply (cadenceQualityFacts.ts), alongside the
     // unit facts the judge is graded against.
-    max: 71_575,
+    // 71_575 -> 71_467. The cadence repeat-similarity math (stop-word list, tokenizer, sentence
+    // extraction, overlap score, near-duplicate test) moved to cadenceRepeatSimilarity.ts so the
+    // eval could import the code that actually runs instead of a hand-copy that had already
+    // drifted from it (ASCII-only apostrophe stripping: 0.8095 in the copy vs 0.7727 shipped).
+    max: 71_467,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
