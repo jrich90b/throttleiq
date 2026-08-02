@@ -199,6 +199,58 @@ const file = (path: string, text: string): SourceFile => ({ path, text });
     file("lazy.ts", "(conv as any).financeOutcomeNotify = (conv as any).financeOutcomeNotify ?? {};")
   ]);
   assert.equal(sites.get("financeOutcomeNotify"), undefined, "idempotent `x = x ?? {}` init is not contention");
+
+  // CUT 3 (2026-08-01): the same idempotent shape with a NON-empty default. This is what was
+  // actually in production — five times on `appointment` alone — and the `?? {}`-only test above
+  // sailed straight past it, which is a large part of why the queue could never reach zero.
+  assert.equal(
+    findWriteSites([
+      file("lazy2.ts", 'conv.appointment = conv.appointment ?? { status: "none", updatedAt: nowIso() };')
+    ]).get("appointment"),
+    undefined,
+    "`x = x ?? <non-empty default>` only ever fills a blank — it cannot overwrite another writer"
+  );
+
+  // ...and through an ALIAS. The old test asked about the alias's ROOT field (`appointment`)
+  // rather than the path actually assigned (`appt.staffNotify`), so this was never recognized.
+  assert.equal(
+    findWriteSites([
+      file("lazy3.ts", ["const appt = conv.appointment;", "appt.staffNotify = appt.staffNotify ?? {};"].join("\n"))
+    ]).get("appointment"),
+    undefined,
+    "a value-preserving default through an alias is not contention either"
+  );
+
+  // CLOCK TOUCH: stamping when something changed is bookkeeping, not a decision about the lead.
+  assert.equal(
+    findWriteSites([
+      file("clock.ts", ["const appt = conv.appointment;", "appt.confirmedAt = nowIso();"].join("\n"))
+    ]).get("appointment"),
+    undefined,
+    "`...At = nowIso()` is a timestamp stamp, not an arbitration"
+  );
+
+  // ...but the exclusion is TIGHT: a COMPUTED date is a real decision about when we next touch a
+  // customer, and must keep counting. This is the assertion that stops rule 2 from eating the queue.
+  assert.equal(
+    (findWriteSites([
+      file("due.ts", "conv.followUpCadence.nextDueAt = computeFollowUpDueAt(anchorAt, offset, tz);")
+    ]).get("followUpCadence") ?? []).length,
+    1,
+    "a COMPUTED due date is a real decision and still counts"
+  );
+
+  // A genuine overwrite must never be excluded — that is the whole fight surface.
+  assert.equal(
+    (findWriteSites([file("real.ts", 'conv.appointment = { status: "confirmed" };')]).get("appointment") ?? []).length,
+    1,
+    "a plain wholesale write is still contention"
+  );
+  assert.equal(
+    (findWriteSites([file("real2.ts", "conv.followUpCadence.status = \"stopped\";")]).get("followUpCadence") ?? []).length,
+    1,
+    "a plain property write is still contention"
+  );
 }
 
 // --- BRANCHES INSIDE ONE FUNCTION ARE ONE WRITER ---
