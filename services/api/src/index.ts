@@ -940,6 +940,7 @@ import {
   isImplausibleAppointmentDueAt,
   startFollowUpCadence,
   applyCadenceQuietWindow,
+  applyCadenceRevival,
   resolveNoShowFollowUpDueAt,
   pauseFollowUpCadence,
   stopFollowUpCadence,
@@ -15152,10 +15153,11 @@ async function applyHealthRecoveryFollowUpDelay(conv: any) {
   const days = Math.max(1, Number(process.env.HEALTH_RECOVERY_DELAY_DAYS ?? 21) || 21);
   const now = new Date().toISOString();
   const untilIso = computeFollowUpDueAt(now, days, timezone);
-  if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
-    conv.followUpCadence = undefined;
-    startFollowUpCadence(conv, now, timezone);
-  }
+  applyCadenceRevival(conv, {
+    trigger: "health_recovery_delay",
+    anchorAtIso: now,
+    timeZone: timezone
+  });
   pauseFollowUpCadence(conv, untilIso, "health_recovery_delay");
   setFollowUpMode(conv, "active", "health_recovery_delay");
   setDialogState(conv, "followup_paused");
@@ -27570,15 +27572,12 @@ async function applyCustomerFollowUpDeferral(conv: any, decision: CustomerFollow
   const cfg = await getSchedulerConfigHot();
   const timezone = cfg.timezone || "America/New_York";
   const now = new Date().toISOString();
-  if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
-    conv.followUpCadence = undefined;
-    startFollowUpCadence(conv, now, timezone);
-  }
-  if (conv.followUpCadence) {
-    conv.followUpCadence.kind = "engaged";
-    conv.followUpCadence.contextTag = decision.reason;
-    conv.followUpCadence.contextTagUpdatedAt = now;
-  }
+  applyCadenceRevival(conv, {
+    trigger: "customer_followup_deferral",
+    anchorAtIso: now,
+    timeZone: timezone,
+    engagedContextTag: decision.reason
+  });
   pauseFollowUpCadence(conv, decision.until.toISOString(), decision.reason);
   setFollowUpMode(conv, "active", decision.reason);
   setDialogState(conv, "followup_paused");
@@ -71045,11 +71044,11 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
             if (isManualFinanceHandoff(conv)) {
               const cfg = await getSchedulerConfigHot();
               const timezone = cfg.timezone || "America/New_York";
-              const cadenceStatus = String(conv.followUpCadence?.status ?? "").trim().toLowerCase();
-              if (!conv.followUpCadence || cadenceStatus === "stopped" || cadenceStatus === "completed") {
-                conv.followUpCadence = undefined;
-                startFollowUpCadence(conv, nowIso(), timezone);
-              }
+              applyCadenceRevival(conv, {
+                trigger: "finance_no_contact",
+                anchorAtIso: nowIso(),
+                timeZone: timezone
+              });
               setFollowUpMode(conv, "active", "finance_no_contact");
               const existing = listOpenTodos().some(
                 t =>

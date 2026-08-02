@@ -25,6 +25,7 @@ import {
   setConversationSoftTag,
   updateHoldingFromInbound,
   confirmAppointmentIfMatchesSuggested,
+  applyCadenceRevival,
   startFollowUpCadence,
   applyMetaPromoInitialCadence,
   resolveInitialAdfCadencePlan,
@@ -7640,17 +7641,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         conv.closedAt = undefined;
       }
       setFollowUpMode(conv, "active", "manual_hold_clear");
-      if (conv.followUpCadence?.status === "stopped") {
-        conv.followUpCadence = undefined;
-      }
       const cfg = await getSchedulerConfig();
-      if (!conv.followUpCadence) {
-        startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone);
-      } else {
-        conv.followUpCadence.status = "active";
-        conv.followUpCadence.pausedUntil = undefined;
-        conv.followUpCadence.pauseReason = undefined;
-      }
+      applyCadenceRevival(conv, {
+        trigger: "manual_hold_clear",
+        anchorAtIso: new Date().toISOString(),
+        timeZone: cfg.timezone
+      });
     }
     let walkInDelayReason: string | null = null;
     let walkInDelayDays: number | null = null;

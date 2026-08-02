@@ -481,8 +481,15 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 //   (conversationStore), the confirm-book path and the voice post-summary path (index.ts) each
 //   decided the confirmed record's companion fields for themselves; all three now ask
 //   `decideAppointmentConfirmRecord`. A CODE change, not a measurement change.
+// 162 -> 158: the cadence-REVIVAL un-stacking (this commit). Four re-engagement triggers each
+//   carried their own test for "which chases are dead enough to throw away?" before blanking the
+//   record to defeat startFollowUpCadence's own guard — the health-recovery delay and the customer
+//   deferral (index.ts), the finance no-contact voicemail (index.ts) and the walk-in hold-clear
+//   (sendgridInbound.ts). All four now ask `decideCadenceRevival` through `applyCadenceRevival`.
+//   `followUpCadence` 17 -> 13 unrefereed, and it drops from 3 contended files to 2. A CODE change,
+//   not a measurement change — the detector is untouched.
 // RATCHET DOWN ONLY.
-const UNREFEREED_WRITER_BASELINE = 162;
+const UNREFEREED_WRITER_BASELINE = 158;
 
 {
   const sourceFiles: SourceFile[] = [];

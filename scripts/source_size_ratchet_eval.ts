@@ -77,7 +77,12 @@ const CEILINGS: Ceiling[] = [
     // 71_460 -> 71_456. The wrongful-silence judge's trace shaping (which stage, whether to record)
     // moved to domain/noResponseTrace.ts — so widening the judge's coverage to two more silence
     // terminals still came in NET SMALLER than before it.
-    max: 71_456,
+    // 71_456 -> 71_455. The cadence-REVIVAL un-stacking: the three inline "is this chase dead
+    // enough to throw away?" blocks (health-recovery delay, customer deferral, finance no-contact)
+    // replaced by applyCadenceRevival (conversationStore) / decideCadenceRevival
+    // (routeStateReducer). Small on paper because the fourth copy lived in sendgridInbound.ts,
+    // which this ceiling does not cover — that file lost 5 lines of its own.
+    max: 71_455,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

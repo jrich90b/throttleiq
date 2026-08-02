@@ -5,6 +5,7 @@ import { maybeMarkEngagedFromInbound } from "./engagement.js";
 import {
   decideAppointmentConfirmRecord,
   decideCadenceQuietWindow,
+  decideCadenceRevival,
   decideCadenceStart,
   decideHeldDraftRelease,
   decideAppointmentTeardown,
@@ -13,6 +14,7 @@ import {
   type AppointmentConfirmLane,
   type AppointmentConfirmRecordDecision,
   type CadenceQuietTrigger,
+  type CadenceRevivalTrigger,
   type HeldDraftReleaseEvent,
   type AppointmentTeardownCause,
   type ManualCadenceRestartContext,
@@ -5028,6 +5030,51 @@ export function applyCadenceQuietWindow(
   if (decision.resetScheduleInvites) {
     conv.followUpCadence.scheduleInviteCount = 0;
     conv.followUpCadence.scheduleMuted = false;
+  }
+}
+
+// The ONE place a re-engagement trigger throws away a dead chase and starts a new one — the four
+// former copies (health-recovery delay, customer "take your time" deferral, finance no-contact
+// voicemail, walk-in hold-clear) now ask `decideCadenceRevival` instead of each deciding for
+// themselves. See that referee in routeStateReducer.ts for the two divergences it preserves.
+//
+// `anchorAtIso` is supplied by the caller so the decision itself stays clock-free and comparable.
+//
+// Deliberately does NOT stamp `conv.updatedAt` or call `scheduleSave()`: `startFollowUpCadence`
+// does both on the path that lays a new cadence, and every call site already stamps + saves around
+// this. Adding another write here would change persisted timestamps, which a cleanup must not do.
+export function applyCadenceRevival(
+  conv: Conversation,
+  input: {
+    trigger: CadenceRevivalTrigger;
+    anchorAtIso: string;
+    timeZone: string;
+    /**
+     * Deferral lane only: re-tag whichever cadence survives as an `engaged` chase carrying this
+     * context. Stamped with `anchorAtIso`, which is the same clock read that site used inline.
+     */
+    engagedContextTag?: string | null;
+  }
+): void {
+  const decision = decideCadenceRevival({
+    trigger: input.trigger,
+    hasCadence: Boolean(conv.followUpCadence),
+    cadenceStatus: conv.followUpCadence?.status ?? null
+  });
+  if (decision.replaceDeadCadence) conv.followUpCadence = undefined;
+  if (decision.startFresh) {
+    // May still refuse (closed thread, non-sales lead) — that is decideCadenceStart's call, not
+    // ours, and a refusal leaves the lead with no cadence exactly as it does today.
+    startFollowUpCadence(conv, input.anchorAtIso, input.timeZone);
+  } else if (decision.reactivateInPlace && conv.followUpCadence) {
+    conv.followUpCadence.status = "active";
+    conv.followUpCadence.pausedUntil = undefined;
+    conv.followUpCadence.pauseReason = undefined;
+  }
+  if (input.engagedContextTag && conv.followUpCadence) {
+    conv.followUpCadence.kind = "engaged";
+    conv.followUpCadence.contextTag = input.engagedContextTag;
+    conv.followUpCadence.contextTagUpdatedAt = input.anchorAtIso;
   }
 }
 
