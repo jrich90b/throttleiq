@@ -86,6 +86,131 @@ const file = (path: string, text: string): SourceFile => ({ path, text });
   assert.equal(isWriteGuarded(lines, 1), false, "should*/is* predicates are not referees");
 }
 
+// =================================================================================================
+// CUT 4 — THE REFEREE ONE LEVEL DOWN.
+//
+// Every un-stacking so far lands the same way: the referee is a pure `decide*` in
+// routeStateReducer.ts, and the call sites do not call it directly — they call a thin `apply*`
+// wrapper that asks the referee and then writes. So properly un-stacked call sites still scored
+// "decides for itself", i.e. FINISHED WORK read as outstanding work.
+//
+// The danger here is over-correcting. Accepting any `apply*` would be a disaster, and it is
+// measurable: 37 of the unrefereed writes have SOME `apply*` within 40 lines above them, and
+// nearly all of those are the enclosing function's own declaration line or an unrelated helper
+// (`applyWatchFieldHygiene`, `applyDeterministicToneOverrides`) that arbitrates nothing. So the
+// credit carries three proof obligations, and these rows exist to keep each one enforced.
+{
+  const store = file(
+    "store.ts",
+    [
+      "export function applyCadenceQuietWindow(conv, input) {",
+      "  const decision = decideCadenceQuietWindow(input);",
+      "  conv.followUpCadence.pausedUntil = input.quietUntilIso;",
+      "}"
+    ].join("\n")
+  );
+  // (1) the applier consults a referee AND writes this field => its call site is refereed.
+  const caller = file(
+    "caller.ts",
+    [
+      "function handleWatchAlert(conv) {",
+      "  applyCadenceQuietWindow(conv, {});",
+      '  conv.followUpCadence.pauseReason = "watch";',
+      "}"
+    ].join("\n")
+  );
+  const sites = findWriteSites([store, caller]);
+  const callSite = sites.get("followUpCadence")!.find(s => s.file === "caller.ts")!;
+  assert.equal(callSite.guarded, true, "a write downstream of a referee-consulting applier IS refereed");
+
+  // (2) FIELD SCOPE. The same applier must not vouch for a field it does not arbitrate — the real
+  // miss this caught: `maybeStartCadence` calls `applyPendingIncomingInventoryState` (a
+  // referee-consulting applier, but for inventory state) fourteen lines above its own hand-built
+  // `conv.followUpCadence = {…}`, and that unrefereed cadence writer would have left the queue.
+  const otherField = file(
+    "other.ts",
+    [
+      "function maybeStart(conv) {",
+      "  applyCadenceQuietWindow(conv, {});",
+      '  conv.appointment = { status: "none" };',
+      "}"
+    ].join("\n")
+  );
+  const otherSites = findWriteSites([store, otherField]);
+  assert.equal(
+    otherSites.get("appointment")!.find(s => s.file === "other.ts")!.guarded,
+    false,
+    "an applier only referees the fields it actually writes — never a neighbouring one"
+  );
+
+  // (3) A PLAIN `apply*` IS NOT A REFEREE. Same shape, but the applier arbitrates nothing.
+  const dumb = file(
+    "dumb.ts",
+    ["export function applyFieldHygiene(conv) {", '  conv.followUpCadence.kind = "engaged";', "}"].join("\n")
+  );
+  const dumbCaller = file(
+    "dumbcaller.ts",
+    ["function handler(conv) {", "  applyFieldHygiene(conv);", "  conv.followUpCadence.stepIndex = 0;", "}"].join("\n")
+  );
+  assert.equal(
+    findWriteSites([dumb, dumbCaller]).get("followUpCadence")!.find(s => s.file === "dumbcaller.ts")!.guarded,
+    false,
+    "an apply* that consults no referee cannot vouch for anyone — the false-comfort guard"
+  );
+
+  // (4) A DECLARATION IS NOT A CALL. `export function applyCadenceQuietWindow(` matches the same
+  // name pattern as a call to it, so without this an applier's own signature line would vouch for
+  // every write in its body — INCLUDING one that runs BEFORE the arbitration, which is precisely
+  // an unrefereed write. That write must stay counted.
+  const preArbitration = file(
+    "pre.ts",
+    [
+      "export function applyCadenceQuietWindow(conv, input) {",
+      "  conv.followUpCadence.stepIndex = 0;",
+      "  const decision = decideCadenceQuietWindow(input);",
+      "  conv.followUpCadence.pausedUntil = input.quietUntilIso;",
+      "}"
+    ].join("\n")
+  );
+  const pre = findWriteSites([preArbitration]).get("followUpCadence")!;
+  assert.equal(
+    pre[0].guarded,
+    false,
+    "a write ABOVE the referee call is not refereed by the applier's own signature line"
+  );
+  assert.equal(pre[1].guarded, true, "the write below the referee call is refereed");
+}
+
+// ALIAS SCOPE — a local binding cannot reach into another function.
+//
+// The "most recent preceding binding in the file" rule leaked across function boundaries, so the
+// `const existing = conv.followUpCadence` inside `applyManualCadenceRestart` was still the live
+// binding 1,200 lines later, and `addTodo`'s unrelated `existing.reason = reason` (a TODO, not a
+// cadence) scored as a competing writer of the follow-up cadence. Names like `existing`/`cad`/
+// `appt` are reused constantly, so this inflated the queue with work that does not exist.
+{
+  const sites = findWriteSites([
+    file(
+      "scope.ts",
+      [
+        "function ownsTheCadence(conv) {",
+        "  const existing = conv.followUpCadence;",
+        "  existing.stepIndex = 0;",
+        "}",
+        "function ownsATodo(todo) {",
+        "  const existing = todo.record;",
+        "  existing.reason = reason;",
+        "}"
+      ].join("\n")
+    )
+  ]);
+  assert.equal(
+    sites.get("followUpCadence")?.length,
+    1,
+    "only the write inside the binding's OWN function counts — an out-of-scope name reuse is not a writer"
+  );
+}
+
 // --- writer clustering: the cut-2 failure mode ---
 {
   const sites = [
@@ -336,10 +461,19 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 // record, and the manual cadence restart. Take this number from a clean checkout, never from the
 // shared anomaly-review tree — that clone is often mid-edit by the loop and reads ~4 lower.
 // 168 -> 164: PR #425 taught the detector that a write which cannot arbitrate is not a writer.
-// 164 -> 177: the referee lookback stopped leaking across function boundaries (this commit) —
-// 13 writes were being credited to a referee in a DIFFERENT function. A measurement fix, not a regression.
+// 164 -> 177: the referee lookback stopped leaking across function boundaries — 13 writes were
+// being credited to a referee in a DIFFERENT function. A measurement fix, not a regression.
+// 177 -> 168: two more measurement fixes, both DOWN (this commit).
+//   - alias scope (8 of the 9): a `const existing = conv.followUpCadence` was still the live
+//     binding 1,200 lines later, so unrelated writes through a reused name — `addTodo`'s
+//     `existing.reason` — counted as cadence writers. Those writers do not exist.
+//   - the referee one level down (1 of the 9): a call to an `apply*` that consults a referee AND
+//     writes the field now counts as refereed, because that is where every un-stacking so far put
+//     the arbitration. Field-scoped and call-only, so it credits exactly one write today
+//     (`conv.scheduleSoft` under `applySoftVisitCadenceWindow`) rather than the 37 a loose
+//     "any apply*" rule would have waved through.
 // RATCHET DOWN ONLY.
-const UNREFEREED_WRITER_BASELINE = 177;
+const UNREFEREED_WRITER_BASELINE = 168;
 
 {
   const sourceFiles: SourceFile[] = [];

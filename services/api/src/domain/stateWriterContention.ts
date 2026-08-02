@@ -119,6 +119,13 @@ export type SourceFile = { path: string; text: string };
  *
  * An alias is attributed to the MOST RECENT preceding binding of that name in the same file, so a
  * name reused across functions resolves to the right field instead of leaking across scopes.
+ *
+ * SCOPE. A binding only reaches writes inside the SAME enclosing function. Without that, the
+ * "most recent preceding binding in the file" rule leaked across function boundaries: the
+ * `const existing = conv.followUpCadence` inside `applyManualCadenceRestart` was still the live
+ * binding 1,200 lines later, so `addTodo`'s completely unrelated `existing.reason = reason` (a
+ * TODO, not a cadence) scored as a competing writer of the follow-up cadence. A name as common as
+ * `existing`/`cad`/`appt` is reused constantly, so this was not a one-off.
  */
 function collectAliasBindings(lines: string[]): { line: number; alias: string; field: string }[] {
   const bindings: { line: number; alias: string; field: string }[] = [];
@@ -243,8 +250,20 @@ export function findWriteSites(files: SourceFile[]): Map<string, WriteSite[]> {
     else byField.set(field, [site]);
   };
 
+  // Which fields does each function write? Needed to prove an applier arbitrates the field it is
+  // being credited for. Filled as we go, then used in the second pass below.
+  const fieldsWrittenByFn = new Map<string, Set<string>>();
+  const noteFieldWrite = (fileKey: string, fn: string, field: string) => {
+    const key = `${fileKey}::${fn}`;
+    const existing = fieldsWrittenByFn.get(key);
+    if (existing) existing.add(field);
+    else fieldsWrittenByFn.set(key, new Set([field]));
+  };
+  const linesByFile = new Map<string, string[]>();
+
   for (const file of files) {
     const lines = file.text.split("\n");
+    linesByFile.set(file.path, lines);
     const aliases = collectAliasBindings(lines);
     const boundaries = collectFunctionBoundaries(lines);
 
@@ -276,6 +295,7 @@ export function findWriteSites(files: SourceFile[]): Map<string, WriteSite[]> {
           if (isNonContendingWrite(trimmed)) continue;
           const site = makeSite(field, null);
           site.wholesale = !match[2] && /=\s*\{/.test(trimmed);
+          noteFieldWrite(file.path, site.fn, field);
           push(field, site);
         }
       }
@@ -288,12 +308,34 @@ export function findWriteSites(files: SourceFile[]): Map<string, WriteSite[]> {
           other => other.alias === binding.alias && other.line > binding.line && other.line < i
         );
         if (shadowed) continue;
+        // …and it must still be IN SCOPE: a local binding cannot reach into another function.
+        if (enclosingFunction(boundaries, binding.line) !== enclosingFunction(boundaries, i)) continue;
         const aliasWrite = new RegExp(
           `\\b${binding.alias}\\.[A-Za-z_][A-Za-z0-9_]*(?:\\??\\.[A-Za-z_][A-Za-z0-9_]*)*\\s*\\??=(?!=|>)`
         );
         if (!aliasWrite.test(trimmed)) continue;
         if (isNonContendingWrite(trimmed)) continue;
-        push(binding.field, makeSite(binding.field, binding.alias));
+        const site = makeSite(binding.field, binding.alias);
+        noteFieldWrite(file.path, site.fn, binding.field);
+        push(binding.field, site);
+      }
+    }
+  }
+
+  // SECOND PASS — the referee one level down. Now that we know which fields each function writes,
+  // an `apply*` that both consults a referee AND owns the field can vouch for its call sites. This
+  // has to run after the whole corpus is scanned: the applier lives in conversationStore.ts and
+  // the call sites it referees live in index.ts.
+  const refereeAppliers = collectRefereeConsultingAppliers(files, fieldsWrittenByFn);
+  if (refereeAppliers.size) {
+    for (const [field, sites] of byField) {
+      for (const site of sites) {
+        if (site.guarded) continue;
+        const lines = linesByFile.get(site.file);
+        if (!lines) continue;
+        if (isWriteGuarded(lines, site.line - 1, REFEREE_LOOKBACK_LINES, refereeAppliers, field)) {
+          site.guarded = true;
+        }
       }
     }
   }
@@ -321,12 +363,80 @@ export const REFEREE_LOOKBACK_LINES = 40;
 
 const REFEREE_CALL = /\b(?:decide|resolve)[A-Z][A-Za-z0-9_]*\s*\(/;
 
+/**
+ * THE REFEREE ONE LEVEL DOWN — why a direct `decide*` match is not enough.
+ *
+ * Every un-stacking so far landed the same shape: the referee is a pure `decide*` in
+ * routeStateReducer.ts, and the write sites do not call it directly — they call a thin
+ * `apply*` wrapper (`applyAppointmentTeardown`, `applyCadenceQuietWindow`,
+ * `applyManualCadenceRestart`) that asks the referee and then performs the writes. So a call site
+ * that has been PROPERLY un-stacked, and any cause-specific write it does immediately after,
+ * still read as "decides for itself". Finished work scored as outstanding work, which is how the
+ * queue could never reach zero however much of it got fixed.
+ *
+ * WHY THIS IS NOT A LOOSENING. The tempting version — "accept any `apply*`" — would be a
+ * disaster, and measurably so: 39 of the 177 unrefereed writes have SOME `apply*` within 40 lines
+ * above them, but almost all of those are the enclosing function's own declaration line
+ * (`async function applyOutcomeSold(`) or an unrelated helper (`applyWatchFieldHygiene`,
+ * `applyDeterministicToneOverrides`) that arbitrates nothing. Accepting them would reinstate
+ * exactly the false comfort cut 1 was built to remove.
+ *
+ * So the credit is PROVEN, not assumed, on three counts:
+ *   1. the applier's OWN BODY must contain a `decide*`/`resolve*` call — derived from the source,
+ *      never a hand-maintained allowlist that would rot;
+ *   2. the applier must itself WRITE THE FIELD IN QUESTION, so it is arbitrating THIS state and
+ *      not merely standing nearby. Without this the rule mis-credits fast: `maybeStartCadence`
+ *      calls `applyPendingIncomingInventoryState` (a referee-consulting applier, but for
+ *      inventory state) fourteen lines above its own hand-built `conv.followUpCadence = {…}`,
+ *      and that unrefereed cadence writer would have silently left the queue; and
+ *   3. the matched line must be a CALL, not that applier's declaration — otherwise every write
+ *      anywhere inside a long applier would be credited by its own signature line, which is the
+ *      leak `isWriteGuarded`'s function-boundary stop was added to close.
+ * `should*`/`is*` remain rejected at every level: a predicate is not an arbiter.
+ *
+ * FAIL DIRECTION: crediting can only REMOVE work from the queue, so every one of those three is a
+ * proof obligation, never a heuristic. When in doubt the write stays counted.
+ */
+export type RefereeApplierIndex = ReadonlyMap<string, ReadonlySet<string>>;
+
+/** `apply*` functions that consult a referee — mapped to the state fields they actually write. */
+export function collectRefereeConsultingAppliers(
+  files: SourceFile[],
+  fieldsWrittenByFn: ReadonlyMap<string, ReadonlySet<string>>
+): RefereeApplierIndex {
+  const out = new Map<string, Set<string>>();
+  for (const file of files) {
+    const lines = file.text.split("\n");
+    const boundaries = collectFunctionBoundaries(lines);
+    for (const [i, line] of lines.entries()) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith("//") || trimmed.startsWith("*")) continue;
+      if (!REFEREE_CALL.test(trimmed)) continue;
+      const fn = enclosingFunction(boundaries, i);
+      if (!/^apply[A-Z]/.test(fn)) continue;
+      const fields = fieldsWrittenByFn.get(`${file.path}::${fn}`);
+      if (!fields || !fields.size) continue; // consults a referee but writes no tracked state
+      const existing = out.get(fn);
+      if (existing) for (const f of fields) existing.add(f);
+      else out.set(fn, new Set(fields));
+    }
+  }
+  return out;
+}
+
 export function isWriteGuarded(
   lines: string[],
   lineIndex: number,
-  lookback: number = REFEREE_LOOKBACK_LINES
+  lookback: number = REFEREE_LOOKBACK_LINES,
+  refereeAppliers?: RefereeApplierIndex,
+  field?: string
 ): boolean {
   const start = Math.max(0, lineIndex - lookback);
+  // Only appliers that arbitrate THIS field can vouch for this write.
+  const owners = field
+    ? [...(refereeAppliers?.keys() ?? [])].filter(fn => refereeAppliers!.get(fn)!.has(field))
+    : [];
+  const applierCall = owners.length ? new RegExp(`\\b(${owners.join("|")})\\s*\\(`) : null;
   for (let i = lineIndex; i >= start; i--) {
     const line = lines[i];
     if (line === undefined) continue;
@@ -339,8 +449,18 @@ export function isWriteGuarded(
     const trimmed = line.trim();
     if (trimmed.startsWith("//") || trimmed.startsWith("*")) continue;
     if (REFEREE_CALL.test(trimmed)) return true;
+    // …or a call to an applier that asks a referee on this code's behalf. A declaration line is
+    // not a call: `function applyCadenceQuietWindow(` must never credit its own body.
+    if (applierCall && applierCall.test(trimmed) && !isFunctionDeclarationLine(trimmed)) return true;
   }
   return false;
+}
+
+/** `export function applyX(` / `const applyX = (` — a definition, not a call site. */
+function isFunctionDeclarationLine(trimmed: string): boolean {
+  return /^(?:export\s+)?(?:async\s+)?function\s+[A-Za-z_]|^(?:export\s+)?const\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*(?:async\s*)?\(/.test(
+    trimmed
+  );
 }
 
 /**
