@@ -652,10 +652,9 @@ import {
   mergeRecentPriceQuestionIntoFinanceAnswer
 } from "./domain/inventoryFactAnswers.js";
 import {
-  getInventoryNote,
   listInventoryNotes,
   setInventoryNote,
-  inventoryNoteMatchesNarratedYear
+  collectCadenceInventoryNotes
 } from "./domain/inventoryNotes.js";
 import {
   listInventoryHolds,
@@ -13702,19 +13701,16 @@ async function buildEarlyCadencePromotionOverride(args: {
     matches = await findInventoryMatches({ year: null, model });
   }
 
-  const noteSet = new Set<string>();
-  for (const item of matches.slice(0, 5)) {
-    // A unit's note (e.g. a "$1,000 trade-in credit" that lives on the 2025 Breakout stock) must
-    // only be narrated for the SAME model+year we're naming above (modelLabel). When the inventory
-    // match was broadened across years (year:null fallback), skip other-year units so we never
-    // borrow one year's credit onto another year's unit (Joe ruling 2026-07-27, +15854890786).
-    if (!inventoryNoteMatchesNarratedYear(item?.year ?? null, year ?? null)) continue;
-    const note = await getInventoryNote(item?.stockId ?? null, item?.vin ?? null);
-    const cleaned = String(note ?? "").replace(/\s+/g, " ").trim();
-    if (cleaned) noteSet.add(cleaned);
-    if (noteSet.size >= 2) break;
-  }
-  const notes = Array.from(noteSet);
+  // Year-scope guard (Joe 2026-07-27) + borrowed-unit attribution (Joe 2026-08-01,
+  // +17736151296) both live in the domain module; it owns reading each unit's note.
+  const notes = await collectCadenceInventoryNotes({
+    items: matches.slice(0, 5),
+    narratedYear: year ?? null,
+    model,
+    leadYear: String(conv?.lead?.vehicle?.year ?? conv?.inventoryContext?.year ?? "").trim() || null,
+    leadCondition:
+      String(conv?.lead?.vehicle?.condition ?? conv?.inventoryContext?.condition ?? "").trim() || null
+  });
   const modelLabel = formatModelLabel(year, model);
   if (notes.length) {
     const promoLine = notes.length === 1 ? notes[0] : `${notes[0]} and ${notes[1]}`;

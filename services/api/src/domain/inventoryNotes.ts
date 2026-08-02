@@ -76,6 +76,124 @@ export function inventoryNoteMatchesNarratedYear(
   return unit === narrated;
 }
 
+/**
+ * Which unit a note belongs to, when the message narrates NO year (Joe report 2026-08-01,
+ * +17736151296, Mark Walsh).
+ *
+ * `inventoryNoteMatchesNarratedYear` above closes the cross-year case, but it returns true
+ * whenever no year is claimed — and the early-cadence promotion builder deliberately narrates no
+ * year for a USED lead (`resolveCadencePreferredModelContext` nulls the year to stop stale
+ * lead-year bleed). "No year claimed" is NOT "no unit claimed": the customer reads "the Breakout"
+ * as THEIR Breakout, so the year guard is a no-op in exactly the case where borrowing is most
+ * misleading — the model name is identical and only the year/condition differ.
+ *
+ * The production miss: Mark asked about a 2017 USED Breakout (stock U590-17). The
+ * "2025 Promotion — Save $4,000 off list price" note lives on the NEW 2025 Breakouts
+ * (S9-25/S13-25), the year-broadened lookup matched them, and the draft read "quick update on the
+ * Breakout: Save $4,000 off list price." — a $4,000 discount the customer's bike does not get.
+ * Joe corrected it by hand to "...on a new 2025 Breakout" and his steering was explicit: "state
+ * the model year when mentioning discounts".
+ *
+ * So a note from a unit we cannot prove is the LEAD's unit gets ATTRIBUTED to the unit it actually
+ * lives on, rather than dropped — the promo is real and worth sending, it just has to say which
+ * bike it is on. Only when the source unit cannot be described (no year on the feed row) is the
+ * note dropped, because an undescribable borrowed discount is the misstatement we started with.
+ *
+ * Deterministic by AGENTS.md: structured extraction over feed fields plus an invariant guard on a
+ * pricing claim — no customer text is read here. Fail direction: attribute (honest, slightly more
+ * verbose) or drop; never narrate another unit's discount as the customer's own.
+ */
+export type InventoryNoteAttribution =
+  | { kind: "plain" }
+  | { kind: "attribute"; phrase: string }
+  | { kind: "drop" };
+
+function normalizeUnitCondition(value: string | null | undefined): "new" | "used" | null {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (!text) return null;
+  if (text === "new" || text === "new_model_interest") return "new";
+  if (/used|pre-?owned|certified/.test(text)) return "used";
+  return null;
+}
+
+export function decideInventoryNoteUnitAttribution(args: {
+  unitYear?: string | null;
+  unitCondition?: string | null;
+  unitModel?: string | null;
+  leadYear?: string | null;
+  leadCondition?: string | null;
+}): InventoryNoteAttribution {
+  const unitYear = String(args.unitYear ?? "").trim();
+  const leadYear = String(args.leadYear ?? "").trim();
+  const unitCondition = normalizeUnitCondition(args.unitCondition);
+  const leadCondition = normalizeUnitCondition(args.leadCondition);
+
+  // Provably the SAME unit as the one the message names: same year, and no condition conflict.
+  // Only this case keeps the bare copy, so an unknown lead year can never round up to "same unit".
+  const sameYear = Boolean(unitYear) && Boolean(leadYear) && unitYear === leadYear;
+  const conditionConflicts =
+    Boolean(unitCondition) && Boolean(leadCondition) && unitCondition !== leadCondition;
+  if (sameYear && !conditionConflicts) return { kind: "plain" };
+
+  // A borrowed note must name its own unit. Without a year we cannot describe which bike it is.
+  if (!unitYear) return { kind: "drop" };
+
+  const model = String(args.unitModel ?? "").trim();
+  const conditionWord = unitCondition ? `${unitCondition} ` : "";
+  const phrase = `a ${conditionWord}${unitYear}${model ? ` ${model}` : ""}`.replace(/\s+/g, " ").trim();
+  return { kind: "attribute", phrase };
+}
+
+/**
+ * Collect the inventory notes the early-cadence promotion builder may narrate, applying BOTH
+ * unit-scope rulings in one place (it also owns the per-unit note read, so index.ts stays a
+ * caller rather than a second home for this policy):
+ *  - Joe 2026-07-27 (+15854890786): when a YEAR is narrated, a note from another year's unit is
+ *    dropped outright — never borrow one year's credit onto another year's unit.
+ *  - Joe 2026-08-01 (+17736151296): when NO year is narrated, the customer reads the bare model
+ *    label as their own bike, so a note from a unit that is not provably theirs is attributed to
+ *    the unit it lives on ("... on a new 2025 Breakout"), or dropped if it cannot be described.
+ * Returns at most `max` distinct note strings, in feed order.
+ */
+export async function collectCadenceInventoryNotes(args: {
+  items: Array<{
+    stockId?: string | null;
+    vin?: string | null;
+    year?: string | null;
+    condition?: string | null;
+  }>;
+  narratedYear: string | null;
+  model: string | null;
+  leadYear: string | null;
+  leadCondition: string | null;
+  max?: number;
+}): Promise<string[]> {
+  const max = Number.isFinite(args.max) ? Number(args.max) : 2;
+  const noteSet = new Set<string>();
+  for (const item of args.items ?? []) {
+    if (!inventoryNoteMatchesNarratedYear(item?.year ?? null, args.narratedYear)) continue;
+    const note = await getInventoryNote(item?.stockId ?? null, item?.vin ?? null);
+    const cleaned = String(note ?? "").replace(/\s+/g, " ").trim();
+    if (!cleaned) continue;
+    if (String(args.narratedYear ?? "").trim()) {
+      // A year IS narrated, so the guard above already proved this unit is the one being named.
+      noteSet.add(cleaned);
+    } else {
+      const attribution = decideInventoryNoteUnitAttribution({
+        unitYear: item?.year ?? null,
+        unitCondition: item?.condition ?? null,
+        unitModel: args.model,
+        leadYear: args.leadYear,
+        leadCondition: args.leadCondition
+      });
+      if (attribution.kind === "drop") continue;
+      noteSet.add(attribution.kind === "attribute" ? `${cleaned} on ${attribution.phrase}` : cleaned);
+    }
+    if (noteSet.size >= max) break;
+  }
+  return Array.from(noteSet);
+}
+
 async function saveStore(store: InventoryNotesStore): Promise<void> {
   const filePath = dataPath(FILE_NAME);
   const payload = {
