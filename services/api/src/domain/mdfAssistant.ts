@@ -451,6 +451,73 @@ export function inferDateYear(raw: string | null | undefined, now: Date): string
   return `${String(parsed.month).padStart(2, "0")}/${String(parsed.day).padStart(2, "0")}/${year}`;
 }
 
+// === Activity-year outlier concern (2026-08-02) =================================================
+// inferDateYear only fills a MISSING year; a year that extraction read WRONG passes straight
+// through. Production: the "250 Years of Freedom" packet (mdf_65220e89c062a) had seven invoices —
+// six dated 2026 and one IBBQ4U invoice read as 2020-07-18 — and the activity dates were taken
+// from the outlier. portalClaimTypeLabel then asked Ansira for a "2020 Event Claim", which does
+// not exist, and four portal runs blocked on 2026-07-31 (agent_ms9dixrw_a0t5dh,
+// agent_ms9foivd_7qsqd8, agent_ms9fzccl_qn2lhr) before anyone knew why.
+//
+// PR #400 (2026-08-01) fixed the MESSAGE — a blocked run now correctly names the claim's dates
+// instead of blaming Ansira. This catches the same thing one step EARLIER, on the packet itself,
+// so the disagreement is visible in review instead of only after a portal run.
+//
+// It FLAGS, it never REWRITES. Picking a funding year is a money-path decision and stays with the
+// human — the same rule mdf_portal_preflight.ts states for the year-mismatch summary.
+//
+// FAIL DIRECTION: the only effect is one extra review concern. It cannot change a date, a claim,
+// or a portal run. It needs at least three dated invoices AND a strict majority year, so a thin
+// packet or a claim whose invoices genuinely straddle a year boundary stays quiet.
+
+/** The 4-digit year in an already-normalized date string ("07/18/2020", "2020-07-18"), else null. */
+function yearOfDate(raw: string | null | undefined): string | null {
+  return String(raw ?? "").match(/\b(?:19|20)\d{2}\b/)?.[0] ?? null;
+}
+
+/**
+ * A review concern when the claim's ACTIVITY year is a minority among the packet's invoice years —
+ * the shape of a single mis-read date setting the funding year for the whole claim. Returns null
+ * when there is nothing confident to say (the common case).
+ */
+export function activityYearOutlierConcern(
+  activityStartDate: string,
+  activityEndDate: string,
+  invoices: Array<{ vendorName?: string; invoiceDate?: string; invoiceNumber?: string }>
+): string | null {
+  const activityYear = yearOfDate(activityStartDate) ?? yearOfDate(activityEndDate);
+  if (!activityYear) return null;
+  const dated = (invoices ?? [])
+    .map(row => ({ row, year: yearOfDate(row?.invoiceDate) }))
+    .filter((entry): entry is { row: (typeof invoices)[number]; year: string } => !!entry.year);
+  // Under three dated invoices there is no majority worth trusting — stay quiet.
+  if (dated.length < 3) return null;
+  const counts = new Map<string, number>();
+  for (const entry of dated) counts.set(entry.year, (counts.get(entry.year) ?? 0) + 1);
+  // STRICT majority only: a 3/3 split or a plurality says nothing reliable.
+  let majorityYear: string | null = null;
+  for (const [year, count] of counts) {
+    if (count * 2 > dated.length) majorityYear = year;
+  }
+  if (!majorityYear || majorityYear === activityYear) return null;
+  const offenders = dated
+    .filter(entry => entry.year === activityYear)
+    .map(entry => {
+      const vendor = String(entry.row?.vendorName ?? "").trim();
+      const number = String(entry.row?.invoiceNumber ?? "").trim();
+      const label = [vendor, number ? `#${number}` : ""].filter(Boolean).join(" ");
+      return `${label || "an invoice"} (${entry.row?.invoiceDate})`;
+    });
+  const majorityCount = counts.get(majorityYear) ?? 0;
+  return (
+    `Activity year looks wrong: this claim's activity dates put it in ${activityYear}, but ` +
+    `${majorityCount} of ${dated.length} invoices are dated ${majorityYear}` +
+    (offenders.length ? ` — only ${offenders.join(", ")} says ${activityYear}` : "") +
+    `. Ansira offers the claim type by YEAR, so a single mis-read invoice date here blocks the ` +
+    `whole portal run. Confirm the Activity start/end dates before filling the portal.`
+  );
+}
+
 function normalizePacket(raw: any, files: MdfUploadedFile[]): MdfClaimPacket {
   const fallback = fallbackPacket(files, "Extractor returned incomplete data.");
   const packet = raw && typeof raw === "object" ? raw : {};
@@ -502,6 +569,13 @@ function normalizePacket(raw: any, files: MdfUploadedFile[]): MdfClaimPacket {
   // Multi-invoice claim: the headline spend is the SUM of all invoices, not the primary.
   const summedSpend = sumInvoiceSpend(invoices);
   if (summedSpend) extractedFields.spend = summedSpend;
+  // One mis-read invoice date can set the funding year for the whole claim (the 2020-vs-2026
+  // "250 Years of Freedom" block). Surface the disagreement in review; never rewrite the date.
+  const yearConcern = activityYearOutlierConcern(
+    extractedFields.activityStartDate,
+    extractedFields.activityEndDate,
+    invoices
+  );
   return {
     claimType: ["media", "event", "map_only", "unknown"].includes(packet.claimType) ? packet.claimType : fallback.claimType,
     activityType: String(packet.activityType ?? ""),
@@ -513,9 +587,14 @@ function normalizePacket(raw: any, files: MdfUploadedFile[]): MdfClaimPacket {
       status: ["likely_eligible", "review_needed", "likely_ineligible", "unknown"].includes(packet.eligibility?.status)
         ? packet.eligibility.status
         : "unknown",
-      concerns: Array.isArray(packet.eligibility?.concerns)
-        ? packet.eligibility.concerns.map((v: unknown) => String(v)).filter(Boolean).slice(0, 10)
-        : []
+      // The outlier-year concern is appended AFTER the model's own concerns and the list is capped
+      // again, so a chatty extractor can't push it out of the review surface.
+      concerns: [
+        ...(Array.isArray(packet.eligibility?.concerns)
+          ? packet.eligibility.concerns.map((v: unknown) => String(v)).filter(Boolean).slice(0, 10)
+          : []),
+        ...(yearConcern ? [yearConcern] : [])
+      ].slice(0, 11)
     },
     requiredDocumentation: Array.isArray(packet.requiredDocumentation)
       ? packet.requiredDocumentation.map((v: unknown) => String(v)).filter(Boolean).slice(0, 12)
