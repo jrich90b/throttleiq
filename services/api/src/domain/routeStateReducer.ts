@@ -4109,6 +4109,25 @@ export type CadenceStartLane =
 /** The lanes that lay a new cadence over one that is still running. See divergence 1 above. */
 const CADENCE_START_REPLACING_LANES = new Set<string>(["post_sale", "deferred_long_term"]);
 
+/**
+ * Handoff reasons that mean "this lead is not a sales conversation at all" — a job seeker, a B2B
+ * vendor pitching the dealership, spam. Chasing one of these with a sales cadence is never right.
+ *
+ * This is the SAME set `scoringExclusions.isNonSalesConversation` reads (it imports from here), so
+ * cadence suppression and tone-scoring exclusion can never drift apart. That drift is exactly how
+ * `vendor_inquiry` came to sit in the exclusion list for months while nothing ever wrote it.
+ *
+ * Until now the hiring lane's cadence suppression was ORDERING LUCK: its ADF branch returns early
+ * before the cadence check, and `setFollowUpMode(…,"manual_handoff")` happens to stop an active
+ * chase as a side effect. Neither is a ruling, and neither survives a refactor. Asking the referee
+ * makes the refusal explicit for every lane and every caller.
+ */
+export const NON_SALES_CADENCE_REASONS = new Set<string>([
+  "hiring_manager_inquiry",
+  "vendor_inquiry",
+  "spam"
+]);
+
 export type CadenceStartInput = {
   lane: CadenceStartLane | string;
   /** `conv.status`. "closed" means the thread is finished. */
@@ -4124,6 +4143,12 @@ export type CadenceStartInput = {
    * The caller resolves it because the two source fields live in different places on the record.
    */
   sold?: boolean | null;
+  /**
+   * `conv.followUp?.reason` exactly as stored. A recognized non-sales class
+   * (`NON_SALES_CADENCE_REASONS`) refuses every customer-chase lane. Absent/unknown = ordinary
+   * sales lead, so a caller that forgets to pass it gets today's behavior, not silence.
+   */
+  followUpReason?: string | null;
 };
 
 export type CadenceStartDecision = {
@@ -4148,30 +4173,39 @@ export function decideCadenceStart(input: CadenceStartInput): CadenceStartDecisi
   // startFollowUpCadence refuses on "stopped" too: someone or something deliberately ended that
   // chase, and quietly reviving it is the fail-unsafe direction.
   const hasCadenceRecord = hasActiveCadence || existingStatus === "stopped";
+  const followUpReason = String(input.followUpReason ?? "").trim().toLowerCase();
+  const nonSalesLead = NON_SALES_CADENCE_REASONS.has(followUpReason);
 
   let start: boolean;
   let why: string;
   switch (lane) {
     case "standard_ramp":
-      start = !conversationClosed && !hasCadenceRecord;
+      start = !conversationClosed && !hasCadenceRecord && !nonSalesLead;
       why = start
         ? "standard_ramp: no cadence on the lead — started the day-one ramp"
         : conversationClosed
           ? "standard_ramp: refused — the conversation is closed"
-          : `standard_ramp: refused — a ${existingStatus} cadence already owns this lead`;
+          : nonSalesLead
+            ? `standard_ramp: refused — this lead is a non-sales class (${followUpReason})`
+            : `standard_ramp: refused — a ${existingStatus} cadence already owns this lead`;
       break;
     case "post_sale":
       // No closed check on purpose: a sold conversation IS closed (reason "sold").
+      // No non-sales check on purpose either: this lane is already gated on an actual sale, and a
+      // vendor/job-seeker never sells. Adding one here would only risk the load-bearing divergence
+      // above for no reachable case.
       start = input.sold === true;
       why = start
         ? "post_sale: the lead bought — started the owner sequence"
         : "post_sale: refused — nothing on this lead says it sold";
       break;
     case "deferred_long_term":
-      start = !conversationClosed;
+      start = !conversationClosed && !nonSalesLead;
       why = start
         ? "deferred_long_term: scheduled the dated check-back touch"
-        : "deferred_long_term: refused — the conversation is closed";
+        : conversationClosed
+          ? "deferred_long_term: refused — the conversation is closed"
+          : `deferred_long_term: refused — this lead is a non-sales class (${followUpReason})`;
       break;
     default:
       start = false;

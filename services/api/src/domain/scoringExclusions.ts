@@ -5,6 +5,12 @@
  * threads as customer-quality misses.
  */
 
+// One list, one owner. `NON_SALES_FOLLOWUP_REASONS` used to be a second hand-maintained copy here,
+// and the copy is precisely why `vendor_inquiry` sat in it unwired for months: the scorer knew
+// about vendors, nothing else did. The cadence referee owns the set now, so "don't chase them" and
+// "don't grade them" cannot drift apart again.
+import { NON_SALES_CADENCE_REASONS as NON_SALES_FOLLOWUP_REASONS } from "./routeStateReducer.js";
+
 const SHADOW_PROVIDER_MESSAGE_ID_RE = /^(SMshadow|MMshadow|adf_shadow_)/i;
 const SHADOW_SENDER_RE = /shadow-replay@/i;
 
@@ -34,7 +40,6 @@ export function isAutomatedSenderInbound(args: {
   return false;
 }
 
-const NON_SALES_FOLLOWUP_REASONS = new Set(["hiring_manager_inquiry", "vendor_inquiry", "spam"]);
 
 /**
  * A structured lead-intake payload — an ADF (`PHONE LOG (ADF)`, `WEB LEAD (ADF)`)

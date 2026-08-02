@@ -4545,7 +4545,8 @@ export function startFollowUpCadence(
   const decision = decideCadenceStart({
     lane: "standard_ramp",
     conversationStatus: conv.status,
-    existing: conv.followUpCadence
+    existing: conv.followUpCadence,
+    followUpReason: conv.followUp?.reason
   });
   if (!decision.start) return;
   // A far-out / not-interested-now lead opens on the slow LONG_TERM_DAY_OFFSETS schedule
@@ -4834,7 +4835,8 @@ export function scheduleLongTermFollowUp(
   const decision = decideCadenceStart({
     lane: "deferred_long_term",
     conversationStatus: conv.status,
-    existing: conv.followUpCadence
+    existing: conv.followUpCadence,
+    followUpReason: conv.followUp?.reason
   });
   if (!decision.start) return;
   const anchorAtIso = String(opts?.anchorAtIso ?? dueAtIso).trim() || dueAtIso;
