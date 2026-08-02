@@ -27,6 +27,12 @@ import {
   buildDraftQualityJudgePrompt,
   coerceDraftQualityOverall
 } from "./draftQualityJudgePrompt.js";
+import {
+  WALK_IN_OUTCOME_PARSER_JSON_SCHEMA,
+  buildWalkInOutcomePrompt,
+  coerceUnmetInventoryWant,
+  type UnmetInventoryWant
+} from "./walkInInventoryWant.js";
 import { decideDraftModelArm, type DraftModelArm } from "./routeStateReducer.js";
 import { passesModelRelevanceGuard } from "./turnUnderstandingAuthority.js";
 import { appendParserCaptureRecord, buildParserCaptureRecord } from "./parserCapture.js";
@@ -3143,6 +3149,16 @@ export type WalkInOutcomeParse = {
   testRideRequested: boolean;
   weatherSensitive: boolean;
   followUpWindowText?: string | null;
+  /**
+   * Which inventory lane the note's want belongs to — the question a STAFF note can answer, as
+   * opposed to "did the customer ask to be notified" (walkInInventoryWant.ts, Larry Godzich
+   * +17164327329). Only "open_search" is watchable; the referee is decideWalkInInventoryWatchTurn.
+   */
+  unmetInventoryWant: UnmetInventoryWant;
+  /** The note itself says the wanted bike is ours to sell/show right now. */
+  wantIsSatisfiableFromNote: boolean;
+  /** Confidence in the want classification only, independent of `confidence`. */
+  wantConfidence?: number;
   confidence?: number;
 };
 
@@ -3551,46 +3567,6 @@ const MANUAL_OUTBOUND_APPOINTMENT_PARSER_JSON_SCHEMA: { [key: string]: unknown }
     },
     reference: { type: "string", enum: ["last_suggested", "last_appointment", "none"] },
     normalized_text: { type: "string" },
-    confidence: { type: "number" }
-  }
-};
-
-const WALK_IN_OUTCOME_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
-  type: "object",
-  additionalProperties: false,
-  required: [
-    "state",
-    "explicit_state",
-    "test_ride_requested",
-    "weather_sensitive",
-    "follow_up_window_text",
-    "confidence"
-  ],
-  properties: {
-    state: {
-      type: "string",
-      enum: [
-        "none",
-        "deal_finalizing",
-        "deposit_left",
-        "sold_delivered",
-        "hold_requested",
-        "hold_cleared",
-        "cosigner_required",
-        "test_ride_completed",
-        "decision_pending",
-        "outside_financing_pending",
-        "down_payment_pending",
-        "trade_equity_pending",
-        "timing_defer_window",
-        "household_approval_pending",
-        "docs_or_insurance_pending"
-      ]
-    },
-    explicit_state: { type: "boolean" },
-    test_ride_requested: { type: "boolean" },
-    weather_sensitive: { type: "boolean" },
-    follow_up_window_text: { type: "string" },
     confidence: { type: "number" }
   }
 };
@@ -13102,105 +13078,13 @@ export async function parseWalkInOutcomeWithLLM(args: {
 
   const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
   const lead = args.lead ?? {};
-  const examples = [
-    `EXAMPLE A
-comment: "left $1,000 deposit on motorcycle. coming in 4/6 at 4:00pm to finalize deal. (step 6)"
-output: {"state":"deposit_left","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","confidence":0.98}`,
-    `EXAMPLE B
-comment: "thinking it over, will let you know next week"
-output: {"state":"decision_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"next week","confidence":0.95}`,
-    `EXAMPLE C
-comment: "wants a test ride next week when weather is better"
- output: {"state":"timing_defer_window","explicit_state":true,"test_ride_requested":true,"weather_sensitive":true,"follow_up_window_text":"next week","confidence":0.9}`,
-    `EXAMPLE D
-comment: "mark this lead on hold until next Friday"
-output: {"state":"hold_requested","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"next Friday","confidence":0.94}`,
-    `EXAMPLE E
-comment: "clear hold and resume follow up"
-output: {"state":"hold_cleared","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","confidence":0.94}`,
-    `EXAMPLE F
-comment: "coming in tomorrow to finalize paperwork"
-output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"tomorrow","confidence":0.93}`,
-    `EXAMPLE G
-comment: "Sean is looking for a 2026 Dark Billiard Gray Street Glide Limited, we need to order one for him. would like to get a commitment and put an order in for him."
-output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","confidence":0.9}`,
-    `EXAMPLE H
-comment: "going to credit union this week, waiting on approval"
-output: {"state":"outside_financing_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"this week","confidence":0.93}`,
-    `EXAMPLE I
-comment: "saving up for down payment, should be ready in a few weeks"
-output: {"state":"down_payment_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"few weeks","confidence":0.92}`,
-    `EXAMPLE J
-comment: "need to sell my bike first before moving forward"
-output: {"state":"trade_equity_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","confidence":0.93}`,
-    `EXAMPLE K
-comment: "need to talk to my wife first"
-output: {"state":"household_approval_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","confidence":0.93}`,
-    `EXAMPLE L
-comment: "picked out accessories and wants to go over final numbers this week"
-output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"this week","confidence":0.9}`,
-    `EXAMPLE M
-comment: "looking for a 2026 Street Glide Limited in Dark Billiard Gray, please watch and let me know when one comes in"
-output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","confidence":0.78}`,
-    `EXAMPLE N
-comment: "Gary was a walk in and is buying 2026 Street Glide Limited. Trading in 2016 Ultra Limited and 2024 Pan Am Special. Had to discount bike to close deal. Plans on closing 4/24 (Step 6)"
-output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"4/24","confidence":0.96}`,
-    `EXAMPLE O
-comment: "Thank for coming in and tell him it was nice working with him. I will be in touch about delivery and parts status. (Step 8)"
-output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","confidence":0.95}`,
-    `EXAMPLE P
-comment: "Stopped in, really liked the dark billiard and gray 2026 Street Glide. Would also like to watch for a 2024-2025 pre-owned street glide. Reach follow up on 5/23/26. (Step 2)"
-output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"5/23/26","confidence":0.88}`,
-    `EXAMPLE Q
-comment: "Would like to take some time to go over finances. Going on a trip end of the month. Definitely interested in the bike."
-output: {"state":"decision_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","confidence":0.9}`
-  ];
-  const prompt = [
-    "You parse walk-in salesperson comments from dealership ADF leads.",
-    "Return only JSON that matches the schema.",
-    "",
-    "Choose exactly one primary state:",
-    "- deal_finalizing: finalizing paperwork/deal soon but not explicitly sold yet.",
-    "- deposit_left: left/placed/took deposit.",
-    "- sold_delivered: sold, delivered, or picked up.",
-    "- hold_requested: explicitly asks to mark/set/put lead on hold.",
-    "- hold_cleared: explicitly asks to clear/release hold or resume.",
-    "- cosigner_required: needs co-signer / credit app waiting for co-signer.",
-    "- test_ride_completed: customer already took/completed test ride.",
-    "- decision_pending: thinking it over / not ready / will let us know.",
-    "- outside_financing_pending: waiting on credit union or bank financing.",
-    "- down_payment_pending: saving/waiting for down payment.",
-    "- trade_equity_pending: needs to sell bike first / waiting trade value / upside down.",
-    "- timing_defer_window: defer with broad window (after winter/next month/after taxes/bonus).",
-    "- household_approval_pending: needs spouse/partner approval.",
-    "- docs_or_insurance_pending: waiting on title/docs/registration/insurance quote/DMV.",
-    "- none: no clear state.",
-    "",
-    "Additional fields:",
-    "- explicit_state=true only when state is clearly stated.",
-    "- test_ride_requested=true when they want to schedule/line up a test ride (even if not immediate).",
-    "- weather_sensitive=true when timing depends on weather being nicer/warmer.",
-    "- follow_up_window_text: short raw window phrase like 'next week' or 'after winter'; empty string if none.",
-    "- confidence is 0..1.",
-    "",
-    "Rules:",
-    "- If both sold/delivered and another pending state appear, prefer sold_delivered.",
-    "- If deposit and pending state both appear, prefer deposit_left.",
-    "- If finalizing language appears without explicit sold/delivered, choose deal_finalizing.",
-    "- Phrases like 'left $X deposit' and high pipeline notes such as '(step 6)' usually indicate deposit_left unless sold/delivered is explicit.",
-    "- Do not set follow_up_window_text for incidental customer availability/travel timing (for example 'going on a trip end of month') unless the note explicitly asks to call, text, reach out, or follow up at that time.",
-    "- If uncertain, return state=none, explicit_state=false, low confidence.",
-    "",
-    ...examples,
-    "",
-    `Known lead info: ${JSON.stringify({
-      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
-      year: lead?.vehicle?.year ?? null,
-      source: lead?.source ?? null
-    })}`,
-    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
-    `Comment: ${text}`
-  ].join("\n");
+  const prompt = buildWalkInOutcomePrompt({
+    text,
+    historyLines: history,
+    leadModel: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+    leadYear: lead?.vehicle?.year ?? null,
+    leadSource: lead?.source ?? null
+  });
 
   const runParse = async (model: string): Promise<any | null> =>
     requestStructuredJson({
@@ -13208,7 +13092,8 @@ output: {"state":"decision_pending","explicit_state":true,"test_ride_requested":
       prompt,
       schemaName: "walkin_outcome_parser",
       schema: WALK_IN_OUTCOME_PARSER_JSON_SCHEMA,
-      maxOutputTokens: 220,
+      // 220 -> 280: the three inventory-want fields ride in the same object.
+      maxOutputTokens: 280,
       debugTag: "llm-walkin-outcome-parser",
       debug
     });
@@ -13242,12 +13127,21 @@ output: {"state":"decision_pending","explicit_state":true,"test_ride_requested":
       ? Math.max(0, Math.min(1, parsed.confidence))
       : undefined;
 
+  const wantConfidence =
+    typeof parsed.want_confidence === "number" && Number.isFinite(parsed.want_confidence)
+      ? Math.max(0, Math.min(1, parsed.want_confidence))
+      : undefined;
+
   return {
     state,
     explicitState: !!parsed.explicit_state,
     testRideRequested: !!parsed.test_ride_requested,
     weatherSensitive: !!parsed.weather_sensitive,
     followUpWindowText: cleanOptionalString(parsed.follow_up_window_text),
+    // An unrecognized lane coerces to "none" — unknown must read as "no watch".
+    unmetInventoryWant: coerceUnmetInventoryWant(parsed.unmet_inventory_want),
+    wantIsSatisfiableFromNote: !!parsed.want_is_satisfiable_from_note,
+    wantConfidence,
     confidence
   };
 }

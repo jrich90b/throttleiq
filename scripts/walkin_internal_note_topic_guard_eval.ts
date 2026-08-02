@@ -16,6 +16,12 @@ import {
 } from "../services/api/src/domain/walkInFollowUpTopic.ts";
 import { buildIntentJudgePrompt } from "./intent_handled_audit.ts";
 import { hasAdfFinanceApplicationContext } from "../services/api/src/domain/workflowRegressionGuards.ts";
+import {
+  buildWalkInOutcomePrompt,
+  coerceUnmetInventoryWant,
+  extractWatchDirectiveSegment,
+  hasWatchIntentPhrase
+} from "../services/api/src/domain/walkInInventoryWant.ts";
 
 // The exact production failure topic, and each internal-note tell in isolation → rejected.
 assert.equal(
@@ -312,5 +318,93 @@ for (const site of JUDGE_CALL_SITES) {
     `a new judge call site must pass provenance too — found ${JSON.stringify(all)}`
   );
 }
+
+// --- A logged WANT must be able to start a watch (Larry Godzich, operator-reported 8/1) -------
+// Same lead as the spec recap above, one level deeper. The 7/28 ruling made the reply SAY the
+// spec back ("you're looking for a pre-owned 2017-2020 Tri Glide") while still keeping no watch,
+// so the text described a watch we were not keeping. Operator, 2026-08-01: "THIS SHOULD HAVE
+// TRIGGERED A WATCH FROM THE ADF."
+const LARRY_TLP_NOTE =
+  "Was in for the Back the Blue ride and was asking about pre-owned trikes. Showed him and " +
+  "his wife Kim the 2019 we have in the back (waiting on lien release). Is looking for " +
+  "2017-2020 Tri Glide in the $25,000 range (Step 2)";
+
+// THE DEFECT, PINNED NEGATIVELY: the regex arm cannot ever carry this note, because a
+// salesperson's log contains no notify verb. This is why the fix had to be a parser and not
+// another phrase — do not "solve" a future miss like this by widening the regex.
+assert.equal(
+  hasWatchIntentPhrase(LARRY_TLP_NOTE),
+  false,
+  "Larry's note carries no notify verb — the KEEP regex arm structurally cannot watch it"
+);
+assert.equal(
+  extractWatchDirectiveSegment(LARRY_TLP_NOTE),
+  "",
+  "no 'watch for' directive segment either"
+);
+// ...and the arm still fires on the notes it was written for (it is a KEEP, not dead code).
+for (const withVerb of [
+  "please watch for a 2024-2025 pre-owned street glide",
+  "let me know when one comes in",
+  "keep an eye out for a Road Glide in vivid black"
+]) {
+  assert.equal(hasWatchIntentPhrase(withVerb), true, `KEEP arm still fires: ${withVerb}`);
+}
+
+// The want lane fails CLOSED: anything the prompt might invent later reads as "no watch",
+// never as the one watchable lane.
+assert.equal(coerceUnmetInventoryWant("open_search"), "open_search");
+assert.equal(coerceUnmetInventoryWant("OPEN_SEARCH "), "open_search", "case/space tolerated");
+for (const bad of ["", null, undefined, "watch", "openSearch", "yes", 1, {}]) {
+  assert.equal(coerceUnmetInventoryWant(bad as unknown), "none", `unknown lane => none: ${String(bad)}`);
+}
+
+// The prompt surface must actually teach the lanes, or the schema field is decoration. Pin the
+// production note as a few-shot and the three negative lanes drawn from the real TLP corpus.
+const wantPrompt = buildWalkInOutcomePrompt({ text: LARRY_TLP_NOTE, historyLines: [] });
+assert.ok(wantPrompt.includes(LARRY_TLP_NOTE), "the production turn rides in the prompt as a few-shot");
+for (const lane of ["open_search", "specific_unit", "order", "incoming_allocated"]) {
+  assert.ok(wantPrompt.includes(lane), `the prompt must define the ${lane} lane`);
+}
+assert.match(
+  wantPrompt,
+  /lien\s+release/i,
+  "the prompt must say a unit we cannot deliver yet does not satisfy the want — that is the whole Larry case"
+);
+// The prompt keeps its ORIGINAL job intact: the walk-in state enum must survive the extraction.
+for (const state of ["deposit_left", "sold_delivered", "docs_or_insurance_pending"]) {
+  assert.ok(wantPrompt.includes(state), `the extracted prompt still teaches state=${state}`);
+}
+
+// THE "king" INSIDE "loo-king" COLLISION (#406) IS LOAD-BEARING HERE: this note reads
+// "Is loo-king for". Any model resolution over it must be whole-word, or Larry gets a Road King
+// watch instead of a Tri Glide one.
+assert.equal(
+  /\bking\b/i.test(LARRY_TLP_NOTE),
+  false,
+  "'looking' must not offer a whole-word 'king' — the substring watch-model collision stays dead"
+);
+
+// WIRING: the ADF walk-in lane must ask the referee, and must no longer compose its own
+// parser-or-regex pair inline (AGENTS.md: route decisions are centralized and pure).
+assert.ok(
+  /decideWalkInInventoryWatchTurn\(\{/.test(sendgrid),
+  "the walk-in watch gate must go through decideWalkInInventoryWatchTurn"
+);
+assert.doesNotMatch(
+  sendgrid,
+  /hasWatchIntent\s*=\s*hasWatchIntentFromParser\s*\|\|\s*hasWatchIntentFromText/,
+  "the inline `parser || regex` watch gate must be gone — the referee owns this decision"
+);
+// DARK BY DEFAULT: the new arm ships off. A flag that defaults ON would make this PR a
+// behavior change rather than the shadow it claims to be.
+assert.ok(
+  /WALKIN_INVENTORY_WANT_WATCH\s*===\s*"1"/.test(sendgrid),
+  "the want arm must be opt-IN (=== \"1\"), so an unset env is today's behavior"
+);
+assert.ok(
+  /walkin_want_watch shadow/.test(sendgrid),
+  "the dark arm must log what it WOULD have watched, or the flip has no evidence behind it"
+);
 
 console.log("PASS walk-in internal-note follow-up topic guard eval (+ slot-only spec recap, TLP finance-context guard, judge provenance)");
