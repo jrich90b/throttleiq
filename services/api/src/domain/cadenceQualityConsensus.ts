@@ -138,3 +138,76 @@ export async function sampleCadenceQualityConsensus<V extends CadenceQualityVerd
   }
   return decideCadenceQualityConsensus(collected, opts.floor);
 }
+
+// === CONFIRM-ON-BLOCK — the draft-gate variant (2026-08-02) ======================================
+// The DRAFT-quality gate (gateDraftBeforePublish, DRAFT_QUALITY_JUDGE_ENABLED=1 live) measured
+// meaningfully more stable than the cadence judge — 92% per-item self-agreement — but 6 of 77
+// staff-approved drafts still flipped the live outcome between two identical runs, every one at
+// 0.9 confidence (e.g. the same Street Glide availability answer judged needs_regenerate@0.9 then
+// good@0.9). An 8% coin flip on a gate that holds real drafts.
+//
+// The cadence gate votes on EVERY enforce decision. That is wrong for this gate, for two reasons:
+//  - It sits on the LIVE reply path, where added judge latency delays a customer answer — the #1
+//    lever (median response went 61min -> 8.5min; auto-send aims at seconds).
+//  - Its documented fail direction is already OPEN ("a judge error must never block a draft"), so
+//    a PASSING verdict needs no defense — passing is the safe default this gate falls to anyway.
+//
+// So: the first verdict stands when it PASSES (cost and latency identical to today), and only a
+// would-BLOCK verdict pays for up to two more samples — it must keep a strict majority to actually
+// block. The flip class gets re-checked; everything else is untouched.
+//
+// The predicate is caller-supplied because "blocks" differs per gate (draft: hold/needs_regenerate
+// at its own floor via decideDraftQualityGate; cadence: suppress/hold at the enforce floor) — the
+// GATE stays the single owner of what blocking means; this module only owns the arithmetic.
+
+export type BlockConfirmation<V> = {
+  /** True only when a strict majority of usable samples still says block. */
+  block: boolean;
+  /** The verdict to report: most confident blocker when blocking, else the strongest pass. */
+  verdict: V | null;
+  blockVotes: number;
+  usableVotes: number;
+  /** False when the first verdict passed and no extra samples were spent. */
+  confirmed: boolean;
+};
+
+export async function confirmBlockWithVote<V>(
+  firstVerdict: V | null,
+  resample: () => Promise<V | null>,
+  opts: { samples: number; blocks: (v: V) => boolean }
+): Promise<BlockConfirmation<V>> {
+  const first = firstVerdict ?? null;
+  // A missing or passing first verdict is final — this gate fails open, and passing IS open.
+  if (!first || !opts.blocks(first)) {
+    return { block: false, verdict: first, blockVotes: 0, usableVotes: first ? 1 : 0, confirmed: false };
+  }
+  const total = Math.max(1, Math.floor(opts.samples));
+  const usable: V[] = [first];
+  let blocks = 1;
+  for (let i = 1; i < total; i += 1) {
+    let v: V | null = null;
+    try {
+      v = await resample();
+    } catch {
+      v = null;
+    }
+    // A failed sample is dropped, never counted — same rule as the cadence vote: the API's error
+    // rate must not decide a customer-facing outcome in either direction.
+    if (!v) continue;
+    usable.push(v);
+    if (opts.blocks(v)) blocks += 1;
+    const remaining = total - (i + 1);
+    const passes = usable.length - blocks;
+    if (blocks > passes + remaining || passes >= blocks + remaining) break;
+  }
+  const block = blocks * 2 > usable.length;
+  const pick = (want: boolean): V | null =>
+    usable
+      .filter(v => opts.blocks(v) === want)
+      .reduce<V | null>((best, v) => {
+        if (!best) return v;
+        const c = (x: any) => Number(x?.confidence ?? 0);
+        return c(v) > c(best) ? v : best;
+      }, null);
+  return { block, verdict: pick(block), blockVotes: blocks, usableVotes: usable.length, confirmed: true };
+}

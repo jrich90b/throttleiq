@@ -53,7 +53,16 @@ assert.ok(
 // so a needs_regenerate verdict does NOT hold while it's on.
 assert.ok(/export function draftQualityHoldClassOnly/.test(fs.readFileSync("services/api/src/domain/draftQualityGate.ts", "utf8")), "the hold-class-only flag must exist");
 assert.ok(/DRAFT_QUALITY_HOLD_CLASS_ONLY/.test(index) || /draftQualityHoldClassOnly\(\)/.test(index), "the gate must consult the hold-class-only policy");
-assert.ok(/decision\.action === "regenerate" && !holdOnly/.test(index), "needs_regenerate must only hold when hold-class-only is OFF");
+// 2026-08-02: the acts-predicate moved into confirmDraftQualityHold (draftQualityGate.ts) with the
+// confirm-on-block vote; the BEHAVIOUR (regenerate blocks only when the flag opens the class, and a
+// block must win a majority) is pinned by cadence_quality_consensus:eval's draft-gate section. Here
+// we pin the WIRING: the gate consults the vote with the policy flag.
+assert.ok(
+  /d\.action === "regenerate" && !args\.holdClassOnly/.test(fs.readFileSync("services/api/src/domain/draftQualityGate.ts", "utf8")) &&
+    /confirmDraftQualityHold\(\{/.test(index) &&
+    /holdClassOnly: draftQualityHoldClassOnly\(\)/.test(index),
+  "needs_regenerate blocks only when hold-class-only is OFF, and the gate routes a would-block through the confirming vote with that policy flag"
+);
 assert.equal(draftQualityHoldClassOnly(), true, "hold-class-only must default ON (the safe first slice)");
 {
   const prev = process.env.DRAFT_QUALITY_HOLD_CLASS_ONLY;
