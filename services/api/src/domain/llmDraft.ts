@@ -16,6 +16,10 @@ import {
 } from "./conversationStateParserPrompt.js";
 import { isDemoDayEventQuestionText } from "./workflowRegressionGuards.js";
 import { findComputerLikePhrases, bannedPhraseAvoidanceInstruction } from "./voiceBannedPhrases.js";
+import {
+  INBOUND_REPLY_ACTION_PARSER_JSON_SCHEMA,
+  INBOUND_REPLY_ACTION_EXAMPLES
+} from "./inboundReplyActionPrompt.js";
 import { decideDraftModelArm, type DraftModelArm } from "./routeStateReducer.js";
 import { passesModelRelevanceGuard } from "./turnUnderstandingAuthority.js";
 import { appendParserCaptureRecord, buildParserCaptureRecord } from "./parserCapture.js";
@@ -2942,6 +2946,10 @@ export type InboundReplyActionParse = {
   shouldReply: boolean;
   normalizedText?: string | null;
   reason?: string | null;
+  // The customer is answering OUR proposed day/time with uncertainty or a conflicting
+  // obligation and has NOT withdrawn — an OPEN scheduling negotiation, never a closeout.
+  // Carried as a slot so it can co-occur with whichever action owns the turn.
+  schedulingConflictOpen?: boolean;
   confidence?: number;
 };
 
@@ -4430,31 +4438,6 @@ const ROUTING_DECISION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   }
 };
 
-const INBOUND_REPLY_ACTION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
-  type: "object",
-  additionalProperties: false,
-  required: ["action", "explicit_action", "should_reply", "normalized_text", "reason", "confidence"],
-  properties: {
-    action: {
-      type: "string",
-      enum: [
-        "dealer_location_question",
-        "explicit_callback_request",
-        "schedule_context_status_update",
-        "inventory_watch_acknowledgement",
-        "pending_incoming_inventory_acknowledgement",
-        "customer_shared_vehicle_photo",
-        "customer_reservation_request",
-        "none"
-      ]
-    },
-    explicit_action: { type: "boolean" },
-    should_reply: { type: "boolean" },
-    normalized_text: { type: "string" },
-    reason: { type: "string" },
-    confidence: { type: "number" }
-  }
-};
 
 const ACCESSORY_REQUEST_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   type: "object",
@@ -12015,92 +11998,7 @@ export async function parseInboundReplyActionWithLLM(args: {
   const history = (args.history ?? []).slice(-10).map(h => `${h.direction}: ${h.body}`);
   const lead = args.lead ?? {};
   const followUp = args.followUp ?? {};
-  const examples = [
-    `EXAMPLE A
-inbound: "Hey, can you give me a call?"
-history: "out: What day and time works best to stop in?"
-output: {"action":"explicit_callback_request","explicit_action":true,"should_reply":true,"normalized_text":"customer requests a phone call","reason":"The customer explicitly asks for a call, so callback routing owns the turn even if prior context was scheduling.","confidence":0.97}`,
-    `EXAMPLE B
-inbound: "This is Darwin returning your call."
-history: "out: I just tried to call you."
-output: {"action":"none","explicit_action":false,"should_reply":false,"normalized_text":"","reason":"The customer reports they are returning a call but does not ask for a future callback.","confidence":0.94}`,
-    `EXAMPLE C
-inbound: "I cant not currently and remind me again what address is this at?"
-history: "out: You can stop by when it works for you."
-output: {"action":"dealer_location_question","explicit_action":true,"should_reply":true,"normalized_text":"customer asks for the dealership address","reason":"The customer asks what address the dealership is at; location question outranks reminder/follow-up handling.","confidence":0.98}`,
-    `EXAMPLE D
-inbound: "What email address should I send it to?"
-history: "out: Please send over your insurance card."
-output: {"action":"none","explicit_action":true,"should_reply":true,"normalized_text":"","reason":"This asks for an email address, not the dealership physical address/location.","confidence":0.92}`,
-    `EXAMPLE E
-inbound: "Yeah I am"
-history: "out: Are you still planning to stop by Saturday?"
-output: {"action":"schedule_context_status_update","explicit_action":true,"should_reply":true,"normalized_text":"customer confirms the visit plan is still active","reason":"Recent outbound asked about a visit plan and the customer provides a status confirmation, so ask for the missing day/time detail instead of generic routing.","confidence":0.93}`,
-    `EXAMPLE F
-inbound: "Sorry just saw this"
-history: "out: What time Saturday works best?"
-output: {"action":"schedule_context_status_update","explicit_action":true,"should_reply":true,"normalized_text":"customer acknowledges delayed scheduling turn","reason":"The recent outbound was a scheduling question and the customer gives a scheduling-context status update without another ask.","confidence":0.91}`,
-    `EXAMPLE G
-inbound: "Sorry just saw this — what address is this at?"
-history: "out: What time Saturday works best?"
-output: {"action":"dealer_location_question","explicit_action":true,"should_reply":true,"normalized_text":"customer asks for dealership address","reason":"A concrete location question in the latest turn outranks the schedule-status acknowledgement.","confidence":0.97}`,
-    `EXAMPLE H
-inbound: "I have no problem. let me know if you find something"
-history: "out: I'm not seeing an Iron 883 right now, but I can keep an eye out."
-output: {"action":"inventory_watch_acknowledgement","explicit_action":true,"should_reply":true,"normalized_text":"customer asks us to keep watching inventory","reason":"The customer accepts or confirms the active inventory watch after an out-of-stock/watch prompt.","confidence":0.96}`,
-    `EXAMPLE I
-inbound: "If you dont mind keeping an eye out cause it either the iron 883 or a Fat Boy im looking for a breakout"
-history: "out: I'm not seeing an Iron 883 in stock right now."
-output: {"action":"inventory_watch_acknowledgement","explicit_action":true,"should_reply":true,"normalized_text":"customer asks us to keep watching inventory options","reason":"The customer explicitly asks us to keep an eye out after inventory-watch/out-of-stock context.","confidence":0.97}`,
-    `EXAMPLE J
-inbound: "Let me know if any sales jobs open up."
-history: "out: Let me know if you want pricing on the Street Glide."
-output: {"action":"none","explicit_action":true,"should_reply":true,"normalized_text":"","reason":"This is not an inventory-watch acknowledgement for the active vehicle workflow.","confidence":0.9}`,
-    `EXAMPLE K
-inbound: "Not sure where this is located or what s the cost, but I m located in New York, NY. Thank you!"
-history: "out: Thanks for booking a test ride on the Breakout."
-output: {"action":"dealer_location_question","explicit_action":true,"should_reply":true,"normalized_text":"customer asks where the dealership or bike is located and also asks cost","reason":"The latest turn asks where this is located; location/address handling outranks source-forced test-ride scheduling while pricing can be handled as a follow-up.","confidence":0.97}`,
-    `EXAMPLE L
-inbound: "Thats what Im looking for. Definitely hit me up if one comes in or another store has one"
-history: "out: I’m not seeing a 2022 Low Rider El Diablo in stock right now. I can check similar options, or I can keep an eye out and text you if one comes in."
-output: {"action":"inventory_watch_acknowledgement","explicit_action":true,"should_reply":true,"normalized_text":"customer asks us to text them if one comes in","reason":"The customer explicitly accepts the out-of-stock watch offer and asks to be notified when a match comes in.","confidence":0.97}`,
-    `EXAMPLE M
-inbound: "Yes, let me know when it's available. Thank you"
-history: "out: Here are pictures of the 2016 Freewheeler we are taking in on trade."
-output: {"action":"pending_incoming_inventory_acknowledgement","explicit_action":true,"should_reply":true,"normalized_text":"customer asks to be notified when the known incoming trade is available","reason":"The customer is not asking us to watch open inventory; they are confirming notification for a specific known trade that is not here yet.","confidence":0.97}`,
-    `EXAMPLE N
-inbound: "Ok keep me posted once the trade gets here"
-history: "out: This one is not in yet, but we should have it after the trade comes in."
-output: {"action":"pending_incoming_inventory_acknowledgement","explicit_action":true,"should_reply":true,"normalized_text":"customer asks for an update once the incoming trade arrives","reason":"The turn is tied to a known pending trade arrival, not a generic inventory watch.","confidence":0.96}`,
-    `EXAMPLE O
-inbound: "Interested in the 2023 120th Anniversary Road Glide Special. Wants us to call him when we get it through service (Step 2)"
-history: "out: Thanks for stopping in today."
-output: {"action":"explicit_callback_request","explicit_action":true,"should_reply":true,"normalized_text":"customer wants a callback once the bike is through service","reason":"The latest turn contains an explicit callback/status request, so callback routing owns the turn instead of a generic walk-in recap.","confidence":0.97}`,
-    `EXAMPLE P
-inbound: "Here is a photo of the HD I like."
-history: "in: Hi scott I hope you're doing well."
-output: {"action":"customer_shared_vehicle_photo","explicit_action":true,"should_reply":true,"normalized_text":"customer shared a photo of a bike they like and wants it matched","reason":"The customer is sharing a vehicle photo as a buying signal; photo-match routing owns the turn instead of small talk or discovery questions.","confidence":0.97}`,
-    `EXAMPLE Q
-inbound: "Can you send me pictures of the Road Glide?"
-history: "out: We have a couple Road Glides on the floor."
-output: {"action":"none","explicit_action":false,"should_reply":true,"normalized_text":"","reason":"The customer is asking us to send photos, not sharing one; the media-request flow owns this turn.","confidence":0.95}`,
-    `EXAMPLE R
-inbound: "Ok I will be there for the taste of country pre party on Saturday 👍"
-history: "out: We've got a couple Road Glides ready to ride — want to swing in and take one out?"
-output: {"action":"schedule_context_status_update","explicit_action":true,"should_reply":true,"normalized_text":"customer commits to coming in Saturday for an event","reason":"After a scheduling/visit thread the customer commits to a concrete future day to come in (for an event); confirm the committed day rather than reading it as an en-route arrival window.","confidence":0.95}`,
-    `EXAMPLE S
-inbound: "What do I have to do to reserve one"
-history: "in: I know it's a limited run and I would like to reserve one\nout: sorry, we don't have the 2026 Superglide in stock right now."
-output: {"action":"customer_reservation_request","explicit_action":true,"should_reply":true,"normalized_text":"customer wants to reserve/pre-order a limited-run unit and is asking how","reason":"The customer wants to RESERVE a unit (limited run), a high-intent buy signal. This is NOT an inventory watch/notify-when-it-arrives; reservation handoff owns the turn.","confidence":0.97}`,
-    `EXAMPLE T
-inbound: "Can you let me know if one comes in?"
-history: "out: We don't have that one in stock right now."
-output: {"action":"inventory_watch_acknowledgement","explicit_action":true,"should_reply":true,"normalized_text":"customer asks to be notified if one comes in","reason":"Asking to be NOTIFIED when one arrives is an inventory watch, not a reservation/pre-order. Reserve = wants to put one aside now; watch = tell me when it shows up.","confidence":0.95}`,
-    `EXAMPLE U
-inbound: "I'm definitely interested. I should have the money and be in the position to pull the trigger on it by the end of next week. I appreciate your guys time and working with me. I'll be getting back ahold of you then, if you still have one available."
-history: "out: The 2026 Street Bob is a limited solo trim run — they move fast.\nout: Hey Kody - just following up with you about the 2026 Street Bob. What are your thoughts?"
-output: {"action":"none","explicit_action":false,"should_reply":true,"normalized_text":"","reason":"A FUTURE/deferred purchase commitment with an 'I'll circle back next week' is NOT a reservation request. The customer is not asking us to put a specific unit aside/hold it now — they'll have the money later and will reach back out. Limited-run context alone does not turn a deferred purchase into a reservation. Leave it to the normal router (warm ack + follow-up around their stated timeframe).","confidence":0.92}`
-  ];
+  const examples = INBOUND_REPLY_ACTION_EXAMPLES;
   const prompt = [
     "You parse one inbound customer turn for high-priority dealership reply actions.",
     "Return only JSON matching the schema.",
@@ -12114,6 +12012,13 @@ output: {"action":"none","explicit_action":false,"should_reply":true,"normalized
     "- inventory_watch_acknowledgement: customer confirms, accepts, or asks us to keep watching inventory after active watch or out-of-stock context.",
     "- pending_incoming_inventory_acknowledgement: customer confirms they want to be notified about a specific known incoming trade/pending unit that is not at the store yet.",
     "- none: no matching high-priority action; leave the turn to the normal router.",
+    "",
+    "Scheduling conflict (a SEPARATE slot — set it alongside whatever action you choose):",
+    "- scheduling_conflict_open = true when a recent dealer outbound proposed or asked for a day/time to come in AND the customer answers with UNCERTAINTY or a CONFLICTING OBLIGATION (an appointment, work, a family commitment, a medical procedure, travel) WITHOUT withdrawing. They still want to come in; they just cannot commit to that time. The visit is still ON.",
+    "- scheduling_conflict_open = false when the customer WITHDRAWS or steps back (\"I'll pass\", \"not doing it\", \"stop texting me\", \"I bought elsewhere\") — that is a real disposition, not a conflict.",
+    "- scheduling_conflict_open = false when the customer NAMES a usable day and/or time back (\"Thursday works\", \"how about 2pm\") — that is a normal scheduling proposal/confirm and the scheduling flow owns it.",
+    "- scheduling_conflict_open = false when there was no recent scheduling ask from us to be in conflict WITH.",
+    "- Judge this from the conversation, not from keywords: health words do NOT by themselves make it true, and their absence does NOT make it false.",
     "",
     "Priority rules:",
     "- Latest explicit ask wins. A dealership address/location question outranks reminder, schedule, or watch context.",
@@ -12189,6 +12094,7 @@ output: {"action":"none","explicit_action":false,"should_reply":true,"normalized
     shouldReply: !!parsed.should_reply,
     normalizedText: cleanOptionalString(parsed.normalized_text),
     reason: cleanOptionalString(parsed.reason),
+    schedulingConflictOpen: !!parsed.scheduling_conflict_open,
     confidence
   };
 }

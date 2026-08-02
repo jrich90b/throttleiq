@@ -109,6 +109,28 @@ const rows: Row[] = [
   // Day-only alone is untouched — Peter Meredith's "see you Monday" keeps the soft-visit arm.
   { id: "day_only_visit_commitment_unchanged", input: { ...base, dayOnlyVisitCommitment: true }, kind: "visit_commitment" },
 
+  // --- Block B3: OPEN SCHEDULING CONFLICT (William Indelicato +17163591526, 2026-07-24) ---
+  // "Unsure I have to have injections into my shoulder" answered our "What time do you think
+  // you can be here on Wednesday?". On main it reached the disposition-closeout arm: the lead
+  // was CLOSED and follow-up paused indefinitely 11 seconds later.
+  { id: "scheduling_conflict_continue", input: { ...base, schedulingConflictStillWilling: true }, kind: "scheduling_conflict_continue", visitCommitment: false },
+  // It does NOT need the dialog-state/offer-context gates: the staff line that set up this turn
+  // ("What time do you think you can be here on Wednesday?") matches none of the
+  // hasScheduleOfferContext phrases, which is precisely why Block C never claimed it.
+  { id: "scheduling_conflict_without_schedule_context", input: { ...base, scheduleDialogState: false, scheduleOfferContext: false, schedulingConflictStillWilling: true }, kind: "scheduling_conflict_continue", visitCommitment: false },
+  // PRECEDENCE — a concrete signal always outranks a conflict answer. If the customer gives us
+  // something bookable, book it; the conflict arm must never steal a booking.
+  { id: "confirm_beats_scheduling_conflict", input: { ...base, schedulingConflictStillWilling: true, customerAckActionAccepted: true, customerAckAction: "confirm_proposed_appointment", customerAckShouldBook: true }, kind: "confirm_appointment" },
+  { id: "provide_new_time_beats_scheduling_conflict", input: { ...base, schedulingConflictStillWilling: true, appointmentTimingAccepted: true, appointmentTimingIntent: "provide_new_time", appointmentTimingHasConcreteDayTime: true }, kind: "propose_booking" },
+  { id: "timed_visit_commitment_beats_scheduling_conflict", input: { ...base, schedulingConflictStillWilling: true, timedVisitCommitment: true }, kind: "propose_booking" },
+  // ...but it OUTRANKS the day-only soft-visit arm: filing a conflict as a visit commitment
+  // would confirm a visit the customer just said they cannot make.
+  { id: "scheduling_conflict_beats_day_only_visit", input: { ...base, schedulingConflictStillWilling: true, dayOnlyVisitCommitment: true }, kind: "scheduling_conflict_continue", visitCommitment: false },
+  // Pricing suppresses it, same as Blocks A and B.
+  { id: "pricing_suppresses_scheduling_conflict", input: { ...base, schedulingConflictStillWilling: true, pricingOrPaymentsIntent: true }, kind: "none" },
+  // FAIL DIRECTION: flag off => exactly today's behavior. The arm can only ever ADD.
+  { id: "scheduling_conflict_off_is_todays_behavior", input: { ...base, schedulingConflictStillWilling: false }, kind: "none" },
+
   // --- RANGE-CONSTRAINT VETO (production incident: Kody +17163975098, 2026-07-16) ---
   // "are you guys available anytime later on the day? I don't think I'll be out until after 3
   // tomorrow" — appointment_timing read it correctly (ask_for_times, window=range, "after 3"),

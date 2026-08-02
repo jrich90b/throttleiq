@@ -84,7 +84,14 @@ const index = fs.readFileSync("services/api/src/index.ts", "utf8");
 
 const applierStart = index.indexOf("function applySellToDealerAppraisalFromDispositionParse");
 assert.ok(applierStart > 0, "the shared sell-to-dealer applier must exist in index.ts");
-const applierBody = index.slice(applierStart, index.indexOf("function buildFriendlyReachOutClose"));
+// End the slice at the NEXT top-level function, not at a named neighbour. Anchoring on whichever
+// function happened to sit below it made this guard silently wrong the moment that neighbour moved
+// out to a domain module: indexOf returned -1, slice(start, -1) swallowed the rest of index.ts, and
+// the "must never close" assertion started reading unrelated code. FAIL DIRECTION: if the applier
+// cannot be delimited we want a loud failure, not a slice that quietly grows.
+const applierEnd = index.indexOf("\nfunction ", applierStart + 1);
+assert.ok(applierEnd > applierStart, "could not delimit the sell-to-dealer applier in index.ts");
+const applierBody = index.slice(applierStart, applierEnd);
 
 assert.ok(
   /decideSellToDealerTurn\(/.test(applierBody),

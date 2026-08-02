@@ -64,14 +64,24 @@ const CEILINGS: Ceiling[] = [
     // extraction, overlap score, near-duplicate test) moved to cadenceRepeatSimilarity.ts so the
     // eval could import the code that actually runs instead of a hand-copy that had already
     // drifted from it (ASCII-only apostrophe stripping: 0.8095 in the copy vs 0.7727 shipped).
-    max: 71_467,
+    // 71_467 -> 71_461. The scheduling-conflict fix paid for its own wiring and then some:
+    // buildFriendlyReachOutClose / buildCustomerDispositionReply / ensureUniqueDispositionReply
+    // moved to domain/dispositionReply.ts, and the six inbound-reply-action acceptance helpers
+    // moved to domain/inboundReplyActionPrompt.ts next to the parser prompt they gate.
+    // NOTE: this PR was authored against a 71_576 ceiling and originally proposed 71_570, which
+    // would have RAISED the ceiling by 103 lines and silently undone two reductions merged since.
+    // Rebased to the real post-merge count instead (the #418 trap, ROUTINE_CONTRACT rule 3).
+    max: 71_461,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
     file: "services/api/src/domain/llmDraft.ts",
     // 16_827 -> 16_825. The cadence-quality judge's inline "Known lead" prompt block became
     // formatCadenceQualityUnitFacts (cadenceQualityFacts.ts), which also carries the purchase.
-    max: 16_825,
+    // 16_825 -> 16_723. Two extractions land together here: the conversation-state prompt
+    // (conversationStateParserPrompt.ts, #436) and the inbound-reply-action JSON schema + its 23
+    // few-shots (domain/inboundReplyActionPrompt.ts), so each prompt surface is editable on its own.
+    max: 16_723,
     note: "every parser prompt + JSON schema; second-largest and on the same trajectory"
   }
 ];

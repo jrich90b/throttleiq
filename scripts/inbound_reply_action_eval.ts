@@ -19,9 +19,26 @@ type Example = {
   hasPendingIncomingInventory?: boolean;
   dialogState?: string | null;
   expected: {
-    action: Action;
-    explicit_action: boolean;
-    should_reply: boolean;
+    /**
+     * Optional for the same reason as should_reply: a SLOT-focused row (one pinning
+     * scheduling_conflict_open) should not also pin an action the parser reads ambiguously.
+     * "Thursday works, how about 2pm" is defensibly either `none` or
+     * `schedule_context_status_update`; what the row is proving is that the conflict slot is
+     * FALSE there. The action/explicit metrics count only the rows that assert them.
+     */
+    action?: Action;
+    explicit_action?: boolean;
+    /**
+     * Optional: omit on rows where the field is incidental to what the row is pinning. The
+     * parser is legitimately non-deterministic on should_reply for a bare withdrawal (the
+     * disposition path owns that turn either way), and pinning it would only make CI flaky.
+     */
+    should_reply?: boolean;
+    /**
+     * OPEN SCHEDULING CONFLICT slot (William Indelicato +17163591526, 2026-07-24). Optional so
+     * the pre-existing rows stay as written; when present it is scored like the other fields.
+     */
+    scheduling_conflict_open?: boolean;
   };
 };
 
@@ -44,8 +61,13 @@ const examples = JSON.parse(raw) as Example[];
 
 let total = 0;
 let actionOk = 0;
+let actionTotal = 0;
 let explicitOk = 0;
+let explicitTotal = 0;
 let replyOk = 0;
+let replyTotal = 0;
+let conflictTotal = 0;
+let conflictOk = 0;
 let nullCount = 0;
 const mismatches: string[] = [];
 
@@ -65,20 +87,40 @@ for (const ex of examples) {
     continue;
   }
 
-  const actionMatch = result.action === ex.expected.action;
-  const explicitMatch = result.explicitAction === ex.expected.explicit_action;
-  const replyMatch = result.shouldReply === ex.expected.should_reply;
+  const expectsAction = typeof ex.expected.action === "string";
+  const actionMatch = !expectsAction || result.action === ex.expected.action;
+  const expectsExplicit = typeof ex.expected.explicit_action === "boolean";
+  const explicitMatch = !expectsExplicit || result.explicitAction === ex.expected.explicit_action;
+  const expectsReply = typeof ex.expected.should_reply === "boolean";
+  const replyMatch = !expectsReply || result.shouldReply === ex.expected.should_reply;
+  const expectsConflict = typeof ex.expected.scheduling_conflict_open === "boolean";
+  const conflictMatch =
+    !expectsConflict || !!result.schedulingConflictOpen === ex.expected.scheduling_conflict_open;
+  if (expectsConflict) {
+    conflictTotal += 1;
+    if (conflictMatch) conflictOk += 1;
+  }
 
-  if (actionMatch) actionOk += 1;
-  if (explicitMatch) explicitOk += 1;
-  if (replyMatch) replyOk += 1;
+  if (expectsAction) {
+    actionTotal += 1;
+    if (actionMatch) actionOk += 1;
+  }
+  if (expectsExplicit) {
+    explicitTotal += 1;
+    if (explicitMatch) explicitOk += 1;
+  }
+  if (expectsReply) {
+    replyTotal += 1;
+    if (replyMatch) replyOk += 1;
+  }
 
-  if (!actionMatch || !explicitMatch || !replyMatch) {
+  if (!actionMatch || !explicitMatch || !replyMatch || !conflictMatch) {
     mismatches.push(
       `[${ex.id}] text=${JSON.stringify(ex.text)} | expected=${JSON.stringify(ex.expected)} | got=${JSON.stringify({
         action: result.action,
         explicitAction: result.explicitAction,
         shouldReply: result.shouldReply,
+        schedulingConflictOpen: result.schedulingConflictOpen,
         normalizedText: result.normalizedText,
         reason: result.reason,
         confidence: result.confidence
@@ -88,10 +130,14 @@ for (const ex of examples) {
 }
 
 const pct = (n: number) => `${((n / Math.max(total, 1)) * 100).toFixed(1)}%`;
-console.log(`Inbound reply action accuracy: ${actionOk}/${total} (${pct(actionOk)})`);
-console.log(`Explicit-action match: ${explicitOk}/${total} (${pct(explicitOk)})`);
-console.log(`Should-reply match: ${replyOk}/${total} (${pct(replyOk)})`);
+const pct2 = (n: number, d: number) => `${((n / Math.max(d, 1)) * 100).toFixed(1)}%`;
+console.log(`Inbound reply action accuracy: ${actionOk}/${actionTotal} (${pct2(actionOk, actionTotal)})`);
+console.log(`Explicit-action match: ${explicitOk}/${explicitTotal} (${pct2(explicitOk, explicitTotal)})`);
+console.log(`Should-reply match: ${replyOk}/${replyTotal} (${pct2(replyOk, replyTotal)})`);
 console.log(`Null parses: ${nullCount}/${total}`);
+if (conflictTotal) {
+  console.log(`Scheduling-conflict slot: ${conflictOk}/${conflictTotal} (${pct2(conflictOk, conflictTotal)})`);
+}
 
 if (mismatches.length) {
   console.error("\nMismatches:");

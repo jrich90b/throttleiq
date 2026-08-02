@@ -3,7 +3,10 @@
     "id": "explicit_callback_request_give_me_a_call",
     "text": "Hey, can you give me a call?",
     "history": [
-      { "direction": "out", "body": "What day and time works best to stop in?" }
+      {
+        "direction": "out",
+        "body": "What day and time works best to stop in?"
+      }
     ],
     "hasActiveInventoryWatch": false,
     "dialogState": "schedule_request",
@@ -17,7 +20,10 @@
     "id": "returning_call_is_not_callback_request",
     "text": "This is Darwin returning your call.",
     "history": [
-      { "direction": "out", "body": "I just tried to call you." }
+      {
+        "direction": "out",
+        "body": "I just tried to call you."
+      }
     ],
     "hasActiveInventoryWatch": false,
     "dialogState": "callback_requested",
@@ -31,7 +37,10 @@
     "id": "address_question_with_reminder_wording",
     "text": "I cant not currently and remind me again what address is this at?",
     "history": [
-      { "direction": "out", "body": "You can stop by when it works for you." }
+      {
+        "direction": "out",
+        "body": "You can stop by when it works for you."
+      }
     ],
     "hasActiveInventoryWatch": false,
     "dialogState": "schedule_request",
@@ -45,7 +54,10 @@
     "id": "email_address_question_not_dealer_location",
     "text": "What email address should I send it to?",
     "history": [
-      { "direction": "out", "body": "Please send over your insurance card." }
+      {
+        "direction": "out",
+        "body": "Please send over your insurance card."
+      }
     ],
     "hasActiveInventoryWatch": false,
     "dialogState": "pricing_answered",
@@ -59,7 +71,10 @@
     "id": "schedule_context_status_confirmation",
     "text": "Yeah I am",
     "history": [
-      { "direction": "out", "body": "Are you still planning to stop by Saturday?" }
+      {
+        "direction": "out",
+        "body": "Are you still planning to stop by Saturday?"
+      }
     ],
     "hasActiveInventoryWatch": false,
     "dialogState": "schedule_offer_sent",
@@ -73,7 +88,10 @@
     "id": "schedule_context_delayed_reply",
     "text": "Sorry just saw this",
     "history": [
-      { "direction": "out", "body": "What time Saturday works best?" }
+      {
+        "direction": "out",
+        "body": "What time Saturday works best?"
+      }
     ],
     "hasActiveInventoryWatch": false,
     "dialogState": "schedule_request",
@@ -87,7 +105,10 @@
     "id": "location_question_outranks_schedule_ack",
     "text": "Sorry just saw this — what address is this at?",
     "history": [
-      { "direction": "out", "body": "What time Saturday works best?" }
+      {
+        "direction": "out",
+        "body": "What time Saturday works best?"
+      }
     ],
     "hasActiveInventoryWatch": false,
     "dialogState": "schedule_request",
@@ -101,7 +122,10 @@
     "id": "watch_acknowledgement_active_watch",
     "text": "I have no problem. let me know if you find something",
     "history": [
-      { "direction": "out", "body": "I'm not seeing an Iron 883 right now, but I can keep an eye out." }
+      {
+        "direction": "out",
+        "body": "I'm not seeing an Iron 883 right now, but I can keep an eye out."
+      }
     ],
     "hasActiveInventoryWatch": true,
     "dialogState": "inventory_watch_active",
@@ -115,7 +139,10 @@
     "id": "watch_acknowledgement_multi_model",
     "text": "If you dont mind keeping an eye out cause it either the iron 883 or a Fat Boy im looking for a breakout",
     "history": [
-      { "direction": "out", "body": "I'm not seeing an Iron 883 in stock right now." }
+      {
+        "direction": "out",
+        "body": "I'm not seeing an Iron 883 in stock right now."
+      }
     ],
     "hasActiveInventoryWatch": true,
     "dialogState": "inventory_watch_active",
@@ -129,7 +156,10 @@
     "id": "location_and_cost_question_outranks_test_ride_source",
     "text": "Not sure where this is located or what s the cost, but I m located in New York, NY. Thank you!",
     "history": [
-      { "direction": "out", "body": "Thanks for booking a test ride on the Breakout." }
+      {
+        "direction": "out",
+        "body": "Thanks for booking a test ride on the Breakout."
+      }
     ],
     "hasActiveInventoryWatch": false,
     "dialogState": "test_ride_init",
@@ -143,7 +173,10 @@
     "id": "watch_acknowledgement_hit_me_up_after_out_of_stock_offer",
     "text": "Thats what Im looking for. Definitely hit me up if one comes in or another store has one",
     "history": [
-      { "direction": "out", "body": "I’m not seeing a 2022 Low Rider El Diablo in stock right now. I can check similar options, or I can keep an eye out and text you if one comes in." }
+      {
+        "direction": "out",
+        "body": "I’m not seeing a 2022 Low Rider El Diablo in stock right now. I can check similar options, or I can keep an eye out and text you if one comes in."
+      }
     ],
     "hasActiveInventoryWatch": false,
     "dialogState": "inventory_watch_prompted",
@@ -157,7 +190,10 @@
     "id": "pending_incoming_trade_acknowledgement",
     "text": "Yes, let me know when it's available. Thank you",
     "history": [
-      { "direction": "out", "body": "Here are pictures of the 2016 Freewheeler we are taking in on trade." }
+      {
+        "direction": "out",
+        "body": "Here are pictures of the 2016 Freewheeler we are taking in on trade."
+      }
     ],
     "hasActiveInventoryWatch": false,
     "hasPendingIncomingInventory": true,
@@ -172,7 +208,10 @@
     "id": "pending_incoming_trade_outranks_generic_watch",
     "text": "Ok keep me posted once the trade gets here",
     "history": [
-      { "direction": "out", "body": "This Freewheeler is not here yet; we are taking it in on trade." }
+      {
+        "direction": "out",
+        "body": "This Freewheeler is not here yet; we are taking it in on trade."
+      }
     ],
     "hasActiveInventoryWatch": true,
     "hasPendingIncomingInventory": true,
@@ -187,7 +226,10 @@
     "id": "future_day_visit_commitment_is_schedule_status_update",
     "text": "Ok I will be there for the taste of country pre party on Saturday 👍",
     "history": [
-      { "direction": "out", "body": "We've got a couple Road Glides ready to ride — want to swing in and take one out?" }
+      {
+        "direction": "out",
+        "body": "We've got a couple Road Glides ready to ride — want to swing in and take one out?"
+      }
     ],
     "hasActiveInventoryWatch": false,
     "hasPendingIncomingInventory": false,
@@ -202,7 +244,10 @@
     "id": "available_to_talk_now_is_explicit_callback_request",
     "text": "I'm free to talk right now if you want to hop on a call",
     "history": [
-      { "direction": "out", "body": "Happy to walk you through the numbers — want me to give you a call?" }
+      {
+        "direction": "out",
+        "body": "Happy to walk you through the numbers — want me to give you a call?"
+      }
     ],
     "hasActiveInventoryWatch": false,
     "hasPendingIncomingInventory": false,
@@ -217,8 +262,14 @@
     "id": "deferred_future_purchase_is_not_reservation",
     "text": "I'm definitely interested. I should have the money and be in the position to pull the trigger on it by the end of next week. I appreciate your guys time and working with me. I'll be getting back ahold of you then, if you still have one available.",
     "history": [
-      { "direction": "out", "body": "The 2026 Street Bob is a limited solo trim run — they move fast." },
-      { "direction": "out", "body": "Hey Kody - just following up with you about the 2026 Street Bob. What are your thoughts?" }
+      {
+        "direction": "out",
+        "body": "The 2026 Street Bob is a limited solo trim run — they move fast."
+      },
+      {
+        "direction": "out",
+        "body": "Hey Kody - just following up with you about the 2026 Street Bob. What are your thoughts?"
+      }
     ],
     "hasActiveInventoryWatch": false,
     "hasPendingIncomingInventory": false,
@@ -227,6 +278,113 @@
       "action": "none",
       "explicit_action": false,
       "should_reply": true
+    }
+  },
+  {
+    "id": "scheduling_conflict_open_medical_appointment",
+    "text": "Unsure I have to have injections into my shoulder",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Can you get here first thing in the morning on Wednesday?"
+      },
+      {
+        "direction": "in",
+        "body": "I can try I have an appointment at 9a on Wednesday"
+      },
+      {
+        "direction": "out",
+        "body": "What time do you think you can be here on Wednesday?"
+      }
+    ],
+    "hasActiveInventoryWatch": false,
+    "dialogState": "schedule_request",
+    "expected": {
+      "action": "none",
+      "explicit_action": false,
+      "should_reply": true,
+      "scheduling_conflict_open": true
+    }
+  },
+  {
+    "id": "scheduling_conflict_open_family_conflict",
+    "text": "not sure yet, my kid has a game that afternoon",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Does Thursday around 2 work to come take a look?"
+      }
+    ],
+    "hasActiveInventoryWatch": false,
+    "dialogState": "schedule_request",
+    "expected": {
+      "action": "none",
+      "explicit_action": false,
+      "should_reply": true,
+      "scheduling_conflict_open": true
+    }
+  },
+  {
+    "id": "scheduling_conflict_false_on_withdrawal",
+    "text": "I'll pass, I'm not doing it this year.",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Can you get here first thing in the morning on Wednesday?"
+      },
+      {
+        "direction": "in",
+        "body": "I can try I have an appointment at 9a on Wednesday"
+      },
+      {
+        "direction": "out",
+        "body": "What time do you think you can be here on Wednesday?"
+      }
+    ],
+    "hasActiveInventoryWatch": false,
+    "dialogState": "schedule_request",
+    "expected": {
+      "action": "none",
+      "explicit_action": false,
+      "scheduling_conflict_open": false
+    }
+  },
+  {
+    "id": "scheduling_conflict_false_on_concrete_day",
+    "text": "Thursday works, how about 2pm",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Can you get here first thing in the morning on Wednesday?"
+      },
+      {
+        "direction": "in",
+        "body": "I can try I have an appointment at 9a on Wednesday"
+      },
+      {
+        "direction": "out",
+        "body": "What time do you think you can be here on Wednesday?"
+      }
+    ],
+    "hasActiveInventoryWatch": false,
+    "dialogState": "schedule_request",
+    "expected": {
+      "scheduling_conflict_open": false
+    }
+  },
+  {
+    "id": "scheduling_conflict_false_on_genuine_deferral",
+    "text": "Alright let me think about it i will get back to you in several days",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Mark, we have a demo in-stock if you would like to come in and try one out"
+      }
+    ],
+    "hasActiveInventoryWatch": false,
+    "dialogState": "schedule_request",
+    "expected": {
+      "scheduling_conflict_open": false
     }
   }
 ]
