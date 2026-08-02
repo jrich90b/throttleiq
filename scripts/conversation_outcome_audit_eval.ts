@@ -154,6 +154,15 @@ eq(dims({ id: "c5e", humanCorrection: { at: "2026-05-01T00:00:00.000Z", category
 }
 eq(dims({ id: "c5h", cadenceQualityShadow: { at: "2026-06-25T01:00:00.000Z", overall: "good" } }), [], "a GOOD cadence verdict => not surfaced");
 eq(dims({ id: "c5i", cadenceQualityShadow: { at: "2026-05-01T00:00:00.000Z", overall: "hold" } }), [], "cadence verdict older than 21d => aged out");
+// The RECOVERY case, and the reason the judge now persists every verdict (see the index.ts pin below):
+// the field holds the LATEST judgement, so a thread suppressed once whose next proactive touch was
+// judged send-worthy stops being a work order. Before that, nothing ever overwrote a suppress and the
+// same thread re-filed for the audit's full 21 days — 40 of the feed's 66 Tier-1 orders on 2026-08-02.
+eq(
+  dims({ id: "c5j", cadenceQualityShadow: { at: "2026-06-25T01:00:00.000Z", overall: "send", reason: "concrete new arrival to report", cadenceKind: "standard" } }),
+  [],
+  "a later PASSING cadence verdict retires the finding (recovery is visible, not stuck)"
+);
 
 // --- 5d. Net 3 open-critic decision: only a CLEAR, MAJOR, high-confidence mishandling escalates. ---
 {
@@ -314,9 +323,27 @@ assert.match(idx, /\(args\.conv as any\)\.contextFidelityShadow = \{/, "publishC
 assert.match(idx, /String\(cfHold\.severity \?\? ""\)\.toLowerCase\(\) === "major"/, "only MAJOR would-holds are persisted (actionable subset)");
 const storeSrc = fs.readFileSync("services/api/src/domain/conversationStore.ts", "utf8");
 assert.match(storeSrc, /\(conv as any\)\.contextFidelityShadow = null/, "an operator/passing draft clears the shadow flag (correction sink)");
-// Folded detectors: cadence-quality judge persists its suppress/hold verdict; task-autoclose regression
+// Folded detectors: cadence-quality judge persists EVERY verdict; task-autoclose regression
 // reads the persisted autoCloseCheck.decision.
-assert.match(idx, /\(conv as any\)\.cadenceQualityShadow = \{/, "the cadence-quality judge persists a suppress/hold verdict for the feed");
+assert.match(idx, /\(conv as any\)\.cadenceQualityShadow = \{/, "the cadence-quality judge persists its verdict for the feed");
+{
+  // The write must be UNCONDITIONAL. Persisting only suppress/hold made the field mean "ever judged
+  // bad" rather than "how this thread is going now" — nothing retired a stale suppress, so a recovered
+  // thread re-filed for 21 days (40 of 66 Tier-1 orders, 2026-08-02). The audit's own `overall` filter
+  // (pinned above by "a GOOD cadence verdict => not surfaced") is what keeps passing verdicts silent,
+  // so the gate belongs THERE, not at the write. Slice the judge body by its own bounds and check the
+  // indices resolved — a -1 from indexOf would otherwise slice from the top of the file and pass on
+  // unrelated code (the silently-wrong source pin from `source-size-ratchet-breaks-eval-source-pins`).
+  const start = idx.indexOf("async function runCadenceQualityJudgeShadow(");
+  assert.ok(start >= 0, "runCadenceQualityJudgeShadow must exist in index.ts");
+  const writeAt = idx.indexOf("(conv as any).cadenceQualityShadow = {", start);
+  assert.ok(writeAt > start, "the verdict write must sit inside runCadenceQualityJudgeShadow");
+  const body = idx.slice(start, writeAt);
+  assert.ok(
+    !/verdict\.overall === "suppress"/.test(body),
+    "the verdict write must NOT be gated on suppress/hold — every judged proactive touch is persisted so a later passing one retires the finding"
+  );
+}
 assert.match(mod, /task_autoclose_regression/, "the store auditor folds the task-autoclose regression");
 assert.match(mod, /autoCloseCheck\?\.decision \?\? ""\)\.toLowerCase\(\) === "closed"/, "task-autoclose regression keys on decision=closed but still open");
 
