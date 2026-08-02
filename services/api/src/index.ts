@@ -461,6 +461,7 @@ import {
   webTextWidgetTodoReason
 } from "./domain/webTextWidget.js";
 import type { DailyForecast } from "./domain/weather.js";
+import type { AppointmentOutcomeSource } from "./domain/routeStateReducer.js";
 import { resolveTownNearestDealer, formatTownLabel } from "./domain/geo.js";
 import { dataPath, getDataDir } from "./domain/dataDir.js";
 import { recordOpenAIUsage } from "./domain/openaiUsageLogger.js";
@@ -724,6 +725,7 @@ import {
   isStaleBookedAppointmentDay,
   isSettledPastAppointment,
   canAssertMissedAppointment,
+  decideAppointmentOutcomeRecord,
   pendingRescheduleCarriesTurnIntent,
   decideVehicleChoiceConfidenceTurn,
   decideVehicleRecommendationTurn,
@@ -19440,12 +19442,8 @@ async function applyFinanceOutcomeStatusFromSignal(
       kind: "long_term"
     };
     if (syncAppointmentOutcome && conv.appointment) {
-      conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
-      conv.appointment.staffNotify.outcome = {
-        status: "financing_declined",
-        note: reasonText || undefined,
-        updatedAt: nowIsoValue
-      };
+      recordAppointmentOutcome(getOutcomeStaffNotifyTarget(conv), "finance_signal",
+        { status: "financing_declined", note: reasonText }, nowIsoValue);
     }
     conv.financeOutcome = {
       status: "declined",
@@ -19464,12 +19462,8 @@ async function applyFinanceOutcomeStatusFromSignal(
     setFollowUpMode(conv, "manual_handoff", "credit_app_needs_info");
     stopFollowUpCadence(conv, "manual_handoff");
     if (syncAppointmentOutcome && conv.appointment) {
-      conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
-      conv.appointment.staffNotify.outcome = {
-        status: "financing_needs_info",
-        note: reasonText || undefined,
-        updatedAt: nowIsoValue
-      };
+      recordAppointmentOutcome(getOutcomeStaffNotifyTarget(conv), "finance_signal",
+        { status: "financing_needs_info", note: reasonText }, nowIsoValue);
     }
     conv.financeOutcome = {
       status: "needs_more_info",
@@ -19498,12 +19492,8 @@ async function applyFinanceOutcomeStatusFromSignal(
     setFollowUpMode(conv, "manual_handoff", "credit_app_approved");
     stopFollowUpCadence(conv, "manual_handoff");
     if (syncAppointmentOutcome && conv.appointment) {
-      conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
-      conv.appointment.staffNotify.outcome = {
-        status: "follow_up",
-        note: `Financing approved${reasonText ? `: ${reasonText}` : ""}`,
-        updatedAt: nowIsoValue
-      };
+      recordAppointmentOutcome(getOutcomeStaffNotifyTarget(conv), "finance_signal",
+        { status: "follow_up", note: `Financing approved${reasonText ? `: ${reasonText}` : ""}` }, nowIsoValue);
     }
     conv.financeOutcome = {
       status: "approved",
@@ -19728,6 +19718,19 @@ async function cancelBookedAppointmentForConversation(
   }
   changed = true;
   return changed;
+}
+
+/** Ask the outcome referee and store its answer. Every place that records "what happened at the
+ *  visit" goes through here, so the nine former hand-built records cannot drift apart again. */
+function recordAppointmentOutcome(
+  target: any,
+  source: AppointmentOutcomeSource,
+  incoming: { status: string; primaryStatus?: string; secondaryStatus?: string; note?: string },
+  nowIsoValue: string
+) {
+  const decision = decideAppointmentOutcomeRecord({ source, existing: target?.outcome ?? null, incoming, nowIso: nowIsoValue });
+  if (target) target.outcome = decision.record;
+  return decision;
 }
 
 function getOutcomeStaffNotifyTarget(conv: any): any {
@@ -21340,11 +21343,7 @@ async function maybeHandleStaffOutcomeSms(event: InboundMessageEvent): Promise<{
   }
 
   const outcomeTarget = getOutcomeStaffNotifyTarget(conv);
-  outcomeTarget.outcome = {
-    status: parsed.outcome,
-    note,
-    updatedAt: nowIsoValue
-  };
+  recordAppointmentOutcome(outcomeTarget, "staff_outcome_sms", { status: parsed.outcome, note }, nowIsoValue);
   if (note) {
     try {
       await applyActionStateFromContextNote(
@@ -25649,15 +25648,12 @@ async function applyAppointmentStateFromContextNote(
     if (booking?.explicitRequest && (booking.intent === "cancel" || booking.intent === "reschedule")) {
       conv.appointment.reschedulePending = true;
       conv.appointment.updatedAt = now;
-      conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
-      conv.appointment.staffNotify.outcome = {
+      recordAppointmentOutcome(getOutcomeStaffNotifyTarget(conv), "context_note_booking", {
         status: "follow_up",
-        note:
-          booking.intent === "cancel"
-            ? `Context note indicates cancellation: ${note}`
-            : `Context note indicates reschedule request: ${note}`,
-        updatedAt: now
-      };
+        note: booking.intent === "cancel"
+          ? `Context note indicates cancellation: ${note}`
+          : `Context note indicates reschedule request: ${note}`
+      }, now);
       conv.appointment.staffNotify.contextUsedAt = now;
       setFollowUpMode(conv, "manual_handoff", "manual_appointment");
       stopFollowUpCadence(conv, "manual_handoff");
@@ -25676,12 +25672,7 @@ async function applyAppointmentStateFromContextNote(
       lead: conv.lead
     });
     if (outcome?.explicitOutcome && (outcome.confidence ?? 0) >= 0.55 && outcome.outcome !== "none") {
-      conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
-      conv.appointment.staffNotify.outcome = {
-        status: outcome.outcome,
-        note,
-        updatedAt: now
-      };
+      recordAppointmentOutcome(getOutcomeStaffNotifyTarget(conv), "context_note_outcome", { status: outcome.outcome, note }, now);
       conv.appointment.staffNotify.contextUsedAt = now;
       conv.appointment.updatedAt = now;
       changed = true;
@@ -39876,13 +39867,12 @@ app.post("/public/appointment/outcome", upload.none(), async (req, res) => {
           return conv.dealerRide.staffNotify;
         })()
       : getOutcomeStaffNotifyTarget(conv);
-  outcomeTarget.outcome = {
-    status: outcome as any,
+  recordAppointmentOutcome(outcomeTarget, "staff_outcome_link", {
+    status: outcome,
     primaryStatus: normalizedOutcome.primaryStatus,
     secondaryStatus: normalizedOutcome.secondaryStatus,
-    note: effectiveNote || undefined,
-    updatedAt: nowIso
-  };
+    note: effectiveNote
+  }, nowIso);
   outcomeTarget.outcomePromptRespondedAt = nowIso;
   if (effectiveNote && outcome !== "no_change") {
     try {
@@ -42113,14 +42103,12 @@ app.post("/conversations/:id/appointment/outcome", requirePermission("canEditApp
       stopFollowUpCadence(conv, "appointment_hold");
     }
 
-    conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
-    conv.appointment.staffNotify.outcome = {
-      status: appointmentOutcomeStatus as any,
+    recordAppointmentOutcome(getOutcomeStaffNotifyTarget(conv), "staff_console_header", {
+      status: appointmentOutcomeStatus,
       primaryStatus: normalizedOutcome.primaryStatus,
       secondaryStatus: normalizedOutcome.secondaryStatus,
-      note: appointmentOutcomeNote || undefined,
-      updatedAt: nowIso
-    };
+      note: appointmentOutcomeNote
+    }, nowIso);
     if (appointmentOutcomeNote) {
       try {
         await applyActionStateFromContextNote(conv, appointmentOutcomeNote, "Appointment outcome");
@@ -43238,13 +43226,12 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
         conv.appointment!.staffNotify = conv.appointment!.staffNotify ?? {};
         notifyTarget = conv.appointment!.staffNotify;
       }
-      notifyTarget.outcome = {
-        status: appointmentOutcomeStatus as any,
+      recordAppointmentOutcome(notifyTarget, "staff_todo_modal", {
+        status: appointmentOutcomeStatus,
         primaryStatus: normalizedOutcome.primaryStatus,
         secondaryStatus: normalizedOutcome.secondaryStatus,
-        note: effectiveAppointmentOutcomeNote || undefined,
-        updatedAt: nowIsoValue
-      };
+        note: effectiveAppointmentOutcomeNote
+      }, nowIsoValue);
       notifyTarget.outcomePromptRespondedAt = nowIsoValue;
       await maybeQueueAppointmentOutcomeRescheduleDraft({
         conv,

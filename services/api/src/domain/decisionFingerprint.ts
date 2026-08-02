@@ -175,6 +175,31 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     });
   }, ["decideManualConfirmPendingAppointment"]);
 
+  // Added 2026-08-01 with the appointment-outcome-record un-stacking (nine writers, one referee).
+  // PROBE: hold the INCOMING write fixed at the bare-shape lane that actually causes the collision
+  // — a finance-declined signal, no primary/secondary pair, no note — and vary only the outcome
+  // ALREADY on the conversation. The sample then answers exactly the question the nine sites
+  // disagreed about: given what this lead's record already says, what does a bare write turn the
+  // attendance answer into, and does it drop a recorded one? A fixed clock string keeps `record`
+  // stable so only the arbitration can move the fingerprint.
+  add("appointmentOutcomeRecordOnBareWrite", conv => {
+    const existing = conv?.appointment?.staffNotify?.outcome ?? conv?.dealerRide?.staffNotify?.outcome ?? null;
+    if (!existing || typeof reducer.decideAppointmentOutcomeRecord !== "function") return undefined;
+    const decision = reducer.decideAppointmentOutcomeRecord({
+      source: "finance_signal", // PROBE
+      existing,
+      incoming: { status: "financing_declined" }, // PROBE — the bare legacy shape
+      nowIso: "2026-01-01T00:00:00.000Z" // PROBE — fixed so only arbitration moves the answer
+    });
+    return {
+      attendanceBefore: decision.attendanceBefore,
+      attendanceAfter: decision.attendanceAfter,
+      attendanceFlipped: decision.attendanceFlipped,
+      dropsRecordedAttendance: decision.dropsRecordedAttendance,
+      divergence: decision.divergence
+    };
+  }, ["decideAppointmentOutcomeRecord", "readAppointmentAttendance"]);
+
   // A/B ARM ASSIGNMENT. Pure functions of an id — perfectly projectable, and uniquely dangerous to
   // leave unsampled: an arm that silently re-buckets corrupts a live experiment's results with no
   // error anywhere, and nothing else in the suite would notice.

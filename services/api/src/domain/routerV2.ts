@@ -54,6 +54,8 @@ export {
   isStaleBookedAppointmentDay,
   isSettledPastAppointment,
   canAssertMissedAppointment,
+  decideAppointmentOutcomeRecord,
+  readAppointmentAttendance,
   pendingRescheduleCarriesTurnIntent,
   decideVehicleChoiceConfidenceTurn,
   decideVehicleRecommendationTurn,
