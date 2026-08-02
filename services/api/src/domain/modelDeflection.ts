@@ -24,6 +24,11 @@ export function isPlaceholderModel(label?: string | null): boolean {
   const t = label.trim().toLowerCase();
   if (!t) return true;
   if (t === "null" || t === "n/a" || t === "na" || t === "unknown" || t === "tbd") return true;
+  // CRM "nothing recorded" values. A customer received "thanks again for coming in for the test
+  // ride on the None Recorded." (+17167279369, Dealer Lead App) — the feed's empty-field literal
+  // rode a template as if it were a model. Same family workflowRegressionGuards recognizes for the
+  // demo-bikes field; recognized here so EVERY label site inherits it.
+  if (/^(?:none|none recorded|not recorded|not applicable|no)$/.test(t)) return true;
   // "Other" / "Harley-Davidson Other" / "Full Line(up)" — placeholders even with a make prefix.
   if (t === "other" || /\bother\b/.test(t) || /\bfull\s*line(up)?\b/.test(t)) return true;
   // Bare make with no model ("harley-davidson", "harley davidson", "harley").

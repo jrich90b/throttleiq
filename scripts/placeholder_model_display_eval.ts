@@ -68,6 +68,38 @@ assert.ok(
   "formatModelLabelForFollowUp must treat full line AND other as 'the bike'"
 );
 
+// --- "None Recorded" is a placeholder, not a bike (+17167279369, 2026-08-02) -----------------
+// A customer received "thanks again for coming in for the test ride on the None Recorded." — the
+// Dealer Lead App's empty-field literal rode the intro template as a model name. The shared
+// authority now recognizes the CRM nothing-recorded family, and the outcome-label choke point
+// returns blank for it so every caller's own "bike" fallback engages.
+{
+  const { isPlaceholderModel, isSpecificModel } = await import(
+    "../services/api/src/domain/modelDeflection.ts"
+  );
+  for (const junk of ["None Recorded", "none recorded", "NONE", "Not Recorded", "not applicable", "no", "N/A"]) {
+    assert.equal(isPlaceholderModel(junk), true, `CRM placeholder recognized: ${junk}`);
+  }
+  // ...and real models are untouched — "no"-adjacent names must not be swallowed.
+  for (const real of ["Nightster", "Road Glide", "Notable Custom", "Norton Commando"]) {
+    assert.equal(isSpecificModel(real), true, `real model survives: ${real}`);
+  }
+
+  const idx = await fs.readFile("services/api/src/index.ts", "utf8");
+  // The outcome-label normalizer blanks placeholders (so its callers' "bike" fallback engages)...
+  assert.match(
+    idx,
+    /normalizeOutcomeCustomerModelLabel\(raw: string\): string \{[\s\S]{0,400}isPlaceholderModel\(source\)\) return "";/,
+    "normalizeOutcomeCustomerModelLabel must blank a CRM placeholder before it can render"
+  );
+  // ...and the Dealer Lead App intro's label build consults the shared authority too.
+  assert.match(
+    idx,
+    /isSpecificModel\(leadModelRaw\)[\s\S]{0,200}\|\| "bike";/,
+    "the test-ride intro label must degrade to 'bike' on a placeholder model"
+  );
+}
+
 // rmSync (not async fs.rm): a synchronous remove can't yield the event loop
 // mid-delete, so the conversation store's pending async flush can't re-write
 // conversations.json between the unlink and rmdir and race us to ENOTEMPTY.
