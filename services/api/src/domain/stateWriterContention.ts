@@ -220,23 +220,69 @@ function assignedValue(trimmed: string): string {
  *     fresh-clock read, so a computed date like `nextDueAt = computeFollowUpDueAt(...)` — which IS
  *     a real decision about when we next touch a customer — keeps counting.
  *
+ * CUT 4 (2026-08-02): two more shapes of the same bookkeeping.
+ *
+ * The booking-endpoint un-stacking (PR #455) removed three unrefereed writers and the queue fell by
+ * only ONE, because pulling those blocks out un-collapsed two `appointment.updatedAt` stamps the
+ * adjacency rule had been hiding inside them. Both are bookkeeping by cut 3's own reasoning; cut 3
+ * simply could not see them.
+ *
+ *  3. GUARDED ON ONE LINE — `if (conv.appointment) conv.appointment.updatedAt = new Date()…`. The
+ *     line no longer STARTS with the assigned path, so it did not parse as an assignment at all.
+ *     Stripping a leading same-line `if (…)` is purely a parsing fix: the write it guards is the
+ *     same write, and a guard makes it strictly LESS able to fight anyone, never more.
+ *  4. `updatedAt` / `createdAt` AS A LEAF, whatever the value is spelled like. These two names are
+ *     already in IGNORED_FIELDS at the ROOT (`conv.updatedAt`) for a reason that does not stop
+ *     being true one level down: "when did this record last change" is modification metadata, not
+ *     a decision about the lead. There is no such thing as two writers DISAGREEING about it —
+ *     every writer stamps it and last-write-wins is correct by definition. Cut 3 required the
+ *     value to be a literal fresh-clock read, so the extremely common handler idiom
+ *     `const nowIso = new Date().toISOString()` … `conv.appointment.updatedAt = nowIso` kept
+ *     counting as a contended writer.
+ *
+ *     Note this widens ONLY those two exact names. Every other `…At` leaf still has to show a
+ *     literal clock read, because a computed one like `nextDueAt = computeFollowUpDueAt(...)` IS a
+ *     real decision about when we next touch a customer, and must keep counting.
+ *
+ *     REJECTED, and worth recording so nobody rebuilds it: a first pass tried to excuse any bare
+ *     identifier this FILE proves is a frozen clock read. It refused to fire — `index.ts` binds the
+ *     name `nowIso` three different ways (a lambda, a computed `atIso ?? now` fallback, and the
+ *     plain read) — which is the disqualifier working correctly, but it left machinery that never
+ *     ran. The leaf-name rule is both simpler and stronger, and it does not depend on what the
+ *     local happens to be called.
+ *
  * FAIL DIRECTION: excluding a write can only REMOVE work from the queue, so the bar is "provably
  * non-contending", never "probably harmless". Anything this cannot parse stays counted.
  */
 const FRESH_CLOCK_VALUE = /^(?:nowIso\(\)|newDate\(\)\.toISOString\(\))[;,)]?$/;
 
+/** Modification metadata — bookkeeping at any depth, never an arbitration. See cut 4. */
+const BOOKKEEPING_LEAVES = new Set(["updatedAt", "createdAt"]);
+
+/** `if (cond) x.y = …` → `x.y = …`. Cut 4: a same-line guard hid the assignment from the parser. */
+function stripLeadingGuard(text: string): string {
+  const guarded = /^if\s*\((?:[^()]|\([^()]*\))*\)\s*(?!\{)(.+)$/.exec(text.trim());
+  return guarded ? guarded[1].trim() : text;
+}
+
 export function isNonContendingWrite(trimmed: string): boolean {
-  const path = assignedPath(trimmed);
+  const unguarded = stripLeadingGuard(trimmed);
+  const path = assignedPath(unguarded);
   if (!path) return false;
-  const value = assignedValue(trimmed);
+  const value = assignedValue(unguarded);
   if (!value) return false;
 
   // 1) `x.y = x.y ?? …` / `x.y = x.y || …`
   const escaped = path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   if (new RegExp(`^${escaped}(?:\\?\\?|\\|\\|)`).test(value)) return true;
 
-  // 2) `…At = nowIso()` — a timestamp stamp, not an arbitration.
   const leaf = path.split(".").pop() ?? "";
+
+  // 2) `x.updatedAt = <anything>` — modification metadata at any depth (cut 4).
+  if (BOOKKEEPING_LEAVES.has(leaf)) return true;
+
+  // 3) any other `…At = nowIso()` — a stamp, but only when the value is a literal clock read, so a
+  //    computed due-date stays counted (cut 3).
   if (/At$/.test(leaf) && FRESH_CLOCK_VALUE.test(value)) return true;
 
   return false;

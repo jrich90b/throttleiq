@@ -367,6 +367,55 @@ const file = (path: string, text: string): SourceFile => ({ path, text });
     "a COMPUTED due date is a real decision and still counts"
   );
 
+  // CUT 4a (2026-08-02): a same-line `if (…)` guard hid the assignment from the parser entirely,
+  // so the write did not even register as a write. The guard makes it strictly LESS able to fight.
+  assert.equal(
+    findWriteSites([
+      file("guarded.ts", "if (conv.appointment) conv.appointment.updatedAt = new Date().toISOString();")
+    ]).get("appointment"),
+    undefined,
+    "a same-line if-guard must not hide a bookkeeping stamp from the non-contending test"
+  );
+  // ...and the guard must not become a way to SMUGGLE a real write past the detector.
+  assert.equal(
+    (findWriteSites([
+      file("guarded2.ts", 'if (conv.appointment) conv.appointment.status = "confirmed";')
+    ]).get("appointment") ?? []).length,
+    1,
+    "an if-guarded REAL write still counts — stripping the guard is a parsing fix, not an excuse"
+  );
+  // A guard introducing a BLOCK is a different shape and must be left alone.
+  assert.equal(
+    (findWriteSites([
+      file("guarded3.ts", ['if (conv.appointment) {', '  conv.appointment.status = "confirmed";', "}"].join("\n"))
+    ]).get("appointment") ?? []).length,
+    1,
+    "an if-BLOCK is untouched — only a same-line statement guard is stripped"
+  );
+
+  // CUT 4b: `updatedAt`/`createdAt` as a LEAF is modification metadata at any depth — the same
+  // reason they are already ignored at the root. Cut 3 demanded a literal clock read, so the
+  // ubiquitous handler idiom (`const nowIso = …` once, then several stamps) kept counting.
+  assert.equal(
+    findWriteSites([file("stamp.ts", "conv.appointment.updatedAt = nowIso;")]).get("appointment"),
+    undefined,
+    "`x.updatedAt = <a frozen clock local>` is bookkeeping — two writers cannot disagree about it"
+  );
+  assert.equal(
+    findWriteSites([file("stamp2.ts", "conv.followUpCadence.createdAt = someOtherTimestamp;")]).get("followUpCadence"),
+    undefined,
+    "createdAt is bookkeeping too, whatever the value is spelled like"
+  );
+  // ...and cut 4b widens ONLY those two exact names. Every other `…At` leaf still needs a literal
+  // clock read, or the computed-due-date assertion above would be silently defeated.
+  assert.equal(
+    (findWriteSites([
+      file("stamp3.ts", "conv.followUpCadence.nextDueAt = nowIso;")
+    ]).get("followUpCadence") ?? []).length,
+    1,
+    "a bare identifier does NOT excuse a non-bookkeeping `…At` leaf — only updatedAt/createdAt widen"
+  );
+
   // A genuine overwrite must never be excluded — that is the whole fight surface.
   assert.equal(
     (findWriteSites([file("real.ts", 'conv.appointment = { status: "confirmed" };')]).get("appointment") ?? []).length,
@@ -506,8 +555,15 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 //   right — so this is the same BOOKKEEPING-counted-as-contention class the detector's CUT 3
 //   already fixed for value-preserving defaults. Filed as detector CUT 4; NOT folded in here,
 //   because a measurement change and a code change in one commit make the ratchet unreadable.
+// 152 -> 150: detector CUT 4 (this commit) — a MEASUREMENT change, NOT a code change, and the only
+//   entry in this list that is. Two shapes of bookkeeping the detector was counting as contention:
+//   a stamp hidden behind a same-line `if (…)` guard (the line did not parse as a write at all),
+//   and `updatedAt`/`createdAt` as a LEAF — already ignored at the root for a reason that does not
+//   stop being true one level down, since two writers cannot disagree about when a record last
+//   changed. This does not un-stack anything; it stops the queue counting work that does not exist,
+//   which #455 exposed when removing three writers moved the number by one.
 // RATCHET DOWN ONLY.
-const UNREFEREED_WRITER_BASELINE = 152;
+const UNREFEREED_WRITER_BASELINE = 150;
 
 {
   const sourceFiles: SourceFile[] = [];
