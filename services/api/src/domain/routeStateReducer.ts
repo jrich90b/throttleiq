@@ -1822,6 +1822,12 @@ export type ServiceSchedulingHandoffTurnInput = {
   parserPurpose?: "service_visit" | "sales_visit" | "unknown" | null;
   parserConfidence?: number | null;
   confidenceMin: number;
+  /**
+   * OUR last outbound was a dealer-initiated visit-time check-in ("what time are you coming in?")
+   * that did not itself name the service department. Biases the turn back to the sales scheduling
+   * cluster (Bobby Kindred, 2026-06-25) — but as a DEFAULT the parser can outrank, not a verdict.
+   */
+  dealerVisitTimeCheckIn?: boolean;
 };
 
 export type ServiceSchedulingHandoffTurnDecision = {
@@ -1830,6 +1836,7 @@ export type ServiceSchedulingHandoffTurnDecision = {
     | "no_service_context"
     | "explicit_service_request"
     | "parser_sales_visit"
+    | "visit_time_checkin_not_service"
     | "service_handoff_default";
 };
 
@@ -1845,6 +1852,22 @@ export function decideServiceSchedulingHandoffTurn(
   const confidence = typeof input.parserConfidence === "number" ? input.parserConfidence : 0;
   if (input.parserPurpose === "sales_visit" && confidence >= input.confidenceMin) {
     return { route: "defer_to_scheduling_cluster", reason: "parser_sales_visit" };
+  }
+  // The customer is ANSWERING our own visit-time check-in ("what time works?" → "Probably around
+  // 4pm"). That framing normally means a plain sales visit, so it defers (Bobby Kindred). It used
+  // to be settled in index.ts by testing the check-in for the literal word "service", which reads
+  // COMPREHENSION off a keyword: Edward Trouse (+17166281539, operator-reported 2026-08-01) bought
+  // a Breakout, called about the NYS inspection sticker, and staff answered "let me know when you
+  // want to bring it in and we can put a new sticker on the bike" — plainly a service visit that
+  // never says "service", so his "Probably around 4pm" was booked as a SALES appointment and filed
+  // a sales availability task. The deferral now lives here as the DEFAULT and a confident
+  // service_visit parse outranks it; anything less (sales_visit, unknown, no parse, low
+  // confidence) still defers, so the fail direction is unchanged.
+  if (
+    input.dealerVisitTimeCheckIn &&
+    !(input.parserPurpose === "service_visit" && confidence >= input.confidenceMin)
+  ) {
+    return { route: "defer_to_scheduling_cluster", reason: "visit_time_checkin_not_service" };
   }
   return { route: "service_handoff", reason: "service_handoff_default" };
 }
