@@ -508,6 +508,7 @@ import {
   startPostSaleCadence,
   releaseHeldDraft,
   applyAppointmentTeardown,
+  applyAppointmentBookingRecord,
   applyAppointmentConfirmRecord,
   clearAppointmentStaffPromptState
 } from "./domain/conversationStore.js";
@@ -38114,16 +38115,14 @@ app.post("/scheduler/book", async (req, res) => {
   if (leadKey) {
     const conv = getConversation(leadKey);
     if (conv) {
-      conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
-      conv.appointment.status = "confirmed";
-      conv.appointment.whenText = `${(slot as any).startLocal ?? slot.start}`;
-      conv.appointment.whenIso = slot.start;
-      conv.appointment.confirmedBy = "customer";
-      conv.appointment.updatedAt = new Date().toISOString();
-      conv.appointment.acknowledged = true;
-      conv.appointment.bookedEventId = event.id ?? null;
-      conv.appointment.bookedEventLink = event.htmlLink ?? null;
-      conv.appointment.bookedSalespersonId = slot.salespersonId ?? null;
+      applyAppointmentBookingRecord(conv, {
+        lane: "scheduler_widget_booking",
+        whenText: `${(slot as any).startLocal ?? slot.start}`,
+        whenIso: slot.start,
+        bookedEventId: event.id ?? null,
+        bookedEventLink: event.htmlLink ?? null,
+        bookedSalespersonId: slot.salespersonId ?? null
+      });
       setAppointmentBookedBy(conv, { actor: "customer", channel: "public_booking" });
       onAppointmentBooked(conv);
     }
@@ -38685,16 +38684,15 @@ app.post("/public/booking/book", async (req, res) => {
     source: conv.lead?.source ?? "Public Booking",
     vehicle: lead?.vehicle ?? conv.lead?.vehicle
   };
-  conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
-  conv.appointment.status = "confirmed";
-  conv.appointment.whenText = slot.startLocal ?? fmtLocal(slot.start, cfg.timezone);
-  conv.appointment.whenIso = slot.start;
-  conv.appointment.confirmedBy = "customer";
-  conv.appointment.updatedAt = new Date().toISOString();
-  conv.appointment.acknowledged = true;
-  conv.appointment.bookedEventId = event.id ?? null;
-  conv.appointment.bookedEventLink = event.htmlLink ?? null;
-  conv.appointment.bookedSalespersonId = chosenSp.id ?? null;
+  const bookedWhenText = slot.startLocal ?? fmtLocal(slot.start, cfg.timezone);
+  applyAppointmentBookingRecord(conv, {
+    lane: "public_link_booking",
+    whenText: bookedWhenText,
+    whenIso: slot.start,
+    bookedEventId: event.id ?? null,
+    bookedEventLink: event.htmlLink ?? null,
+    bookedSalespersonId: chosenSp.id ?? null
+  });
   setAppointmentBookedBy(conv, { actor: "customer", channel: "public_booking" });
   onAppointmentBooked(conv);
 
@@ -38702,7 +38700,7 @@ app.post("/public/booking/book", async (req, res) => {
     ok: true,
     eventId: event.id,
     htmlLink: event.htmlLink,
-    whenText: conv.appointment.whenText,
+    whenText: bookedWhenText,
     salesperson: chosenSp?.name ?? null
   });
 });
@@ -41788,33 +41786,30 @@ app.post("/conversations/:id/appointment", requirePermission("canEditAppointment
       colorId
     );
 
-    conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
-    conv.appointment.status = "confirmed";
-    conv.appointment.whenText = formatSlotLocal(startIso, cfg.timezone);
-    conv.appointment.whenIso = startIso;
-    conv.appointment.confirmedBy = "salesperson";
-    conv.appointment.updatedAt = new Date().toISOString();
-    conv.appointment.acknowledged = true;
-    conv.appointment.bookedEventId = event.id ?? null;
-    conv.appointment.bookedEventLink = event.htmlLink ?? null;
-    conv.appointment.bookedSalespersonId = salesperson.id ?? null;
+    applyAppointmentBookingRecord(conv, {
+      lane: "staff_console_booking",
+      whenText: formatSlotLocal(startIso, cfg.timezone),
+      whenIso: startIso,
+      bookedEventId: event.id ?? null,
+      bookedEventLink: event.htmlLink ?? null,
+      bookedSalespersonId: salesperson.id ?? null,
+      matchedSlot: {
+        salespersonId: salesperson.id,
+        salespersonName: salesperson.name,
+        calendarId: salesperson.calendarId,
+        start: startIso,
+        end: endIso,
+        startLocal: formatSlotLocal(startIso, cfg.timezone),
+        endLocal: formatSlotLocal(endIso, cfg.timezone),
+        appointmentType
+      }
+    });
     setAppointmentBookedBy(conv, {
       actor: "human",
       channel: "manual",
       userId: String((req as any).user?.id ?? "").trim() || undefined,
       userName: String((req as any).user?.name ?? (req as any).user?.email ?? "").trim() || undefined
     });
-    conv.appointment.matchedSlot = {
-      salespersonId: salesperson.id,
-      salespersonName: salesperson.name,
-      calendarId: salesperson.calendarId,
-      start: startIso,
-      end: endIso,
-      startLocal: formatSlotLocal(startIso, cfg.timezone),
-      endLocal: formatSlotLocal(endIso, cfg.timezone),
-      appointmentType
-    };
-    conv.appointment.reschedulePending = false;
     setPreferredSalespersonForConv(conv, { id: salesperson.id, name: salesperson.name }, "manual-appointment");
     onAppointmentBooked(conv);
     const smsResult: { sent: boolean; reason?: string; sid?: string } = {

@@ -95,7 +95,13 @@ const CEILINGS: Ceiling[] = [
     // 71_443 main and proposed 71_436. #449 (-1) and #450 (+4) merged first, so the honest
     // integrated count is 71_439 — taking 71_436 would have failed the build on merge, and
     // "fixing" that by raising the ceiling later is exactly what this guard exists to stop.
-    max: 71_439,
+    // 71_439 -> 71_432. The booking-ENDPOINT un-stacking: the three HTTP endpoints that create a
+    // calendar event (/scheduler/book, /public/booking/book, /conversations/:id/appointment) each
+    // ran their own copy of the same eleven-line "write the confirmed record" field list. All three
+    // now call applyAppointmentBookingRecord (conversationStore), which asks
+    // decideAppointmentBookingRecord (routeStateReducer). Taken against main's REAL count (71_437),
+    // not the ceiling's 2 lines of headroom — a ceiling is a cap, never a budget to spend.
+    max: 71_432,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
