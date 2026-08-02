@@ -60,7 +60,7 @@ const CEILINGS: Ceiling[] = [
     // The cadence-quality judge's input assembly also moved out: the inline "days since the customer
     // last replied" walk is now daysSinceLastCustomerReply (cadenceQualityFacts.ts), alongside the
     // unit facts the judge is graded against.
-    max: __INDEX_MAX__,
+    max: 71_575,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
