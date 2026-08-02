@@ -331,8 +331,9 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 // refereed draftHeld, the cadence quiet window, the appointment teardown, the appointment outcome
 // record, and the manual cadence restart. Take this number from a clean checkout, never from the
 // shared anomaly-review tree — that clone is often mid-edit by the loop and reads ~4 lower.
+// 168 -> 164: PR #425 taught the detector that a write which cannot arbitrate is not a writer.
 // RATCHET DOWN ONLY.
-const UNREFEREED_WRITER_BASELINE = 168;
+const UNREFEREED_WRITER_BASELINE = 164;
 
 {
   const sourceFiles: SourceFile[] = [];
