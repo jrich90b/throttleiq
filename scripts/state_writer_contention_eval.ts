@@ -13,6 +13,8 @@
  * Both failure modes produce a number nobody can act on. These rows exist to keep them dead.
  */
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import {
   countWriters,
   findWriteSites,
@@ -230,6 +232,103 @@ const file = (path: string, text: string): SourceFile => ({ path, text });
     2,
     "three branches of one function collapse to ONE writer; the separate function is the second"
   );
+}
+
+// =================================================================================================
+// THE RE-STACKING RATCHET (Joe, 2026-08-01: "I don't need this conflicting with what the
+// un-sticking is trying to clean up").
+//
+// THE PROBLEM IT SOLVES. The un-stack loop removes fights; four OTHER routines add code to the same
+// files every day, and until now none of them knew this program existed. Nothing stopped a routine
+// from bolting a fresh unrefereed write onto a field that had just been given a referee — silently
+// undoing an un-stacking, with the PR looking perfectly reasonable on its own.
+//
+// Telling the routines is necessary but weak: instructions are read by a model that may or may not
+// weigh them, and a new routine written next month starts blind again. So this is STRUCTURAL. Any
+// change that raises the number of unrefereed writers fails `ci:eval`, whoever wrote it and whether
+// or not they ever heard of the un-stack loop. Same mechanism as `source_size_ratchet` and
+// `eval_source_pin_ratchet`, both of which already work exactly this way.
+//
+// WHAT THE NUMBER MEANS: independent places that can each set a piece of conversation state with
+// nobody arbitrating between them. It goes DOWN as the loop referees them. It should never go up.
+//
+// TO ADD A WRITE LEGITIMATELY: ask the field's referee (a `decide*`/`resolve*` call within 40 lines
+// above the write) instead of deciding for yourself — that is what "refereed" means here, and a
+// refereed write does not count. If the field has no referee yet, that is the signal it needs one:
+// leave the work to the un-stack loop rather than adding the Nth competing writer.
+//
+// TO LOWER IT: un-stack something, then drop the number here and say what you refereed.
+//
+// TO RAISE IT: don't. A change that genuinely cannot be refereed is the strongest possible argument
+// that the field is already too contended to touch safely.
+//
+// KNOWN HOLE, found by sabotage-testing this ratchet rather than assuming it worked. "Refereed"
+// means a `decide*`/`resolve*` call sits within 40 lines ABOVE the write — proximity, not proof of
+// a real relationship. So a new write parked just below an UNRELATED referee call reads as guarded
+// and slips through: a simulated re-stack inserted a few lines under `applyCadenceQuietWindow` did
+// NOT move this number, while the same write in a file with no nearby referee did (168 -> 169).
+// The ratchet therefore catches the ordinary case and can be evaded by an unlucky (or deliberate)
+// insertion point. That is the detector's documented under-reporting, inherited here: a number that
+// holds is good evidence, never a proof of no re-stacking. Tightening it means teaching
+// `isWriteGuarded` that the referee has to be about THIS field.
+//
+// FAIL DIRECTION: a scan that finds nothing FAILS rather than passing silently — a ratchet that
+// quietly stops measuring is worse than no ratchet, because it reads as "no re-stacking happened".
+const CONTENTION_ROOT = path.resolve("services/api/src");
+// Measured 2026-08-01 against a CLEAN origin/main (7b679fbb), after PRs #411/#414/#420/#421/#423
+// refereed draftHeld, the cadence quiet window, the appointment teardown, the appointment outcome
+// record, and the manual cadence restart. Take this number from a clean checkout, never from the
+// shared anomaly-review tree — that clone is often mid-edit by the loop and reads ~4 lower.
+// RATCHET DOWN ONLY.
+const UNREFEREED_WRITER_BASELINE = 168;
+
+{
+  const sourceFiles: SourceFile[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === "node_modules") continue;
+        walk(full);
+      } else if (entry.name.endsWith(".ts")) {
+        sourceFiles.push(file(path.relative(process.cwd(), full), fs.readFileSync(full, "utf8")));
+      }
+    }
+  };
+  assert.ok(fs.existsSync(CONTENTION_ROOT), `contention ratchet: ${CONTENTION_ROOT} not found — the scan is broken`);
+  walk(CONTENTION_ROOT);
+  assert.ok(
+    sourceFiles.length > 50,
+    `contention ratchet: only ${sourceFiles.length} source file(s) scanned — that is not the real tree, and an empty scan must never pass`
+  );
+
+  const queue = unstackingQueue(rankContention(sourceFiles, { minWrites: 4 }));
+  const total = queue.reduce((n, f) => n + f.unrefereedWriters, 0);
+  assert.ok(total > 0, "contention ratchet: zero unrefereed writers found — the detector broke, this is not a clean codebase");
+
+  if (total > UNREFEREED_WRITER_BASELINE) {
+    const worst = [...queue].sort((a, b) => b.unrefereedWriters - a.unrefereedWriters).slice(0, 5);
+    console.error(
+      `  FAIL re-stacking ratchet: ${total} unrefereed writers, baseline ${UNREFEREED_WRITER_BASELINE} ` +
+        `(+${total - UNREFEREED_WRITER_BASELINE}).\n` +
+        "       Something added a place that sets conversation state with nobody arbitrating — which is\n" +
+        "       what the un-stack loop exists to remove. ASK THE FIELD'S REFEREE instead (a decide*/\n" +
+        "       resolve* call above the write); a refereed write does not count here. If the field has\n" +
+        "       no referee yet, leave it to the un-stack loop rather than adding the Nth writer.\n" +
+        "       Do NOT raise this number.\n" +
+        `       Most contended: ${worst.map(f => `${f.field}(${f.unrefereedWriters})`).join(", ")}`
+    );
+    process.exit(1);
+  }
+
+  console.log(
+    `state_writer_contention:eval re-stacking ratchet OK (${total} / ${UNREFEREED_WRITER_BASELINE} unrefereed writers across ${queue.length} field(s))`
+  );
+  if (UNREFEREED_WRITER_BASELINE - total >= 5) {
+    console.log(
+      `  NOTE: ${UNREFEREED_WRITER_BASELINE - total} under baseline — lower UNREFEREED_WRITER_BASELINE to ${total} to keep the grip.`
+    );
+  }
 }
 
 console.log("PASS state-writer contention — writer clustering, referee proof, over-count guards, queue ordering");
