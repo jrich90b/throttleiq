@@ -377,3 +377,103 @@ export function buildRevertPlan(verdict: CanaryVerdict, deployedSha: string): st
     "npm run deploy:api   # NEVER the raw script — it repoints the live store"
   ];
 }
+
+/**
+ * THE DEPLOY GATE — "has the last behaviour deploy been judged, so another one may go out?"
+ *
+ * The canary's decision table above says whether a deploy hurt anyone. This says whether we have
+ * an ANSWER yet, and it is what makes the readiness loop's rate limit mechanical instead of a
+ * promise: no second behaviour deploy until the previous one's window has closed and come back
+ * HEALTHY. Before this existed the baseline lived in /tmp and evaporated, so nothing ever came
+ * back to judge a deploy at all — the canary watched, and then forgot.
+ *
+ * FAIL DIRECTION, and it is the whole point. Every state that is not a recorded HEALTHY verdict
+ * BLOCKS. A missing record blocks; a window still running blocks; UNKNOWN blocks. The failure we
+ * must never have is a gate that opens because it lost track — that launders an unwatched deploy
+ * as watched, which is exactly the false-green failure the canary exists to avoid. Waiting costs
+ * a few hours; a wrongly-opened gate stacks two unjudged behaviour changes on live customers.
+ *
+ * Behaviour-preserving CLEANUPS are exempt and never consult this — a change proven IDENTICAL by
+ * the decision-equivalence harness cannot alter what a customer receives, so there is nothing for
+ * a canary to judge.
+ *
+ * PURE + CLOCK-FREE: the caller passes `nowMs` in, so this stays unit-testable.
+ */
+export type CanaryPending = {
+  /** When the baseline was captured (the deploy moment). */
+  takenAtMs: number;
+  /** How long the watch window runs from `takenAtMs`. */
+  windowMs: number;
+  /** The commit that went out. Needed to build the revert. */
+  deployedSha: string;
+} | null;
+
+export type CanaryGateDecision = {
+  /** May another BEHAVIOUR deploy go out right now? */
+  mayDeployBehaviour: boolean;
+  /** Is there a canary waiting to be judged, and is its window closed? */
+  pendingReady: boolean;
+  minutesRemaining: number;
+  reason: string;
+};
+
+export function decideCanaryGate(input: {
+  pending: CanaryPending;
+  /** The verdict of the most recently JUDGED canary, if any. */
+  lastVerdictStatus?: CanaryVerdict["status"] | null;
+  nowMs: number;
+}): CanaryGateDecision {
+  const pending = input.pending ?? null;
+  const last = input.lastVerdictStatus ?? null;
+
+  if (pending) {
+    const endMs = Number(pending.takenAtMs) + Number(pending.windowMs);
+    const remainingMs = endMs - Number(input.nowMs);
+    const minutesRemaining = remainingMs > 0 ? Math.ceil(remainingMs / 60_000) : 0;
+    return {
+      mayDeployBehaviour: false,
+      pendingReady: remainingMs <= 0,
+      minutesRemaining,
+      reason:
+        remainingMs > 0
+          ? `a canary is still open on ${pending.deployedSha.slice(0, 8) || "(unrecorded)"} — ${minutesRemaining} min left in its window`
+          : `a canary on ${pending.deployedSha.slice(0, 8) || "(unrecorded)"} is ready to judge but has not been judged yet`
+    };
+  }
+
+  if (last === "healthy") {
+    return {
+      mayDeployBehaviour: true,
+      pendingReady: false,
+      minutesRemaining: 0,
+      reason: "the last canary returned HEALTHY and nothing is pending"
+    };
+  }
+
+  if (last === "regressed") {
+    return {
+      mayDeployBehaviour: false,
+      pendingReady: false,
+      minutesRemaining: 0,
+      reason: "the last canary REGRESSED — deal with that before shipping more behaviour"
+    };
+  }
+
+  if (last === "unknown") {
+    return {
+      mayDeployBehaviour: false,
+      pendingReady: false,
+      minutesRemaining: 0,
+      reason: "the last canary concluded nothing (UNKNOWN) — that is not a clean bill of health"
+    };
+  }
+
+  // No pending canary AND no judged verdict ever recorded. This is the state the loop was in
+  // before this gate existed, and it must BLOCK: "we have never measured one" is not "all clear".
+  return {
+    mayDeployBehaviour: false,
+    pendingReady: false,
+    minutesRemaining: 0,
+    reason: "no canary has ever been judged — arm one on the next deploy before shipping behaviour"
+  };
+}
