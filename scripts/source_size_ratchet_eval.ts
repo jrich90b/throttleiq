@@ -74,7 +74,10 @@ const CEILINGS: Ceiling[] = [
     // 71_461 -> 71_460. The appointment-confirm companion fields (status/confirmedBy/acknowledged/
     // reschedule latch) moved behind applyAppointmentConfirmRecord (conversationStore), which asks
     // decideAppointmentConfirmRecord — the two booked lanes here now write one call, not four fields.
-    max: 71_460,
+    // 71_460 -> 71_456. The wrongful-silence judge's trace shaping (which stage, whether to record)
+    // moved to domain/noResponseTrace.ts — so widening the judge's coverage to two more silence
+    // terminals still came in NET SMALLER than before it.
+    max: 71_456,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
