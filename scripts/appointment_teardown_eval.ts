@@ -127,29 +127,49 @@ for (const cause of ["customer_cancelled", "calendar_event_gone", "staff_cancell
   eq(decision.closeAppointmentTodos, true, `${cause}: open appointment todos get closed`);
 }
 
-// --- THE PRESERVED DIVERGENCE -------------------------------------------------------------------
-// The manual-outbound booking-failure paths keep the requested time. This is today's live
-// behavior and the un-stacking must not silently "fix" it.
+// --- THE RULING: no more phantom time ------------------------------------------------------------
+// Joe, 2026-08-01: "Clear it." The manual-outbound booking-failure paths used to KEEP the requested
+// time after the calendar refused the booking, so a customer asking "are we still on?" was told
+// "I'm seeing an appointment note for Saturday at 2:00 PM, but I'll have the team confirm it" —
+// half-affirming a time nobody ever booked. All five teardown causes now clear it.
 {
   const appt = bookedAppointment();
   const decision = applyAppointmentTeardown(appt, { cause: "manual_outbound_book_failed" });
 
-  eq(appt.whenText, "Saturday at 2:00 PM", "book-failed KEEPS the requested time (divergence, as-is)");
-  eq(appt.confirmedBy, "salesperson", "book-failed KEEPS confirmedBy (divergence, as-is)");
-  ok(!!appt.matchedSlot, "book-failed KEEPS the matched slot (divergence, as-is)");
-  eq(
-    decision.divergence,
-    "manual_outbound_book_failed_retains_requested_time",
-    "the disagreement is NAMED on the decision, not buried in a branch"
-  );
+  eq(appt.whenText, undefined, "book-failed now CLEARS the requested time — no phantom appointment");
+  eq(appt.matchedSlot, undefined, "and the matched calendar slot with it");
+  eq(decision.clearRequestedTime, true, "the decision says so explicitly");
+  eq(appt.bookedEventId, null, "the calendar event id is dropped");
+  eq(appt.whenIso, null, "and the machine-readable time");
+
+  // THE DIVERGENCE THAT SURVIVES, deliberately: this path opens a staff CALL todo instead of
+  // closing the open appointment todos. That todo IS the recovery path — it carries the time in
+  // its own text ("Manual appointment could not be booked on calendar. Requested: ...") — so
+  // closing it would drop the work on the floor and staff WOULD lose the time.
   eq(
     decision.closeAppointmentTodos,
     false,
-    "book-failed does not close appointment todos — its caller OPENS a staff call todo instead"
+    "book-failed still does not close appointment todos — its caller OPENS a staff call todo"
   );
-  // Even the diverging path must still drop the booking itself.
-  eq(appt.bookedEventId, null, "book-failed still drops the calendar event id");
-  eq(appt.whenIso, null, "book-failed still drops the machine-readable time");
+  eq(
+    decision.divergence,
+    "manual_outbound_book_failed_opens_call_todo",
+    "the remaining disagreement is NAMED, not buried in a branch"
+  );
+}
+// The customer-facing consequence, stated as a property: after ANY teardown cause, no path can
+// still be holding a time to half-affirm back to the customer.
+for (const cause of [
+  "manual_outbound_book_failed",
+  "customer_cancelled",
+  "staff_no_show",
+  "staff_cancelled",
+  "unknown_cause"
+] as const) {
+  const appt = bookedAppointment();
+  applyAppointmentTeardown(appt, { cause: cause as any });
+  eq(appt.whenText, undefined, `${cause}: no phantom time survives the teardown`);
+  eq(appt.whenIso, null, `${cause}: no machine-readable time survives either`);
 }
 
 // --- reschedulePending: the one answer that genuinely differs by cause ---------------------------

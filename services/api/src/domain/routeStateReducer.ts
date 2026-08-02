@@ -3670,18 +3670,24 @@ export function decideAppointmentTeardown(
   return {
     status: "none",
     clearBookedEvent: true,
-    // Divergence: the manual-outbound failure paths keep the requested time on the record.
-    clearRequestedTime: !bookFailed,
-    clearMatchedSlot: !bookFailed,
+    // RULED (Joe, 2026-08-01: "Clear it"). The manual-outbound failure paths used to KEEP the
+    // requested time after the calendar refused the booking, so a customer who later asked "are we
+    // still on?" was told "I'm seeing an appointment note for Saturday at 2:00 PM, but I'll have the
+    // team confirm it" — half-affirming a time nobody ever booked. The other four teardown causes
+    // clear it and produce the neutral "I'll have the team confirm your appointment status."
+    // All five now behave the same. Staff lose nothing: the failure opens a call todo that carries
+    // the time in its text ("Manual appointment could not be booked on calendar. Requested: ...").
+    clearRequestedTime: true,
+    clearMatchedSlot: true,
     reschedulePending,
     clearStaffPromptState: true,
-    // Divergence: those same two paths open a staff CALL todo instead of closing the open ones.
+    // STILL DIVERGENT, deliberately and unruled: those same two paths open a staff CALL todo rather
+    // than closing the open appointment todos — that todo IS the recovery path for the failed
+    // booking, so closing it would drop the work on the floor.
     closeAppointmentTodos: !bookFailed,
-    divergence: bookFailed
-      ? "manual_outbound_book_failed_retains_requested_time"
-      : null,
+    divergence: bookFailed ? "manual_outbound_book_failed_opens_call_todo" : null,
     why: bookFailed
-      ? "calendar refused a staff-set time — booking dropped, requested time kept for the staff call todo"
+      ? "calendar refused a staff-set time — booking and time both cleared; a staff call todo carries the time forward"
       : `appointment torn down (${cause}) — record fully cleared`
   };
 }
@@ -3818,12 +3824,29 @@ export function decideAppointmentOutcomeRecord(
   const secondaryStatus = String(input.incoming.secondaryStatus ?? "").trim();
   const note = String(input.incoming.note ?? "").trim();
 
-  // Full replacement — this is what all nine sites do today and what the un-stacking preserves.
   const record: AppointmentOutcomeRecordDecision["record"] = {
     status,
     updatedAt: input.nowIso
   };
+  const existingPrimary = String(input.existing?.primaryStatus ?? "").trim();
+
+  // RULED (Joe, 2026-08-01: "the reps click wins"). Six of the nine write sites save a BARE record
+  // — a `status` with no attendance answer — and assigning it wholesale erased what the rep had
+  // recorded about whether the customer actually showed up. So: a rep clicks "did not show"; that
+  // lead's finance application later comes back declined; the system then believed he DID come in,
+  // and we lost the ability to say "sorry you couldn't make it". It ran the other way too — a note
+  // read as "cancelled", landing on someone recorded as SOLD, gave us permission to tell a customer
+  // who had just bought a bike that he failed to appear.
+  //
+  // A finance result or a context note is not a statement about whether someone walked in the door,
+  // so it may not overwrite one. The rep's click is ground truth and is carried forward; the new
+  // `status` still lands, so the incoming write loses nothing it actually knew.
+  //
+  // FAIL DIRECTION: preserving an attendance answer is the safe side — the readers
+  // (`canAssertMissedAppointment`) only ever ASSERT a miss on a positive answer, so keeping the
+  // rep's "missed" can at most keep us honest, while wiping it invents a "showed" nobody recorded.
   if (primaryStatus) record.primaryStatus = primaryStatus;
+  else if (existingPrimary) record.primaryStatus = existingPrimary;
   if (secondaryStatus) record.secondaryStatus = secondaryStatus;
   if (note) record.note = note;
 
@@ -3834,8 +3857,9 @@ export function decideAppointmentOutcomeRecord(
     attendanceAfter !== "unknown" &&
     attendanceBefore !== attendanceAfter;
 
-  const hadRecordedPair = !!String(input.existing?.primaryStatus ?? "").trim();
-  const dropsRecordedAttendance = hadRecordedPair && !primaryStatus;
+  // After the carry-forward above, a bare write no longer drops the recorded answer. This stays
+  // computed (rather than hard-coded false) so the flag keeps telling the truth if the rule moves.
+  const dropsRecordedAttendance = !!existingPrimary && !String(record.primaryStatus ?? "").trim();
   const bareLegacyShape = !primaryStatus;
 
   let divergence: string | null = null;

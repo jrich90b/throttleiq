@@ -123,11 +123,14 @@ for (const source of BARE_SOURCES) {
     incoming: { status: "follow_up" },
     nowIso: NOW
   }).record;
-  ok(!("primaryStatus" in record), `${source}: does NOT carry the old primaryStatus forward (as-is)`);
-  ok(!("secondaryStatus" in record), `${source}: does NOT carry the old secondaryStatus forward (as-is)`);
+  eq(record.primaryStatus, "did_not_show", `${source}: CARRIES the rep's answer forward (Joe 8/1)`);
+  ok(!("secondaryStatus" in record), `${source}: the sub-status is NOT carried — only the attendance answer is`);
 }
 
-// --- THE PRESERVED DIVERGENCE: a bare write flips a recorded no-show into a showed ---------------
+// --- THE RULING: a bare write can no longer erase what the rep recorded --------------------------
+// Joe, 2026-08-01: "the reps click wins." A rep clicks "did not show"; that lead's finance
+// application later comes back declined; the bare finance write used to overwrite the rep and the
+// system then believed he DID come in, losing our ability to say "sorry you couldn't make it".
 {
   const decision = decideAppointmentOutcomeRecord({
     source: "finance_signal",
@@ -136,16 +139,16 @@ for (const source of BARE_SOURCES) {
     nowIso: NOW
   });
   eq(decision.attendanceBefore, "missed", "staff had recorded that he did not show");
-  eq(decision.attendanceAfter, "showed", "the bare finance write turns that into a SHOWED (as-is)");
-  eq(decision.attendanceFlipped, true, "the flip is detected, not buried in a branch");
-  eq(decision.dropsRecordedAttendance, true, "the recorded pair is dropped by this write");
-  eq(
-    decision.divergence,
-    "bare_outcome_write_flips_recorded_attendance",
-    "the disagreement is NAMED on the decision"
-  );
+  eq(decision.attendanceAfter, "missed", "and the finance result no longer changes that");
+  eq(decision.attendanceFlipped, false, "nothing flipped — the rep's click survived");
+  eq(decision.dropsRecordedAttendance, false, "and the recorded answer was not dropped");
+  eq(decision.divergence, null, "so there is no disagreement left to name");
+  // The incoming write still lands everything it actually knew.
+  eq(decision.record.status, "financing_declined", "the finance result is recorded");
+  eq(decision.record.note, "Lender turned it down.", "and its note");
+  eq(decision.record.primaryStatus, "did_not_show", "alongside — not instead of — the rep's answer");
 
-  // And the downstream consequence the name is about: the readers really do change their answer.
+  // The downstream consequence, which is the whole point: we can still tell him he missed it.
   eq(
     canAssertMissedAppointment({
       whenIso: "2026-08-01T14:00:00.000Z",
@@ -154,7 +157,7 @@ for (const source of BARE_SOURCES) {
       outcomeLegacyStatus: "no_show"
     }),
     true,
-    "before the overwrite we may tell him he missed it"
+    "before the finance write we may tell him he missed it"
   );
   eq(
     canAssertMissedAppointment({
@@ -163,17 +166,8 @@ for (const source of BARE_SOURCES) {
       outcomePrimaryStatus: decision.record.primaryStatus ?? null,
       outcomeLegacyStatus: decision.record.status
     }),
-    false,
-    "after it we no longer can — the recorded no-show is gone"
-  );
-  // The readers do NOT agree with each other about the very same record, which is the second half
-  // of this mess. visitFraming's legacy list is narrower than isShowedAppointmentOutcome's — it
-  // accepts only showed/showed_up — so after the overwrite the attendance question reads SHOWED to
-  // the settled-appointment guard and NOT-A-VISIT to the phantom-visit guard, off one record.
-  eq(
-    customerVisitConfirmed({ appointment: { staffNotify: { outcome: decision.record } } }),
-    false,
-    "the phantom-visit guard reads the SAME record as no-visit — the two readers disagree"
+    true,
+    "and after it we STILL can — that capability used to be silently lost here"
   );
 }
 
@@ -186,12 +180,13 @@ for (const source of BARE_SOURCES) {
     nowIso: NOW
   });
   eq(decision.attendanceBefore, "showed", "he had showed and bought");
-  eq(decision.attendanceAfter, "missed", "the note write turns that into a miss (as-is)");
-  eq(decision.attendanceFlipped, true, "the reverse flip is detected too");
+  eq(decision.attendanceAfter, "showed", "and a note read as 'cancelled' no longer un-does that");
+  eq(decision.attendanceFlipped, false, "the dangerous reverse flip is gone too");
+  eq(decision.divergence, null, "nothing left to name in this direction either");
   eq(
-    decision.divergence,
-    "bare_outcome_write_flips_recorded_attendance",
-    "same named divergence in the dangerous direction"
+    customerVisitConfirmed({ appointment: { staffNotify: { outcome: decision.record } } }),
+    true,
+    "we can never tell a customer who just bought a bike that he failed to appear"
   );
 }
 
@@ -204,14 +199,11 @@ for (const source of BARE_SOURCES) {
     nowIso: NOW
   });
   eq(decision.attendanceBefore, "showed", "showed before");
-  eq(decision.attendanceAfter, "showed", "still reads showed via the legacy fallback");
-  eq(decision.attendanceFlipped, false, "no flip — the answer survived the shape change");
-  eq(decision.dropsRecordedAttendance, true, "but the explicit pair was still lost");
-  eq(
-    decision.divergence,
-    "bare_outcome_write_drops_recorded_attendance",
-    "the weaker divergence is named distinctly from the flip"
-  );
+  eq(decision.attendanceAfter, "showed", "showed after");
+  eq(decision.attendanceFlipped, false, "no flip");
+  eq(decision.dropsRecordedAttendance, false, "and the explicit answer is no longer lost either");
+  eq(decision.record.primaryStatus, "showed", "it is carried forward on the new record");
+  eq(decision.divergence, null, "nothing to report");
 }
 
 // --- the quiet, correct case: a normalized lane overwriting with the same attendance -------------
@@ -251,18 +243,19 @@ for (const source of NORMALIZED_SOURCES) {
   eq(first.dropsRecordedAttendance, false, "nothing was dropped — there was no pair");
   eq(first.divergence, null, "and so nothing is reported");
 
-  // Writing an UNRECOGNIZED status over a recorded one is not a flip either (after is unknown),
-  // but it still drops the pair — the weaker, honest signal.
+  // An UNRECOGNIZED incoming status is the strongest case for the ruling: we cannot read it, so it
+  // certainly is not a statement about whether the customer walked in. The rep's answer survives it.
   const opaque = decideAppointmentOutcomeRecord({
     source: "context_note_outcome",
     existing: { status: "no_show", primaryStatus: "did_not_show" },
     incoming: { status: "some_future_status" },
     nowIso: NOW
   });
-  eq(opaque.attendanceAfter, "unknown", "an unrecognized incoming status stays unknown");
+  eq(opaque.attendanceAfter, "missed", "a status we cannot read does not get to erase the rep's answer");
   eq(opaque.attendanceFlipped, false, "unknown is never a flip — we do not invent a contradiction");
-  eq(opaque.dropsRecordedAttendance, true, "the pair is still gone, and that is still reported");
-  eq(opaque.divergence, "bare_outcome_write_drops_recorded_attendance", "named as a drop, not a flip");
+  eq(opaque.dropsRecordedAttendance, false, "the recorded answer is kept, not dropped");
+  eq(opaque.record.primaryStatus, "did_not_show", "it rides forward onto the new record");
+  eq(opaque.divergence, null, "nothing left to report");
 
   // The caller's status is kept verbatim — the referee is a shaper, never a classifier.
   eq(opaque.record.status, "some_future_status", "an unknown status is stored as-is, not normalized away");
