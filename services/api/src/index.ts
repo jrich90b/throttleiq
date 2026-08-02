@@ -5345,23 +5345,22 @@ async function runCadenceQualityJudgeShadow(
         }
       });
     }
-    // Fold the cadence-quality judge into the self-healing feed (like the context-fidelity shadow): when a
-    // PROACTIVE cadence message is judged suppress/hold (a bad message we'd send unprompted), persist the
-    // verdict so the read-only outcome-audit sweep surfaces it as a comprehension gap. Detection only — STEP
-    // 1 stays shadow (the draft is NOT altered here).
-    if (verdict.overall === "suppress" || verdict.overall === "hold") {
-      (conv as any).cadenceQualityShadow = {
-        at: new Date().toISOString(),
-        overall: verdict.overall,
-        confidence: verdict.confidence ?? null,
-        reason: String(verdict.reason ?? "").slice(0, 240),
-        steering: String(verdict.steering ?? "").slice(0, 240) || null,
-        channel,
-        cadenceKind: cadenceKind ?? null,
-        messagePreview: text.slice(0, 240)
-      };
-      saveConversation(conv);
-    }
+    // Fold the cadence-quality judge into the self-healing feed (like the context-fidelity shadow): persist
+    // the verdict so the read-only outcome-audit sweep can surface a bad unprompted send as a comprehension
+    // gap. Detection only — STEP 1 stays shadow (the draft is NOT altered here). EVERY judged touch is
+    // written, not just suppress/hold, so this field holds the LATEST judgement and a later passing touch
+    // retires a stale suppress. Rationale + fail direction: conversation_outcome_audit:eval, same names.
+    (conv as any).cadenceQualityShadow = {
+      at: new Date().toISOString(),
+      overall: verdict.overall,
+      confidence: verdict.confidence ?? null,
+      reason: String(verdict.reason ?? "").slice(0, 240),
+      steering: String(verdict.steering ?? "").slice(0, 240) || null,
+      channel,
+      cadenceKind: cadenceKind ?? null,
+      messagePreview: text.slice(0, 240)
+    };
+    saveConversation(conv);
     // The CALLER enforces: when CADENCE_QUALITY_ENFORCE is on and decision.action === "suppress", the
     // cadence loop skips this touch + advances. When off, this stays observe-only (the caller ignores
     // the returned decision and the send proceeds unchanged).
