@@ -21,6 +21,11 @@ import {
   resolvePostSaleModelLabel
 } from "./domain/postSaleCadence.js";
 import { stampDraftProvenance } from "./domain/agentCorrectionRate.js";
+import {
+  normalizeOutboundText,
+  extractComparableCadenceSentences,
+  isCadenceNearDuplicateText
+} from "./domain/cadenceRepeatSimilarity.js";
 import { hasDeliveredOrPendingDealerRideThankYou } from "./domain/dealerRideThankYouDedup.js";
 import {
   hasDealProgressParserHintText,
@@ -23536,10 +23541,6 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function normalizeOutboundText(text: string): string {
-  return String(text ?? "").toLowerCase().replace(/\s+/g, " ").trim();
-}
-
 function normalizeOutboundTarget(target: string): string {
   const raw = String(target ?? "").trim().toLowerCase();
   if (!raw) return "";
@@ -23555,115 +23556,6 @@ function normalizeOutboundMediaForDedup(mediaUrls?: string[]): string {
     .filter(Boolean)
     .sort()
     .join("|");
-}
-
-const CADENCE_SIMILARITY_STOP_WORDS = new Set([
-  "a",
-  "an",
-  "and",
-  "are",
-  "as",
-  "at",
-  "be",
-  "by",
-  "can",
-  "did",
-  "do",
-  "for",
-  "from",
-  "get",
-  "got",
-  "have",
-  "i",
-  "if",
-  "in",
-  "is",
-  "it",
-  "just",
-  "let",
-  "me",
-  "my",
-  "of",
-  "on",
-  "or",
-  "our",
-  "so",
-  "still",
-  "that",
-  "the",
-  "this",
-  "to",
-  "we",
-  "what",
-  "when",
-  "which",
-  "with",
-  "you",
-  "your"
-]);
-
-function cadenceSimilarityTokens(text: string): Set<string> {
-  const normalized = normalizeOutboundText(text)
-    .replace(/[’']/g, "")
-    .replace(/[^a-z0-9\s]/g, " ");
-  const out = new Set<string>();
-  for (const token of normalized.split(/\s+/)) {
-    if (!token) continue;
-    if (CADENCE_SIMILARITY_STOP_WORDS.has(token)) continue;
-    if (token.length <= 2 && !/^\d+$/.test(token)) continue;
-    out.add(token);
-  }
-  return out;
-}
-
-function extractComparableCadenceSentences(text: string): string[] {
-  const compact = String(text ?? "")
-    .replace(/[!?]+/g, ".")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!compact) return [];
-  return compact
-    .split(".")
-    .map(part =>
-      normalizeOutboundText(part)
-        .replace(/[’']/g, "")
-        .replace(/[^a-z0-9\s]/g, " ")
-        .replace(/\s+/g, " ")
-        .trim()
-    )
-    .filter(part => part.length >= 24 && part.split(" ").length >= 5);
-}
-
-function cadenceTokenOverlapScore(a: string, b: string): number {
-  const left = cadenceSimilarityTokens(a);
-  const right = cadenceSimilarityTokens(b);
-  if (!left.size || !right.size) return 0;
-  let overlap = 0;
-  for (const token of left) {
-    if (right.has(token)) overlap += 1;
-  }
-  return overlap / Math.min(left.size, right.size);
-}
-
-function cadenceSharesSentence(a: string, b: string): boolean {
-  const left = extractComparableCadenceSentences(a);
-  if (!left.length) return false;
-  const right = new Set(extractComparableCadenceSentences(b));
-  if (!right.size) return false;
-  return left.some(sentence => right.has(sentence));
-}
-
-function isCadenceNearDuplicateText(a: string, b: string): boolean {
-  const left = normalizeOutboundText(a);
-  const right = normalizeOutboundText(b);
-  if (!left || !right) return false;
-  if (left === right) return true;
-  const minLen = Math.min(left.length, right.length);
-  if (minLen >= 48 && (left.includes(right) || right.includes(left))) return true;
-  const overlap = cadenceTokenOverlapScore(left, right);
-  if (overlap >= 0.82) return true;
-  if (cadenceSharesSentence(left, right) && overlap >= 0.45) return true;
-  return false;
 }
 
 function isInventoryUnavailableCadenceText(text: string): boolean {
