@@ -3979,12 +3979,26 @@ export function decideManualCadenceRestart(
   const existingTag = String(existing?.contextTag ?? "").trim().toLowerCase();
 
   const promptLane = MANUAL_CONTEXT_PROMPT_CONTEXTS.has(context);
-  /** The majority rule: still running, and running for THIS context. */
+  /**
+   * THE ONE RULE, all three lanes (Joe, 2026-08-01: "Start fresh"). Keep a lead's place in the
+   * follow-up sequence ONLY when the chase is still running AND running for this same reason.
+   *
+   * The manual-context prompt used to apply a looser test — "anything that has not completed" — so
+   * pressing "Buyer interest" or "Seller intake" inherited the position of a chase that had been
+   * STOPPED, or that was running for something else entirely. Two things went wrong with that:
+   * the inherited next-touch date could already be in the PAST, so the very next scheduler pass
+   * texted the customer immediately instead of walking the day-one ramp; and a lead already nine
+   * touches deep sat at the give-up threshold, so the "new" buyer chase sent ONE message and shut
+   * itself off. Staff pressing that button mean "chase this lead for THIS reason, now" — which is
+   * a fresh day one, exactly as the quote-delivered and credit-app lanes already behaved.
+   *
+   * FAIL DIRECTION: starting fresh re-anchors the next touch to the day-one offset rather than a
+   * stale (possibly past-due) one, so it can only ever DELAY the next proactive message, never
+   * fire one sooner. It also restores the full ramp instead of a lead expiring after one send.
+   */
   const sameContextActive = !!existing && status === "active" && existingTag === context.toLowerCase();
-  /** The manual-context prompt's looser rule: anything that has not completed. */
-  const anyNotCompleted = !!existing && status !== "completed";
 
-  const keepPlaceInLine = promptLane ? anyNotCompleted : sameContextActive;
+  const keepPlaceInLine = sameContextActive;
   const carryExistingRecord = promptLane ? keepPlaceInLine : !!existing;
 
   const anchorAt = keepPlaceInLine ? String(existing?.anchorAt ?? "").trim() || now : now;
@@ -4001,12 +4015,13 @@ export function decideManualCadenceRestart(
     : 0;
   const scheduleMuted = carrySource?.scheduleMuted === true;
 
+  // The prompt-lane divergence is RULED and gone. What survives is the quote/finance lanes carrying
+  // a finished cadence RECORD forward (its invite budget and mute flag) even when they correctly
+  // start a fresh day one — a narrower disagreement Joe has not ruled on, so it stays named.
   const divergence =
-    promptLane && keepPlaceInLine && !sameContextActive
-      ? "manual_context_prompt_keeps_the_place_of_a_stopped_or_foreign_cadence"
-      : !promptLane && !!existing && !sameContextActive
-        ? "quote_and_finance_lanes_carry_a_finished_cadence_record_forward"
-        : null;
+    !promptLane && !!existing && !sameContextActive
+      ? "quote_and_finance_lanes_carry_a_finished_cadence_record_forward"
+      : null;
 
   return {
     keepPlaceInLine,
