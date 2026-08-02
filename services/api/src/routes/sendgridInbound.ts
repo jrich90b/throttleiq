@@ -5130,6 +5130,15 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     conversationStateAccepted &&
     llmConversationState?.stateIntent === "hiring_manager" &&
     llmConversationState.explicitRequest === true;
+  // A B2B pitch TO the dealership. Triple-locked like the hiring intent, plus one structural lock
+  // the parser cannot give us: only an INITIAL ADF can be reclassified. A lead we have already
+  // talked to is a conversation in progress, and no confidence score should be able to reach back
+  // and silence it.
+  const conversationStateVendorSolicitationIntent =
+    conversationStateAccepted &&
+    llmConversationState?.stateIntent === "vendor_solicitation" &&
+    llmConversationState.explicitRequest === true &&
+    llmConversationState.manualHandoffReason === "vendor_inquiry";
   const conversationStateAcceptedNonHiringIntent =
     conversationStateAccepted &&
     llmConversationState?.stateIntent !== "hiring_manager" &&
@@ -9780,6 +9789,32 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       hasLicense: conv.lead?.hasMotoLicense
     });
     scheduleLongTermFollowUp(conv, due.toISOString(), msg);
+  }
+  // Vendor/B2B solicitation: mark the lead non-sales BEFORE the cadence admission below, so it is
+  // never enrolled in a customer chase. (Jessica Miller +12168596131, 2026-07-31: a virtual-assistant
+  // sales pitch arrived as a Room58 "Contact Us" ADF, drew a standard day-one ramp, and was still
+  // sending sales follow-ups two days after a human had told them no.)
+  //
+  // Deliberately placed HERE rather than beside the hiring branch, and deliberately NOT returning
+  // early: this changes the CHASE only. The draft this lead gets is exactly the draft it gets today,
+  // still staff-approved before anything leaves. Suppressing the reply as well is a separate,
+  // customer-facing decision that is not what the operator reported.
+  if (isInitialAdf && conversationStateVendorSolicitationIntent) {
+    setFollowUpMode(conv, "manual_handoff", "vendor_inquiry");
+    stopFollowUpCadence(conv, "manual_handoff");
+    conv.classification = {
+      ...(conv.classification ?? {}),
+      bucket: "general_inquiry",
+      cta: "contact_us",
+      channel,
+      ruleName: "vendor_solicitation"
+    };
+    addTodo(
+      conv,
+      "other",
+      `Vendor/B2B solicitation (not a sales lead): ${effectiveInquiry || inquiryRaw || event.body || "Business pitched the dealership."}`,
+      event.providerMessageId
+    );
   }
   const shouldStartCadence =
     !hasExistingCadence &&

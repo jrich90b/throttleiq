@@ -9,6 +9,11 @@ import { isFabricatedGratitudeLeadIn, isEchoedInboundOpening } from "./leadInGua
 import { customerVisitConfirmed, phantomVisitGuardEnabled, stripPhantomVisitFraming } from "./visitFraming.js";
 import { recordOpenAIUsage } from "./openaiUsageLogger.js";
 import { buildPartsCatalogParserHint, matchPartsCatalogLexicon } from "./partsCatalogLexicon.js";
+import {
+  CONVERSATION_STATE_FEW_SHOT_EXAMPLES,
+  VENDOR_SOLICITATION_PROMPT_RULES,
+  isVendorSolicitationVerdictConfident
+} from "./conversationStateParserPrompt.js";
 import { isDemoDayEventQuestionText } from "./workflowRegressionGuards.js";
 import { findComputerLikePhrases, bannedPhraseAvoidanceInstruction } from "./voiceBannedPhrases.js";
 import { decideDraftModelArm, type DraftModelArm } from "./routeStateReducer.js";
@@ -3300,6 +3305,7 @@ export type ConversationStateParse = {
     | "parts_request"
     | "apparel_request"
     | "hiring_manager"
+    | "vendor_solicitation"
     | "corporate_misroute"
     | "scheduling"
     | "pricing"
@@ -3323,6 +3329,7 @@ export type ConversationStateParse = {
     | "parts_request"
     | "apparel_request"
     | "hiring_manager_inquiry"
+    | "vendor_inquiry"
     | "none";
   confidence?: number;
 };
@@ -4875,6 +4882,7 @@ const CONVERSATION_STATE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
         "parts_request",
         "apparel_request",
         "hiring_manager",
+        "vendor_solicitation",
         "corporate_misroute",
         "scheduling",
         "pricing",
@@ -4909,6 +4917,7 @@ const CONVERSATION_STATE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
         "parts_request",
         "apparel_request",
         "hiring_manager_inquiry",
+        "vendor_inquiry",
         "none"
       ]
     },
@@ -13489,35 +13498,7 @@ export async function parseConversationStateWithLLM(args: {
   const history = (args.history ?? []).slice(-8).map(h => `${h.direction}: ${h.body}`);
   const lead = args.lead ?? {};
   const catalogHint = buildPartsCatalogParserHint(text);
-  const voiceExamples = [
-    'input: "Customer: can service quote an LED headlight install?" output: {"state_intent":"service_request","corporate_topic":"none","department_intent":"service","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"service_request","confidence":0.97}',
-    'input: "Customer: can parts order drag specialties for me?" output: {"state_intent":"parts_request","corporate_topic":"none","department_intent":"parts","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"parts_request","confidence":0.97}',
-    'input: "Customer: can you order a sissy bar for my Low Rider ST?" output: {"state_intent":"parts_request","corporate_topic":"none","department_intent":"parts","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"parts_request","confidence":0.97}',
-    'input: "Customer: do you have a modular helmet in XL?" output: {"state_intent":"apparel_request","corporate_topic":"none","department_intent":"apparel","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"apparel_request","confidence":0.97}',
-    'input: "Customer: If you get anyone yanking out their 114/117 M-8 to upgrade let me know as I am in the market for one." output: {"state_intent":"parts_request","corporate_topic":"none","department_intent":"parts","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"parts_request","confidence":0.97}',
-    'input: "Customer: Who is the hiring manager for American Harley Davidson?" output: {"state_intent":"hiring_manager","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"hiring_manager_inquiry","confidence":0.97}',
-    'input: "Customer: I wanted to apply for a job at your dealership. Who should I talk to?" output: {"state_intent":"hiring_manager","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"hiring_manager_inquiry","confidence":0.96}',
-    'input: "Customer: Are you hiring?" output: {"state_intent":"hiring_manager","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"hiring_manager_inquiry","confidence":0.96}',
-    'input: "Customer: Where do I send a resume?" output: {"state_intent":"hiring_manager","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"hiring_manager_inquiry","confidence":0.96}',
-    'input: "Customer: I applied online, who handles that?" output: {"state_intent":"hiring_manager","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"hiring_manager_inquiry","confidence":0.94}',
-    'input: "Customer: PreQual: N, PreQualified Amount; $0 Please note non-prequalified customers can still be considered for approval with a completed credit application." output: {"state_intent":"finance_docs","corporate_topic":"none","department_intent":"none","explicit_request":false,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"credit_app","confidence":0.96}',
-    'input: "Customer: can service call me saturday morning around 10?" output: {"state_intent":"service_request","corporate_topic":"none","department_intent":"service","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"service_request","confidence":0.97}',
-    'input: "Customer: i need parts for my 572 fl. can someone call me saturday around ten?" output: {"state_intent":"parts_request","corporate_topic":"none","department_intent":"parts","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"parts_request","confidence":0.96}',
-    'input: "Customer: keep an eye out for a black road glide and text me when one lands" output: {"state_intent":"inventory_watch","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":false,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.96}',
-    'input: "Customer: I do not want to waste your time. I am looking for a low mileage used one, not new." output: {"state_intent":"used_low_mileage_watch","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":false,"clear_pricing_need_model":true,"manual_handoff_reason":"used_low_mileage_watch","confidence":0.96}',
-    'input: "Customer: I want a pre owned breakout with low miles, not a new one." output: {"state_intent":"used_low_mileage_watch","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":false,"clear_pricing_need_model":true,"manual_handoff_reason":"used_low_mileage_watch","confidence":0.97}',
-    'input: "Customer: tuesday around 4 works for me" output: {"state_intent":"scheduling","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.94}',
-    'input: "Customer: saturday morning works. does 9:30 work for you?" output: {"state_intent":"scheduling","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.95}',
-    'input: "Customer: how about a tri glide instead. it has to be saturday morning." output: {"state_intent":"scheduling","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.95}',
-    'input: "Customer: how about a triglycerides instead. let me know about saturday." output: {"state_intent":"scheduling","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.93}',
-    'input: "Customer: I have to cancel coming to you Tuesday. I am having service done on the bike and inspection. I need to do a few more things before I can sell. I will get back to you." output: {"state_intent":"general","corporate_topic":"none","department_intent":"none","explicit_request":false,"clear_inventory_watch_pending":false,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.92}',
-    'input: "Customer: we still have to service and detail the bike before delivery" output: {"state_intent":"general","corporate_topic":"none","department_intent":"none","explicit_request":false,"clear_inventory_watch_pending":false,"clear_pricing_need_model":false,"manual_handoff_reason":"none","confidence":0.9}',
-    'input: "Customer: i can do 2500 down and want to stay under 500 monthly" output: {"state_intent":"pricing","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":false,"manual_handoff_reason":"none","confidence":0.95}',
-    'input: "Customer: i had a bad experience at another harley dealer and need corporate to step in" output: {"state_intent":"corporate_misroute","corporate_topic":"other_dealer_experience","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.95}',
-    'input: "Customer: hi i just want to let you know about an experience i had at dealership abc" output: {"state_intent":"corporate_misroute","corporate_topic":"other_dealer_experience","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.92}',
-    'input: "Customer: is this bike still under harley factory warranty?" output: {"state_intent":"general","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":false,"clear_pricing_need_model":false,"manual_handoff_reason":"none","confidence":0.9}',
-    'input: "Customer: ok sounds good thanks" output: {"state_intent":"general","corporate_topic":"none","department_intent":"none","explicit_request":false,"clear_inventory_watch_pending":false,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.9}'
-  ];
+  const voiceExamples = [...CONVERSATION_STATE_FEW_SHOT_EXAMPLES];
   const prompt = [
     "You parse inbound dealership messages into conversation state transitions.",
     "Return only JSON matching the schema.",
@@ -13528,6 +13509,7 @@ export async function parseConversationStateWithLLM(args: {
     "- used_low_mileage_watch: customer is narrowing the search to a used/pre-owned low-mileage bike and explicitly does not want a new one; this should trigger a salesperson handoff to refine or create a watch.",
     "- service_request / parts_request / apparel_request: department handoff intents.",
     "- hiring_manager: customer asks about local dealership hiring, job openings, applying for a job, employment, or the hiring manager at this dealership.",
+    "- vendor_solicitation: the sender is a BUSINESS pitching a product, service, software, staffing, marketing, SEO, lead-gen, financing platform, or partnership TO the dealership. They are selling to us; they are not buying a motorcycle.",
     "- corporate_misroute: customer clearly intends Harley-Davidson Motor Company or another dealership/corporate process (not this dealership workflow).",
     "- scheduling: appointment timing/day/time selection.",
     "- pricing: pricing/payment/apr/down/term questions.",
@@ -13543,6 +13525,7 @@ export async function parseConversationStateWithLLM(args: {
     "- IMPORTANT: If the customer asks normal dealership sales/service questions (inventory, pricing, test ride, finance, warranty on this bike), do NOT use corporate_misroute.",
     "- IMPORTANT: If the customer asks who handles hiring at this dealership, use state_intent=hiring_manager, not corporate_misroute.",
     "- IMPORTANT: PreQual, prequalified amount, credit app, financing, approval, and HDFS/COA messages are finance_docs, never hiring_manager.",
+    ...VENDOR_SOLICITATION_PROMPT_RULES,
     "- For corporate-misroute messages, set explicit_request=true even when phrased as a statement (for example: 'just letting you know about another dealership experience').",
     "",
     "Department intent rules:",
@@ -13651,6 +13634,7 @@ export async function parseConversationStateWithLLM(args: {
     stateRaw === "parts_request" ||
     stateRaw === "apparel_request" ||
     stateRaw === "hiring_manager" ||
+    stateRaw === "vendor_solicitation" ||
     stateRaw === "corporate_misroute" ||
     stateRaw === "scheduling" ||
     stateRaw === "pricing" ||
@@ -13676,7 +13660,8 @@ export async function parseConversationStateWithLLM(args: {
     handoffRaw === "service_request" ||
     handoffRaw === "parts_request" ||
     handoffRaw === "apparel_request" ||
-    handoffRaw === "hiring_manager_inquiry"
+    handoffRaw === "hiring_manager_inquiry" ||
+    handoffRaw === "vendor_inquiry"
       ? handoffRaw
       : "none";
   if (departmentIntent === "service" && !explicitServiceRequest) {
@@ -13714,6 +13699,13 @@ export async function parseConversationStateWithLLM(args: {
   }
   if (stateIntent === "hiring_manager" && !explicitHiringRequest) {
     stateIntent = financeCue ? "finance_docs" : "general";
+  }
+  // vendor_solicitation demotion — the fail-direction guard (see the predicate's own comment).
+  if (stateIntent === "vendor_solicitation" && !isVendorSolicitationVerdictConfident(parsed)) {
+    stateIntent = "general";
+  }
+  if (manualHandoffReason === "vendor_inquiry" && stateIntent !== "vendor_solicitation") {
+    manualHandoffReason = "none";
   }
   if (stateIntent === "used_low_mileage_watch" && !lowMileageUsedCue) {
     stateIntent = "general";

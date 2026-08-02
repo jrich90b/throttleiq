@@ -255,4 +255,113 @@ const activeCadence = (over: Record<string, unknown> = {}) => ({
   eq(live.followUpCadence.scheduleMuted, false, "...and the invite budget re-opens (divergence 2)");
 }
 
+// --- a non-sales lead is refused by every customer-chase lane -----------------------------------
+// Jessica Miller +12168596131 (2026-07-31): a B2B virtual-assistant pitch arrived as a Room58
+// "Contact Us" ADF and was enrolled in the standard day-one ramp. It was still generating sales
+// follow-ups two days after a human had replied "we're not looking to buy virtual assistant
+// services". The parser now marks such a lead `vendor_inquiry`; the REFEREE is what makes the
+// refusal a ruling instead of a side effect of whichever branch happened to return first.
+{
+  const vendor: any = {
+    id: "+12168596131",
+    status: "open",
+    followUp: { mode: "manual_handoff", reason: "vendor_inquiry" }
+  };
+  startFollowUpCadence(vendor, NOW, TZ);
+  eq(vendor.followUpCadence, undefined, "a vendor solicitation gets no day-one sales ramp");
+
+  scheduleLongTermFollowUp(vendor, LATER, "future_timeframe");
+  eq(vendor.followUpCadence, undefined, "...and no dated check-back touch either");
+
+  // The hiring lane's suppression used to depend on an early return plus a mode-setter side
+  // effect. Now it is the same ruling, reachable from any caller.
+  const jobSeeker: any = {
+    id: "h1",
+    status: "open",
+    followUp: { mode: "manual_handoff", reason: "hiring_manager_inquiry" }
+  };
+  startFollowUpCadence(jobSeeker, NOW, TZ);
+  eq(jobSeeker.followUpCadence, undefined, "a job seeker gets no sales chase");
+
+  const spam: any = { id: "s1", status: "open", followUp: { mode: "active", reason: "spam" } };
+  startFollowUpCadence(spam, NOW, TZ);
+  eq(spam.followUpCadence, undefined, "spam gets no sales chase");
+
+  // THE CHECK THAT MATTERS MOST. The costly failure here is not a vendor slipping through — it is
+  // a real buyer going silent. Every reason outside the set, and a lead with no reason at all,
+  // must still start exactly as before.
+  const ordinary: any = { id: "o1", status: "open" };
+  startFollowUpCadence(ordinary, NOW, TZ);
+  eq(ordinary.followUpCadence?.kind, "standard", "an ordinary lead still gets the day-one ramp");
+
+  const otherReason: any = {
+    id: "o2",
+    status: "open",
+    followUp: { mode: "manual_handoff", reason: "service_request" }
+  };
+  startFollowUpCadence(otherReason, NOW, TZ);
+  eq(
+    otherReason.followUpCadence?.kind,
+    "standard",
+    "a department handoff is still a sales lead — it keeps its chase"
+  );
+
+  // Unknown/blank reasons fail toward TODAY'S behavior, not toward silence.
+  for (const reason of [undefined, null, "", "  ", "not_a_known_reason"]) {
+    const conv: any = { id: `u-${String(reason)}`, status: "open", followUp: { reason } };
+    startFollowUpCadence(conv, NOW, TZ);
+    eq(
+      conv.followUpCadence?.kind,
+      "standard",
+      `an unrecognized follow-up reason (${JSON.stringify(reason)}) still starts the ramp`
+    );
+  }
+
+  // Case/whitespace must not be a way around the refusal.
+  const shouty: any = {
+    id: "v2",
+    status: "open",
+    followUp: { mode: "manual_handoff", reason: "  Vendor_Inquiry  " }
+  };
+  startFollowUpCadence(shouty, NOW, TZ);
+  eq(shouty.followUpCadence, undefined, "the reason match is case- and whitespace-insensitive");
+
+  // The referee's own words, so the ops log and the equivalence harness can see WHY.
+  const decision = decideCadenceStart({
+    lane: "standard_ramp",
+    conversationStatus: "open",
+    followUpReason: "vendor_inquiry"
+  });
+  eq(decision.start, false, "the referee refuses the standard ramp for a non-sales lead");
+  eq(
+    /non-sales class \(vendor_inquiry\)/.test(decision.why),
+    true,
+    "...and names the class in its reason"
+  );
+}
+
+// --- one list, not two --------------------------------------------------------------------------
+// The scoring exclusion and the cadence referee must read the SAME set. They were separate copies,
+// which is exactly how `vendor_inquiry` came to be listed for scoring while nothing ever wrote it.
+{
+  const { NON_SALES_CADENCE_REASONS } = await import(
+    "../services/api/src/domain/routeStateReducer.ts"
+  );
+  const { isNonSalesConversation } = await import(
+    "../services/api/src/domain/scoringExclusions.ts"
+  );
+  for (const reason of NON_SALES_CADENCE_REASONS) {
+    eq(
+      isNonSalesConversation({ followUp: { reason } }),
+      true,
+      `the tone scorer excludes ${reason} — the same set the referee refuses`
+    );
+  }
+  eq(
+    isNonSalesConversation({ followUp: { reason: "service_request" } }),
+    false,
+    "a department handoff is still graded as a sales conversation"
+  );
+}
+
 console.log(`cadence_start:eval OK — ${checks} checks`);

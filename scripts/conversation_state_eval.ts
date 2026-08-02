@@ -9,6 +9,7 @@ type StateIntent =
   | "parts_request"
   | "apparel_request"
   | "hiring_manager"
+  | "vendor_solicitation"
   | "corporate_misroute"
   | "scheduling"
   | "pricing"
@@ -25,6 +26,58 @@ type Fixture = {
 };
 
 const fixtures: Fixture[] = [
+  // --- vendor_solicitation -----------------------------------------------------------------------
+  // The pinned production turn: Jessica Miller +12168596131, Room58 "Contact Us" ADF, 2026-07-31.
+  // A B2B pitch drew a sales draft AND a standard follow-up chase that was still running two days
+  // after a human had declined. The three negatives below are the ones that actually matter: the
+  // expensive failure of this class is calling a real buyer a vendor and going silent on them.
+  {
+    id: "vendor_b2b_pitch_jessica_miller_20260731",
+    text: "Hi, We offer trained human Virtual Assistants supported by our custom-built AI system, MAVIS (My Advanced Virtual Intelligent System), that easily replaces the workload of a 10-person team handling marketing, admin, social media, lead generation, CRM management, content creation, customer support, and more. The best part is that you simply delegate tasks to one trained VA (full-time or part-time), and we handle the execution. Open for discussion?",
+    expectedState: "vendor_solicitation",
+    expectedDepartment: "none",
+    expectedHandoff: "vendor_inquiry",
+    expectedExplicit: true
+  },
+  {
+    id: "vendor_marketing_agency_pitch",
+    text: "I represent a digital marketing agency and we can get your dealership more leads. Can we set up 15 minutes this week?",
+    expectedState: "vendor_solicitation",
+    expectedDepartment: "none",
+    expectedHandoff: "vendor_inquiry",
+    expectedExplicit: true
+  },
+  {
+    id: "vendor_supplier_pitch",
+    text: "Our company supplies OEM-grade tooling to powersports dealers nationwide. Who handles purchasing for your store?",
+    expectedState: "vendor_solicitation",
+    expectedDepartment: "none",
+    expectedHandoff: "vendor_inquiry",
+    expectedExplicit: true
+  },
+  {
+    // A customer selling US their bike is a TRADE, the most valuable lead we get — never a vendor.
+    id: "vendor_negative_customer_selling_own_bike",
+    text: "I want to sell you my 2019 Road King, what will you give me for it?",
+    expectedState: "general",
+    expectedDepartment: "none",
+    expectedHandoff: "none"
+  },
+  {
+    // Mentions owning a company; is buying for himself. Business words are not a vendor signal.
+    id: "vendor_negative_business_owner_buying_for_himself",
+    text: "I own a landscaping business and I am looking to buy a Street Glide for myself.",
+    expectedState: "general",
+    expectedDepartment: "none",
+    expectedHandoff: "none"
+  },
+  {
+    id: "vendor_negative_corporate_fleet_discount",
+    text: "Do you offer a corporate or fleet discount for my company?",
+    expectedState: "pricing",
+    expectedDepartment: "none",
+    expectedHandoff: "none"
+  },
   {
     id: "hiring_manager_question_1",
     text: "Who is the hiring manager for American Harley Davidson?",
