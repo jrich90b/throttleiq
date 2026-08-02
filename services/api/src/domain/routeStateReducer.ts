@@ -3638,6 +3638,91 @@ export function decideCadenceRevival(input: CadenceRevivalInput): CadenceRevival
   };
 }
 
+// The lead BOUGHT — one referee for what were two hand-maintained copies of the same closeout.
+//
+// WHAT WAS FIGHTING. Marking a unit sold happens down two paths that were written separately and
+// then kept in step by hand: `applyOutcomeSold` (the rep records an appointment outcome) and
+// `POST /conversations/:id/close` with reason "sold" (the console's sold button). Both stamp the
+// sale, close the thread as "sold", decide whether the lead's unit HOLD is released, and start the
+// owner sequence — including a five-line hold-match condition duplicated character for character.
+// Three Tier-1 fields (`status`, `closedReason`, `hold`) had two independent writers each, and the
+// only thing keeping them equal was that nobody had edited one copy without the other yet.
+//
+// THE ONE PRESERVED DIVERGENCE: the outcome path REFUSES a sale with no unit named (it returns an
+// error before touching anything), while the console endpoint accepts one — it closes the thread as
+// sold and starts the owner sequence, but skips the whole inventory block, so the lead's hold is
+// never released and the bike stays flagged HELD in inventory with a sold conversation attached to
+// it. Named on the decision as `sold_closeout_without_a_named_unit_leaves_the_hold_standing`.
+// Preserved, not fixed: releasing a hold we cannot match to the sold unit could free the WRONG
+// bike, which is the worse direction. Fixing it is a behavior change and belongs in its own PR.
+//
+// FAIL DIRECTION. Releasing a hold is the irreversible-ish side of this decision (the unit goes
+// back on the floor), so anything unresolved must KEEP the hold. Closing the thread is not gated
+// on the unit at all — both paths agree that a recorded sale closes the conversation, and that is
+// the answer a lead who just bought should get either way.
+//
+// PURE: the caller resolves `holdMatchesSoldUnit` (it needs the inventory matcher and the lead's
+// stored hold), so this stays sampleable by the decision-equivalence harness.
+export type SoldCloseoutInput = {
+  /** Did staff name an actual unit on this sale? The console endpoint allows a sale without one. */
+  hasSoldUnit: boolean;
+  /** The lead's stored hold, exactly as recorded. Absent = nothing to release. */
+  hold?: { key?: string | null; onOrder?: boolean | null } | null;
+  /** Normalized key of the unit that just sold. */
+  soldKey?: string | null;
+  /**
+   * Does the stored hold match the sold unit by stock number / VIN? Resolved by the caller because
+   * it needs the inventory matcher and the previous hold key as a fallback.
+   */
+  holdMatchesSoldUnit: boolean;
+};
+
+export type SoldCloseoutDecision = {
+  /** Close the thread. Both paths say yes for any recorded sale. */
+  closeConversation: boolean;
+  closedReason: string;
+  /** Drop the lead's unit hold. The five-line condition both copies carried, stated once. */
+  releaseHold: boolean;
+  /** Names the preserved disagreement when this input is the odd one out. */
+  divergence: string | null;
+  why: string;
+};
+
+export function decideSoldCloseout(input: SoldCloseoutInput): SoldCloseoutDecision {
+  const hasSoldUnit = Boolean(input.hasSoldUnit);
+  const hold = input.hold ?? null;
+  // Compared RAW, exactly as both copies did. No trim/normalize here: the keys on both sides come
+  // out of `normalizeInventorySoldKey`, and quietly normalizing one side would make two keys match
+  // that do not match today — a cleanup must not change which bike gets freed.
+  const soldKey = input.soldKey;
+  // The condition both copies spelled out inline: an on-order hold and a keyless hold are always
+  // this lead's own, a keyed hold has to be the same unit, and otherwise the inventory matcher
+  // decides. Anything that does not clear one of those bars KEEPS the hold — see fail direction.
+  const holdIsThisUnit = Boolean(
+    hold && (hold.onOrder || !hold.key || hold.key === soldKey || input.holdMatchesSoldUnit)
+  );
+  const releaseHold = hasSoldUnit && holdIsThisUnit;
+
+  return {
+    closeConversation: true,
+    closedReason: "sold",
+    releaseHold,
+    divergence:
+      !hasSoldUnit && Boolean(hold)
+        ? "sold_closeout_without_a_named_unit_leaves_the_hold_standing"
+        : null,
+    why: !hasSoldUnit
+      ? hold
+        ? "sold with no unit named — the thread closes but the lead's hold is left standing"
+        : "sold with no unit named — nothing held, so nothing to release"
+      : releaseHold
+        ? "sold — this lead's hold is the unit that sold, so release it"
+        : hold
+          ? "sold — the lead's hold is a different unit, so it stays"
+          : "sold — the lead had no hold to release"
+  };
+}
+
 // Who may release a HELD draft — one referee for what were six independent decisions.
 //
 // `draftHeld` is the "being fixed" marker: the quality gate withheld a reply, so staff see a card

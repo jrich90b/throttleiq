@@ -8,6 +8,7 @@ import {
   decideCadenceRevival,
   decideCadenceStart,
   decideHeldDraftRelease,
+  decideSoldCloseout,
   decideAppointmentTeardown,
   decideManualCadenceRestart,
   isRealReplyProvider,
@@ -18,7 +19,8 @@ import {
   type HeldDraftReleaseEvent,
   type AppointmentTeardownCause,
   type ManualCadenceRestartContext,
-  type ManualCadenceRestartDecision
+  type ManualCadenceRestartDecision,
+  type SoldCloseoutDecision
 } from "./routeStateReducer.js";
 import { fileURLToPath } from "node:url";
 import { dataPath } from "./dataDir.js";
@@ -5076,6 +5078,48 @@ export function applyCadenceRevival(
     conv.followUpCadence.contextTag = input.engagedContextTag;
     conv.followUpCadence.contextTagUpdatedAt = input.anchorAtIso;
   }
+}
+
+// The ONE place a recorded sale closes the thread and settles the lead's unit hold — the two
+// former copies (the appointment-outcome path and the console's sold button, both in index.ts) now
+// ask `decideSoldCloseout` instead of each carrying the same five-line hold-match condition. See
+// that referee in routeStateReducer.ts for the divergence it preserves.
+//
+// ORDERING NOTE. In both originals the hold release sat ~10 lines further down, after the two
+// inventory-store awaits (`setInventorySold`, `clearInventoryHoldRefs`). It runs here instead,
+// which is inert: neither await reads `conv.hold` — `clearInventoryHoldRefs` is handed the
+// previous hold key explicitly, captured before either path touches anything — and the caller
+// resolves `holdMatchesSoldUnit` against the stored hold before calling in.
+//
+// Deliberately does NOT stamp `conv.updatedAt` or save: the outcome path's caller saves, and the
+// endpoint saves inline right after. Adding a write here would change persisted timestamps, which
+// a cleanup must not do.
+export function applySoldCloseout(
+  conv: Conversation,
+  input: {
+    nowIso: string;
+    /** The sale record to stamp, built by the caller (the two paths carry different fields). */
+    sale: NonNullable<Conversation["sale"]>;
+    /** Normalized key of the sold unit; blank/absent = staff named no unit. */
+    soldKey?: string | null;
+    /** Whether the lead's stored hold matches the sold unit — see the referee's input docs. */
+    holdMatchesSoldUnit: boolean;
+  }
+): SoldCloseoutDecision {
+  const decision = decideSoldCloseout({
+    hasSoldUnit: Boolean(input.soldKey),
+    hold: conv.hold ?? null,
+    soldKey: input.soldKey,
+    holdMatchesSoldUnit: input.holdMatchesSoldUnit
+  });
+  conv.sale = input.sale;
+  if (decision.closeConversation) {
+    conv.status = "closed";
+    conv.closedAt = input.nowIso;
+    conv.closedReason = decision.closedReason;
+  }
+  if (decision.releaseHold) conv.hold = undefined;
+  return decision;
 }
 
 /**

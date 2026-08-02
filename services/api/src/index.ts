@@ -941,6 +941,7 @@ import {
   startFollowUpCadence,
   applyCadenceQuietWindow,
   applyCadenceRevival,
+  applySoldCloseout,
   resolveNoShowFollowUpDueAt,
   pauseFollowUpCadence,
   stopFollowUpCadence,
@@ -20546,18 +20547,23 @@ async function applyOutcomeSold(
   const cfg = await getSchedulerConfigHot();
   const salespeople = cfg.salespeople ?? [];
   const sp = soldById ? salespeople.find(s => s.id === soldById) ?? null : null;
-  conv.sale = {
-    soldAt: nowIso,
-    soldById: sp?.id ?? (soldById || undefined),
-    soldByName: sp?.name ?? (soldByNameRaw || undefined),
-    stockId: unit.stockId,
-    vin: unit.vin,
-    label: unit.label,
-    note
-  };
-  conv.status = "closed";
-  conv.closedAt = nowIso;
-  conv.closedReason = "sold";
+  applySoldCloseout(conv, {
+    nowIso,
+    sale: {
+      soldAt: nowIso,
+      soldById: sp?.id ?? (soldById || undefined),
+      soldByName: sp?.name ?? (soldByNameRaw || undefined),
+      stockId: unit.stockId,
+      vin: unit.vin,
+      label: unit.label,
+      note
+    },
+    soldKey,
+    holdMatchesSoldUnit: Boolean(
+      conv.hold &&
+        inventoryAvailabilityRecordMatches(conv.hold, unit.stockId ?? prevHoldKey, unit.vin)
+    )
+  });
   markOpenTodosDoneForConversation(conv.id);
   const soldEntry = {
     id: soldKey,
@@ -20575,15 +20581,6 @@ async function applyOutcomeSold(
   };
   await setInventorySold({ stockId: unit.stockId, vin: unit.vin, sold: soldEntry });
   await clearInventoryHoldRefs({ stockId: unit.stockId, vin: unit.vin, key: prevHoldKey });
-  if (
-    conv.hold &&
-    (conv.hold.onOrder ||
-      !conv.hold.key ||
-      conv.hold.key === soldKey ||
-      inventoryAvailabilityRecordMatches(conv.hold, unit.stockId ?? prevHoldKey, unit.vin))
-  ) {
-    conv.hold = undefined;
-  }
   setFollowUpMode(conv, "active", "post_sale");
   startPostSaleCadence(conv, nowIso, cfg.timezone);
   if (conv.lead?.leadRef) {
@@ -41353,19 +41350,24 @@ app.post("/conversations/:id/close", async (req, res) => {
     const prevHoldKey = conv.hold?.key ?? undefined;
     const salespeople = cfg.salespeople ?? [];
     const sp = soldById ? salespeople.find(s => s.id === soldById) ?? null : null;
-    conv.sale = {
-      soldAt: nowIso,
-      soldById: sp?.id ?? (soldById || undefined),
-      soldByName: sp?.name ?? (soldByNameRaw || undefined),
-      leadRef: selectedLeadRef || conv.lead?.leadRef || undefined,
-      stockId: soldStockId,
-      vin: soldVin,
-      label: soldLabel,
-      note: soldNote
-    };
-    conv.status = "closed";
-    conv.closedAt = nowIso;
-    conv.closedReason = "sold";
+    applySoldCloseout(conv, {
+      nowIso,
+      sale: {
+        soldAt: nowIso,
+        soldById: sp?.id ?? (soldById || undefined),
+        soldByName: sp?.name ?? (soldByNameRaw || undefined),
+        leadRef: selectedLeadRef || conv.lead?.leadRef || undefined,
+        stockId: soldStockId,
+        vin: soldVin,
+        label: soldLabel,
+        note: soldNote
+      },
+      soldKey,
+      holdMatchesSoldUnit: Boolean(
+        conv.hold &&
+          inventoryAvailabilityRecordMatches(conv.hold, soldStockId ?? prevHoldKey, soldVin)
+      )
+    });
     markOpenTodosDoneForConversation(conv.id);
     if (soldKey) {
       const soldEntry = {
@@ -41384,15 +41386,6 @@ app.post("/conversations/:id/close", async (req, res) => {
       };
       await setInventorySold({ stockId: soldStockId, vin: soldVin, sold: soldEntry });
       await clearInventoryHoldRefs({ stockId: soldStockId, vin: soldVin, key: prevHoldKey });
-      if (
-        conv.hold &&
-        (conv.hold.onOrder ||
-          !conv.hold.key ||
-          conv.hold.key === soldKey ||
-          inventoryAvailabilityRecordMatches(conv.hold, soldStockId ?? prevHoldKey, soldVin))
-      ) {
-        conv.hold = undefined;
-      }
     }
     setFollowUpMode(conv, "active", "post_sale");
     startPostSaleCadence(conv, nowIso, cfg.timezone);

@@ -350,6 +350,31 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     }, ["decideCadenceRevival"]);
   }
 
+  // Added 2026-08-02 with the SOLD-closeout un-stacking. Sampled once WITH a named unit and once
+  // WITHOUT, because that is the whole disagreement between the two paths: the appointment-outcome
+  // path refuses a sale with no unit, the console endpoint accepts one and leaves the lead's hold
+  // standing. PROBE: `hasSoldUnit` and `holdMatchesSoldUnit` are held at fixed values per sample —
+  // the matcher needs the live inventory feed, which is not stored state — so the only thing that
+  // can move the fingerprint between a baseline and a candidate run is the arbitration itself,
+  // applied to the hold this lead actually has stored.
+  for (const hasSoldUnit of [true, false] as const) {
+    add(`soldCloseout:${hasSoldUnit ? "unit_named" : "no_unit_named"}`, conv => {
+      if (typeof reducer.decideSoldCloseout !== "function") return undefined;
+      const decision = reducer.decideSoldCloseout({
+        hasSoldUnit, // PROBE
+        hold: conv?.hold ?? null,
+        soldKey: str(conv?.sale?.stockId) ?? str(conv?.sale?.vin) ?? null,
+        holdMatchesSoldUnit: false // PROBE — the inventory matcher is not projectable from the store
+      });
+      return {
+        closeConversation: decision.closeConversation,
+        closedReason: decision.closedReason,
+        releaseHold: decision.releaseHold,
+        divergence: decision.divergence
+      };
+    }, ["decideSoldCloseout"]);
+  }
+
   // Added 2026-08-02 with the appointment-CONFIRM un-stacking. Sampled once PER LANE, because the
   // whole point of this referee is that the slot-match lane answers `acknowledged` and the
   // reschedule latch differently from the two booked lanes — a single sample would hide exactly
