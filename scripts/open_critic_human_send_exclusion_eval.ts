@@ -1,6 +1,9 @@
 /**
  * open_critic_human_send_exclusion:eval — pins the open-critic's reply-selection so it grades the
- * AGENT's reply, never a human-typed/edited send NOR a Campaign Studio broadcast send.
+ * AGENT's reply, never a human-typed/edited send, a Campaign Studio broadcast send, NOR a reply so old
+ * that the question "did this mishandle the lead?" is incoherent (2026-08-02, +17165107361: a correct
+ * April first touch graded against June voice calls, the thread "recent" only by way of an unsent
+ * draft_ai — 5 of 11 candidates that day were graded on a reply 11-132 days old).
  *
  * Production bug (2026-06-30): salesman Kurtis Stone typed manual self-intros with a missing comma
  * after his own name — "hello stone from American Harley…" / "hello Donald Stone from American Harley
@@ -14,7 +17,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import {
+  OPEN_CRITIC_MAX_REPLY_AGE_MS_DEFAULT,
   isHumanAuthoredOutbound,
+  isOpenCriticReplyFreshEnough,
   selectOpenCriticAgentReply
 } from "../services/api/src/domain/conversationOutcomeAudit.ts";
 
@@ -137,9 +142,99 @@ assert.ok(pickedNoThread && pickedNoThread.body.startsWith("250 Years"), "withou
 const sweep = fs.readFileSync(path.resolve("scripts/open_critic_sweep.ts"), "utf8");
 assert.ok(/selectOpenCriticAgentReply/.test(sweep), "open_critic_sweep imports the shared agent-reply selector");
 assert.ok(
-  (sweep.match(/selectOpenCriticAgentReply\(msgs, REAL_OUT, c\?\.campaignThread\)/g) || []).length >= 2,
-  "the sweep uses the selector in BOTH the prefilter and the per-conv loop, passing the thread's campaignThread (no human-authored or broadcast send graded)"
+  (sweep.match(/selectOpenCriticAgentReply\(msgs, REAL_OUT, c\?\.campaignThread, freshness\)/g) || []).length >= 2,
+  "the sweep uses the selector in BOTH the prefilter and the per-conv loop, passing the thread's campaignThread AND the freshness window (no human-authored, broadcast, or months-stale reply graded)"
 );
 assert.ok(!/\.reverse\(\)\s*\.find\(\(m: any\) => m\?\.direction === "out"/.test(sweep), "the old un-authored lastReply find is gone");
+// The window the sweep bounds the reply by must be the SAME one it filters candidates by — if these
+// drift apart the bound silently stops meaning "inside the sweep window".
+assert.ok(
+  /const freshness = \{ nowMs: now, maxAgeMs: windowMs \}/.test(sweep),
+  "the sweep's reply-freshness bound reuses its own candidate window (nowMs/windowMs), not a second independent constant"
+);
 
-console.log("PASS open-critic human-send exclusion eval (authorship predicate + agent-reply selection + campaign-broadcast exclusion + sweep wiring)");
+// --- freshness: the graded reply must itself be recent -------------------------------------------
+// PRODUCTION CASE (+17165107361, 2026-08-02). Michael Coleman's thread: a correct 2026-04-12 first
+// touch on an HDFS credit application, then months of voice-call artifacts, then an UNSENT draft_ai
+// nudge that made the thread look "recent". The critic graded the April reply against the June thread
+// and reported `ignored_prior_context_and_active_relationship` — the reply predates the context it is
+// accused of ignoring.
+const NOW = Date.parse("2026-08-02T00:40:00.000Z");
+const TWO_DAYS = 2 * 24 * 60 * 60 * 1000;
+const colemanThread = [
+  { direction: "in", provider: "twilio", body: "WEB LEAD (ADF)\nSource: HDFS COA Online", at: "2026-04-12T03:22:52.431Z" },
+  {
+    direction: "out",
+    provider: "twilio",
+    body: "Hi Michael — This is Alexandra at American Harley-Davidson. Thanks — I received your credit application. I’ll have our finance team reach out shortly.",
+    at: "2026-04-12T12:00:27.816Z"
+  },
+  { direction: "out", provider: "voice", body: "Scott Hartrich: …the status of it currently was a turndown…", at: "2026-06-02T15:25:31.692Z" },
+  { direction: "out", provider: "draft_ai", body: "Thanks for sending that in — anything else you want me to pass along to finance?", at: "2026-08-01T00:11:54.230Z" }
+];
+assert.equal(
+  selectOpenCriticAgentReply(colemanThread, REAL_OUT, null, { nowMs: NOW, maxAgeMs: TWO_DAYS }),
+  null,
+  "a 111-day-old first touch is NOT graded just because a pending draft_ai made the thread look recent (+17165107361)"
+);
+assert.ok(
+  selectOpenCriticAgentReply(colemanThread, REAL_OUT, null)?.body.startsWith("Hi Michael"),
+  "without a freshness window the same thread still selects the old reply (the bound is what changed, not the selection)"
+);
+// Amy Szyminski (+17168615133) — the same shape at 132 days, the finding that produced PR #415.
+assert.equal(
+  selectOpenCriticAgentReply(
+    [
+      { direction: "in", provider: "twilio", body: "i have vast experience in sales", at: "2026-03-22T14:00:00.000Z" },
+      { direction: "out", provider: "twilio", body: "Got it. Thanks for sending your resume, Amy", at: "2026-03-22T15:00:00.000Z" },
+      { direction: "out", provider: "draft_ai", body: "Any other details for the hiring team, Amy?", at: "2026-08-01T00:10:00.000Z" }
+    ],
+    REAL_OUT,
+    null,
+    { nowMs: NOW, maxAgeMs: TWO_DAYS }
+  ),
+  null,
+  "a 132-day-old correctly-handled job application is not re-graded off the back of a pending draft (+17168615133)"
+);
+// A genuinely recent reply is STILL graded — the bound must not just switch the critic off.
+const freshThread = [
+  { direction: "in", provider: "twilio", body: "still got that Road Glide?", at: "2026-08-01T18:00:00.000Z" },
+  { direction: "out", provider: "twilio", body: "Sure do — want to come see it Saturday?", at: "2026-08-01T18:05:00.000Z" }
+];
+assert.ok(
+  selectOpenCriticAgentReply(freshThread, REAL_OUT, null, { nowMs: NOW, maxAgeMs: TWO_DAYS })?.body.startsWith("Sure do"),
+  "a reply inside the window is still graded"
+);
+// Boundaries: exactly at the window is IN, a millisecond past is OUT.
+const atEdge = [{ direction: "out", provider: "twilio", body: "edge", at: new Date(NOW - TWO_DAYS).toISOString() }];
+const pastEdge = [{ direction: "out", provider: "twilio", body: "past", at: new Date(NOW - TWO_DAYS - 1).toISOString() }];
+assert.ok(selectOpenCriticAgentReply(atEdge, REAL_OUT, null, { nowMs: NOW, maxAgeMs: TWO_DAYS }), "exactly at the window edge is still graded");
+assert.equal(selectOpenCriticAgentReply(pastEdge, REAL_OUT, null, { nowMs: NOW, maxAgeMs: TWO_DAYS }), null, "one millisecond past the edge is not");
+
+// --- isOpenCriticReplyFreshEnough: fail direction ------------------------------------------------
+const old = { direction: "out", provider: "twilio", body: "x", at: "2026-04-12T12:00:27.816Z" };
+assert.equal(isOpenCriticReplyFreshEnough(old, { nowMs: NOW, maxAgeMs: TWO_DAYS }), false, "months-old reply is not fresh");
+// Junk maxAgeMs falls back to the DEFAULT, never to "no bound" — a forgettable safety stop is not one.
+for (const junk of [undefined, null, 0, -1, Number.NaN, "2 days" as unknown as number]) {
+  assert.equal(
+    isOpenCriticReplyFreshEnough(old, { nowMs: NOW, maxAgeMs: junk as number | null | undefined }),
+    false,
+    `maxAgeMs ${String(junk)} falls back to the ${OPEN_CRITIC_MAX_REPLY_AGE_MS_DEFAULT}ms default, not to unbounded`
+  );
+}
+// No freshness at all => unbounded (back-compat for callers grading a fixed fixture).
+assert.equal(isOpenCriticReplyFreshEnough(old), true, "no freshness argument => no bound (today's behaviour)");
+assert.equal(isOpenCriticReplyFreshEnough(old, { nowMs: Number.NaN }), true, "an unusable clock => no bound, rather than dropping everything");
+// An UNDATABLE reply is KEPT: a store that stops stamping `at` must degrade to today's behaviour, not
+// silently switch the critic off (the failure mode the #365 reviewer flagged for gradedAtCommit).
+for (const at of [undefined, null, "", "not-a-date"]) {
+  assert.equal(
+    isOpenCriticReplyFreshEnough({ direction: "out", provider: "twilio", body: "x", at: at as string | null }, { nowMs: NOW, maxAgeMs: TWO_DAYS }),
+    true,
+    `an undatable reply (at=${String(at)}) is kept, never silently dropped`
+  );
+}
+assert.equal(isOpenCriticReplyFreshEnough(null, { nowMs: NOW, maxAgeMs: TWO_DAYS }), false, "no reply is not fresh");
+assert.ok(OPEN_CRITIC_MAX_REPLY_AGE_MS_DEFAULT > 0, "the default reply-age ceiling is a real positive bound");
+
+console.log("PASS open-critic human-send exclusion eval (authorship predicate + agent-reply selection + campaign-broadcast exclusion + reply freshness + sweep wiring)");

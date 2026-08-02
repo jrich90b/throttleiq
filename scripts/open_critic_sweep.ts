@@ -49,6 +49,10 @@ const MAX = Number(process.env.OPEN_CRITIC_MAX ?? 40);
 const WINDOW_DAYS = Number(process.env.OPEN_CRITIC_WINDOW_DAYS ?? 2);
 const now = Date.now();
 const windowMs = WINDOW_DAYS * 24 * 60 * 60 * 1000;
+// The reply we grade must be inside the SAME window, not merely sitting in a thread that was touched
+// inside it. A pending `draft_ai` (or a voice-call artifact) at the end of a thread made a months-old
+// reply look current — see selectOpenCriticAgentReply's FRESHNESS note (+17165107361, 2026-08-02).
+const freshness = { nowMs: now, maxAgeMs: windowMs };
 
 const REAL_OUT = new Set(["twilio", "sendgrid", "human"]);
 const isClosed = (c: any) => !!(c?.closedAt || c?.closedReason || c?.sale?.soldAt);
@@ -75,7 +79,7 @@ const candidates = convs
     if (isClosed(c)) return false;
     const msgs = Array.isArray(c?.messages) ? c.messages : [];
     const hasInbound = msgs.some((m: any) => m?.direction === "in" && String(m?.body ?? "").trim());
-    const agentReply = selectOpenCriticAgentReply(msgs, REAL_OUT, c?.campaignThread);
+    const agentReply = selectOpenCriticAgentReply(msgs, REAL_OUT, c?.campaignThread, freshness);
     return hasInbound && !!agentReply && now - lastAt(c) <= windowMs;
   })
   .sort((a, b) => lastAt(b) - lastAt(a))
@@ -92,7 +96,7 @@ for (const c of candidates) {
     .filter((m: any) => (m?.direction === "in" || m?.direction === "out") && String(m?.body ?? "").trim())
     .slice(-12)
     .map((m: any) => ({ direction: m.direction as "in" | "out", body: String(m.body) }));
-  const lastReply = selectOpenCriticAgentReply(msgs, REAL_OUT, c?.campaignThread);
+  const lastReply = selectOpenCriticAgentReply(msgs, REAL_OUT, c?.campaignThread, freshness);
   if (!lastReply) continue;
   const channel = String(lastReply?.from ?? "").includes("@") ? "email" : "sms";
   const convTodos = openTodos.filter((t: any) => String(t?.convId ?? "") === String(c?.id ?? ""));

@@ -571,13 +571,34 @@ export function isHumanAuthoredOutbound(m: OutboundAuthorshipMsg | null | undefi
  * decision — so it must never be critiqued as one. Same correlation the voice charter uses
  * (scoringExclusions.isCampaignBroadcastSend: campaignId + ±10s send-window), so a genuine 1:1 agent
  * reply on a campaign-tagged thread (minutes/hours from any send) is still graded.
+ *
+ * FRESHNESS (2026-08-02, +17165107361): the selected reply must also be RECENT, because the critic is
+ * shown the thread's last 12 messages and asked whether THIS reply mishandled the lead. Nothing bounded
+ * how old the reply could be, and `lastRealOut` walks the whole history — so a conversation could enter
+ * the sweep on the strength of a later message and be graded on a reply from months earlier. Michael
+ * Coleman's thread qualified as "recent" only because its newest message was an UNSENT `draft_ai`; the
+ * graded reply was his 2026-04-12 first touch ("I received your credit application. I'll have our
+ * finance team reach out shortly"), correct when sent, judged against three months of later voice calls
+ * in which he was turned down and started needing a cosigner. The critic duly reported
+ * `ignored_prior_context_and_active_relationship` — an incoherent question, since the reply predates
+ * the context it is accused of ignoring. Measured on the live store the same day: 5 of 11 candidates
+ * (45%) were graded on a reply 11-132 days old, every one of them recent only by way of a pending
+ * draft, and 3 of the 4 flagged findings came from that set.
+ *
+ * Supplying `freshness` bounds the reply's age; `maxAgeMs` junk (missing, non-numeric, non-positive)
+ * falls back to OPEN_CRITIC_MAX_REPLY_AGE_MS_DEFAULT rather than to "no bound". An UNDATABLE reply is
+ * KEPT, matching the disposition ledger's convention for undatable events: a store that stopped
+ * stamping `at` must degrade to today's behaviour, never silently switch the critic off.
  */
+export const OPEN_CRITIC_MAX_REPLY_AGE_MS_DEFAULT = 2 * 24 * 60 * 60 * 1000;
+
 export function selectOpenCriticAgentReply<T extends OutboundAuthorshipMsg>(
   messages: T[],
   realOutProviders: ReadonlySet<string>,
   campaignThread?:
     | { campaignId?: string | null; firstSentAt?: string | null; lastSentAt?: string | null }
-    | null
+    | null,
+  freshness?: { nowMs: number; maxAgeMs?: number | null } | null
 ): T | null {
   const list = Array.isArray(messages) ? messages : [];
   let lastRealOut: T | null = null;
@@ -593,7 +614,25 @@ export function selectOpenCriticAgentReply<T extends OutboundAuthorshipMsg>(
   if (!lastRealOut) return null;
   if (isHumanAuthoredOutbound(lastRealOut)) return null;
   if (isCampaignBroadcastSend(lastRealOut, campaignThread ?? null)) return null;
+  if (!isOpenCriticReplyFreshEnough(lastRealOut, freshness)) return null;
   return lastRealOut;
+}
+
+/** Is the reply recent enough for the critic's "did this reply mishandle the lead?" question to mean
+ *  anything? No `freshness` => unbounded (today's behaviour, for callers that grade a fixed fixture).
+ *  Undatable reply => true (see above: degrade, never silently disable). */
+export function isOpenCriticReplyFreshEnough(
+  reply: OutboundAuthorshipMsg | null | undefined,
+  freshness?: { nowMs: number; maxAgeMs?: number | null } | null
+): boolean {
+  if (!reply) return false;
+  const nowMs = Number(freshness?.nowMs);
+  if (!Number.isFinite(nowMs)) return true;
+  const atMs = Date.parse(String(reply.at ?? ""));
+  if (!Number.isFinite(atMs)) return true;
+  const maxAge = Number(freshness?.maxAgeMs);
+  const maxAgeMs = Number.isFinite(maxAge) && maxAge > 0 ? maxAge : OPEN_CRITIC_MAX_REPLY_AGE_MS_DEFAULT;
+  return nowMs - atMs <= maxAgeMs;
 }
 
 export function decideOpenCriticAnomaly(
