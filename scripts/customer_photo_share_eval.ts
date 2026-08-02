@@ -248,10 +248,22 @@ assert.equal(
 
 const llmSource = await fs.readFile(path.resolve("services/api/src/domain/llmDraft.ts"), "utf8");
 assert.match(llmSource, /"customer_shared_vehicle_photo"/, "parser union/schema must include the action");
+// The inbound-reply-action few-shots moved to their own prompt module (source_size_ratchet:eval
+// pushes prompt surfaces out of llmDraft.ts). The fixture must still be pinned — just where it
+// now lives.
+const inboundActionPromptSource = await fs.readFile(
+  path.resolve("services/api/src/domain/inboundReplyActionPrompt.ts"),
+  "utf8"
+);
 assert.match(
-  llmSource,
+  inboundActionPromptSource,
   /Here is a photo of the HD I like\./,
   "parser few-shots must include the Mustafa production fixture"
+);
+assert.match(
+  inboundActionPromptSource,
+  /"customer_shared_vehicle_photo"/,
+  "the prompt module's schema enum must carry the photo-share action"
 );
 
 // Non-motorcycle photo: NEVER claim to match it against inventory; respond like a human.

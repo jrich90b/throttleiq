@@ -13,7 +13,8 @@ const {
   canApplyDispositionCloseout,
   hasActiveDealCloseoutBlockers,
   hasUnitInfoRequestText,
-  hasQualificationCriteriaAnswerText
+  hasQualificationCriteriaAnswerText,
+  shouldSuppressDispositionCloseout
 } = await import("../services/api/src/domain/transitionSafety.ts");
 
 const nowMs = Date.parse("2026-06-11T19:08:28.000Z");
@@ -142,6 +143,84 @@ assert.equal(
   "a genuine budget stop with no live ask still closes"
 );
 
+// ── OPEN SCHEDULING CONFLICT (William Indelicato +17163591526, 2026-07-24) ──────────────────
+// msg_2e66f70720313_1784929050013. Scott spent four turns pinning down a service-visit day:
+//   out: "Can you get here first thing in the morning on Wednesday?"
+//   in:  "I can try I have an appointment at 9a on Wednesday"
+//   out: "What time do you think you can be here on Wednesday?"
+//   in:  "Unsure I have to have injections into my shoulder"
+// That last turn parsed as stepping_back. Eleven seconds later the lead was CLOSED and
+// followUp went paused_indefinite (reason "customer_stepping_back"), with the taper draft
+// "I hear you. If anything changes down the road, just give me a shout." Staff overrode it
+// with "Ok Let me know what day works best for you and I will try to accommodate".
+//
+// The signal is the inbound-reply-action parser's scheduling_conflict_open slot — it is the
+// only scheduling parser that runs UNCONDITIONALLY, and the hint-gated appointment-timing /
+// customer-ack parsers were both skipped on this turn (no weekday, no clock token).
+const SHOULDER = "Unsure I have to have injections into my shoulder";
+assert.equal(
+  canApplyDispositionCloseout({
+    conv: { id: "+17163591526", messages: [] },
+    text: SHOULDER,
+    parsedAccepted: true,
+    hasDecision: true,
+    openTodos: [],
+    schedulingConflictOpen: true
+  }),
+  false,
+  "an open scheduling negotiation must never close the lead, however confident the disposition parse"
+);
+// FAIL DIRECTION: the arm is ADDITIVE. With the flag off this turn still closes exactly as it
+// does on main today — a parser false negative can only leave today's behavior, never regress
+// something that worked. (That is what makes a parser signal admissible next to the
+// deterministic KEEP arms, which must NOT be migrated.)
+assert.equal(
+  canApplyDispositionCloseout({
+    conv: { id: "+17163591526", messages: [] },
+    text: SHOULDER,
+    parsedAccepted: true,
+    hasDecision: true,
+    openTodos: [],
+    schedulingConflictOpen: false
+  }),
+  true,
+  "flag off => unchanged behavior; the scheduling-conflict arm only ever ADDS a suppression"
+);
+// The veto suppresses the CLOSEOUT, it does not manufacture a decision: no decision, no close.
+assert.equal(
+  canApplyDispositionCloseout({
+    conv: { id: "+17163591526", messages: [] },
+    text: SHOULDER,
+    parsedAccepted: true,
+    hasDecision: false,
+    openTodos: [],
+    schedulingConflictOpen: true
+  }),
+  false,
+  "no disposition decision => nothing to close, with or without the conflict veto"
+);
+// A real withdrawal is NOT a scheduling conflict and must still close (the parser is instructed
+// to return false when the customer steps back) — otherwise this arm would make leads unclosable.
+assert.equal(
+  canApplyDispositionCloseout({
+    conv: { id: "+17163591526", messages: [] },
+    text: "I'll pass, I'm not doing it this year.",
+    parsedAccepted: true,
+    hasDecision: true,
+    openTodos: [],
+    schedulingConflictOpen: false
+  }),
+  true,
+  "a genuine withdrawal mid-scheduling still closes"
+);
+assert.equal(
+  shouldSuppressDispositionCloseout({ id: "+17163591526", messages: [] }, SHOULDER, {
+    schedulingConflictOpen: true
+  }),
+  true,
+  "the guard itself reads the scheduling-conflict arm"
+);
+
 // Wiring + parser pins.
 const apiSource = await fs.readFile(path.resolve("services/api/src/index.ts"), "utf8");
 assert.ok(
@@ -251,6 +330,35 @@ assert.match(
   apiSource,
   /hasQualificationCriteriaAnswerText\(t\)/,
   "the health-update arm must not swallow a buying-criteria answer"
+);
+
+// BOTH PATHS (AGENTS.md law): live /webhooks/twilio, regenerate, and the human-mode arm must
+// all feed the scheduling-conflict veto, or a lead closed on the live path would survive regen
+// (or the reverse) and the two lanes would drift.
+assert.ok(
+  (apiSource.match(/schedulingConflictOpen: isSchedulingConflictStillOpen\(/g) ?? []).length >= 3,
+  "all three disposition closeout gates (live + regen + human-mode) must pass the scheduling-conflict veto"
+);
+assert.match(
+  apiSource,
+  /schedulingConflictStillWilling: isSchedulingConflictStillOpen\(regenInboundReplyActionParse\)/,
+  "the regen scheduling decision must read the same parser slot as live"
+);
+// The parser owns the comprehension — pin the production turn as a few-shot so a prompt edit
+// cannot silently drop the lesson (AGENTS.md: fix a miss with few-shots + a fixture, not regex).
+const inboundActionSource = await fs.readFile(
+  path.resolve("services/api/src/domain/inboundReplyActionPrompt.ts"),
+  "utf8"
+);
+assert.match(
+  inboundActionSource,
+  /Unsure I have to have injections into my shoulder/,
+  "the inbound-reply-action few-shots pin the William Indelicato production turn"
+);
+assert.match(
+  inboundActionSource,
+  /my kid has a game that afternoon/,
+  "a no-medical-words paraphrase keeps the lesson from being memorized off 'injections'"
 );
 
 console.log("PASS disposition close guard eval");

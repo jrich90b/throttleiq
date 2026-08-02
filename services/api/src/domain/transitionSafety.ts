@@ -128,8 +128,29 @@ export function hasActiveDealCloseoutBlockers(
 export function shouldSuppressDispositionCloseout(
   conv: any,
   text: string,
-  opts: { openTodos?: Array<{ convId?: string; reason?: string; summary?: string }> } = {}
+  opts: {
+    openTodos?: Array<{ convId?: string; reason?: string; summary?: string }>;
+    schedulingConflictOpen?: boolean;
+  } = {}
 ): boolean {
+  // PARSER-FED ARM (William Indelicato +17163591526, 2026-07-24). Mid-negotiation over a
+  // service-visit day, "Unsure I have to have injections into my shoulder" parsed as
+  // stepping_back: the lead was CLOSED and follow-up paused indefinitely 11 seconds later,
+  // and the draft was the taper "I hear you. If anything changes down the road, just give me
+  // a shout." Staff had to send "let me know what day works best and I will try to accommodate".
+  //
+  // Every arm below reads only THIS turn's text and none reads conversation state, so an open
+  // scheduling negotiation was invisible here. The signal comes from the inbound-reply-action
+  // parser (scheduling_conflict_open), which alone among the scheduling parsers runs
+  // UNCONDITIONALLY — the hint-gated appointment-timing / customer-ack parsers were skipped on
+  // this very turn because it carried no weekday or clock token.
+  //
+  // FAIL DIRECTION: this is an ADDITIVE arm, so it can only ever ADD suppressions. A parser
+  // false negative leaves today's (buggy) behavior — no new regression; a false positive keeps
+  // a lead we would have closed OPEN, which staff can archive. That is why a parser signal is
+  // admissible here even though the deterministic arms below are KEEPs that must NOT be
+  // migrated (removing one of those would fail toward closing a live lead).
+  if (opts.schedulingConflictOpen) return true;
   if (hasActiveDealCloseoutBlockers(conv, opts)) return true;
   if (isLogisticsProgressUpdateText(text)) return true;
   if (isStructuredFinanceInfoText(text)) return true;
@@ -395,10 +416,18 @@ export function canApplyDispositionCloseout(args: {
   hasDecision: boolean;
   responseControlNotInterested?: boolean;
   openTodos?: Array<{ convId?: string; reason?: string; summary?: string }>;
+  // Inbound-reply-action parser: an OPEN scheduling negotiation vetoes the closeout.
+  schedulingConflictOpen?: boolean;
 }): boolean {
   const { conv, text, parsedAccepted, hasDecision, responseControlNotInterested } = args;
   if (!hasDecision) return false;
-  if (shouldSuppressDispositionCloseout(conv, text, { openTodos: args.openTodos })) return false;
+  if (
+    shouldSuppressDispositionCloseout(conv, text, {
+      openTodos: args.openTodos,
+      schedulingConflictOpen: args.schedulingConflictOpen
+    })
+  )
+    return false;
   if (parsedAccepted) return true;
   // Parser-first closeout: allow fallback only when the dedicated response-control parser
   // independently classified the turn as not interested.

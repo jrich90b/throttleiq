@@ -685,6 +685,20 @@ import {
   isResponseControlNoResponseAccepted,
   shouldSuppressAppointmentConfirmationReminder
 } from "./domain/transitionSafety.js";
+import {
+  buildFriendlyReachOutClose,
+  buildCustomerDispositionReply,
+  ensureUniqueDispositionReply
+} from "./domain/dispositionReply.js";
+import { buildSchedulingConflictContinuationReply } from "./domain/schedulingConflictContinuation.js";
+import {
+  inboundReplyActionConfidence,
+  inboundReplyActionConfidenceMin,
+  isInboundReplyActionParserAccepted,
+  isAcceptedInboundReplyAction,
+  isSchedulingConflictStillOpen,
+  canUseInboundReplyActionFallback
+} from "./domain/inboundReplyActionPrompt.js";
 import { pickRegenerateInbound } from "./domain/regenerateSelection.js";
 import { applyDraftStateInvariants, repairLikelyTruncatedDraftText } from "./domain/draftStateInvariants.js";
 import {
@@ -10788,27 +10802,6 @@ function isCustomerAckActionParserAccepted(parsed: CustomerAckActionParse | null
   return confidence >= min;
 }
 
-function inboundReplyActionConfidence(parsed: InboundReplyActionParse | null): number {
-  return typeof parsed?.confidence === "number" && Number.isFinite(parsed.confidence)
-    ? parsed.confidence
-    : 0;
-}
-
-function inboundReplyActionConfidenceMin(): number {
-  return Number(process.env.LLM_INBOUND_REPLY_ACTION_CONFIDENCE_MIN ?? 0.74);
-}
-
-function isInboundReplyActionParserAccepted(parsed: InboundReplyActionParse | null): boolean {
-  if (!parsed || parsed.action === "none" || !parsed.explicitAction) return false;
-  return inboundReplyActionConfidence(parsed) >= inboundReplyActionConfidenceMin();
-}
-
-function isAcceptedInboundReplyAction(
-  parsed: InboundReplyActionParse | null,
-  action: Exclude<InboundReplyActionParse["action"], "none">
-): boolean {
-  return isInboundReplyActionParserAccepted(parsed) && parsed?.action === action;
-}
 
 function buildWalkInCallbackTodoSummary(noteText: string, modelLabel?: string | null): string {
   const normalizedNote = String(noteText ?? "").replace(/\s+/g, " ").trim();
@@ -10843,14 +10836,6 @@ function hasWalkInCallbackStatusRequestText(text?: string | null): boolean {
   return callbackCue && whenReadyCue;
 }
 
-function canUseInboundReplyActionFallback(args: {
-  parserEligible: boolean;
-  parsed: InboundReplyActionParse | null;
-}): boolean {
-  if (!args.parserEligible) return true;
-  if (!args.parsed) return true;
-  return inboundReplyActionConfidence(args.parsed) < inboundReplyActionConfidenceMin();
-}
 
 function isCadenceRegenerateContextParserAccepted(parsed: CadenceRegenerateContextParse | null): boolean {
   if (!parsed) return false;
@@ -11191,6 +11176,32 @@ function addAppointmentStatusReviewTodo(conv: any, text: string | null | undefin
 // gate (decideSchedulingDeferralFollowUpTask) + summary-marker dedupe so repeated regen of the same
 // turn doesn't stack tasks. "call" reason = top priority + survives the sold-lead suppression. Shared
 // by BOTH the live and regen scheduling arms (route-parity). Fail-direction: create when unsure.
+// OPEN SCHEDULING CONFLICT — the ONE resolver behind decideSchedulingTurn's
+// "scheduling_conflict_continue" arm in BOTH paths, so the state effects cannot drift.
+// Keeps the thread OPEN (no close, no cadence stop, no watch pause, no booking) and leaves the
+// owner a follow-up task. Incident + copy: domain/schedulingConflictContinuation.ts.
+function applySchedulingConflictContinuation(
+  scope: "live" | "regen",
+  conv: any,
+  inboundBody: string | null | undefined,
+  providerMessageId: string | null | undefined,
+  confidence: number | null
+): string {
+  setDialogState(conv, "schedule_request");
+  recordRouteOutcome(scope, "scheduling_conflict_continue", {
+    convId: conv.id,
+    leadKey: conv.leadKey,
+    confidence
+  });
+  addSchedulingDeferralFollowUpTodo(
+    conv,
+    { deferred: true, booked: false, offeredAlternatives: false, requestedPhrase: "" },
+    inboundBody,
+    providerMessageId
+  );
+  return buildSchedulingConflictContinuationReply(normalizeDisplayCase(conv?.lead?.firstName));
+}
+
 function addSchedulingDeferralFollowUpTodo(
   conv: any,
   input: { deferred: boolean; booked: boolean; offeredAlternatives: boolean; requestedPhrase: string },
@@ -23805,24 +23816,6 @@ function pickSpecificAnchorModel(conv: any): string | null {
   return raw.replace(/^harley[-\s]?davidson\s+/i, "").trim() || raw;
 }
 
-function ensureUniqueDispositionReply(reply: string, conv: any): string {
-  const used = new Set(
-    (conv?.messages ?? [])
-      .filter((m: any) => m.direction === "out")
-      .map((m: any) => normalizeOutboundText(m.body))
-  );
-  const base = String(reply ?? "").trim();
-  if (base && !used.has(normalizeOutboundText(base))) return base;
-  const fallbacks = [
-    "I hear you. No worries at all. If things change later, reach out anytime.",
-    "Totally get it. Thanks for being straight with me. If timing changes, I’m here.",
-    "All good — thanks for the update. If things open up later, just text me."
-  ];
-  for (const fb of fallbacks) {
-    if (!used.has(normalizeOutboundText(fb))) return fb;
-  }
-  return "No worries at all. If things change later, just text me.";
-}
 
 function draftHasSchedulingPrompt(text: string): boolean {
   return /(what day|what time|when.*available|schedule|appointment|come in|stop by|stop in|book|reserve|test ride|demo ride|which works best)/i.test(
@@ -27716,40 +27709,6 @@ function applySellToDealerAppraisalFromDispositionParse(
   return true;
 }
 
-function buildFriendlyReachOutClose(hasAppreciation: boolean): string {
-  return hasAppreciation
-    ? "I hear you, and I appreciate that. If anything changes down the road, just give me a shout."
-    : "I hear you. If anything changes down the road, just give me a shout.";
-}
-
-function buildCustomerDispositionReply(text: string, conv?: any): string {
-  const textLower = String(text ?? "").toLowerCase();
-  const firstName = normalizeDisplayCase(conv?.lead?.firstName);
-  if (
-    /\b(accident|broke|broken|rib|ribs|punctured|lung|hospital|surgery|injur(?:y|ed)|recovery|recovering)\b/i.test(
-      textLower
-    ) &&
-    /\b(pass|hold off|not (?:able|going)|can(?:not|'t))\b/i.test(textLower)
-  ) {
-    return firstName
-      ? `I’m sorry to hear that, ${firstName}. I’ll hold off on follow-up. Wishing you a smooth recovery.`
-      : "I’m sorry to hear that. I’ll hold off on follow-up. Wishing you a smooth recovery.";
-  }
-  if (/\b(can\s+hold\s+off|hold off(?: for now)?)\b/i.test(textLower)) {
-    return firstName
-      ? `Ok ${firstName}, I’ll hold off. Thanks for the update.`
-      : "Ok, I’ll hold off. Thanks for the update.";
-  }
-  if (/\b(i(?:'|’)?ll pass|i(?:'|’)?ll have to pass|i will pass|i will have to pass|have to pass(?: at this point| for now)?|pass man|pass for now|all set)\b/i.test(textLower)) {
-    return firstName
-      ? `Alright ${firstName}, thanks for the update. You have my number, just get a hold of me when you’re ready.`
-      : "Alright, thanks for the update. You have my number, just get a hold of me when you’re ready.";
-  }
-  const hasBikeCompliment =
-    /\b(beautiful|nice|great|awesome|amazing|love|like|clean|killer|badass|sweet)\b/i.test(textLower) &&
-    /\b(bike|street glide|road glide|harley|motorcycle|ride)\b/i.test(textLower);
-  return buildFriendlyReachOutClose(hasBikeCompliment);
-}
 
 function buildAppointmentWeatherTimingReply(text: string): string {
   const lower = String(text ?? "").toLowerCase();
@@ -56640,6 +56599,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     // TIMED visit commitment (Joe ruling 2026-07-28, Terry Majchrzak +17166091289) — same
     // parser signal as the live path; regen mirrors it as a DRAFT preview (book:false).
     timedVisitCommitment: isParserTimedVisitCommitment(regenAppointmentTimingParse),
+    // OPEN SCHEDULING CONFLICT — same parser slot as the live path (called INLINE: the
+    // route-parity guard ratchets mirrored `const regen*` locals DOWN-ONLY).
+    schedulingConflictStillWilling: isSchedulingConflictStillOpen(regenInboundReplyActionParse),
     pricingOrPaymentsIntent: false,
     scheduleDialogState: isScheduleDialogState(getDialogState(conv)),
     scheduleOfferContext: hasScheduleOfferContext(regenLastOutboundForActionText, getDialogState(conv))
@@ -56780,6 +56742,19 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         turnAvailabilityIntent: false,
         turnFinanceIntent: false
       }
+    );
+  }
+  if (event.provider === "twilio" && regenSched.kind === "scheduling_conflict_continue") {
+    return respondWithSmsRegeneratedDraft(
+      applySchedulingConflictContinuation(
+        "regen",
+        conv,
+        event.body,
+        (inbound as any)?.providerMessageId,
+        regenInboundReplyActionParse?.confidence ?? null
+      ),
+      undefined,
+      { turnSchedulingIntent: true, turnAvailabilityIntent: false, turnFinanceIntent: false }
     );
   }
   if (event.provider === "twilio" && regenSched.kind === "offer_slots_in_bound") {
@@ -58565,7 +58540,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     hasDecision: !!regenDispositionDecision,
     responseControlNotInterested:
       regenResponseControlAccepted && regenResponseControlParse?.intent === "not_interested",
-    openTodos: listOpenTodos()
+    openTodos: listOpenTodos(),
+    schedulingConflictOpen: isSchedulingConflictStillOpen(regenInboundReplyActionParse)
   });
   const regenTerminalRouteDecision = resolveInboundTerminalRoute({
     provider: event.provider,
@@ -58600,7 +58576,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   }
   if (regenTerminalRouteDecision?.kind === "customer_disposition_closeout" && regenDispositionDecision) {
     applyCustomerDispositionCloseout(conv, regenDispositionDecision);
-    const regenReply = ensureUniqueDispositionReply(buildCustomerDispositionReply(event.body, conv), conv);
+    const regenReply = ensureUniqueDispositionReply(buildCustomerDispositionReply(event.body, normalizeDisplayCase(conv?.lead?.firstName)), conv, normalizeOutboundText);
     recordRouteOutcome("regen", regenTerminalRouteDecision.routeOutcome, {
       convId: conv.id,
       leadKey: conv.leadKey,
@@ -61245,7 +61221,8 @@ if (authToken && signature) {
       parsedAccepted: humanModeParsedDispositionAccepted,
       hasDecision: !!humanModeDispositionDecision,
       responseControlNotInterested: llmNotInterested,
-      openTodos: listOpenTodos()
+      openTodos: listOpenTodos(),
+      schedulingConflictOpen: isSchedulingConflictStillOpen(inboundReplyActionParse)
     });
     if (humanModeDispositionCloseoutAllowed && humanModeDispositionDecision) {
       applyCustomerDispositionCloseout(conv, humanModeDispositionDecision);
@@ -62322,7 +62299,8 @@ if (authToken && signature) {
     parsedAccepted: parsedDispositionAccepted,
     hasDecision: !!dispositionDecision,
     responseControlNotInterested: llmNotInterested,
-    openTodos: listOpenTodos()
+    openTodos: listOpenTodos(),
+    schedulingConflictOpen: isSchedulingConflictStillOpen(inboundReplyActionParse)
   });
   const terminalRouteDecision = resolveInboundTerminalRoute({
     provider: event.provider,
@@ -62349,7 +62327,7 @@ if (authToken && signature) {
   }
   if (terminalRouteDecision?.kind === "customer_disposition_closeout" && dispositionDecision) {
     applyCustomerDispositionCloseout(conv, dispositionDecision);
-    const reply = ensureUniqueDispositionReply(buildCustomerDispositionReply(semanticInboundText, conv), conv);
+    const reply = ensureUniqueDispositionReply(buildCustomerDispositionReply(semanticInboundText, normalizeDisplayCase(conv?.lead?.firstName)), conv, normalizeOutboundText);
     recordRouteOutcome("live", terminalRouteDecision.routeOutcome, {
       convId: conv.id,
       leadKey: conv.leadKey,
@@ -65420,6 +65398,10 @@ if (authToken && signature) {
     // there today between 4 and 5") — a commitment that named a time goes to the book-or-offer
     // resolver, not the soft-visit hold that let his 4pm slip.
     timedVisitCommitment: isParserTimedVisitCommitment(appointmentTimingParse),
+    // OPEN SCHEDULING CONFLICT (William Indelicato +17163591526) — the unconditionally-run
+    // inbound-reply-action parser is the only scheduling signal available on a turn that
+    // carries no weekday or clock token, which is exactly this turn shape.
+    schedulingConflictStillWilling: isSchedulingConflictStillOpen(inboundReplyActionParse),
     pricingOrPaymentsIntent,
     scheduleDialogState: isScheduleDialogState(getDialogState(conv)),
     scheduleOfferContext: hasScheduleOfferContext(lastOutboundText, getDialogState(conv))
@@ -65826,6 +65808,18 @@ if (authToken && signature) {
     return publishLiveTwilioReply(buildProposedAppointmentConfirmationReply(appointmentTimingParse), {
       turnSchedulingIntent: true
     });
+  }
+  if (event.provider === "twilio" && sched.kind === "scheduling_conflict_continue") {
+    return publishLiveTwilioReply(
+      applySchedulingConflictContinuation(
+        "live",
+        conv,
+        event.body,
+        event.providerMessageId,
+        inboundReplyActionParse?.confidence ?? null
+      ),
+      { turnSchedulingIntent: true }
+    );
   }
   if (event.provider === "twilio" && sched.kind === "offer_slots_in_bound") {
     // RANGE-CONSTRAINT VETO arm (Kody +17163975098, 2026-07-16): the parser read this turn's

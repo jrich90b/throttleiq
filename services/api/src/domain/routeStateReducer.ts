@@ -286,6 +286,7 @@ export type SchedulingTurnKind =
   | "propose_booking"
   | "offer_slots_in_bound"
   | "visit_commitment"
+  | "scheduling_conflict_continue"
   | "none";
 
 // ---------------------------------------------------------------------------
@@ -364,6 +365,13 @@ export type SchedulingTurnInput = {
   // this routes to the SAME book-or-offer resolver a proposed day+time uses instead of the
   // soft-visit hold that let Terry's 4pm slip (staff-reported the same morning).
   timedVisitCommitment?: boolean;
+  // OPEN SCHEDULING CONFLICT (William Indelicato +17163591526, 2026-07-24). The
+  // inbound-reply-action parser's scheduling_conflict_open slot: we proposed a day/time and the
+  // customer answered with uncertainty or a conflicting obligation WITHOUT withdrawing. Unlike
+  // every other input here it does NOT depend on a hint-gated parser, which is the whole point —
+  // the appointment-timing and customer-ack parsers are both skipped on a turn with no weekday
+  // or clock token, which is exactly the turn shape that produced the incident.
+  schedulingConflictStillWilling?: boolean;
   // Context gates available where the decision is computed.
   pricingOrPaymentsIntent: boolean;
   scheduleDialogState: boolean;
@@ -478,6 +486,25 @@ export function decideSchedulingTurn(input: SchedulingTurnInput): SchedulingTurn
     // tomorrow after 3" names a bound, not a clock time — offer slots honoring it.
     if (input.appointmentTimingOpenEndedBound) return { kind: "offer_slots_in_bound", visitCommitment };
     return { kind: "propose_booking", visitCommitment };
+  }
+
+  // Block B3 — an OPEN SCHEDULING CONFLICT (William Indelicato +17163591526, 2026-07-24).
+  // We asked "What time do you think you can be here on Wednesday?" and got "Unsure I have to
+  // have injections into my shoulder" — uncertainty plus a conflicting obligation, no
+  // withdrawal. On main that turn reached the disposition-closeout arm instead: the lead was
+  // closed and follow-up paused indefinitely, and the draft was a taper sign-off.
+  //
+  // Precedence: BELOW A/B/B2, so an explicit ack or any concrete day/time the customer names
+  // still outranks it (if they give us a bookable time, book it — a conflict answer never
+  // steals a booking). ABOVE Block C, because a conflict is the OPPOSITE of a visit
+  // commitment: filing it as one would confirm a visit the customer just said they cannot
+  // make. Gated on !pricingOrPaymentsIntent like A and B.
+  //
+  // FAIL DIRECTION: fires toward KEEPING the negotiation open (offer to work around them +
+  // an owner follow-up task). A miss is today's behavior; an over-fire costs one warm
+  // "what day works best" on a live thread, never a booking and never a close.
+  if (input.schedulingConflictStillWilling && !input.pricingOrPaymentsIntent) {
+    return { kind: "scheduling_conflict_continue", visitCommitment: false };
   }
 
   // Block C — recognized future-day visit commitment. The handler additionally gates

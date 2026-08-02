@@ -44,9 +44,31 @@ function functionBlockByName(name: string): string {
   return body;
 }
 
+/**
+ * A parser may keep its few-shots INLINE, or hand them off to an extracted prompt module
+ * (`const examples = INBOUND_REPLY_ACTION_EXAMPLES;`). The de-tangle program actively wants the
+ * second shape — source_size_ratchet:eval forces prompt surfaces out of llmDraft.ts — so this
+ * contract must follow the examples rather than fail the move. We do NOT accept the reference on
+ * faith: the named constant has to resolve to a non-empty array literal in a domain module, or a
+ * parser could "satisfy" the contract by pointing at nothing.
+ */
+function referencedExamplesAreNonEmpty(constName: string): boolean {
+  const domainDir = path.join(process.cwd(), "services/api/src/domain");
+  const declaration = new RegExp(
+    `export const ${constName}\\s*:?[^=]*=\\s*\\[\\s*(?:\\/\\/[^\\n]*\\n\\s*)*\\S`
+  );
+  for (const file of fs.readdirSync(domainDir)) {
+    if (!file.endsWith(".ts")) continue;
+    if (declaration.test(fs.readFileSync(path.join(domainDir, file), "utf8"))) return true;
+  }
+  return false;
+}
+
 function hasFewShotExamples(body: string): boolean {
+  const referenced = body.match(/\bexamples\s*=\s*([A-Z][A-Z0-9_]*)\s*;/);
   return (
     /\bexamples\s*=\s*\[/.test(body) ||
+    (!!referenced && referencedExamplesAreNonEmpty(referenced[1])) ||
     /"Examples:"/.test(body) ||
     /"Voice-style examples:"/.test(body) ||
     /"Good examples:"/.test(body) ||

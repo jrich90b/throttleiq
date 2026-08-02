@@ -72,18 +72,32 @@ assert.ok(/RESERVE a unit/.test(fallbackTodo), `unknown-unit todo: "${fallbackTo
 
 // 3) Parser wiring in llmDraft.ts.
 const llmSrc = fs.readFileSync(path.resolve("services/api/src/domain/llmDraft.ts"), "utf8");
-for (const pin of [
-  '| "customer_reservation_request"', // union
-  '"customer_reservation_request",' // schema enum + mapping share this token
-]) {
-  assert.ok(llmSrc.includes(pin), `llmDraft.ts must wire reservation parser action: ${pin}`);
-}
+// The inbound-reply-action PROMPT SURFACE (strict JSON schema + few-shots) now lives in its own
+// module — source_size_ratchet:eval forces prompt surfaces out of llmDraft.ts, and llmDraft keeps
+// the TS union and the return mapping. Pin each half where it actually lives, so the guard follows
+// the code instead of failing the extraction it asked for.
+const promptSrc = fs.readFileSync(
+  path.resolve("services/api/src/domain/inboundReplyActionPrompt.ts"),
+  "utf8"
+);
+assert.ok(
+  llmSrc.includes('| "customer_reservation_request"'),
+  "llmDraft.ts must wire the reservation parser action union"
+);
+assert.ok(
+  promptSrc.includes('"customer_reservation_request",'),
+  "the prompt module's schema enum must carry the reservation action"
+);
 assert.match(
   llmSrc,
   /actionRaw === "customer_reservation_request"/,
   "parser must map customer_reservation_request (not drop it to none)"
 );
-assert.match(llmSrc, /EXAMPLE S[\s\S]*customer_reservation_request/, "parser must carry the reservation few-shot");
+assert.match(
+  promptSrc,
+  /EXAMPLE S[\s\S]*customer_reservation_request/,
+  "parser must carry the reservation few-shot"
+);
 
 // 4) Dispatch wired in BOTH live and regen paths.
 const apiSrc = fs.readFileSync(path.resolve("services/api/src/index.ts"), "utf8");
