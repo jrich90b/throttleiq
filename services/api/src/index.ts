@@ -505,6 +505,7 @@ import {
   startPostSaleCadence,
   releaseHeldDraft,
   applyAppointmentTeardown,
+  applyAppointmentConfirmRecord,
   clearAppointmentStaffPromptState
 } from "./domain/conversationStore.js";
 import {
@@ -11784,8 +11785,10 @@ async function bookConfirmedAppointmentSlot(args: {
     (cfg.salespeople ?? []).find((p: any) => p.id === slot.salespersonId)?.name ||
     null;
   const whenText = formatSlotLocal(slot.start, cfg.timezone);
+  // Calendar event already written above — the applier asks decideAppointmentConfirmRecord WHAT
+  // the confirmed record contains (acknowledged + latch); booking IO fields stay here.
+  applyAppointmentConfirmRecord(conv, "customer_confirm_booking");
   conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
-  conv.appointment.status = "confirmed";
   conv.appointment.bookedEventId = eventIdToPersist;
   conv.appointment.bookedEventLink = eventLinkToPersist;
   conv.appointment.bookedSalespersonId = slot.salespersonId ?? null;
@@ -11795,9 +11798,6 @@ async function bookConfirmedAppointmentSlot(args: {
   conv.appointment.whenText = whenText;
   conv.appointment.whenLocal = whenText;
   conv.appointment.appointmentType = appointmentType;
-  conv.appointment.confirmedBy = "customer";
-  conv.appointment.acknowledged = true;
-  conv.appointment.reschedulePending = false;
   conv.appointment.matchedSlot = {
     salespersonId: slot.salespersonId,
     salespersonName: slot.salespersonName ?? repName ?? undefined,
@@ -13147,8 +13147,10 @@ async function applyPostCallSummaryActions(opts: {
         eventLinkToPersist = created?.htmlLink ?? eventLinkToPersist;
       }
 
+      // Calendar event already written above — the applier asks decideAppointmentConfirmRecord
+      // WHAT the confirmed record contains (acknowledged + latch); booking IO fields stay here.
+      applyAppointmentConfirmRecord(conv, "voice_summary_booking");
       conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
-      conv.appointment.status = "confirmed";
       conv.appointment.bookedEventId = eventIdToPersist;
       conv.appointment.bookedEventLink = eventLinkToPersist;
       conv.appointment.bookedSalespersonId = exactMatch.sp.id;
@@ -13158,9 +13160,6 @@ async function applyPostCallSummaryActions(opts: {
       conv.appointment.whenText = formatSlotLocal(exactMatch.exact.start, cfg.timezone);
       conv.appointment.whenLocal = conv.appointment.whenText;
       conv.appointment.appointmentType = requestedAppointmentType;
-      conv.appointment.confirmedBy = "customer";
-      conv.appointment.acknowledged = true;
-      conv.appointment.reschedulePending = false;
       conv.appointment.matchedSlot = {
         salespersonId: exactMatch.sp.id,
         salespersonName: exactMatch.sp.name,

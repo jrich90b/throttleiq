@@ -71,7 +71,10 @@ const CEILINGS: Ceiling[] = [
     // NOTE: this PR was authored against a 71_576 ceiling and originally proposed 71_570, which
     // would have RAISED the ceiling by 103 lines and silently undone two reductions merged since.
     // Rebased to the real post-merge count instead (the #418 trap, ROUTINE_CONTRACT rule 3).
-    max: 71_461,
+    // 71_461 -> 71_460. The appointment-confirm companion fields (status/confirmedBy/acknowledged/
+    // reschedule latch) moved behind applyAppointmentConfirmRecord (conversationStore), which asks
+    // decideAppointmentConfirmRecord — the two booked lanes here now write one call, not four fields.
+    max: 71_460,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

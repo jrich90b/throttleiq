@@ -321,6 +321,34 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     }, ["decideCadenceStart"]);
   }
 
+  // Added 2026-08-02 with the appointment-CONFIRM un-stacking. Sampled once PER LANE, because the
+  // whole point of this referee is that the slot-match lane answers `acknowledged` and the
+  // reschedule latch differently from the two booked lanes — a single sample would hide exactly
+  // that. PROBE: the lane is held fixed per sample; the only stored state consulted is the lead's
+  // actual reschedulePending latch, so between a baseline and a candidate run only the arbitration
+  // itself can move the fingerprint.
+  for (const lane of [
+    "customer_slot_match",
+    "customer_confirm_booking",
+    "voice_summary_booking"
+  ] as const) {
+    add(`appointmentConfirmRecord:${lane}`, conv => {
+      if (!conv?.appointment || typeof reducer.decideAppointmentConfirmRecord !== "function") {
+        return undefined;
+      }
+      const decision = reducer.decideAppointmentConfirmRecord({
+        lane, // PROBE
+        reschedulePending: conv.appointment?.reschedulePending
+      });
+      return {
+        confirm: decision.confirm,
+        acknowledged: decision.acknowledged,
+        clearReschedulePending: decision.clearReschedulePending,
+        divergence: decision.divergence
+      };
+    }, ["decideAppointmentConfirmRecord"]);
+  }
+
   return registry;
 }
 
