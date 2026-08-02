@@ -167,11 +167,72 @@ function enclosingFunction(boundaries: { line: number; name: string }[], lineInd
 }
 
 /**
- * `x.field = x.field ?? {}` / `|| {}` — idempotent lazy-init, not a value write. Counting these
- * produced pure noise: every `financeOutcomeNotify` and `crm` "writer" was one of these.
+ * The assigned left-hand path on this line — `conv.appointment.staffNotify` out of
+ * `conv.appointment.staffNotify = …`. Whitespace-normalized so it can be compared to the
+ * right-hand side. Returns null for anything that is not a plain path assignment (declarations,
+ * `(conv as any).x = …`, destructuring), which keeps those COUNTED — the conservative direction.
  */
-function isLazyInit(trimmed: string, field: string): boolean {
-  return new RegExp(`\\.${field}\\s*=\\s*[^=]*\\.${field}\\s*(?:\\?\\?|\\|\\|)\\s*\\{\\s*\\}`).test(trimmed);
+function assignedPath(trimmed: string): string | null {
+  const match = /^([A-Za-z_$][A-Za-z0-9_$]*(?:\s*\??\.\s*[A-Za-z_$][A-Za-z0-9_$]*)+)\s*=(?!=|>)/.exec(
+    stripAsAny(trimmed)
+  );
+  return match ? match[1].replace(/\s+/g, "") : null;
+}
+
+/**
+ * `(conv as any).x` → `conv.x`. Production writes this constantly, and without unwrapping it the
+ * line no longer STARTS with a plain path, so every such default-init read as a real writer.
+ */
+function stripAsAny(text: string): string {
+  return text.replace(/\(\s*([A-Za-z_$][A-Za-z0-9_$]*)\s+as\s+any\s*\)/g, "$1");
+}
+
+/** Everything after the first `=` of an assignment, whitespace-stripped. */
+function assignedValue(trimmed: string): string {
+  const normalized = stripAsAny(trimmed);
+  const eq = normalized.search(/=(?!=|>)/);
+  return eq < 0 ? "" : normalized.slice(eq + 1).replace(/\s+/g, "");
+}
+
+/**
+ * CUT 3 (2026-08-01): a write that CANNOT ARBITRATE is not a writer.
+ *
+ * Cuts 1 and 2 (see the eval header) killed two ways of over-reporting. This kills the third, and
+ * it is the one that was keeping the queue from ever reaching zero: the detector was counting
+ * bookkeeping as contention. Two shapes, both provably unable to fight anyone:
+ *
+ *  1. VALUE-PRESERVING DEFAULT — `x.y = x.y ?? …` / `|| …`. Idempotent: it only ever fills a blank,
+ *     and can never overwrite what another writer decided. The previous test only caught the
+ *     literal `?? {}` form, so the far more common
+ *     `conv.appointment = conv.appointment ?? { status: "none", updatedAt: nowIso() }` sailed
+ *     through and scored as a contended writer — five times over, on `appointment` alone. It also
+ *     checked the ALIAS's root field rather than the path actually being assigned, so
+ *     `appt.staffNotify = appt.staffNotify ?? {}` was never recognized either.
+ *  2. CLOCK TOUCH — `…At = nowIso()` / `new Date().toISOString()`. Stamping "when did this change"
+ *     is bookkeeping, not a decision about the lead. Deliberately TIGHT: the value must be a bare
+ *     fresh-clock read, so a computed date like `nextDueAt = computeFollowUpDueAt(...)` — which IS
+ *     a real decision about when we next touch a customer — keeps counting.
+ *
+ * FAIL DIRECTION: excluding a write can only REMOVE work from the queue, so the bar is "provably
+ * non-contending", never "probably harmless". Anything this cannot parse stays counted.
+ */
+const FRESH_CLOCK_VALUE = /^(?:nowIso\(\)|newDate\(\)\.toISOString\(\))[;,)]?$/;
+
+export function isNonContendingWrite(trimmed: string): boolean {
+  const path = assignedPath(trimmed);
+  if (!path) return false;
+  const value = assignedValue(trimmed);
+  if (!value) return false;
+
+  // 1) `x.y = x.y ?? …` / `x.y = x.y || …`
+  const escaped = path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (new RegExp(`^${escaped}(?:\\?\\?|\\|\\|)`).test(value)) return true;
+
+  // 2) `…At = nowIso()` — a timestamp stamp, not an arbitration.
+  const leaf = path.split(".").pop() ?? "";
+  if (/At$/.test(leaf) && FRESH_CLOCK_VALUE.test(value)) return true;
+
+  return false;
 }
 
 export function findWriteSites(files: SourceFile[]): Map<string, WriteSite[]> {
@@ -212,7 +273,7 @@ export function findWriteSites(files: SourceFile[]): Map<string, WriteSite[]> {
         while ((match = pattern.exec(line))) {
           const field = match[1];
           if (IGNORED_FIELDS.has(field)) continue;
-          if (isLazyInit(trimmed, field)) continue;
+          if (isNonContendingWrite(trimmed)) continue;
           const site = makeSite(field, null);
           site.wholesale = !match[2] && /=\s*\{/.test(trimmed);
           push(field, site);
@@ -231,7 +292,7 @@ export function findWriteSites(files: SourceFile[]): Map<string, WriteSite[]> {
           `\\b${binding.alias}\\.[A-Za-z_][A-Za-z0-9_]*(?:\\??\\.[A-Za-z_][A-Za-z0-9_]*)*\\s*\\??=(?!=|>)`
         );
         if (!aliasWrite.test(trimmed)) continue;
-        if (isLazyInit(trimmed, binding.field)) continue;
+        if (isNonContendingWrite(trimmed)) continue;
         push(binding.field, makeSite(binding.field, binding.alias));
       }
     }
