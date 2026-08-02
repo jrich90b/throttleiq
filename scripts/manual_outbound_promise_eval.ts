@@ -9,6 +9,7 @@ import {
   decideManualOutboundPromise,
   hasManualPromiseHint,
   isActionablePromiseKind,
+  isHumanAuthoredOutbound,
   type ManualOutboundPromiseInput
 } from "../services/api/src/domain/manualOutboundPromise.ts";
 import type { ManualOutboundPromiseParse } from "../services/api/src/domain/llmDraft.ts";
@@ -194,6 +195,92 @@ for (const t of HINT_NO) check(`hint_no:${t.slice(0, 34)}`, !hasManualPromiseHin
 {
   const d = decideManualOutboundPromise(base({ parse: parse({ promisePresent: false, kind: "none", action: "" }) }));
   check("conditional_offer_no_task", d.kind === "none", JSON.stringify(d));
+}
+
+// ── AN UNEDITED AGENT DRAFT IS NOT A STAFF PROMISE (Scott Hartrich +17167130279,
+// operator-reported 2026-08-02: "Why did this create a call back"). In suggest mode the
+// agent's draft is released through the same /conversations/:id/send endpoint a person
+// types into, so the agent's own "I'll follow up with the numbers we discussed" armed a
+// dated task for the salesperson plus a cadence hold. 8 of the 20 promise tasks on the box
+// came from agent copy this way. The pending draft is the discriminator. ──
+{
+  const AGENT_DRAFT =
+    "Hi Scott — this is Stone at American Harley-Davidson. Thanks again for sitting down with me. " +
+    "I'll follow up with the numbers we discussed and next steps. Just so I've got it right, " +
+    "you're looking for a new Street Glide.";
+
+  // The production turn: the hint still fires (it is only a cost gate), but the author check
+  // is what keeps the arm from running.
+  check("scott_agent_draft_still_hints", hasManualPromiseHint(AGENT_DRAFT));
+  check(
+    "scott_unedited_agent_draft_not_human_authored",
+    !isHumanAuthoredOutbound({ pendingDraftBody: AGENT_DRAFT, sentBody: AGENT_DRAFT })
+  );
+  // formatSmsLayout can re-wrap the draft on its way out; whitespace alone must not read as
+  // a human edit, or the guard would leak on every send.
+  check(
+    "whitespace_reflow_is_not_an_edit",
+    !isHumanAuthoredOutbound({
+      pendingDraftBody: AGENT_DRAFT,
+      sentBody: AGENT_DRAFT.replace(/\. /g, ".\n\n")
+    })
+  );
+
+  // Everything else keeps today's behaviour — the guard suppresses only the provable case.
+  check(
+    "staff_typed_with_no_draft_is_human",
+    isHumanAuthoredOutbound({
+      pendingDraftBody: null,
+      sentBody: "I'll get those payment numbers together and send them over Monday."
+    })
+  );
+  check(
+    "edited_draft_is_human",
+    isHumanAuthoredOutbound({
+      pendingDraftBody: AGENT_DRAFT,
+      sentBody: `${AGENT_DRAFT} I'll have your trade number by Monday.`
+    })
+  );
+  check(
+    "empty_draft_body_is_human",
+    isHumanAuthoredOutbound({ pendingDraftBody: "   ", sentBody: "I'll call you tomorrow with the figure." })
+  );
+  check(
+    "empty_send_body_fails_open",
+    isHumanAuthoredOutbound({ pendingDraftBody: AGENT_DRAFT, sentBody: "" })
+  );
+  // ensureInitialSmsOptOutFooter appends the compliance line to the FIRST sms of a thread —
+  // which is exactly the first-touch ADF draft this arm sees most. We appended it, so it is
+  // not a human edit; without this the guard would leak on every genuine first touch.
+  check(
+    "optout_footer_is_not_an_edit",
+    !isHumanAuthoredOutbound({
+      pendingDraftBody: AGENT_DRAFT,
+      sentBody: `${AGENT_DRAFT} Reply STOP to opt out.`
+    })
+  );
+  // …but the footer must not swallow a real edit that happens to sit before it.
+  check(
+    "edit_before_the_footer_is_still_an_edit",
+    isHumanAuthoredOutbound({
+      pendingDraftBody: AGENT_DRAFT,
+      sentBody: `${AGENT_DRAFT} I'll have your trade number Monday. Reply STOP to opt out.`
+    })
+  );
+
+  // SOURCE PIN: the send path must actually consult the author check before arming the
+  // promise. Both channels share reconcileManualOutboundState, so pinning the one gate keeps
+  // SMS and email in lockstep. Fails loudly if the gate is renamed rather than reading -1.
+  const fs3 = await import("node:fs");
+  const index = fs3.readFileSync("services/api/src/index.ts", "utf8");
+  const gateAt = index.indexOf("hasManualPromiseHint(text) &&");
+  if (gateAt < 0) {
+    console.error("could not find the manual-promise gate in services/api/src/index.ts");
+    failures += 1;
+  } else if (!/isHumanAuthoredOutbound\(/.test(index.slice(gateAt, gateAt + 500))) {
+    console.error("the manual-promise gate must consult isHumanAuthoredOutbound before arming a task");
+    failures += 1;
+  }
 }
 
 if (failures) {
