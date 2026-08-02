@@ -105,8 +105,22 @@ const CLOSING_ACK_VOCATIVE =
   "(?:man|bud(?:dy|y)?|bro(?:ther|tha)?|dude|sir|ma'?am|boss|pal|friend|champ|chief|mate|fam|homie|hun|hon|partner|amigo|guys?|battle bud(?:dy|y)|my (?:friend|man|guy))";
 // Separator between stacked closers: punctuation/whitespace, optional "and"/"&".
 const CLOSING_ACK_SEP = "(?:[\\s.!,]+(?:and |& )?)";
+// A polite DECLINE may OPEN the closer chain — "No, thanks", "Nope, thank you",
+// "Nah, appreciate it". Turning down an offer WE made ends the exchange exactly
+// like an ack does: there is nothing left to answer, so the designed closeout is
+// silence. (Mark Walsh +17736151296, 2026-08-01: the agent offered a pricing and
+// payment breakdown, he replied "No, thanks", the handler logged a deliberate
+// `customer_ack_no_response` at 0.98 — and the tone scorer still counted it a
+// `missing_response`, dirtying the release gate's tone-missing count.)
+//
+// Opener ONLY, never a clause on its own: the `(?:PHRASE)+` below still has to
+// match at least once, so a bare "no" — which may well be answering a question
+// that deserves a follow-up — is NOT newly skipped, and the substantive-closer
+// requirement means the decline must be paired with real gratitude to qualify.
+const CLOSING_ACK_DECLINE_OPENER =
+  "(?:no|nope|nah|not right now|not at (?:this|the) time|i'?m good|we'?re good)";
 const CLOSING_ACK_FULL_RE = new RegExp(
-  `^${CLOSING_ACK_SEP}?(?:${CLOSING_ACK_PHRASE}(?:\\s+${CLOSING_ACK_VOCATIVE})?${CLOSING_ACK_SEP}?)+$`,
+  `^${CLOSING_ACK_SEP}?(?:${CLOSING_ACK_DECLINE_OPENER}${CLOSING_ACK_SEP})?(?:${CLOSING_ACK_PHRASE}(?:\\s+${CLOSING_ACK_VOCATIVE})?${CLOSING_ACK_SEP}?)+$`,
   "i"
 );
 // Requires at least one substantive gratitude/acknowledgment, so a bare "ok" /

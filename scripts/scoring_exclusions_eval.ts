@@ -210,6 +210,32 @@ assert.equal(isClosingAckNoAction("thank you boss"), true);
 assert.equal(isClosingAckNoAction("thanks guys"), true);
 assert.equal(isClosingAckNoAction("thanks man, call me when you can"), false); // actionable cue survives the vocative
 
+// A polite DECLINE of an offer we made is a closer too — there is nothing left
+// to answer, so silence is the designed closeout (Mark Walsh +17736151296,
+// 2026-08-01: "No, thanks" to an offered pricing breakdown; the handler logged a
+// deliberate customer_ack_no_response at 0.98 and the tone scorer still counted
+// it a missing_response, tripping the release gate's toneMissingResponses).
+assert.equal(isClosingAckNoAction("No, thanks"), true);
+assert.equal(isClosingAckNoAction("no thanks"), true);
+assert.equal(isClosingAckNoAction("Nope, thank you"), true);
+assert.equal(isClosingAckNoAction("Nah, appreciate it"), true);
+assert.equal(isClosingAckNoAction("not right now, thanks"), true);
+assert.equal(isClosingAckNoAction("I'm good, thanks man"), true);
+// Fail-direction guards on the decline opener. It is an OPENER, never a clause
+// on its own, and every other guard still applies — so a decline that carries an
+// ask, or a bare "no" that may be answering a question we owe a follow-up to,
+// stays in the scored population.
+assert.equal(isClosingAckNoAction("no"), false); // bare no — not a closer, still graded
+assert.equal(isClosingAckNoAction("nope"), false);
+assert.equal(isClosingAckNoAction("no thanks".replace("thanks", "")), false); // "no " alone
+assert.equal(isClosingAckNoAction("No thanks, what about the Road King?"), false); // question
+assert.equal(isClosingAckNoAction("no thanks, is the street glide still available"), false); // actionable cue
+assert.equal(isClosingAckNoAction("No thanks, I'll stop by tomorrow"), false); // actionable cue
+assert.equal(isClosingAckNoAction("no, I already bought one"), false); // not every clause is a closer
+assert.equal(isClosingAckNoAction("nah"), false); // no substantive closer
+// "no problem" must still parse as the PHRASE it is, not as opener + orphan word.
+assert.equal(isClosingAckNoAction("no problem"), true);
+
 // Bare short acks — the agent is correctly silent, so grading them is a phantom
 // miss. An emoji decoration must not change the verdict: "Awesome 👍" is the
 // same turn as "Awesome" (both dirtied the 7/17 gate's tone-missing count
