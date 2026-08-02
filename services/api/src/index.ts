@@ -461,7 +461,10 @@ import {
   webTextWidgetTodoReason
 } from "./domain/webTextWidget.js";
 import type { DailyForecast } from "./domain/weather.js";
-import type { AppointmentOutcomeSource } from "./domain/routeStateReducer.js";
+import type {
+  AppointmentOutcomeSource,
+  ManualCadenceRestartContext
+} from "./domain/routeStateReducer.js";
 import { resolveTownNearestDealer, formatTownLabel } from "./domain/geo.js";
 import { dataPath, getDataDir } from "./domain/dataDir.js";
 import { recordOpenAIUsage } from "./domain/openaiUsageLogger.js";
@@ -918,6 +921,7 @@ import {
   resolveNoShowFollowUpDueAt,
   pauseFollowUpCadence,
   stopFollowUpCadence,
+  applyManualCadenceRestart,
   resumeFollowUpCadence,
   scheduleLongTermFollowUp,
   advanceFollowUpCadence,
@@ -35416,30 +35420,16 @@ async function applyManualContextChoice(args: {
   };
   const activateCadence = (contextTag: string, followUpReason: string, kind: "standard" | "engaged") => {
     setFollowUpMode(conv, "active", followUpReason);
-    const existing = conv.followUpCadence && conv.followUpCadence.status !== "completed"
-      ? conv.followUpCadence
-      : null;
-    const anchorAt = String(existing?.anchorAt ?? "").trim() || now;
-    const stepIndex = Number.isFinite(Number(existing?.stepIndex))
-      ? Math.max(0, Number(existing.stepIndex))
-      : 0;
-    conv.followUpCadence = {
-      ...(existing ?? {}),
-      status: "active",
-      anchorAt,
-      nextDueAt:
-        String(existing?.nextDueAt ?? "").trim() ||
-        computeFollowUpDueAt(anchorAt, FOLLOW_UP_DAY_OFFSETS[0], timezone),
-      stepIndex,
+    // Does this lead keep its place in the follow-up sequence? One referee decides for all three
+    // manual-outbound restart lanes — see decideManualCadenceRestart in routeStateReducer.ts. This
+    // lane is the odd one out (it resumes a stopped / differently-tagged cadence); the referee
+    // preserves that as-is and NAMES the divergence rather than silently fixing it.
+    applyManualCadenceRestart(conv, {
+      context: contextTag as ManualCadenceRestartContext,
       kind,
-      contextTag,
-      contextTagUpdatedAt: now,
-      pausedUntil: undefined,
-      pauseReason: undefined,
-      stopReason: undefined,
-      scheduleInviteCount: existing?.scheduleInviteCount ?? 0,
-      scheduleMuted: existing?.scheduleMuted ?? false
-    };
+      nowIso: now,
+      timeZone: timezone
+    });
     setDialogState(conv, "followup_resumed");
   };
 
@@ -53015,32 +53005,14 @@ app.post("/conversations/:id/send", async (req, res) => {
     }
     setFollowUpMode(conv, "active", "credit_app_needs_info");
 
-    const existingCadence = conv.followUpCadence ?? null;
-    const reuseExistingFinanceCadence =
-      existingCadence?.status === "active" &&
-      String(existingCadence?.contextTag ?? "").trim().toLowerCase() === "finance_docs";
-    const anchorAt = reuseExistingFinanceCadence
-      ? String(existingCadence?.anchorAt ?? "").trim() || updatedAt
-      : updatedAt;
-    conv.followUpCadence = {
-      ...(existingCadence ?? {}),
-      status: "active",
-      anchorAt,
-      nextDueAt:
-        (reuseExistingFinanceCadence ? String(existingCadence?.nextDueAt ?? "").trim() : "") ||
-        computeFollowUpDueAt(anchorAt, FOLLOW_UP_DAY_OFFSETS[0], schedulerTimezone),
-      stepIndex: reuseExistingFinanceCadence && Number.isFinite(Number(existingCadence?.stepIndex))
-        ? Math.max(0, Number(existingCadence?.stepIndex))
-        : 0,
+    // Does this lead keep its place in the follow-up sequence? One referee decides for all three
+    // manual-outbound restart lanes — see decideManualCadenceRestart in routeStateReducer.ts.
+    applyManualCadenceRestart(conv, {
+      context: "finance_docs",
       kind: "engaged",
-      contextTag: "finance_docs",
-      contextTagUpdatedAt: updatedAt,
-      pausedUntil: undefined,
-      pauseReason: undefined,
-      stopReason: undefined,
-      scheduleInviteCount: existingCadence?.scheduleInviteCount ?? 0,
-      scheduleMuted: existingCadence?.scheduleMuted ?? false
-    };
+      nowIso: updatedAt,
+      timeZone: schedulerTimezone
+    });
     recordRouteOutcome("manual", "manual_outbound_finance_needs_info_followup", {
       convId: conv.id,
       leadKey: conv.leadKey,

@@ -265,6 +265,38 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     }, ["decideAppointmentTeardown"]);
   }
 
+  // Added 2026-08-01 with the manual-outbound cadence-restart un-stacking. Sampled once PER
+  // CONTEXT, because the whole point of this referee is that two of the lanes keep a lead's place
+  // in the follow-up sequence only when the cadence is still running for that same context, and the
+  // third keeps the place of ANY cadence that has not completed. A single sample would hide exactly
+  // that. PROBE: the context and the clock are held fixed per sample, so the only thing that can
+  // move the fingerprint between a baseline and a candidate run is the arbitration itself, applied
+  // to the cadence this lead actually has stored.
+  for (const context of [
+    "manual_quote_delivered",
+    "finance_docs",
+    "seller_photo_details_request",
+    "buyer_interest"
+  ] as const) {
+    add(`manualCadenceRestart:${context}`, conv => {
+      const existing = conv?.followUpCadence ?? null;
+      if (!existing || typeof reducer.decideManualCadenceRestart !== "function") return undefined;
+      const decision = reducer.decideManualCadenceRestart({
+        context, // PROBE
+        existing,
+        nowIso: "2026-01-01T00:00:00.000Z" // PROBE — fixed so only arbitration moves the answer
+      });
+      return {
+        keepPlaceInLine: decision.keepPlaceInLine,
+        stepIndex: decision.stepIndex,
+        keptNextDueAt: decision.keepNextDueAt != null,
+        carryExistingRecord: decision.carryExistingRecord,
+        scheduleMuted: decision.scheduleMuted,
+        divergence: decision.divergence
+      };
+    }, ["decideManualCadenceRestart"]);
+  }
+
   return registry;
 }
 
