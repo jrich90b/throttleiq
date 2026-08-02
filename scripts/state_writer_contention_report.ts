@@ -55,8 +55,10 @@ lines.push(
 lines.push("");
 lines.push("A WRITER is an independent place that sets this state (adjacent writes collapse — they run");
 lines.push("in sequence and cannot fight). It counts as refereed when a `decide*`/`resolve*` call sits");
-lines.push("within 40 lines above it. `decideFinanceDeclinedCadence` (PR #398) is the worked example:");
-lines.push("two writers wanted the cadence, so one referee now says which wins and both ask it.");
+lines.push("within 40 lines above it — or a call to an `apply*` that both consults such a referee AND");
+lines.push("writes this same field, which is where every un-stacking so far actually put the");
+lines.push("arbitration. `decideFinanceDeclinedCadence` (PR #398) is the worked example: two writers");
+lines.push("wanted the cadence, so one referee now says which wins and both ask it.");
 lines.push("");
 lines.push("| Field | Writers | Unrefereed | Files | Raw writes |");
 lines.push("| --- | --- | --- | --- | --- |");
