@@ -3404,16 +3404,24 @@ export function decideFinanceDeclinedCadence(
 // arbitrated between them, so a change to one silently left the other three behind — exactly the
 // shape that produced PR #398 (two writers of `followUpCadence` disagreeing 37 seconds apart).
 //
-// TWO REAL DIVERGENCES this referee makes VISIBLE rather than papering over. Both are preserved
-// exactly as they behave in production today; neither is "fixed" here, because a cleanup must not
-// smuggle in a behavior change:
+// DIVERGENCE 1 — RESTARTING A STOPPED CADENCE. **Joe ruled 2026-08-01: make it match.**
+//      The three watch sites blank `followUpCadence` before calling startFollowUpCadence, because
+//      that function refuses to overwrite a cadence whose status is already "active" or "stopped".
+//      The soft-visit site did NOT blank it, so on a STOPPED cadence its restart quietly no-op'd:
+//      a customer who said "I'll be there Saturday" got no cadence, therefore no day-before
+//      "still planning to stop by?" reminder and no follow-up after the visit day. That was a real
+//      customer-facing miss, and it is now fixed — soft visits revive a stopped cadence too.
 //
-//   1. RESTARTING A STOPPED CADENCE. The three watch sites blank `followUpCadence` before calling
-//      startFollowUpCadence, because that function refuses to overwrite a cadence whose status is
-//      already "active" or "stopped". The soft-visit site does NOT blank it, so on a STOPPED
-//      cadence its startFollowUpCadence call quietly no-ops and the customer's stated visit never
-//      gets a quiet window. That is very likely a latent bug, and it is now one line
-//      (`clearStoppedCadenceFirst`) instead of an absence nobody could see. Flagged for Joe.
+//      ONE CARVE-OUT, and it is not optional. `setFollowUpMode(conv, "manual_handoff")` STOPS the
+//      cadence on purpose: "a handed-off lead must not keep an ACTIVE customer cadence — otherwise
+//      it can auto-text the customer mid-handoff (audited contradiction class)". The watch sites
+//      escape that because they flip the mode to `holding_inventory` first; the soft-visit site
+//      deliberately PRESERVES `manual_handoff` (see the guard right after its call). So a literal
+//      "match the watch paths" would leave a human-owned thread carrying a live automated cadence —
+//      re-creating the exact contradiction that invariant exists to prevent. `paused_indefinite`
+//      is excluded for the same reason: someone deliberately said stop.
+//      Net: soft visits now revive a stopped cadence EXCEPT on a human-owned or deliberately
+//      paused thread. Fail direction of the carve-out is safe — it only ever means FEWER touches.
 //   2. THE INVITE BUDGET. Only the soft-visit site resets scheduleInviteCount/scheduleMuted — a
 //      fresh visit commitment re-opens the "what time works?" budget. The watch sites leave it
 //      alone. Deliberate, and now stated.
@@ -3435,6 +3443,11 @@ export type CadenceQuietInput = {
   trigger: CadenceQuietTrigger;
   /** Current `followUpCadence.status`. Absent/blank = there is no cadence at all. */
   cadenceStatus?: string | null;
+  /**
+   * Current `followUp.mode`. Only consulted for a soft visit, and only to REFUSE a revival on a
+   * thread a human owns or that was deliberately paused — never to start one.
+   */
+  followUpMode?: string | null;
   /** Caller-supplied pause reason; falls back to the trigger's own default. */
   reason?: string | null;
 };
@@ -3458,27 +3471,42 @@ const CADENCE_QUIET_DEFAULT_REASON: Record<CadenceQuietTrigger, string> = {
   soft_visit_window: "soft_visit_window"
 };
 
+/**
+ * Modes where the automated cadence must NOT be revived: a human owns the thread, or someone
+ * deliberately stopped the chase. Reviving either would re-create the contradiction
+ * `setFollowUpMode` guards against (handoff + active cadence = auto-texting mid-handoff).
+ */
+const CADENCE_REVIVAL_BLOCKING_MODES = new Set(["manual_handoff", "paused_indefinite"]);
+
 export function decideCadenceQuietWindow(input: CadenceQuietInput): CadenceQuietDecision {
   const status = String(input.cadenceStatus ?? "").trim().toLowerCase();
   const missingOrStopped = !status || status === "stopped";
   const isSoftVisit = input.trigger === "soft_visit_window";
+  const mode = String(input.followUpMode ?? "").trim().toLowerCase();
+  // Only the soft-visit path consults the mode. The watch paths flip the mode to
+  // `holding_inventory` themselves before quieting, so there is no handoff left to contradict.
+  const revivalBlocked = isSoftVisit && CADENCE_REVIVAL_BLOCKING_MODES.has(mode);
+  const restartCadence = missingOrStopped && !revivalBlocked;
   const reason =
     String(input.reason ?? "").trim() ||
     CADENCE_QUIET_DEFAULT_REASON[input.trigger] ||
     CADENCE_QUIET_DEFAULT_REASON.inventory_watch_alert;
 
   return {
-    restartCadence: missingOrStopped,
-    // Divergence (1) above: the soft-visit path never blanked a stopped cadence, so its restart
-    // is a no-op on exactly that state. Preserved as-is.
-    clearStoppedCadenceFirst: missingOrStopped && !isSoftVisit,
+    restartCadence,
+    // Joe 2026-08-01: soft visits now blank a stopped cadence like the watch paths do, so the
+    // revival actually takes. Moves in lockstep with restartCadence — a restart that cannot
+    // overwrite the stopped cadence is the silent no-op this ruling exists to kill.
+    clearStoppedCadenceFirst: restartCadence,
     quiet: true,
     reason,
     // Divergence (2) above: only a fresh visit commitment re-opens the invite budget.
     resetScheduleInvites: isSoftVisit,
-    why: missingOrStopped
-      ? `no live cadence to quiet — restart first, then hold for ${reason}`
-      : `hold the running cadence for ${reason}`
+    why: revivalBlocked
+      ? `a ${mode} thread keeps its stopped cadence — never revive a chase a human or a deliberate pause ended`
+      : missingOrStopped
+        ? `no live cadence to quiet — restart first, then hold for ${reason}`
+        : `hold the running cadence for ${reason}`
   };
 }
 

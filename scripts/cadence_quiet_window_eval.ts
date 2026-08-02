@@ -19,13 +19,22 @@
  * Ambiguity therefore quiets. The one thing it must never do is resurrect a cadence that is not
  * running: the quiet is applied only to a cadence that is genuinely active.
  *
- * TWO DIVERGENCES PINNED AS-IS (preserved by the un-stacking, NOT fixed by it):
- *   1. Only the watch paths blank a STOPPED cadence before restarting it. Without that blank,
- *      startFollowUpCadence refuses to overwrite a stopped cadence, so the soft-visit path leaves
- *      such a lead with no quiet window at all. Very likely a latent bug — flagged for Joe, and
- *      pinned here so it cannot drift further while the question is open.
- *   2. Only the soft-visit path re-opens the schedule-invite budget (a fresh visit commitment
- *      earns a fresh "what time works?"). The watch paths leave the counter alone.
+ * THE STOPPED-CADENCE RULING (Joe, 2026-08-01: "make it match the other paths").
+ * A customer who said "I'll be there Saturday" on a STOPPED cadence used to get nothing: the
+ * soft-visit path never blanked the stopped cadence, so startFollowUpCadence refused to overwrite
+ * it and silently no-op'd — no day-before "still planning to stop by?" reminder, and no follow-up
+ * after the visit day. Soft visits now revive a stopped cadence exactly like the watch paths do.
+ *
+ * ONE CARVE-OUT, and it is load-bearing. `setFollowUpMode(conv, "manual_handoff")` stops the
+ * cadence on purpose — "a handed-off lead must not keep an ACTIVE customer cadence — otherwise it
+ * can auto-text the customer mid-handoff (audited contradiction class)". The watch paths escape
+ * that by flipping the mode to `holding_inventory` first; the soft-visit path deliberately
+ * PRESERVES `manual_handoff`. So a literal match would leave a human-owned thread carrying a live
+ * automated cadence. `manual_handoff` and `paused_indefinite` therefore keep their stopped cadence.
+ * Fail direction of the carve-out is safe: it only ever means FEWER proactive touches.
+ *
+ * STILL DIVERGENT BY DESIGN: only the soft-visit path re-opens the schedule-invite budget (a fresh
+ * visit commitment earns a fresh "what time works?"). The watch paths leave the counter alone.
  *
  * Behavior assertions only — no source-text pins (see eval_source_pin_ratchet:eval).
  *
@@ -66,6 +75,7 @@ const eq = (actual: unknown, expected: unknown, message: string) => {
 type Row = {
   trigger: "inventory_watch_alert" | "soft_visit_window";
   status: string | null;
+  mode?: string | null;
   restartCadence: boolean;
   clearStoppedCadenceFirst: boolean;
   resetScheduleInvites: boolean;
@@ -104,11 +114,11 @@ const TABLE: Row[] = [
     trigger: "soft_visit_window",
     status: null,
     restartCadence: true,
-    clearStoppedCadenceFirst: false,
+    clearStoppedCadenceFirst: true,
     resetScheduleInvites: true,
     note: "soft visit with no cadence — start one, then hold it"
   },
-  // DIVERGENCE (1): stopped cadence. Only the watch paths blank it first.
+  // THE RULING: a stopped cadence is now revived by BOTH triggers.
   {
     trigger: "inventory_watch_alert",
     status: "stopped",
@@ -121,9 +131,48 @@ const TABLE: Row[] = [
     trigger: "soft_visit_window",
     status: "stopped",
     restartCadence: true,
+    clearStoppedCadenceFirst: true,
+    resetScheduleInvites: true,
+    note: "soft visit on a stopped cadence — now revives it too (Joe 8/1: make it match)"
+  },
+  // THE CARVE-OUT: never revive a chase a human owns or a deliberate pause ended.
+  {
+    trigger: "soft_visit_window",
+    status: "stopped",
+    mode: "manual_handoff",
+    restartCadence: false,
     clearStoppedCadenceFirst: false,
     resetScheduleInvites: true,
-    note: "soft visit on a stopped cadence — does NOT blank it (preserved as-is; flagged for Joe)"
+    note: "soft visit on a HUMAN-OWNED thread — the stopped cadence stays stopped"
+  },
+  {
+    trigger: "soft_visit_window",
+    status: "stopped",
+    mode: "paused_indefinite",
+    restartCadence: false,
+    clearStoppedCadenceFirst: false,
+    resetScheduleInvites: true,
+    note: "soft visit on a deliberately paused thread — the stopped cadence stays stopped"
+  },
+  {
+    trigger: "soft_visit_window",
+    status: "stopped",
+    mode: "holding_inventory",
+    restartCadence: true,
+    clearStoppedCadenceFirst: true,
+    resetScheduleInvites: true,
+    note: "holding_inventory is NOT a block — a watch hold still earns the visit reminder"
+  },
+  // The carve-out is soft-visit only: the watch paths flip the mode themselves, so a handoff
+  // mode reaching them is already on its way to holding_inventory and must not block the revival.
+  {
+    trigger: "inventory_watch_alert",
+    status: "stopped",
+    mode: "manual_handoff",
+    restartCadence: true,
+    clearStoppedCadenceFirst: true,
+    resetScheduleInvites: false,
+    note: "watch alert ignores the mode — it sets holding_inventory itself before quieting"
   },
   // A completed cadence is neither running nor stopped: nothing restarts it, and the quiet is
   // applied only if it turns out to be active (it is not), so this lead is left alone.
@@ -138,7 +187,11 @@ const TABLE: Row[] = [
 ];
 
 for (const row of TABLE) {
-  const decision = decideCadenceQuietWindow({ trigger: row.trigger, cadenceStatus: row.status });
+  const decision = decideCadenceQuietWindow({
+    trigger: row.trigger,
+    cadenceStatus: row.status,
+    followUpMode: row.mode ?? null
+  });
   eq(decision.restartCadence, row.restartCadence, `${row.note}: restartCadence`);
   eq(
     decision.clearStoppedCadenceFirst,
@@ -268,15 +321,14 @@ for (const trigger of ["inventory_watch_alert", "soft_visit_window"] as const) {
   eq(conv.followUpCadence.pausedUntil, QUIET_UNTIL, `${trigger}: and immediately quiet`);
 }
 
-// DIVERGENCE (1), executed: a STOPPED cadence restarts on the watch path but not the soft-visit
-// path. Preserved exactly as production behaves today.
+// THE RULING, executed end-to-end: a STOPPED cadence is revived by BOTH triggers now.
 {
   const stopped = () => ({
     status: "stopped",
     kind: "standard",
     stepIndex: 2,
     anchorAt: "2026-07-20T14:00:00.000Z",
-    stopReason: "manual_handoff"
+    stopReason: "ack_after_soft_close"
   });
 
   const watchConv = mkConv(stopped());
@@ -293,6 +345,8 @@ for (const trigger of ["inventory_watch_alert", "soft_visit_window"] as const) {
   );
   eq(watchConv.followUpCadence.pausedUntil, QUIET_UNTIL, "and quiets the revived cadence");
 
+  // THE FIX: this used to leave the lead stopped with no quiet window at all, so the customer
+  // never got the day-before "still planning to stop by?" reminder.
   const visitConv = mkConv(stopped());
   applyCadenceQuietWindow(visitConv, {
     trigger: "soft_visit_window",
@@ -302,14 +356,37 @@ for (const trigger of ["inventory_watch_alert", "soft_visit_window"] as const) {
   });
   eq(
     visitConv.followUpCadence.status,
-    "stopped",
-    "soft visit does NOT revive a stopped cadence — the pre-existing divergence, pinned not fixed"
+    "active",
+    "soft visit now revives a stopped cadence too (Joe 8/1)"
   );
   eq(
     visitConv.followUpCadence.pausedUntil,
-    undefined,
-    "so no quiet window is applied to it either"
+    QUIET_UNTIL,
+    "and holds it until the day-before reminder — the reminder the customer used to never get"
   );
+
+  // THE CARVE-OUT, executed: a human owns this thread, so the cadence stays dead. Reviving it
+  // would re-create the contradiction setFollowUpMode guards against (auto-texting mid-handoff).
+  for (const mode of ["manual_handoff", "paused_indefinite"]) {
+    const guarded = mkConv(stopped());
+    guarded.followUp = { mode, updatedAt: ANCHOR };
+    applyCadenceQuietWindow(guarded, {
+      trigger: "soft_visit_window",
+      quietUntilIso: QUIET_UNTIL,
+      anchorAtIso: ANCHOR,
+      timeZone: TZ
+    });
+    eq(
+      guarded.followUpCadence.status,
+      "stopped",
+      `a ${mode} thread keeps its stopped cadence — no automated chase revived under a human`
+    );
+    eq(
+      guarded.followUpCadence.pausedUntil,
+      undefined,
+      `and no quiet window is written on the ${mode} thread`
+    );
+  }
 }
 
 // A CLOSED conversation is never resurrected: startFollowUpCadence refuses, and the quiet is only
