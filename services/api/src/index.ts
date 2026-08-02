@@ -372,7 +372,7 @@ import {
   parseThumbsDownNoteWithLLM
 } from "./domain/llmDraft.js";
 import {
-  decideDraftQualityGate,
+  decideDraftQualityGate, confirmDraftQualityHold,
   isDraftQualityJudgeEnabled,
   draftQualityJudgeShadowEnabled,
   draftQualityHoldClassOnly,
@@ -5435,15 +5435,15 @@ async function gateDraftBeforePublish(
         lead: conv.lead,
         channel
       }));
-    const decision = decideDraftQualityGate({ enabled: true, verdict });
-    // First live slice = HOLD-class only (the backtest showed it catches real fabrications/wrong-
-    // answers; needs_regenerate is noisier + has no auto-regenerate yet). When STEP 3 (auto-
-    // regenerate) lands, set DRAFT_QUALITY_HOLD_CLASS_ONLY=0 to also act on regenerate.
-    const holdOnly = draftQualityHoldClassOnly();
-    const acts = decision.action === "hold" || (decision.action === "regenerate" && !holdOnly);
-    if (decision.live && acts) {
-      return { held: true, reason: `live_${decision.action}`, judgeReason: verdict?.reason };
-    }
+    // Confirm-on-block (8/2: 6 of 77 flips, all @0.9) — a pass stands at today's cost; a block
+    // must win a vote. Rationale + fail direction: confirmDraftQualityHold (draftQualityGate.ts).
+    const confirmed = await confirmDraftQualityHold({
+      firstVerdict: verdict,
+      resample: () => judgeDraftQualityWithLLM({ draft: candidate, inbound, history: buildDraftJudgeHistory(conv, 8), lead: conv.lead, channel }),
+      samples: cadenceQualityConsensusSamples(),
+      holdClassOnly: draftQualityHoldClassOnly()
+    });
+    if (confirmed.held) return confirmed;
   } catch {
     // Fail-open: a judge error must never block a draft (fail toward publishing).
   }

@@ -83,6 +83,41 @@ export function decideDraftQualityGate(input: {
   return { action, live: !!input.enabled, reason: input.enabled ? `live_${action}` : `shadow_would_${action}` };
 }
 
+// === CONFIRM-ON-BLOCK for the live draft gate (2026-08-02) =======================================
+// Measured: two identical runs of the production judge over 77 staff-approved drafts agreed on 92%
+// of items — but 6 flipped the LIVE gate outcome between runs, every one at 0.9 confidence (the
+// same Street Glide availability answer judged needs_regenerate@0.9, then good@0.9). An 8% coin
+// flip on a gate that holds real drafts (DRAFT_QUALITY_JUDGE_ENABLED=1 on the box).
+//
+// Unlike the cadence gate (which votes on every enforce decision), a PASSING first verdict here
+// stands untouched: this gate sits on the live reply path where judge latency delays a customer
+// answer, and its documented fail direction is already OPEN — passing is the state it falls to on
+// any error. Only a would-BLOCK verdict pays for up to two more samples, and must keep a strict
+// majority to hold the draft. The flip class gets re-checked; everything else costs exactly what
+// it costs today.
+import { confirmBlockWithVote, type BlockConfirmation } from "./cadenceQualityConsensus.js";
+
+export async function confirmDraftQualityHold(args: {
+  firstVerdict: DraftQualityVerdict | null;
+  resample: () => Promise<DraftQualityVerdict | null>;
+  samples: number;
+  /** DRAFT_QUALITY_HOLD_CLASS_ONLY — the first live slice acts on hold only, not regenerate. */
+  holdClassOnly: boolean;
+}): Promise<{ held: false } | { held: true; reason: string; judgeReason?: string }> {
+  const wouldAct = (v: DraftQualityVerdict): boolean => {
+    const d = decideDraftQualityGate({ enabled: true, verdict: v });
+    return d.live && (d.action === "hold" || (d.action === "regenerate" && !args.holdClassOnly));
+  };
+  const confirmation: BlockConfirmation<DraftQualityVerdict> = await confirmBlockWithVote(
+    args.firstVerdict,
+    args.resample,
+    { samples: args.samples, blocks: wouldAct }
+  );
+  if (!confirmation.block || !confirmation.verdict) return { held: false };
+  const d = decideDraftQualityGate({ enabled: true, verdict: confirmation.verdict });
+  return { held: true, reason: `live_${d.action}`, judgeReason: confirmation.verdict.reason };
+}
+
 // --- No-response gate (sibling of the draft gate) ---------------------------------
 // The agent stayed SILENT on a customer turn; the judge says whether that was a miss. This
 // gate maps the verdict to an action. STEP 1 is shadow: it only logs what it WOULD do.
