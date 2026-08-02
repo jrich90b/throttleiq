@@ -87,7 +87,15 @@ const CEILINGS: Ceiling[] = [
     // console's sold button) replaced by applySoldCloseout (conversationStore) / decideSoldCloseout
     // (routeStateReducer), including the five-line hold-match condition each carried inline.
     // Landed at 71_447 after rebasing onto #440/#442.
-    max: 71_447,
+    // 71_447 -> 71_439. The burned-cadence-ladder heal did not fit, which is this guard working as
+    // designed: both reconcile-tick cadence realign loops (mis-deferred long_term + the new burned
+    // ladder) moved to domain/cadenceRealignSweep.ts as one shared walk, so the caller records
+    // outcomes instead of hand-rolling the same loop twice. Net -7 WITH the new heal included.
+    // REBASE NOTE (ROUTINE_CONTRACT rule 3, the #418 trap): this branch was authored against a
+    // 71_443 main and proposed 71_436. #449 (-1) and #450 (+4) merged first, so the honest
+    // integrated count is 71_439 — taking 71_436 would have failed the build on merge, and
+    // "fixing" that by raising the ceiling later is exactly what this guard exists to stop.
+    max: 71_439,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

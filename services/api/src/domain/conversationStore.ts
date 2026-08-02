@@ -12,6 +12,7 @@ import {
   decideAppointmentTeardown,
   decideManualCadenceRestart,
   isRealReplyProvider,
+  decideBurnedCadenceLadderRealign,
   type AppointmentConfirmLane,
   type AppointmentConfirmRecordDecision,
   type CadenceQuietTrigger,
@@ -4719,6 +4720,51 @@ export function realignMisdeferredLongTermCadence(
     scheduleInviteCount: 0,
     scheduleMuted: false
   };
+  conv.updatedAt = nowIso();
+  scheduleSave();
+  return true;
+}
+
+/**
+ * Heal a follow-up ladder that was BURNED ahead of the calendar — the residue of the pre-86e3ec79
+ * bug where every staff manual send consumed a ladder step (Dennis Daffron +16303628805: ten texts
+ * on day one marched stepIndex 0 -> 9 of 13, parking his next touch on Sept 5). That fix stopped
+ * new damage; it could not repair records already burned, and a burned ladder looks perfectly
+ * healthy — it is just pointing at a rung the calendar has not earned.
+ *
+ * The JUDGEMENT lives in decideBurnedCadenceLadderRealign (routeStateReducer) — followUpCadence is
+ * a contended field and gets one referee, not another inline writer. This function only applies
+ * the verdict: clamp the step back onto the earned rung and recompute nextDueAt from the anchor,
+ * exactly as resumeFollowUpCadence does.
+ *
+ * Sends nothing. The lead simply rejoins its normal schedule, where the cadence value gate and the
+ * no-repeat guards still decide whether that touch has anything worth saying. Idempotent.
+ */
+export function realignBurnedCadenceLadder(
+  conv: Conversation,
+  timeZone: string,
+  now: Date = new Date()
+): boolean {
+  const cad = conv?.followUpCadence;
+  if (!cad) return false;
+  const anchorMs = Date.parse(String(cad.anchorAt ?? ""));
+  const pausedUntilMs = Date.parse(String(cad.pausedUntil ?? ""));
+  const decision = decideBurnedCadenceLadderRealign({
+    status: cad.status,
+    kind: cad.kind,
+    stepIndex: cad.stepIndex,
+    ageDays: Number.isFinite(anchorMs) ? Math.floor((now.getTime() - anchorMs) / 86_400_000) : null,
+    ladderOffsets: FOLLOW_UP_DAY_OFFSETS,
+    conversationClosed: !!(conv.closedAt || conv.closedReason || (conv as any).sale?.soldAt),
+    pausedInFuture: Number.isFinite(pausedUntilMs) && pausedUntilMs > now.getTime()
+  });
+  if (!decision.realign || decision.stepIndex === undefined) return false;
+  cad.stepIndex = decision.stepIndex;
+  cad.nextDueAt = computeFollowUpDueAt(
+    String(cad.anchorAt),
+    FOLLOW_UP_DAY_OFFSETS[Math.min(decision.stepIndex, FOLLOW_UP_DAY_OFFSETS.length - 1)],
+    timeZone
+  );
   conv.updatedAt = nowIso();
   scheduleSave();
   return true;

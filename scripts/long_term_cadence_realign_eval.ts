@@ -105,8 +105,14 @@ assert.equal(
 n += 7;
 
 // --- Source guard: the cron reconcile runs the heal. ---
+// 2026-08-02: this heal's inline loop moved OUT of index.ts into domain/cadenceRealignSweep.ts,
+// which now walks the conversations once for BOTH realign heals (this one + the burned-ladder
+// heal). The cron still runs it, one call further down — so the guard follows it there rather
+// than pinning a call site that deliberately no longer exists.
+// That the sweep actually RUNS this heal is proven by behavior in cadence_manual_advance:eval
+// (it calls sweepCadenceRealigns and asserts the returned outcomes), so no source pin for it here.
 const api = fs.readFileSync("services/api/src/index.ts", "utf8");
-assert.match(api, /realignMisdeferredLongTermCadence\(conv, cfg\.timezone, now\)/, "reconcile runs the heal");
+assert.match(api, /sweepCadenceRealigns\(convs, cfg\.timezone, now\)/, "reconcile runs the realign sweep");
 assert.match(api, /long_term_cadence_realigned_to_standard/, "route outcome recorded");
 n += 2;
 

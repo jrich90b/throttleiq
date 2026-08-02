@@ -571,6 +571,7 @@ import {
   leadShowedMoneyInterest, leadFinanceDeclined,
   vehicleLabelForOfferMatch
 } from "./domain/nationalOffers.js";
+import { sweepCadenceRealigns } from "./domain/cadenceRealignSweep.js";
 import {
   resolveInterestUnitPriceDrop,
   commitInterestUnitPriceDropFire
@@ -962,7 +963,6 @@ import {
   healPendingIncomingNotifyTodoDuplicates,
   healStaleHeldFlag,
   isSchedulingLeakConversation,
-  realignMisdeferredLongTermCadence,
   realignOverEagerEngagedCadence,
   cadenceTempoCappedToLongTerm,
   inferTodoTaskClass,
@@ -32449,25 +32449,18 @@ async function processDueFollowUpsUnlocked() {
       recordRouteOutcome("manual", "stuck_agent_task_reaped", { taskId });
     }
   }
-  // Cadence re-align: a lead wrongly deferred to a long_term (months-out) first touch when its
-  // structured purchase timeframe actually resolves to the STANDARD day-1 ramp (Richard Tait, 6/25:
-  // a "3-12 Months" marketplace lead pushed ~3 months out by the old inline threshold). Heal the
-  // never-contacted ones so their initial nurture fires now, not in 3 months. Capped per tick.
-  let cadenceRealigned = 0;
-  for (const conv of convs) {
-    if (cadenceRealigned >= 25) break;
-    if (realignMisdeferredLongTermCadence(conv, cfg.timezone, now)) {
-      saveConversation(conv);
-      cadenceRealigned += 1;
-      recordRouteOutcome("manual", "long_term_cadence_realigned_to_standard", {
-        convId: conv.id,
-        leadKey: conv.leadKey,
-        purchaseTimeframe: conv.lead?.purchaseTimeframe ?? null
-      });
-    }
+  // Cadence realign sweeps (domain/cadenceRealignSweep.ts): mis-deferred long_term first touches
+  // (Richard Tait 6/25) and burned ladders sitting on a rung the calendar never earned (Dennis
+  // Daffron +16303628805 — manual sends used to consume steps, parking him on Sept 5). Both heals
+  // only move a cadence back onto its correct rung; neither sends anything.
+  const realignSweep = sweepCadenceRealigns(convs, cfg.timezone, now);
+  for (const r of realignSweep.longTermRealigned) recordRouteOutcome("manual", "long_term_cadence_realigned_to_standard", r);
+  for (const r of realignSweep.burnedLaddersHealed) recordRouteOutcome("manual", "burned_cadence_ladder_realigned", r);
+  if (realignSweep.longTermRealigned.length > 0) {
+    console.log(`[state-reconcile] re-aligned ${realignSweep.longTermRealigned.length} mis-deferred long_term cadence(s) to standard`);
   }
-  if (cadenceRealigned > 0) {
-    console.log(`[state-reconcile] re-aligned ${cadenceRealigned} mis-deferred long_term cadence(s) to standard`);
+  if (realignSweep.burnedLaddersHealed.length > 0) {
+    console.log(`[state-reconcile] re-aligned ${realignSweep.burnedLaddersHealed.length} burned cadence ladder(s) onto the earned rung`);
   }
   // Cadence tempo cap (the mirror): a lead bumped to the aggressive "engaged" tempo whose STRUCTURED
   // purchase timeframe is actually 4+ months out (Joe, 2026-07-16: Zachary +17169013675 — "4-6 Months",

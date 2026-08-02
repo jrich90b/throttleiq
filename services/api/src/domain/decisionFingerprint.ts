@@ -78,6 +78,13 @@ function str(value: unknown): string | undefined {
  * that needs this turn's customer text is not sampleable from the store and is out of scope —
  * un-stacking targets STATE arbitration, not comprehension.
  */
+/**
+ * The standard/engaged follow-up ladder, for SAMPLING only. Mirrors FOLLOW_UP_DAY_OFFSETS in
+ * conversationStore, which this import-free module cannot pull in (that file loads the store).
+ * Drift is guarded: cadence_manual_advance:eval asserts the two stay equal.
+ */
+export const SAMPLING_FOLLOW_UP_DAY_OFFSETS = [1, 2, 3, 5, 7, 10, 15, 21, 30, 45, 60, 90, 120];
+
 export function buildDecisionRegistry(reducer: any): SampledDecision[] {
   const registry: SampledDecision[] = [];
 
@@ -129,6 +136,31 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
       cadenceStatus: conv?.followUpCadence?.status ?? null
     });
   }, ["decideFinanceDeclinedCadence"]);
+
+  // Added 2026-08-02 with the burned-cadence-ladder heal (Dennis Daffron +16303628805). Sampled as:
+  // given this conversation's CURRENT ladder position and how long the cadence has actually been
+  // running, is that a rung the calendar has earned?
+  //
+  // The ladder is a LOCAL copy on purpose: this module is deliberately import-free so it can load
+  // against a BASELINE checkout (hence `reducer: any` + the typeof guards), and the real constant
+  // lives in conversationStore, which loads the store on import. A copy is the trade — so
+  // cadence_manual_advance:eval asserts SAMPLING_FOLLOW_UP_DAY_OFFSETS still equals
+  // FOLLOW_UP_DAY_OFFSETS, and fails the build if they ever drift apart.
+  add("burnedCadenceLadderRealign", (conv, clock) => {
+    const cad = conv?.followUpCadence;
+    if (!cad || typeof reducer.decideBurnedCadenceLadderRealign !== "function") return undefined;
+    const anchorMs = Date.parse(String(cad.anchorAt ?? ""));
+    const pausedUntilMs = Date.parse(String(cad.pausedUntil ?? ""));
+    return reducer.decideBurnedCadenceLadderRealign({
+      status: cad.status ?? null,
+      kind: cad.kind ?? null,
+      stepIndex: cad.stepIndex ?? null,
+      ageDays: Number.isFinite(anchorMs) ? Math.floor((clock.nowMs - anchorMs) / 86_400_000) : null,
+      ladderOffsets: SAMPLING_FOLLOW_UP_DAY_OFFSETS,
+      conversationClosed: !!(conv?.closedAt || conv?.closedReason || conv?.sale?.soldAt),
+      pausedInFuture: Number.isFinite(pausedUntilMs) && pausedUntilMs > clock.nowMs
+    });
+  }, ["decideBurnedCadenceLadderRealign"]);
 
   // Added 2026-08-01 with the draftHeld un-stacking. Sampled as: given this conversation's CURRENT
   // hold, would a real reply release it? That is the question the six former clear-sites disagreed on.

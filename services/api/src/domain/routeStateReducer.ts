@@ -4377,6 +4377,73 @@ export type CadenceStartDecision = {
   why: string;
 };
 
+// === Burned-ladder realign referee (2026-08-02) =================================================
+// Dennis Daffron (+16303628805), a day-one hot out-of-state buyer choosing between dealers: staff
+// texted him ten times on 2026-07-23 and every manual send consumed a follow-up ladder step, so
+// stepIndex marched 0 -> 9 of 13 in a single afternoon. Step 9 is the 45-day offset, which parked
+// his next automated touch on Sept 5 — right after he told us "I should have a decision soon."
+//
+// The SOURCE bug is already fixed: 86e3ec79 (Joe ruling 2026-07-23) removed the manual-send
+// advance hook, so no new cadence can be burned this way. What that fix could not do is repair the
+// records already damaged, and a burned ladder is invisible — the cadence looks perfectly healthy,
+// it is just pointing at a step the calendar has not earned. Measured on the live store 2026-08-02:
+// 2 of 66 active standard/engaged cadences are still stranded (+16303628805, +16813891971), both at
+// step 9 with a September due date.
+//
+// The referee is the ONE place that judges whether a ladder position is consistent with elapsed
+// time. It only ever moves a cadence BACK onto the rung the calendar has actually reached; it never
+// sends anything, and the value gate + no-repeat guards still decide whether that touch has content
+// worth sending. Scoped to the standard/engaged ladders — long_term and post_sale cadences sit
+// months out BY DESIGN and must never be "corrected".
+//
+// FAIL DIRECTION: an unrealigned cadence is a live lead parked months out (the damage); a
+// realigned one is a lead back on its normal schedule, still value-gated. Tolerance of +1 keeps the
+// currently-pending step legitimate, so a healthy ladder is never touched, and the result is
+// idempotent — after a realign the position is consistent and the referee declines to act again.
+
+export type BurnedLadderInput = {
+  status?: string | null;
+  kind?: string | null;
+  stepIndex?: number | null;
+  /** Whole days elapsed since the cadence anchor. Null/negative = no usable anchor. */
+  ageDays?: number | null;
+  /** The ladder this cadence kind runs on (FOLLOW_UP_DAY_OFFSETS for standard/engaged). */
+  ladderOffsets: number[];
+  conversationClosed: boolean;
+  /** A live pause (manual-outbound breather, event hold) owns the schedule — leave it alone. */
+  pausedInFuture: boolean;
+};
+
+export type BurnedLadderDecision = {
+  realign: boolean;
+  /** The rung elapsed time actually justifies. Only set when realign is true. */
+  stepIndex?: number;
+  why: string;
+};
+
+export function decideBurnedCadenceLadderRealign(input: BurnedLadderInput): BurnedLadderDecision {
+  if (String(input?.status ?? "").trim() !== "active") return { realign: false, why: "cadence_not_active" };
+  const kind = String(input?.kind ?? "").trim().toLowerCase();
+  // long_term / post_sale ladders legitimately run months out — never "correct" them.
+  if (kind !== "standard" && kind !== "engaged") return { realign: false, why: "kind_not_ladder_scoped" };
+  if (input.conversationClosed) return { realign: false, why: "conversation_closed" };
+  if (input.pausedInFuture) return { realign: false, why: "pause_owns_the_schedule" };
+  const offsets = Array.isArray(input.ladderOffsets) ? input.ladderOffsets : [];
+  if (!offsets.length) return { realign: false, why: "no_ladder" };
+  // Explicit null/undefined check FIRST: Number(null) is 0, which would read a missing anchor as
+  // "day zero" and clamp a live cadence to the first rung — due immediately. Never infer an anchor.
+  if (input.ageDays === null || input.ageDays === undefined) return { realign: false, why: "no_anchor" };
+  const ageDays = Number(input.ageDays);
+  if (!Number.isFinite(ageDays) || ageDays < 0) return { realign: false, why: "no_anchor" };
+  const stepIndex = Number(input.stepIndex ?? 0);
+  if (!Number.isFinite(stepIndex) || stepIndex <= 0) return { realign: false, why: "ladder_at_start" };
+  // The rung elapsed time has actually earned: every offset that has already come due.
+  const justified = offsets.filter(offset => Number(offset) <= ageDays).length;
+  // +1 tolerance: the step currently PENDING is legitimately one ahead of what has fired.
+  if (stepIndex <= justified + 1) return { realign: false, why: "ladder_consistent_with_elapsed_time" };
+  return { realign: true, stepIndex: justified, why: "ladder_burned_ahead_of_elapsed_time" };
+}
+
 export function decideCadenceStart(input: CadenceStartInput): CadenceStartDecision {
   const lane = String(input.lane ?? "").trim();
   const conversationClosed =
