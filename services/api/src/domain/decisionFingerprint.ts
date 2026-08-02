@@ -453,7 +453,11 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
       }
       const decision = reducer.decideAppointmentBookingRecord({
         lane, // PROBE
-        reschedulePending: conv.appointment?.reschedulePending
+        reschedulePending: conv.appointment?.reschedulePending,
+        // PROBE, fixed true: `divergence` only names the matched-slot gap when there IS a slot to
+        // record, so holding this at true keeps that field live in the fingerprint. It is a
+        // caller-side fact, never stored state, so pinning it changes nothing about what varies.
+        hasMatchedSlot: true
       });
       return {
         record: decision.record,
