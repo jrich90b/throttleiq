@@ -125,7 +125,11 @@ const CEILINGS: Ceiling[] = [
     // NOTE (rebase, 2026-08-02): PR #438 was authored against a 16_723 ceiling and proposed 16_617.
     // Main had since ratcheted to 16_597, so landing 16_617 verbatim would have RAISED the ceiling
     // and undone two reductions — the #418 trap. Reconciled to the real post-merge count.
-    max: 16_491,
+    // 16_491 -> 16_476. The walk-in `state` coercion was a 17-line inline ternary chain; it is now
+    // coerceWalkInOutcomeState in walkInInventoryWant.ts, set-based like its want sibling. That
+    // paid for the three return-visit fields (Ed Szulist +17167255404) with room to spare — this
+    // file was sitting EXACTLY on its ceiling, so the slot work had to fund itself.
+    max: 16_476,
     note: "every parser prompt + JSON schema; second-largest and on the same trajectory"
   }
 ];

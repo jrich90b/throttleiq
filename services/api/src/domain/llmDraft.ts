@@ -31,7 +31,11 @@ import {
   WALK_IN_OUTCOME_PARSER_JSON_SCHEMA,
   buildWalkInOutcomePrompt,
   coerceUnmetInventoryWant,
-  type UnmetInventoryWant
+  coerceWalkInOutcomeState,
+  coerceWalkInReturnVisit,
+  type UnmetInventoryWant,
+  type WalkInOutcomeState,
+  type WalkInReturnVisit
 } from "./walkInInventoryWant.js";
 import { decideDraftModelArm, type DraftModelArm } from "./routeStateReducer.js";
 import { passesModelRelevanceGuard } from "./turnUnderstandingAuthority.js";
@@ -3129,22 +3133,7 @@ function isIncomingInventoryFaqQuestion(textRaw: string | null | undefined): boo
 }
 
 export type WalkInOutcomeParse = {
-  state:
-    | "none"
-    | "deal_finalizing"
-    | "deposit_left"
-    | "sold_delivered"
-    | "hold_requested"
-    | "hold_cleared"
-    | "cosigner_required"
-    | "test_ride_completed"
-    | "decision_pending"
-    | "outside_financing_pending"
-    | "down_payment_pending"
-    | "trade_equity_pending"
-    | "timing_defer_window"
-    | "household_approval_pending"
-    | "docs_or_insurance_pending";
+  state: WalkInOutcomeState;
   explicitState: boolean;
   testRideRequested: boolean;
   weatherSensitive: boolean;
@@ -3159,6 +3148,15 @@ export type WalkInOutcomeParse = {
   wantIsSatisfiableFromNote: boolean;
   /** Confidence in the want classification only, independent of `confidence`. */
   wantConfidence?: number;
+  /**
+   * Is the CUSTOMER coming back in, and did the note name the day (walkInInventoryWant.ts,
+   * Ed Szulist +17167255404)? Distinct from `followUpWindowText`, which is when WE reach out.
+   */
+  returnVisit: WalkInReturnVisit;
+  /** The day phrase exactly as the note wrote it — resolved by the caller, never by the model. */
+  returnDayText?: string | null;
+  /** Confidence in the return-visit classification only, independent of `confidence`. */
+  returnVisitConfidence?: number;
   confidence?: number;
 };
 
@@ -13093,7 +13091,8 @@ export async function parseWalkInOutcomeWithLLM(args: {
       schemaName: "walkin_outcome_parser",
       schema: WALK_IN_OUTCOME_PARSER_JSON_SCHEMA,
       // 220 -> 280: the three inventory-want fields ride in the same object.
-      maxOutputTokens: 280,
+      // 280 -> 340: so do the three return-visit fields.
+      maxOutputTokens: 340,
       debugTag: "llm-walkin-outcome-parser",
       debug
     });
@@ -13104,33 +13103,15 @@ export async function parseWalkInOutcomeWithLLM(args: {
     (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
   if (!parsed) return null;
 
-  const stateRaw = String(parsed.state ?? "").toLowerCase();
-  const state: WalkInOutcomeParse["state"] =
-    stateRaw === "deal_finalizing" ||
-    stateRaw === "deposit_left" ||
-    stateRaw === "sold_delivered" ||
-    stateRaw === "hold_requested" ||
-    stateRaw === "hold_cleared" ||
-    stateRaw === "cosigner_required" ||
-    stateRaw === "test_ride_completed" ||
-    stateRaw === "decision_pending" ||
-    stateRaw === "outside_financing_pending" ||
-    stateRaw === "down_payment_pending" ||
-    stateRaw === "trade_equity_pending" ||
-    stateRaw === "timing_defer_window" ||
-    stateRaw === "household_approval_pending" ||
-    stateRaw === "docs_or_insurance_pending"
-      ? stateRaw
-      : "none";
+  const state = coerceWalkInOutcomeState(parsed.state);
   const confidence =
     typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
       ? Math.max(0, Math.min(1, parsed.confidence))
       : undefined;
 
-  const wantConfidence =
-    typeof parsed.want_confidence === "number" && Number.isFinite(parsed.want_confidence)
-      ? Math.max(0, Math.min(1, parsed.want_confidence))
-      : undefined;
+  const clamp01 = (v: unknown): number | undefined =>
+    typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : undefined;
+  const wantConfidence = clamp01(parsed.want_confidence);
 
   return {
     state,
@@ -13142,6 +13123,10 @@ export async function parseWalkInOutcomeWithLLM(args: {
     unmetInventoryWant: coerceUnmetInventoryWant(parsed.unmet_inventory_want),
     wantIsSatisfiableFromNote: !!parsed.want_is_satisfiable_from_note,
     wantConfidence,
+    // Unknown/absent coerces to "none" — the clause then renders "", i.e. today's tail.
+    returnVisit: coerceWalkInReturnVisit(parsed.return_visit),
+    returnDayText: cleanOptionalString(parsed.return_day_text),
+    returnVisitConfidence: clamp01(parsed.return_visit_confidence),
     confidence
   };
 }

@@ -12,13 +12,20 @@ import fs from "node:fs";
 import {
   isInternalNoteFollowUpTopic,
   buildWalkInSpecRecapClause,
+  buildWalkInReturnVisitTail,
+  formatWalkInReturnDayLabel,
+  formatWalkInFamilyLabel,
   describeWalkInNoteProvenance
 } from "../services/api/src/domain/walkInFollowUpTopic.ts";
+import { referencesFamilyOnlyInText } from "../services/api/src/domain/modelFamily.ts";
+import { parseRequestedDateOnly } from "../services/api/src/domain/conversationStore.ts";
 import { buildIntentJudgePrompt } from "./intent_handled_audit.ts";
 import { hasAdfFinanceApplicationContext } from "../services/api/src/domain/workflowRegressionGuards.ts";
 import {
   buildWalkInOutcomePrompt,
   coerceUnmetInventoryWant,
+  coerceWalkInReturnVisit,
+  coerceWalkInOutcomeState,
   extractWatchDirectiveSegment,
   hasWatchIntentPhrase
 } from "../services/api/src/domain/walkInInventoryWant.ts";
@@ -407,4 +414,154 @@ assert.ok(
   "the dark arm must log what it WOULD have watched, or the flip has no evidence behind it"
 );
 
-console.log("PASS walk-in internal-note follow-up topic guard eval (+ slot-only spec recap, TLP finance-context guard, judge provenance)");
+// --- The committed return day (Ed Szulist +17167255404, 2026-08-01) ---------------------------
+// The Traffic Log Pro note named the day he was walking in on; the draft said "I'll follow up
+// shortly with next steps" and Stone rewrote it by hand to ask for a time window. Same law as the
+// spec recap above: the clause is built from parsed SLOTS, never the note prose.
+const ED_TLP_NOTE =
+  "COMING BACK NXT WEEK TUESDAY AUGUST 4TH TO TEST RIDE A FEW DIFFERENT SPORTSTERS (Step 5)";
+const ED_ASOF = "2026-08-01T18:20:05.402Z"; // the production turn's clock, injected — never Date.now()
+const ED_TZ = "America/New_York";
+
+// The day resolves through the SAME parser the scheduling lane uses, and renders as a label.
+assert.equal(
+  formatWalkInReturnDayLabel(parseRequestedDateOnly("Tuesday August 4th", ED_TZ), ED_TZ, ED_ASOF),
+  "Tuesday, Aug 4",
+  "Ed's logged return day resolves and renders"
+);
+
+// THE PRODUCTION TURN: what the first text back should have said.
+const edTail = buildWalkInReturnVisitTail({
+  ackSentence: "Thanks again for your time.",
+  returnVisit: "committed_day",
+  confidence: 0.95,
+  confidenceMin: 0.8,
+  dayLabel: "Tuesday, Aug 4",
+  familyLabel: formatWalkInFamilyLabel(referencesFamilyOnlyInText(ED_TLP_NOTE)),
+  testRide: true
+});
+assert.equal(
+  edTail,
+  "Thanks again for your time. What time works best Tuesday, Aug 4? I'll have a few Sportsters ready for you.",
+  "+17167255404: the committed day is said back and the open question is asked"
+);
+// Pin the SHIPPED draft as the defect, so it cannot quietly return.
+assert.notEqual(
+  edTail,
+  "Thanks again for your time. I'll follow up shortly with next steps.",
+  "the generic promise is the bug, not the fallback for this note"
+);
+
+// FAIL-CLOSED MATRIX — every one of these is today's behavior (an empty clause → generic tail).
+const base = {
+  ackSentence: "Thanks again for your time.",
+  returnVisit: "committed_day",
+  confidence: 0.95,
+  confidenceMin: 0.8,
+  dayLabel: "Tuesday, Aug 4",
+  familyLabel: "Sportsters",
+  testRide: true
+};
+assert.equal(buildWalkInReturnVisitTail({ ...base, returnVisit: "tentative" }), "", "no day named => nothing to ask");
+assert.equal(buildWalkInReturnVisitTail({ ...base, returnVisit: "none" }), "", "no return commitment => silent");
+assert.equal(
+  buildWalkInReturnVisitTail({ ...base, returnVisit: "committed_day_and_time" }),
+  "",
+  "day AND time already settled => never ask a customer for a time they gave us"
+);
+assert.equal(buildWalkInReturnVisitTail({ ...base, confidence: 0.7 }), "", "under the confidence floor => silent");
+assert.equal(buildWalkInReturnVisitTail({ ...base, confidence: null }), "", "no confidence => silent");
+assert.equal(buildWalkInReturnVisitTail({ ...base, dayLabel: "" }), "", "a day that did not resolve => silent");
+// The family phrase is optional; the ask is not.
+assert.equal(
+  buildWalkInReturnVisitTail({ ...base, familyLabel: "" }),
+  "Thanks again for your time. What time works best Tuesday, Aug 4? I'll make sure we're ready for you.",
+  "an unmapped family drops the phrase rather than inventing a name"
+);
+
+// THE DATE WINDOW. parseRequestedDateOnly ROLLS A BARE DATE FORWARD, so re-reading "August 4th"
+// in September resolves to next year — a draft must never invite someone to a visit 11 months out.
+assert.equal(
+  formatWalkInReturnDayLabel(parseRequestedDateOnly("August 4th", ED_TZ), ED_TZ, "2026-09-01T12:00:00.000Z"),
+  "",
+  "a rolled-forward date beyond the window renders nothing"
+);
+assert.equal(
+  formatWalkInReturnDayLabel({ year: 2026, month: 7, day: 30 }, ED_TZ, ED_ASOF),
+  "",
+  "a day already past renders nothing"
+);
+assert.equal(formatWalkInReturnDayLabel(null, ED_TZ, ED_ASOF), "", "an unresolvable day renders nothing");
+assert.equal(
+  formatWalkInReturnDayLabel({ year: 2026, month: 8, day: 1 }, ED_TZ, ED_ASOF),
+  "Saturday, Aug 1",
+  "today itself still counts as a return day"
+);
+
+// THE FAMILY FALLBACK IS THE EXISTING CATALOG RESOLVER, NOT A NEW REGEX. This is the whole reason
+// the note produced no model: the walk-in path's own hint is word-bounded and the note says the
+// PLURAL. Widening that regex would push a family into modelLabel, which feeds the watch referee.
+assert.equal(referencesFamilyOnlyInText(ED_TLP_NOTE.toLowerCase()), "sportster", "the family resolver reads the plural");
+assert.equal(/\b(?:sportster)\b/i.test("SPORTSTERS"), false, "the plural is why the model hint missed — do NOT widen that regex");
+assert.equal(formatWalkInFamilyLabel("sportster"), "Sportsters");
+assert.equal(formatWalkInFamilyLabel("nightster"), "", "an unmapped family gets no invented label");
+assert.equal(formatWalkInFamilyLabel(null), "");
+
+// The clause obeys the law of the module it lives in.
+assert.equal(isInternalNoteFollowUpTopic(edTail), false, "the return-visit clause passes the internal-note guard");
+assert.doesNotMatch(edTail, /\$\s?\d/, "never a dollar figure");
+assert.doesNotMatch(edTail, /\b(?:his|him|her|hers)\b/i, "never third-person staff phrasing");
+
+// COERCION FAILS CLOSED — an unknown lane must read as "say nothing", never as the speaking one.
+for (const bad of ["", null, undefined, "yes", "committedDay", "committed", 1, {}]) {
+  assert.equal(coerceWalkInReturnVisit(bad as unknown), "none", `unrecognized return_visit => none: ${String(bad)}`);
+}
+assert.equal(coerceWalkInReturnVisit("committed_day"), "committed_day");
+assert.equal(coerceWalkInReturnVisit(" Tentative "), "tentative", "trimmed and lowercased like its want sibling");
+assert.equal(coerceWalkInReturnVisit(" COMMITTED_DAY "), "committed_day", "case/whitespace is normalized, not rejected");
+
+// The state coercion moved out of llmDraft.ts (it paid for the new fields). Same fifteen strings.
+for (const state of ["deposit_left", "sold_delivered", "docs_or_insurance_pending", "hold_cleared"]) {
+  assert.equal(coerceWalkInOutcomeState(state), state, `state survives the move: ${state}`);
+}
+for (const bad of ["", null, "dealFinalizing", "unknown", 7]) {
+  assert.equal(coerceWalkInOutcomeState(bad as unknown), "none", `unrecognized state => none: ${String(bad)}`);
+}
+
+// THE PROMPT MUST ACTUALLY TEACH THE SLOTS, and teach the trap: most dates in these notes are OURS.
+const edPrompt = buildWalkInOutcomePrompt({ text: ED_TLP_NOTE, historyLines: [] });
+for (const token of ["return_visit", "return_day_text", "return_visit_confidence", "committed_day_and_time", "tentative"]) {
+  assert.ok(edPrompt.includes(token), `the prompt teaches ${token}`);
+}
+assert.ok(edPrompt.includes(ED_TLP_NOTE), "the production turn rides as a few-shot");
+assert.match(edPrompt, /projected ship date/i, "an OUR-date negative is taught (a ship date is not a visit)");
+assert.match(edPrompt, /never in follow_up_window_text/i, "the day must not double-book with the follow-up window");
+assert.match(edPrompt, /A date that is OURS/i, "the prompt states the trap in so many words");
+
+// WIRING, pinned as ORDERING rather than source syntax. Each index is checked against -1 first:
+// a missing needle makes indexOf return -1, and -1 < everything, so an unguarded ordering
+// assertion passes while guarding nothing (the failure mode that cost a sibling eval its grip).
+const specRecapAt = sendgrid.indexOf("buildWalkInSpecRecapClause(");
+const returnTailAt = sendgrid.indexOf("buildWalkInReturnVisitTail(");
+const confidenceFloorAt = sendgrid.indexOf("WALKIN_RETURN_VISIT_CONFIDENCE_MIN");
+const addendumAt = sendgrid.indexOf("const buildWalkInAddendum");
+for (const [label, at] of [
+  ["buildWalkInSpecRecapClause", specRecapAt],
+  ["buildWalkInReturnVisitTail", returnTailAt],
+  ["WALKIN_RETURN_VISIT_CONFIDENCE_MIN", confidenceFloorAt],
+  ["buildWalkInAddendum", addendumAt]
+] as [string, number][]) {
+  assert.notEqual(at, -1, `the walk-in lane must still contain ${label}`);
+}
+assert.ok(specRecapAt < returnTailAt, "the return-visit tail is decided after the spec recap it supersedes");
+assert.ok(returnTailAt < confidenceFloorAt, "the builder call carries its own confidence floor");
+assert.ok(confidenceFloorAt < addendumAt, "the clause is settled before the addendum decides whether to add a test-ride ask");
+// The slot must NOT be gated on walkInOutcomeAccepted — that gate needs an explicit_state from the
+// state enum, which a "coming back to ride" note never has, so it would never fire.
+assert.doesNotMatch(
+  sendgrid.slice(returnTailAt - 600, returnTailAt),
+  /walkInOutcomeAccepted[\s\S]{0,80}returnVisit/,
+  "the return-visit slot must not ride on walkInOutcomeAccepted — unreachable for this note class"
+);
+
+console.log("PASS walk-in internal-note follow-up topic guard eval (+ slot-only spec recap, committed return day, TLP finance-context guard, judge provenance)");

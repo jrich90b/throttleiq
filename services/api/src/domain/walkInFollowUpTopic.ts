@@ -58,6 +58,130 @@ export function buildWalkInSpecRecapClause(input: {
 }
 
 /**
+ * Say the committed return day back, and ask the one thing the note left open — the time.
+ *
+ * Ed Szulist (+17167255404, 2026-08-01). The Traffic Log Pro note said "COMING BACK NXT WEEK
+ * TUESDAY AUGUST 4TH TO TEST RIDE A FEW DIFFERENT SPORTSTERS (Step 5)" and the whole first text
+ * back was "Thanks again for your time. I'll follow up shortly with next steps." Stone rewrote it
+ * by hand to ask what time window worked on the 4th, which is exactly what the recap above would
+ * have done if it had a slot to speak from: "Sportsters" is a FAMILY, not a model, so
+ * `buildWalkInSpecRecapClause` had no model, no year range and no condition, and returned "".
+ *
+ * Same law as its sibling: built ONLY from parsed slots (`return_visit` / `return_day_text`, plus
+ * the catalog-backed family resolver), never from the note prose. The day itself is resolved by
+ * the CALLER through `parseRequestedDateOnly` and handed in already split — this module owns copy,
+ * not clocks, and takes `asOfIso` rather than reading one so the eval can pin the production turn.
+ *
+ * FAIL DIRECTION: returns "" for every lane but `committed_day`, for a confidence under the floor,
+ * for a day that did not resolve, and for a day already past or absurdly far out — and "" is
+ * byte-for-byte today's tail. The clause promises nothing: no booking, no watch, no callback. It
+ * asks a question about a day the salesperson wrote down. Pinned by
+ * walkin_internal_note_topic_guard:eval.
+ */
+const RETURN_DAY_MAX_AHEAD_DAYS = 45;
+
+const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const WEEKDAY_LABELS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+/** The dealer-local Y/M/D of an instant, without dragging a date library in. */
+function localDateParts(iso: string, timeZone: string): { year: number; month: number; day: number } | null {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return null;
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).formatToParts(at);
+    const pick = (t: string) => Number(parts.find(p => p.type === t)?.value ?? NaN);
+    const year = pick("year");
+    const month = pick("month");
+    const day = pick("day");
+    return Number.isFinite(year) && Number.isFinite(month) && Number.isFinite(day)
+      ? { year, month, day }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * "Tuesday, Aug 4" for a resolved return day — or "" when it is in the past or more than
+ * ~6 weeks out. The window matters because `parseRequestedDateOnly` ROLLS A BARE DATE FORWARD:
+ * re-reading "August 4th" in September resolves to next year, and a draft must never invite
+ * someone to a visit eleven months away.
+ */
+export function formatWalkInReturnDayLabel(
+  parts: { year: number; month: number; day: number } | null | undefined,
+  timeZone: string,
+  asOfIso: string
+): string {
+  if (!parts) return "";
+  const { year, month, day } = parts;
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return "";
+  if (month < 1 || month > 12 || day < 1 || day > 31) return "";
+  const today = localDateParts(asOfIso, timeZone);
+  if (!today) return "";
+  const target = Date.UTC(year, month - 1, day);
+  const from = Date.UTC(today.year, today.month - 1, today.day);
+  const aheadDays = Math.round((target - from) / 86_400_000);
+  if (aheadDays < 0 || aheadDays > RETURN_DAY_MAX_AHEAD_DAYS) return "";
+  const weekday = WEEKDAY_LABELS[new Date(target).getUTCDay()] ?? "";
+  const monthLabel = MONTH_LABELS[month - 1] ?? "";
+  if (!weekday || !monthLabel) return "";
+  return `${weekday}, ${monthLabel} ${day}`;
+}
+
+/**
+ * A customer-facing plural for a FAMILY key ("sportster" → "Sportsters").
+ *
+ * The key comes from `referencesFamilyOnlyInText` (modelFamily.ts), which is catalog-backed and
+ * already eval-pinned — deliberately reused instead of widening the walk-in path's own
+ * `\bsportster\b` model hint, whose word boundary is what missed the plural in the first place.
+ * Widening THAT would push a family label into `modelLabel`, which feeds the watch referee and the
+ * spec recap: a far bigger blast radius than this sentence. An unmapped family returns "" and the
+ * clause simply drops the phrase rather than inventing a name for it.
+ */
+export function formatWalkInFamilyLabel(familyKey: string | null | undefined): string {
+  const key = String(familyKey ?? "").trim().toLowerCase();
+  const labels: { [k: string]: string } = {
+    sportster: "Sportsters",
+    trike: "trikes",
+    softail: "Softails",
+    touring: "touring bikes"
+  };
+  return labels[key] ?? "";
+}
+
+export function buildWalkInReturnVisitTail(input: {
+  ackSentence: string;
+  returnVisit: string;
+  confidence?: number | null;
+  confidenceMin: number;
+  dayLabel?: string | null;
+  familyLabel?: string | null;
+  testRide?: boolean | null;
+}): string {
+  if (input.returnVisit !== "committed_day") return "";
+  const confidence = typeof input.confidence === "number" ? input.confidence : 0;
+  if (!(confidence >= input.confidenceMin)) return "";
+  const day = String(input.dayLabel ?? "").trim();
+  if (!day) return "";
+  const ack = String(input.ackSentence ?? "").trim();
+  const family = String(input.familyLabel ?? "").trim();
+  // "what time works best" is the existing soft-visit invite's wording, already clean against the
+  // banned-phrase and voice-charter guards — a second phrasing for the same ask would just be a
+  // new surface for them to police.
+  const ask = `What time works best ${day}?`;
+  const close =
+    family && input.testRide
+      ? `I'll have a few ${family} ready for you.`
+      : "I'll make sure we're ready for you.";
+  return [ack, ask, close].filter(Boolean).join(" ");
+}
+
+/**
  * Tell the intent judge WHO WROTE the inbound it is about to grade.
  *
  * WHY (2026-07-31): the agent side of this module already knows a Traffic Log Pro walk-in
