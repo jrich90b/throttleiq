@@ -40,6 +40,52 @@ export function hasManualPromiseHint(text: string): boolean {
   return firstPersonFuture && deliverableVerb;
 }
 
+/**
+ * Did a PERSON write these words? (Scott Hartrich +17167130279, operator-reported
+ * 2026-08-02: "Why did this create a call back".)
+ *
+ * The arm's premise is a STAFF-TYPED promise, but in suggest mode every agent draft
+ * is released through the very same `/conversations/:id/send` endpoint a salesperson
+ * types into, so the sent text alone cannot tell the two apart. The pending draft can:
+ * a send whose text still matches the agent's own pending draft is that draft approved
+ * as-is — the agent's boilerplate, not a person committing to something. The agent
+ * writing "I'll follow up with the numbers we discussed" is describing what the agent
+ * already does on its cadence; turning that into a dated task for the salesperson (and
+ * holding the cadence past its due day) is noise, and it fired on 8 of the 20 promise
+ * tasks on the box.
+ *
+ * This is the same comparison `shouldStampHumanOutboundActor` already uses to decide
+ * whether to stamp a human actor on the outbound — one fact, asked twice.
+ *
+ * Two things we deliberately do NOT count as a human edit, because we appended them
+ * ourselves on the way out: whitespace reflow (formatSmsLayout) and the compliance
+ * opt-out footer (ensureInitialSmsOptOutFooter, which fires on exactly the first-touch
+ * ADF sends this arm sees most).
+ *
+ * Fail direction: only the PROVABLE unedited-draft case is suppressed. No draft in
+ * play, an edited draft, or an unreadable body all return true and leave today's
+ * behaviour untouched, so an unrecognised shape can never swallow a real staff promise.
+ *
+ * Caller note: pass the draft body captured BEFORE the send — finalizeDraftAsSent
+ * rewrites the pending draft message in place, so by reconcile time `draft.body`
+ * already holds the sent text and would compare equal to everything.
+ */
+export function isHumanAuthoredOutbound(args: {
+  pendingDraftBody?: string | null;
+  sentBody: string;
+}): boolean {
+  const normalize = (value: unknown) =>
+    String(value ?? "")
+      .replace(/\s+/g, " ")
+      .replace(/\s*Reply STOP to opt out\.?\s*$/i, "")
+      .trim();
+  const sent = normalize(args.sentBody);
+  if (!sent) return true;
+  const draft = normalize(args.pendingDraftBody);
+  if (!draft) return true;
+  return draft !== sent;
+}
+
 const ACTIONABLE_KINDS = new Set(["send_info", "check_and_get_back", "prepare_something", "other"]);
 
 /** True for promise kinds this arm owns (others belong to the watch/appointment arms or are non-promises). */

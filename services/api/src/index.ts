@@ -78,7 +78,8 @@ import {
 } from "./domain/voiceNextStep.js";
 import {
   decideManualOutboundPromise,
-  hasManualPromiseHint
+  hasManualPromiseHint,
+  isHumanAuthoredOutbound
 } from "./domain/manualOutboundPromise.js";
 import { applyTradeVehicleRepair, type TradeVehicleRepairRequest } from "./domain/tradeVehicleRepair.js";
 import { buildPipelineSummary } from "./domain/pipelineFunnel.js";
@@ -53032,7 +53033,10 @@ app.post("/conversations/:id/send", async (req, res) => {
       process.env.MANUAL_PROMISE_NEXT_STEP_ENABLED !== "0" &&
       process.env.LLM_ENABLED === "1" &&
       !!process.env.OPENAI_API_KEY &&
-      hasManualPromiseHint(text)
+      hasManualPromiseHint(text) &&
+      // TYPED BY STAFF is load-bearing — an unedited agent draft released here is the agent's
+      // copy, not a person's commitment. draftTextForLog = the draft body BEFORE the send.
+      isHumanAuthoredOutbound({ pendingDraftBody: draftTextForLog, sentBody: text })
     ) {
       const promiseSourceMessageId = opts?.sourceMessageId ? String(opts.sourceMessageId) : undefined;
       const promiseChannel = opts?.channel ?? null;
