@@ -33,6 +33,7 @@ import {
   findDeadCounters,
   typicalPeakOutboundPerHour,
   buildRevertPlan,
+  decideCanaryGate,
   DEFAULT_CANARY_THRESHOLDS,
   type CanaryCounters
 } from "../services/api/src/domain/canaryHealth.ts";
@@ -302,5 +303,65 @@ const CONVS = [
 ok(DEFAULT_CANARY_THRESHOLDS.maxIncreaseRatio >= 1.5, "the increase limit stays loose");
 ok(DEFAULT_CANARY_THRESHOLDS.minBaselineOutbound > 0, "there is always a minimum-traffic floor");
 ok(DEFAULT_CANARY_THRESHOLDS.runawayMinPerHour > 0, "and an absolute runaway floor");
+
+// =================================================================================================
+// THE DEPLOY GATE — "has the last behaviour deploy been judged, so another one may go out?"
+//
+// This is what makes the readiness loop's rate limit mechanical rather than a promise. Its ONLY
+// dangerous failure is opening when it should not: that launders an unwatched deploy as watched,
+// which is the same false-green the verdict table above exists to prevent. So every state that is
+// not a RECORDED HEALTHY blocks — including "we have never measured one", which is the state the
+// loop was actually in before this existed.
+// =================================================================================================
+{
+  const HOUR = 3_600_000;
+  const NOW = 1_754_000_000_000;
+  const pending = (over: Record<string, unknown> = {}) => ({
+    takenAtMs: NOW - 10 * HOUR,
+    windowMs: 48 * HOUR,
+    deployedSha: "abc1234def",
+    ...over
+  });
+
+  // --- a canary that is still running blocks -----------------------------------------------------
+  const open = decideCanaryGate({ pending: pending(), lastVerdictStatus: "healthy", nowMs: NOW });
+  eq(open.mayDeployBehaviour, false, "an OPEN canary blocks the next behaviour deploy");
+  eq(open.pendingReady, false, "...and is not yet ready to judge");
+  ok(open.minutesRemaining > 0, "...reporting how long is left");
+
+  // --- a window that has elapsed but was never judged still blocks --------------------------------
+  const ripe = decideCanaryGate({
+    pending: pending({ takenAtMs: NOW - 60 * HOUR }),
+    lastVerdictStatus: null,
+    nowMs: NOW
+  });
+  eq(ripe.mayDeployBehaviour, false, "an elapsed-but-unjudged canary still blocks");
+  eq(ripe.pendingReady, true, "...but is flagged ready so something comes back and judges it");
+  eq(ripe.minutesRemaining, 0, "...with no time left on the clock");
+
+  // --- only a recorded HEALTHY with nothing pending opens the gate --------------------------------
+  eq(
+    decideCanaryGate({ pending: null, lastVerdictStatus: "healthy", nowMs: NOW }).mayDeployBehaviour,
+    true,
+    "a judged HEALTHY with nothing pending is the ONE state that opens the gate"
+  );
+
+  // --- every other terminal state blocks ----------------------------------------------------------
+  eq(
+    decideCanaryGate({ pending: null, lastVerdictStatus: "regressed", nowMs: NOW }).mayDeployBehaviour,
+    false,
+    "a REGRESSED verdict blocks until it is dealt with"
+  );
+  eq(
+    decideCanaryGate({ pending: null, lastVerdictStatus: "unknown", nowMs: NOW }).mayDeployBehaviour,
+    false,
+    "UNKNOWN blocks — a run that concluded nothing is not a clean bill of health"
+  );
+  eq(
+    decideCanaryGate({ pending: null, lastVerdictStatus: null, nowMs: NOW }).mayDeployBehaviour,
+    false,
+    "NEVER MEASURED blocks — 'we have no record' must never round up to 'all clear'"
+  );
+}
 
 console.log(`PASS canary auto-revert — abstains rather than false-greens (${checks} checks)`);
