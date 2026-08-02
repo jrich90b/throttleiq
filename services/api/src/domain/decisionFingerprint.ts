@@ -321,6 +321,35 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     }, ["decideCadenceStart"]);
   }
 
+  // Added 2026-08-02 with the cadence-REVIVAL un-stacking. Sampled once PER TRIGGER, because the
+  // whole point of this referee is that the four triggers answer "which chases are dead enough to
+  // throw away?" differently — finance_no_contact alone buries a `completed` chase, and
+  // manual_hold_clear alone puts a surviving one back to work in place. A single sample would hide
+  // exactly those two divergences. PROBE: the trigger is held fixed per sample, so the only thing
+  // that can move the fingerprint between a baseline and a candidate run is the arbitration itself,
+  // applied to the cadence this lead actually has stored.
+  for (const trigger of [
+    "health_recovery_delay",
+    "customer_followup_deferral",
+    "finance_no_contact",
+    "manual_hold_clear"
+  ] as const) {
+    add(`cadenceRevival:${trigger}`, conv => {
+      if (typeof reducer.decideCadenceRevival !== "function") return undefined;
+      const decision = reducer.decideCadenceRevival({
+        trigger, // PROBE
+        hasCadence: Boolean(conv?.followUpCadence),
+        cadenceStatus: conv?.followUpCadence?.status ?? null
+      });
+      return {
+        replaceDeadCadence: decision.replaceDeadCadence,
+        startFresh: decision.startFresh,
+        reactivateInPlace: decision.reactivateInPlace,
+        divergence: decision.divergence
+      };
+    }, ["decideCadenceRevival"]);
+  }
+
   // Added 2026-08-02 with the appointment-CONFIRM un-stacking. Sampled once PER LANE, because the
   // whole point of this referee is that the slot-match lane answers `acknowledged` and the
   // reschedule latch differently from the two booked lanes — a single sample would hide exactly
