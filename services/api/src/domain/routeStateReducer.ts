@@ -4630,16 +4630,19 @@ export function decideAppointmentConfirmRecord(
 // the lists had drifted apart. They agree on status/whenText/whenIso/updatedAt/acknowledged and the
 // three booked-event ids. They disagree on two things:
 //
-//   DIVERGENCE 1 — the `reschedulePending` latch. The staff lane CLEARS it; the two customer lanes
-//     leave it standing. That latch is what routes a lead's NEXT message into the reschedule arm
-//     (pendingRescheduleCarriesTurnIntent, and the regen twin at index.ts ~55663). So a lead who was
-//     mid-reschedule and then books a new time through the public link stays flagged as owing a
-//     rebook: their next message carrying any time-ish word can be answered as "let's find you
-//     another time" for the appointment they JUST made. Two downstream guards already carry local
-//     armor against exactly this "confirmed AND reschedule-pending" contradiction (the stale-latch
-//     comments at index.ts ~55689 and ~62982). The already-ruled principle from the sibling referee
-//     is that a lane holding a REAL calendar event clears the latch — all three of these do — but
-//     it is PRESERVED EXACTLY here, because this is a cleanup and not a fix. Named on the decision.
+//   DIVERGENCE 1 — the `reschedulePending` latch. **FIXED 2026-08-02; all three lanes now clear
+//     it.** The staff lane always did; the two customer lanes left it standing. That latch is what
+//     routes a lead's NEXT message into the reschedule arm (pendingRescheduleCarriesTurnIntent, and
+//     the regen twin at index.ts ~55663), so a lead who was mid-reschedule and then booked a new
+//     time through the public link stayed flagged as owing a rebook: her next message carrying any
+//     time-ish word could be answered as "let's find you another time" for the appointment she JUST
+//     made. Two downstream guards already carried local armor against exactly this "confirmed AND
+//     reschedule-pending" contradiction (the stale-latch comments at index.ts ~55689 and ~62982),
+//     which is how we knew it had been hit. The principle was already settled by the sibling referee
+//     `decideAppointmentConfirmRecord`: a lane holding a REAL calendar event clears the latch, and
+//     "leave it standing" belongs to the provisional slot-match lane that has no event yet. All
+//     three of these hold an event. PR #455 preserved the split (a cleanup must not change an
+//     answer); this is the follow-up fix. Ruling 4 in the joe-autonomous-rulings ledger.
 //
 //   DIVERGENCE 2 — `matchedSlot`. The staff lane records the slot it booked; the two customer lanes
 //     do not, so their record cannot say which salesperson/calendar window was taken. Lower stakes
@@ -4670,6 +4673,8 @@ export type AppointmentBookingRecordInput = {
   lane: AppointmentBookingLane | string;
   /** The stored `appointment.reschedulePending` latch, exactly as it is right now. */
   reschedulePending?: boolean | null;
+  /** Does the caller HAVE a slot to record? Only used to name divergence 2 honestly. */
+  hasMatchedSlot?: boolean;
 };
 
 export type AppointmentBookingRecordDecision = {
@@ -4703,19 +4708,28 @@ export function decideAppointmentBookingRecord(
     // All three booked a real calendar event against a time the customer or the rep chose, so the
     // robotic "Reply YES to confirm" reminder would re-ask what was just settled.
     acknowledged: true,
-    clearReschedulePending: recognized && !customerDriven,
+    // RULED 2026-08-02 (divergence 1, FIXED — was: staff lane only). A booking lane that holds a
+    // REAL calendar event clears the latch; that principle was already settled by the sibling
+    // referee `decideAppointmentConfirmRecord`, which reserves "leave it standing" for the
+    // provisional slot-match lane that has no event yet. All three of these lanes hold an event.
+    // Leaving it standing let a lead who booked through the public link keep owing a rebook, so her
+    // next message with a time-ish word could be answered "let's find you another time" — for the
+    // appointment she had just made. Fail-direction agrees: clearing fails toward NOT raising a
+    // reschedule nobody asked for. See ruling 4 in the joe-autonomous-rulings ledger.
+    clearReschedulePending: recognized,
     recordMatchedSlot: recognized && !customerDriven,
-    // Divergence 1, named but NOT acted on — and only when the latch is actually standing, so the
-    // flag marks leads genuinely in the contradictory state rather than every customer booking.
+    // Divergence 2, still preserved and NOT acted on: only the staff lane records which slot it
+    // took. A breadcrumb, never asserted to a customer. Named only when a slot actually exists to
+    // record, so the flag marks a real gap rather than every customer booking.
     divergence:
-      recognized && customerDriven && latched
-        ? "customer_lane_booking_leaves_the_reschedule_latch_standing"
+      recognized && customerDriven && input.hasMatchedSlot === true
+        ? "customer_lane_booking_does_not_record_the_matched_slot"
         : null,
     why: !recognized
       ? `unrecognized appointment-booking lane "${lane}" — refused, nothing may be stamped`
       : customerDriven
-        ? `${lane}: the customer booked a real calendar event — their word is on file, but the ` +
-          "reschedule latch and the matched slot are left as-is"
+        ? `${lane}: the customer booked a real calendar event — their word is on file and the ` +
+          `reschedule latch is cleared${latched ? " (it was standing)" : ""}; the matched slot is not recorded`
         : `${lane}: a salesperson booked the lead in — latch cleared and the taken slot recorded`
   };
 }

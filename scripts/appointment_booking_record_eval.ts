@@ -12,20 +12,23 @@
  * The lists had drifted apart. This is the SIBLING question to appointment_confirm_record:eval,
  * which owns the three CONVERSATION-TURN lanes that stamp `confirmed`; these three are endpoints.
  *
- * THE DIVERGENCES, PINNED AS-IS (preserved by the un-stacking, NOT fixed by it):
+ * THE TWO DIVERGENCES the un-stacking found — one now FIXED, one still preserved:
  *
- *   1. The `reschedulePending` LATCH. The staff lane clears it; the two customer lanes leave it
- *      standing. That latch is what routes a lead's NEXT message into the reschedule arm, so a lead
- *      who was mid-reschedule and then books a new time through the public link stays flagged as
- *      owing a rebook — their next message carrying a time-ish word can be answered as "let's find
- *      you another time" for the appointment they just made. Blast radius measured 2026-08-02 on the
- *      live corpus: 13 of 800 leads carry the latch, and ZERO have ever booked through a customer
- *      lane (`bookedBy.channel === "public_booking"` is unused at this dealer today), so the
- *      divergence is real by rule and has never fired here. It matters for dealer #2, where the
- *      public booking link may well be switched on.
+ *   1. The `reschedulePending` LATCH — **FIXED 2026-08-02, all three lanes now clear it.** The
+ *      staff lane always did; the two customer lanes left it standing. That latch is what routes a
+ *      lead's NEXT message into the reschedule arm, so a lead who was mid-reschedule and then
+ *      booked a new time through the public link stayed flagged as owing a rebook — her next
+ *      message carrying a time-ish word could be answered as "let's find you another time" for the
+ *      appointment she just made. The principle was already settled by the sibling referee
+ *      `decideAppointmentConfirmRecord`: a lane holding a REAL calendar event clears the latch, and
+ *      "leave it standing" belongs to the provisional slot-match lane that has no event yet. All
+ *      three of these hold an event. Blast radius on the live corpus: 13 of 800 leads carry the
+ *      latch, and ZERO have ever booked through a customer lane (`bookedBy.channel ===
+ *      "public_booking"` is unused at this dealer today) — so this is a PORTABILITY fix that first
+ *      bites when a dealer switches the public booking link on. Ruling 4 in the rulings ledger.
  *
- *   2. `matchedSlot`. The staff lane records which salesperson/calendar window was taken; the two
- *      customer lanes do not.
+ *   2. `matchedSlot` — STILL PRESERVED. The staff lane records which salesperson/calendar window
+ *      was taken; the two customer lanes do not. A breadcrumb, never asserted to a customer.
  *
  * FAIL DIRECTION. Refusing to stamp is the SAFE answer: an unrecorded booking costs a re-ask, while
  * a wrong "confirmed" tells a customer they are on the calendar when nothing holds the slot. So an
@@ -139,48 +142,61 @@ ok(refused.record === false, "the applier reports the refusal");
 eq(untouched.appointment, before, "a refused lane must leave the stored record byte-identical");
 
 // ---------------------------------------------------------------------------------------------
-// 3. DIVERGENCE 1 — the reschedule latch. Staff clears it; the customer lanes leave it standing.
+// 3. DIVERGENCE 1, NOW FIXED — every lane that holds a real calendar event clears the latch.
 // ---------------------------------------------------------------------------------------------
-for (const lane of CUSTOMER_LANES) {
-  const d = decideAppointmentBookingRecord({ lane, reschedulePending: true });
-  ok(
-    d.clearReschedulePending === false,
-    `${lane}: PRESERVED divergence — a customer-driven booking leaves the reschedule latch alone`
-  );
-  eq(
-    d.divergence,
-    "customer_lane_booking_leaves_the_reschedule_latch_standing",
-    `${lane}: the preserved disagreement must be NAMED on the decision when the latch is standing`
-  );
-}
-{
-  const d = decideAppointmentBookingRecord({ lane: STAFF_LANE, reschedulePending: true });
-  ok(d.clearReschedulePending === true, "the staff console lane clears the reschedule latch");
-  ok(d.divergence === null, "the staff lane is the majority-of-one that clears — not the odd one out");
-}
-// The flag marks leads GENUINELY in the contradictory state, not every customer booking.
-for (const latch of [false, null, undefined]) {
-  for (const lane of CUSTOMER_LANES) {
-    const d = decideAppointmentBookingRecord({ lane, reschedulePending: latch as any });
+for (const lane of ALL_LANES) {
+  for (const latch of [true, false, null, undefined]) {
     ok(
-      d.divergence === null,
-      `${lane}: with no latch standing (${String(latch)}) there is nothing to diverge about`
+      decideAppointmentBookingRecord({ lane, reschedulePending: latch as any })
+        .clearReschedulePending === true,
+      `${lane}: a lane holding a real calendar event clears the latch (stored latch=${String(latch)})`
     );
   }
 }
+// The FIX stated as the failure it prevents: a lead mid-reschedule who books herself in must not
+// come out of it still owing a rebook, or her next message gets read as "move my appointment".
+{
+  const conv = latchedLead();
+  applyAppointmentBookingRecord(conv, bookingInput("public_link_booking") as any);
+  eq(
+    conv.appointment.reschedulePending,
+    false,
+    "a customer who books through the public link no longer owes a rebook — the bug this fixes"
+  );
+  eq(conv.appointment.status, "confirmed", "...and she is on the calendar");
+}
+// An unrecognized lane still authorizes nothing, the latch included.
+ok(
+  decideAppointmentBookingRecord({ lane: "made_up_lane", reschedulePending: true })
+    .clearReschedulePending === false,
+  "a refused lane may not clear the latch either"
+);
 
 // ---------------------------------------------------------------------------------------------
-// 4. DIVERGENCE 2 — matchedSlot. Staff records the slot taken; the customer lanes do not.
+// 4. DIVERGENCE 2, STILL PRESERVED — staff records the slot taken; the customer lanes do not.
 // ---------------------------------------------------------------------------------------------
 for (const lane of CUSTOMER_LANES) {
   ok(
     decideAppointmentBookingRecord({ lane }).recordMatchedSlot === false,
     `${lane}: PRESERVED divergence — a customer-driven booking does not record the matched slot`
   );
+  eq(
+    decideAppointmentBookingRecord({ lane, hasMatchedSlot: true }).divergence,
+    "customer_lane_booking_does_not_record_the_matched_slot",
+    `${lane}: the surviving disagreement is NAMED when there is actually a slot to record`
+  );
+  ok(
+    decideAppointmentBookingRecord({ lane, hasMatchedSlot: false }).divergence === null,
+    `${lane}: no slot passed means no gap to name`
+  );
 }
 ok(
-  decideAppointmentBookingRecord({ lane: STAFF_LANE }).recordMatchedSlot === true,
+  decideAppointmentBookingRecord({ lane: STAFF_LANE, hasMatchedSlot: true }).recordMatchedSlot === true,
   "the staff console lane records which slot it took"
+);
+ok(
+  decideAppointmentBookingRecord({ lane: STAFF_LANE, hasMatchedSlot: true }).divergence === null,
+  "the staff lane records the slot, so it is not the odd one out"
 );
 
 // ---------------------------------------------------------------------------------------------
@@ -217,9 +233,9 @@ for (const lane of CUSTOMER_LANES) {
   eq(appt.bookedSalespersonId, SLOT.salespersonId, `${lane}: the booked salesperson is stored`);
   eq(
     appt.reschedulePending,
-    true,
-    `${lane}: PRESERVED — the latch survives a customer-driven booking (this is the bug the ` +
-      "divergence names, pinned here so it cannot drift further while it is unruled)"
+    false,
+    `${lane}: FIXED — a customer who books herself in no longer owes a rebook, so her next ` +
+      'message is not read as "move my appointment"'
   );
   ok(
     appt.matchedSlot === undefined,
@@ -314,14 +330,18 @@ for (const lane of ALL_LANES) {
   const staffProjection = staffSample.sample(conv, clock) as any;
   const customerProjection = customerSample.sample(conv, clock) as any;
   ok(
+    staffProjection?.recordMatchedSlot === true && customerProjection?.recordMatchedSlot === false,
+    "the two samples project the SURVIVING disagreement — the harness can still see this referee move"
+  );
+  ok(
     staffProjection?.clearReschedulePending === true &&
-      customerProjection?.clearReschedulePending === false,
-    "the two samples project the disagreement itself — the harness can see this referee move"
+      customerProjection?.clearReschedulePending === true,
+    "...and both project the now-agreed latch answer, so a regression back to the split is visible"
   );
   eq(
     customerProjection?.divergence,
-    "customer_lane_booking_leaves_the_reschedule_latch_standing",
-    "the customer-lane sample carries the named divergence into the fingerprint"
+    "customer_lane_booking_does_not_record_the_matched_slot",
+    "the customer-lane sample carries the surviving divergence into the fingerprint"
   );
 }
 

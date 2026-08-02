@@ -5245,7 +5245,8 @@ export function applyAppointmentBookingRecord(
 ): AppointmentBookingRecordDecision {
   const decision = decideAppointmentBookingRecord({
     lane: input.lane,
-    reschedulePending: conv?.appointment?.reschedulePending ?? null
+    reschedulePending: conv?.appointment?.reschedulePending ?? null,
+    hasMatchedSlot: !!input.matchedSlot
   });
   if (!conv || !decision.record) return decision;
   conv.appointment = conv.appointment ?? { status: "none", updatedAt: nowIso() };
