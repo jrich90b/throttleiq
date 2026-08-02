@@ -25,9 +25,16 @@
  *
  *   2. All three lanes open the new cadence with the invite budget back at zero. On the two
  *      replacing lanes that means a customer muted for having already been asked three times
- *      "what time works for you?" becomes askable again the moment the chase is re-shaped. That
- *      one is fail-UNSAFE — it fails toward messaging — so the referee NAMES it as a divergence.
- *      Behaviour is unchanged; the name is where the ruling lands.
+ *      "what time works for you?" becomes askable again once the chase is re-shaped.
+ *
+ *      RULED CORRECT 2026-08-02 — see decideCadenceStart's comment for the full reasoning. In
+ *      short: the mute never silences a touch (it only softens that touch's content, so clearing
+ *      it cannot fail toward messaging); both replacing lanes produce a `post_sale`/`long_term`
+ *      cadence, and every schedule-invite path returns early on exactly those kinds, so the flag
+ *      is cleared into a state nothing reads; and the only way it ever surfaces is after the
+ *      customer has come BACK and been promoted to `engaged`, where asking them what time suits
+ *      is the right move. The divergence stays NAMED because the state is worth seeing — as a
+ *      known-and-accepted difference, not as work waiting to be done.
  *
  * FAIL DIRECTION. Refusing to start is the SAFE answer: a chase that never starts costs the lead
  * some nurture, while a chase started wrongly texts a customer who should have been left alone.
@@ -145,7 +152,7 @@ const activeCadence = (over: Record<string, unknown> = {}) => ({
   eq(closed.start, false, "deferred_long_term refuses on a closed conversation");
 }
 
-// --- DIVERGENCE 2: a replacing lane re-opens a MUTED invite budget ------------------------------
+// --- DIVERGENCE 2: a replacing lane re-opens a MUTED invite budget (ruled CORRECT, still named) --
 {
   const replacingAMutedChase = decideCadenceStart({
     lane: "deferred_long_term",
@@ -155,7 +162,7 @@ const activeCadence = (over: Record<string, unknown> = {}) => ({
   eq(
     replacingAMutedChase.divergence,
     "replacing_lane_reopens_a_muted_schedule_invite_budget",
-    "replacing a muted chase is NAMED as the fail-unsafe divergence"
+    "replacing a muted chase is NAMED as a divergence so the state stays visible"
   );
   eq(replacingAMutedChase.scheduleMuted, false, "...and today's behaviour is preserved: un-muted");
 
@@ -243,8 +250,9 @@ const activeCadence = (over: Record<string, unknown> = {}) => ({
   eq(live.followUpCadence.kind, "long_term", "the deferred touch takes the chase over");
   eq(live.followUpCadence.nextDueAt, LATER, "...due on the date the caller asked for");
   eq(live.followUpCadence.stepIndex, 0, "...re-anchored at step 0");
-  // Divergence 2 in the customer-visible form: the mute the lead had earned is gone.
-  eq(live.followUpCadence.scheduleMuted, false, "...and the earned mute is cleared (divergence 2)");
+  // Divergence 2: the mute is cleared. Ruled CORRECT — a long_term cadence never reaches the
+  // schedule-invite path anyway, and by the time one could, the customer has re-engaged.
+  eq(live.followUpCadence.scheduleMuted, false, "...and the invite budget re-opens (divergence 2)");
 }
 
 console.log(`cadence_start:eval OK — ${checks} checks`);

@@ -4071,9 +4071,25 @@ export function decideManualCadenceRestart(
 //   2. THE INVITE BUDGET GOES BACK TO ZERO. All three lanes open the new cadence at
 //      `scheduleInviteCount: 0, scheduleMuted: false`. On the two replacing lanes that means a
 //      customer who was muted for having already been asked three times "what time works for you?"
-//      becomes askable again the moment the chase is re-shaped. That one is fail-UNSAFE — it fails
-//      toward messaging — and it is named on the decision as `divergence` so the follow-up ruling
-//      has somewhere to land. Behaviour is UNCHANGED by this PR.
+//      becomes askable again once the chase is re-shaped.
+//
+//      RULED 2026-08-02 (readiness loop, hands-off mandate): this is CORRECT, not a defect, and
+//      the ruling is written here because the first reading of it was wrong and the next reader
+//      will reach for the same wrong fix. Three things had to be checked, and all three say leave
+//      it alone:
+//        - It adds NO messages. The mute never silences a touch; it swaps that touch's content
+//          from the schedule ask to a softer pool. So clearing it cannot fail toward messaging.
+//        - It is not even reachable on the lane that clears it. Both replacing lanes produce a
+//          cadence of kind `post_sale` or `long_term`, and every schedule-invite content path
+//          returns early on exactly those two kinds. The flag is cleared into a state nothing
+//          reads.
+//        - The only way it surfaces is later, when the engagement bump promotes a `long_term`
+//          chase to `engaged` — which happens because THE CUSTOMER CAME BACK. Asking a customer
+//          who has just re-engaged months later what time suits them is the right move, not a
+//          relapse. The mute means "ignored three asks in THIS chase", and a dated check-back
+//          starts a genuinely different one.
+//      The divergence is still NAMED on the decision, because the state is worth seeing — but it
+//      is named as a known-and-accepted difference, not as work waiting to be done.
 //
 //   3. THE CLOSED CHECK. Two lanes refuse on a closed conversation, post-sale does not (see 1).
 //
