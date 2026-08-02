@@ -43,6 +43,12 @@ export type FingerprintClock = {
 export type SampledDecision = {
   name: string;
   sample: (conv: any, clock: FingerprintClock) => unknown | undefined;
+  /**
+   * The reducer function(s) this sample exercises. Declared, not inferred — `decision_registry_
+   * coverage:eval` reads it to prove every referee is either sampled here or consciously classified
+   * as un-projectable. Inferring it by reflection would silently pass when a sample early-returns.
+   */
+  covers: string[];
 };
 
 export type ConversationFingerprint = {
@@ -75,17 +81,17 @@ function str(value: unknown): string | undefined {
 export function buildDecisionRegistry(reducer: any): SampledDecision[] {
   const registry: SampledDecision[] = [];
 
-  const add = (name: string, fn: SampledDecision["sample"]) => {
+  const add = (name: string, fn: SampledDecision["sample"], covers: string[] = []) => {
     // A referee that has not shipped yet simply is not sampled — that is correct on the BASELINE
     // side of a comparison, where the new function does not exist. It must never throw.
-    registry.push({ name, sample: fn });
+    registry.push({ name, sample: fn, covers });
   };
 
   add("staleBookedAppointmentDay", (conv, clock) => {
     const whenIso = str(conv?.appointment?.whenIso);
     if (!whenIso || typeof reducer.isStaleBookedAppointmentDay !== "function") return undefined;
     return reducer.isStaleBookedAppointmentDay({ whenIso, nowMs: clock.nowMs, timeZone: clock.timeZone });
-  });
+  }, ["isStaleBookedAppointmentDay"]);
 
   add("canAssertMissedAppointment", (conv, clock) => {
     const whenIso = str(conv?.appointment?.whenIso);
@@ -97,19 +103,19 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
       outcomePrimaryStatus: outcome.primaryStatus ?? null,
       outcomeLegacyStatus: outcome.status ?? null
     });
-  });
+  }, ["canAssertMissedAppointment"]);
 
   add("staleSoldAnnouncement", (conv, clock) => {
     const soldAtIso = str(conv?.sale?.soldAt);
     if (!soldAtIso || typeof reducer.isStaleSoldAnnouncement !== "function") return undefined;
     return reducer.isStaleSoldAnnouncement({ soldAtIso, nowMs: clock.nowMs });
-  });
+  }, ["isStaleSoldAnnouncement"]);
 
   add("internationalLeadPhone", conv => {
     const phone = str(conv?.lead?.phone) ?? str(conv?.id);
     if (!phone || typeof reducer.isInternationalLeadPhone !== "function") return undefined;
     return reducer.isInternationalLeadPhone(phone);
-  });
+  }, ["isInternationalLeadPhone"]);
 
   // Added 2026-08-01 with PR #398 — the worked example of an un-stacking referee.
   add("financeDeclinedCadence", conv => {
@@ -122,7 +128,7 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
       cadenceKind: conv?.followUpCadence?.kind ?? null,
       cadenceStatus: conv?.followUpCadence?.status ?? null
     });
-  });
+  }, ["decideFinanceDeclinedCadence"]);
 
   // Added 2026-08-01 with the draftHeld un-stacking. Sampled as: given this conversation's CURRENT
   // hold, would a real reply release it? That is the question the six former clear-sites disagreed on.
@@ -133,7 +139,71 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
       heldKind: held.heldKind ?? held.reason,
       event: "real_reply"
     });
-  });
+  }, ["decideHeldDraftRelease"]);
+
+  // ---------------------------------------------------------------------------------------------
+  // PROBED DECISIONS (added 2026-08-01, registry-deepening pass).
+  //
+  // Some referees mix STORED state with THIS TURN's inputs (what the customer just said, what the
+  // parser read). Those look un-sampleable, and the registry skipped them — which left the harness
+  // blind exactly where the next un-stackings will land.
+  //
+  // THE PROBE TECHNIQUE closes that gap: hold every turn-derived input at a FIXED, documented
+  // value and vary ONLY the stored state. The sample then answers a precise, deterministic
+  // question — "holding the customer's side constant, does this conversation's STATE still steer
+  // the decision the same way?" — which is exactly what un-stacking can break, and nothing else.
+  //
+  // A probe must never be mistaken for full coverage of its referee: it pins one row of that
+  // decision's table, chosen to be the row where state arbitration actually happens. The probe
+  // values are named inline so a future reader can see which row is pinned and add others.
+  // ---------------------------------------------------------------------------------------------
+
+  // Appointment state — the NEXT un-stacking target (23 unrefereed writers, the top of the queue).
+  // PROBE: staff clearly confirmed a requested time (pending request present, affirmative, no
+  // question mark). Everything that varies is stored appointment state, which is the whole point.
+  add("manualConfirmPendingAppointment", (conv, clock) => {
+    if (typeof reducer.decideManualConfirmPendingAppointment !== "function") return undefined;
+    const whenIso = str(conv?.appointment?.whenIso);
+    const whenMs = whenIso ? Date.parse(whenIso) : NaN;
+    return reducer.decideManualConfirmPendingAppointment({
+      hasPendingRequestText: true, // PROBE
+      hasAffirmativeAck: true, // PROBE
+      hasQuestionMark: false, // PROBE
+      hasBookedEvent: !!str(conv?.appointment?.bookedEventId),
+      existingBookedAppointmentIsPast:
+        Number.isFinite(whenMs) && whenMs < clock.nowMs - 3_600_000
+    });
+  }, ["decideManualConfirmPendingAppointment"]);
+
+  // A/B ARM ASSIGNMENT. Pure functions of an id — perfectly projectable, and uniquely dangerous to
+  // leave unsampled: an arm that silently re-buckets corrupts a live experiment's results with no
+  // error anywhere, and nothing else in the suite would notice.
+  add("cadenceInviteArm", conv => {
+    const id = str(conv?.id);
+    if (!id || typeof reducer.decideCadenceInviteArm !== "function") return undefined;
+    return reducer.decideCadenceInviteArm(id);
+  }, ["decideCadenceInviteArm"]);
+
+  add("draftModelArm", conv => {
+    const leadKey = str(conv?.leadKey) ?? str(conv?.id);
+    if (!leadKey || typeof reducer.decideDraftModelArm !== "function") return undefined;
+    return reducer.decideDraftModelArm(leadKey);
+  }, ["decideDraftModelArm"]);
+
+  // Closing a lead as international is a SIDE EFFECT on stored state (stop + close), driven by the
+  // stored phone. PROBE: an inbound SMS on twilio that has not been logged yet — the arm where the
+  // close actually fires.
+  add("internationalLeadTurn", conv => {
+    if (typeof reducer.decideInternationalLeadTurn !== "function") return undefined;
+    const phone = str(conv?.lead?.phone) ?? str(conv?.leadKey);
+    if (!phone) return undefined;
+    return reducer.decideInternationalLeadTurn({
+      provider: "twilio", // PROBE
+      channel: "sms", // PROBE
+      alreadyLogged: false, // PROBE
+      fromPhone: phone
+    });
+  }, ["decideInternationalLeadTurn"]);
 
   // Added 2026-08-01 with the followUpCadence quiet-window un-stacking. Sampled once PER TRIGGER,
   // because the point of this referee is that the two triggers answer the same question
@@ -145,7 +215,7 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
         trigger,
         cadenceStatus: conv?.followUpCadence?.status ?? null
       });
-    });
+    }, ["decideCadenceQuietWindow"]);
   }
 
   return registry;
