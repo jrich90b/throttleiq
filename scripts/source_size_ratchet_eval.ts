@@ -57,12 +57,17 @@ const CEILINGS: Ceiling[] = [
     // 71_604 -> 71_576. The manual-outbound cadence-restart un-stacking: two of the three
     // hand-built "does this lead keep its place in the follow-up sequence?" blocks replaced by
     // applyManualCadenceRestart (conversationStore) / decideManualCadenceRestart (routeStateReducer).
-    max: 71_576,
+    // The cadence-quality judge's input assembly also moved out: the inline "days since the customer
+    // last replied" walk is now daysSinceLastCustomerReply (cadenceQualityFacts.ts), alongside the
+    // unit facts the judge is graded against.
+    max: __INDEX_MAX__,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
     file: "services/api/src/domain/llmDraft.ts",
-    max: 16_827,
+    // 16_827 -> 16_825. The cadence-quality judge's inline "Known lead" prompt block became
+    // formatCadenceQualityUnitFacts (cadenceQualityFacts.ts), which also carries the purchase.
+    max: 16_825,
     note: "every parser prompt + JSON schema; second-largest and on the same trajectory"
   }
 ];

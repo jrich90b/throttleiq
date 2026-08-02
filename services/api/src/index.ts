@@ -381,6 +381,7 @@ import {
   isTruncatedDraftBody,
   type CadenceQualityGateDecision
 } from "./domain/draftQualityGate.js";
+import { daysSinceLastCustomerReply } from "./domain/cadenceQualityFacts.js";
 import {
   decideContextFidelityHold,
   contextFidelityHoldShadowEnabled,
@@ -5276,12 +5277,6 @@ async function runCadenceQualityJudgeShadow(
     if (opts?.messageClass === "disengaged_closeout") return null;
     const text = String(message ?? "").trim();
     if (!text) return null;
-    let daysSinceLastInbound: number | null = null;
-    const lastInbound = [...(conv.messages ?? [])].reverse().find((m: any) => m?.direction === "in" && m?.body);
-    const lastMs = lastInbound?.at ? Date.parse(String(lastInbound.at)) : NaN;
-    if (Number.isFinite(lastMs)) {
-      daysSinceLastInbound = Math.max(0, Math.floor((Date.now() - lastMs) / 86_400_000));
-    }
     const cadenceKind = conv.followUpCadence?.kind ?? null;
     const verdict = await judgeCadenceQualityWithLLM({
       message: text,
@@ -5289,7 +5284,11 @@ async function runCadenceQualityJudgeShadow(
       cadenceKind,
       history: buildHistory(conv, 8),
       lead: conv.lead,
-      daysSinceLastInbound
+      // The unit the customer actually BOUGHT. Without it the judge graded a post-sale touch
+      // against the ADF inquiry vehicle only, so naming the RIGHT bike read as a mismatch and
+      // the touch was suppressed (+17168614216, 2026-08-01). See cadenceQualityFacts.ts.
+      sale: conv.sale,
+      daysSinceLastInbound: daysSinceLastCustomerReply(conv)
     });
     if (!verdict) return null;
     // ENFORCE (flag-gated) is the LIVE cadence gate: when on, the decision uses the enforce floor (0.90)

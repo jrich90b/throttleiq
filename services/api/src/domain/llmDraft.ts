@@ -14,6 +14,7 @@ import { findComputerLikePhrases, bannedPhraseAvoidanceInstruction } from "./voi
 import { decideDraftModelArm, type DraftModelArm } from "./routeStateReducer.js";
 import { passesModelRelevanceGuard } from "./turnUnderstandingAuthority.js";
 import { appendParserCaptureRecord, buildParserCaptureRecord } from "./parserCapture.js";
+import { formatCadenceQualityUnitFacts } from "./cadenceQualityFacts.js";
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -10982,6 +10983,7 @@ export async function judgeCadenceQualityWithLLM(args: {
   cadenceKind?: string | null; // e.g. post_sale / meta_promo / inventory_watch / nurture
   history?: { direction: "in" | "out"; body: string }[];
   lead?: Conversation["lead"];
+  sale?: Conversation["sale"]; // the unit actually PURCHASED — authoritative for state_fit
   daysSinceLastInbound?: number | null;
 }): Promise<CadenceQualityJudgeParse | null> {
   const useLLM =
@@ -11000,7 +11002,6 @@ export async function judgeCadenceQualityWithLLM(args: {
   if (!message) return null;
 
   const history = (args.history ?? []).slice(-8).map(h => `${h.direction}: ${h.body}`);
-  const lead = args.lead ?? {};
   // Surface any computer-like phrases already present so the tone axis has a concrete anchor.
   const bannedHits = findComputerLikePhrases(message);
   const prompt = [
@@ -11049,10 +11050,7 @@ export async function judgeCadenceQualityWithLLM(args: {
       ? `Days since the customer last replied: ${args.daysSinceLastInbound}`
       : "Days since the customer last replied: unknown",
     bannedHits.length ? `Banned computer-like phrases present: ${bannedHits.join(", ")}` : "Banned computer-like phrases present: none",
-    `Known lead: ${JSON.stringify({
-      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
-      source: lead?.source ?? null
-    })}`,
+    formatCadenceQualityUnitFacts({ lead: args.lead as any, sale: args.sale as any }),
     history.length ? `Recent thread:\n${history.join("\n")}` : "Recent thread: (none)",
     `PROACTIVE cadence message to judge: ${message}`
   ].join("\n");
