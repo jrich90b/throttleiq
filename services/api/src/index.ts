@@ -16675,12 +16675,10 @@ function buildDealerLeadAppPostRideReply(args: {
     .filter(Boolean)
     .join("\n");
   const demoBikeLabel = extractDealerLeadAppDemoBikeLabel(dealerLeadAppText);
+  // A CRM placeholder model ("None Recorded") degrades to "bike" — templates below say "the ${modelLabel}".
+  const leadModelRaw = args.conv?.lead?.vehicle?.model ?? args.conv?.lead?.vehicle?.description ?? null;
   const modelLabel =
-    demoBikeLabel ||
-    formatModelLabel(
-      args.conv?.lead?.vehicle?.year ?? args.conv?.lead?.year ?? null,
-      args.conv?.lead?.vehicle?.model ?? args.conv?.lead?.vehicle?.description ?? null
-    ) || "that bike";
+    demoBikeLabel || (isSpecificModel(leadModelRaw) ? formatModelLabel(args.conv?.lead?.vehicle?.year ?? args.conv?.lead?.year ?? null, leadModelRaw) : "") || "bike";
   // Phantom-visit guard (dark behind PHANTOM_VISIT_GUARD): only thank for a past ride when one
   // actually happened; otherwise an initial-touch intro. Assuming a visit that didn't happen is the
   // single biggest out-of-context miss in production (the Knighton/Krugov class).
@@ -16723,6 +16721,7 @@ function isDealerLeadAppConversationWithoutConfirmedDemoRide(conv: any): boolean
 function normalizeOutcomeCustomerModelLabel(raw: string): string {
   const source = String(raw ?? "").trim();
   if (!source) return "";
+  if (isPlaceholderModel(source)) return ""; // CRM placeholder ("None Recorded", +17167279369) — callers' "bike" fallback engages
   const normalizeAcronyms = (value: string) =>
     normalizeDisplayCase(value)
       .replace(/\bSt\b/g, "ST")

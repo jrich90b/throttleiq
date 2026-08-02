@@ -11,87 +11,21 @@
  *   LLM_ENABLED=1 BACKTEST_CONVERSATIONS_PATH=/tmp/lr_backtest/conversations.json \
  *     BACKTEST_SAMPLE=150 npx tsx scripts/draft_judge_backtest.ts
  */
-import fs from "node:fs";
 import { judgeDraftQualityWithLLM } from "../services/api/src/domain/llmDraft.ts";
+import {
+  buildApprovedDraftCandidates,
+  loadBacktestConversations,
+  strideSample
+} from "./draft_judge_backtest_corpus.ts";
 
 const PATH = process.env.BACKTEST_CONVERSATIONS_PATH || "data/conversations.json";
 const SAMPLE = Math.max(1, Number(process.env.BACKTEST_SAMPLE || 150));
 
-type Msg = { direction: "in" | "out"; body?: string; provider?: string; at?: string };
-type Conv = { id?: string; leadKey?: string; lead?: any; messages?: Msg[] };
-
-function loadConversations(p: string): Conv[] {
-  const raw = JSON.parse(fs.readFileSync(p, "utf8"));
-  if (Array.isArray(raw)) return raw;
-  if (Array.isArray(raw?.conversations)) return raw.conversations;
-  if (raw && typeof raw === "object") return Object.values(raw) as Conv[];
-  return [];
-}
-
-const norm = (s: string) =>
-  String(s ?? "").toLowerCase().replace(/\s+/g, " ").replace(/[^\w\s]/g, "").trim();
-
-function similar(a: string, b: string): boolean {
-  const na = norm(a);
-  const nb = norm(b);
-  if (!na || !nb) return false;
-  if (na === nb) return true;
-  if (na.length > 12 && (na.includes(nb) || nb.includes(na))) return true;
-  const sa = new Set(na.split(" "));
-  const sb = new Set(nb.split(" "));
-  let inter = 0;
-  for (const w of sa) if (sb.has(w)) inter++;
-  const jac = inter / (sa.size + sb.size - inter);
-  // 0.45 captures lightly-edited sends (still a good-draft proxy); a full rewrite scores lower and
-  // is correctly excluded (it means the draft was NOT good).
-  return jac >= 0.45;
-}
-
-const isCustomerOutboundSent = (m: Msg) =>
-  m.direction === "out" && (m.provider === "human" || m.provider === "twilio" || m.provider === "sendgrid");
-
-// --- Build approved reply-draft candidates. ---
-type Candidate = { convId: string; leadKey?: string; lead?: any; inbound: string; draft: string; channel: "sms" | "email"; history: { direction: "in" | "out"; body: string }[] };
-const candidates: Candidate[] = [];
-
-for (const conv of loadConversations(PATH)) {
-  const msgs = (conv.messages ?? []).filter(m => m && (m.direction === "in" || m.direction === "out"));
-  for (let i = 0; i < msgs.length; i++) {
-    const m = msgs[i];
-    if (m.provider !== "draft_ai" || m.direction !== "out") continue;
-    const draft = String(m.body ?? "").trim();
-    if (!draft) continue;
-    // The customer turn this draft replied to (most recent inbound before it).
-    let inbound = "";
-    for (let j = i - 1; j >= 0; j--) {
-      if (msgs[j].direction === "in" && String(msgs[j].body ?? "").trim()) {
-        inbound = String(msgs[j].body ?? "").trim();
-        break;
-      }
-    }
-    if (!inbound) continue; // cadence / proactive draft — not the draft-quality judge's domain
-    // Was it SENT? next customer-facing outbound that matches the draft.
-    let approved = false;
-    for (let k = i + 1; k < msgs.length; k++) {
-      if (msgs[k].direction === "in") break; // a new customer turn — stop looking
-      if (isCustomerOutboundSent(msgs[k]) && similar(draft, String(msgs[k].body ?? ""))) {
-        approved = true;
-        break;
-      }
-    }
-    if (!approved) continue;
-    const channel: "sms" | "email" = m.provider === "sendgrid" || /@/.test(String(conv.leadKey ?? "")) ? "email" : "sms";
-    const history = msgs
-      .slice(Math.max(0, i - 8), i)
-      .map(h => ({ direction: h.direction, body: String(h.body ?? "") }))
-      .filter(h => h.body.trim());
-    candidates.push({ convId: String(conv.id ?? ""), leadKey: conv.leadKey, lead: conv.lead, inbound, draft, channel, history });
-  }
-}
-
-// Deterministic spread sample (stride) so we cover the whole corpus, not just the first convs.
+// Candidate extraction lives in draft_judge_backtest_corpus.ts, shared with the model-comparison
+// backtest so both grade the IDENTICAL candidate set.
+const candidates = buildApprovedDraftCandidates(loadBacktestConversations(PATH));
+const sampled = strideSample(candidates, SAMPLE);
 const stride = Math.max(1, Math.floor(candidates.length / SAMPLE));
-const sampled = candidates.filter((_, idx) => idx % stride === 0).slice(0, SAMPLE);
 
 console.log(`Approved reply-drafts found: ${candidates.length}; sampling ${sampled.length} (stride ${stride}).`);
 if (!sampled.length) {
