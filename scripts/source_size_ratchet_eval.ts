@@ -82,7 +82,12 @@ const CEILINGS: Ceiling[] = [
     // replaced by applyCadenceRevival (conversationStore) / decideCadenceRevival
     // (routeStateReducer). Small on paper because the fourth copy lived in sendgridInbound.ts,
     // which this ceiling does not cover — that file lost 5 lines of its own.
-    max: 71_455,
+    // 71_455 -> 71_448. The SOLD-closeout un-stacking: the two hand-maintained copies of "the lead
+    // bought — close the thread and settle the unit hold" (the appointment-outcome path and the
+    // console's sold button) replaced by applySoldCloseout (conversationStore) / decideSoldCloseout
+    // (routeStateReducer), including the five-line hold-match condition each carried inline.
+    // Landed at 71_447 after rebasing onto #440/#442.
+    max: 71_447,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

@@ -488,8 +488,13 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 //   (sendgridInbound.ts). All four now ask `decideCadenceRevival` through `applyCadenceRevival`.
 //   `followUpCadence` 17 -> 13 unrefereed, and it drops from 3 contended files to 2. A CODE change,
 //   not a measurement change — the detector is untouched.
+// 158 -> 153: the SOLD-closeout un-stacking (this commit). `applyOutcomeSold` and the console's
+//   sold button (POST /conversations/:id/close, reason "sold") were hand-maintained copies of the
+//   same closeout, down to a five-line hold-match condition duplicated character for character.
+//   Both now ask `decideSoldCloseout` through `applySoldCloseout`. `status` 6 -> 5, `closedReason`
+//   6 -> 5, `hold` 6 -> 5. A CODE change, not a measurement change.
 // RATCHET DOWN ONLY.
-const UNREFEREED_WRITER_BASELINE = 158;
+const UNREFEREED_WRITER_BASELINE = 153;
 
 {
   const sourceFiles: SourceFile[] = [];
