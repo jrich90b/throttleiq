@@ -148,12 +148,18 @@ import {
   shouldForceInitialTestRideSourceScheduleCopy,
   shouldRouteRoom58PriceHandoff
 } from "../domain/adfPolicy.js";
-import { isInternalNoteFollowUpTopic, buildWalkInSpecRecapClause } from "../domain/walkInFollowUpTopic.js";
+import {
+  isInternalNoteFollowUpTopic,
+  buildWalkInSpecRecapClause,
+  buildWalkInReturnVisitTail,
+  formatWalkInReturnDayLabel,
+  formatWalkInFamilyLabel
+} from "../domain/walkInFollowUpTopic.js";
 // SHADOW judge on this lane's drafts (Joe Step 2, 2026-08-02) — fire-and-forget, never awaited.
 import { runEmailLaneJudgeShadow } from "../domain/emailLaneJudgeShadow.js";
 // The watch-phrase helpers moved to the domain module so the eval exercises the regex that runs.
 import { extractWatchDirectiveSegment, hasWatchIntentPhrase } from "../domain/walkInInventoryWant.js";
-import { isFamilyOnlyModelLabel } from "../domain/modelFamily.js";
+import { isFamilyOnlyModelLabel, referencesFamilyOnlyInText } from "../domain/modelFamily.js";
 import {
   isDealerLocationQuestionText,
   isFirstTimeRiderGuidanceParserAccepted,
@@ -7826,9 +7832,54 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         }
       }
     }
-    const hasDirectedTestRidePlan = /line up your test ride|reach back when the weather looks better|check back next week/i.test(
-      tail
-    );
+    // The note named the day the CUSTOMER is walking in on (Ed Szulist +17167255404, 2026-08-01:
+    // "COMING BACK NXT WEEK TUESDAY AUGUST 4TH TO TEST RIDE A FEW DIFFERENT SPORTSTERS"). The step
+    // tail above says "I'll follow up shortly with next steps" and the spec recap has nothing to
+    // say — "Sportsters" is a family, not a model — so the one fact that mattered went unmentioned
+    // and Stone rewrote the draft by hand to ask for a time window. This REPLACES that tail rather
+    // than appending: the generic promise is what was wrong with it.
+    //
+    // Read straight off the parser, NOT through walkInOutcomeAccepted — that gate needs an
+    // explicit_state from the state enum, which a "coming back to ride" note never has. The slot
+    // carries its own confidence for exactly this reason (walkInInventoryWant.ts).
+    const walkInReturnVisit = llmWalkInOutcome?.returnVisit ?? "none";
+    const walkInReturnDayText = String(llmWalkInOutcome?.returnDayText ?? "").trim();
+    const returnVisitTail =
+      walkInReturnVisit === "committed_day" && walkInReturnDayText
+        ? buildWalkInReturnVisitTail({
+            ackSentence: "Thanks again for your time.",
+            returnVisit: walkInReturnVisit,
+            confidence: llmWalkInOutcome?.returnVisitConfidence,
+            confidenceMin: Number(process.env.WALKIN_RETURN_VISIT_CONFIDENCE_MIN ?? 0.8),
+            dayLabel: formatWalkInReturnDayLabel(
+              parseRequestedDateOnly(
+                walkInReturnDayText,
+                (await getSchedulerConfig()).timezone || "America/New_York"
+              ),
+              (await getSchedulerConfig()).timezone || "America/New_York",
+              new Date().toISOString()
+            ),
+            familyLabel: formatWalkInFamilyLabel(referencesFamilyOnlyInText(walkInCleanedComment)),
+            testRide: !!llmWalkInOutcome?.testRideRequested
+          })
+        : "";
+    if (
+      returnVisitTail &&
+      !hasCompletedTestRideSignal &&
+      !hasDealProgressSignal &&
+      !hasCreditCosignerSignal &&
+      !hasHoldSignal &&
+      !hasResumeHoldSignal &&
+      !walkInReminderRequest
+    ) {
+      tail = returnVisitTail;
+    }
+    // `|| !!returnVisitTail`: the clause already asks about the visit, so the addendum must not
+    // tack "If you want a test ride, just let me know" onto it.
+    const hasDirectedTestRidePlan =
+      /line up your test ride|reach back when the weather looks better|check back next week/i.test(
+        tail
+      ) || !!returnVisitTail;
     const buildWalkInAddendum = () => {
       if (!walkInCleanedComment) return "";
       const parserWindow = walkInOutcomeAccepted ? walkInFollowUpWindowHint : "";

@@ -75,6 +75,114 @@ export function coerceUnmetInventoryWant(raw: unknown): UnmetInventoryWant {
 }
 
 /**
+ * Did the note say the customer is COMING BACK, and did it name a day?
+ *
+ * Ed Szulist (+17167255404, 2026-08-01, Traffic Log Pro ref 11719) is why this slot exists. The
+ * note read "COMING BACK NXT WEEK TUESDAY AUGUST 4TH TO TEST RIDE A FEW DIFFERENT SPORTSTERS
+ * (Step 5)" and the whole first text back was "Thanks again for your time. I'll follow up shortly
+ * with next steps." The salesperson then rewrote it by hand to ask what time window worked on the
+ * 4th — the feed filed it `human_correction_material / missing_info`, and the correction steering
+ * says it outright: "ask for a preferred time window on the specified date."
+ *
+ * Why nothing caught it: the walk-in path extracts model / year / condition and nothing else, so
+ * `buildWalkInSpecRecapClause` had no slots to speak from (and "Sportsters" is a FAMILY, not a
+ * model), while `follow_up_window_text` answers a different question — when WE will reach out, not
+ * when THEY are walking in. A day the customer commits to is the single most actionable fact a
+ * walk-in note can carry, and we had nowhere to put it.
+ *
+ * THE ENUM IS THE WHOLE GUARD. Sampling the live Traffic Log Pro notes, dates in staff prose are
+ * mostly OURS, not theirs — "projected ship date is 7/29", "Spot delivery 7/23", "Reach follow up
+ * on 5/23/26". Reading any of those as "the customer is coming in Wednesday" would put a visit in
+ * the customer's mouth that they never promised, and that clause asks them a question, so the miss
+ * is loud. Hence an enum, not a boolean: `committed_day` (coming back, a day named, no time settled
+ * — the only lane that speaks), `committed_day_and_time` (both already settled, so there is nothing
+ * to ask), `tentative` (they said they'd be back, no day), `none` (everything else, including every
+ * date that belongs to us).
+ *
+ * FAIL DIRECTION: unknown, unclear, low-confidence and dateless all collapse to a clause of "",
+ * which is byte-for-byte today's generic tail. The slot can only ADD a question about a day the
+ * note itself named. It carries its OWN confidence (`return_visit_confidence`, the `want_confidence`
+ * shape from the Larry work above) precisely so it never rides on `walkInOutcomeAccepted` — that
+ * gate needs an `explicit_state` from the state enum, which a "coming back to ride" note never has,
+ * and that is why the existing `test_ride_requested` slot is unreachable for this whole note class.
+ */
+export type WalkInReturnVisit =
+  /** No return commitment — including any date that is OURS (ship, delivery, our own callback). */
+  | "none"
+  /** The note says they are coming back AND names a day, with no time settled. Renders the ask. */
+  | "committed_day"
+  /**
+   * A day AND a time are already settled ("coming in 4/6 at 4:00pm"). Kept distinct rather than
+   * folded into `committed_day` because the clause's whole job is to ask for a time — asking a
+   * customer who already gave one reads as not listening, which is the failure we are fixing.
+   * Renders nothing today; it exists so the enum stays truthful and a later appointment lane has
+   * something to read.
+   */
+  | "committed_day_and_time"
+  /** They said they'd be back but named no day. Nothing to ask about yet. */
+  | "tentative";
+
+const WALK_IN_RETURN_VISITS: ReadonlySet<string> = new Set<WalkInReturnVisit>([
+  "none",
+  "committed_day",
+  "committed_day_and_time",
+  "tentative"
+]);
+
+/** Coerce the parser's raw string. Anything unrecognized becomes "none" — see fail direction. */
+export function coerceWalkInReturnVisit(raw: unknown): WalkInReturnVisit {
+  const value = String(raw ?? "").trim().toLowerCase();
+  return WALK_IN_RETURN_VISITS.has(value) ? (value as WalkInReturnVisit) : "none";
+}
+
+/** The walk-in note's primary state. */
+export type WalkInOutcomeState =
+  | "none"
+  | "deal_finalizing"
+  | "deposit_left"
+  | "sold_delivered"
+  | "hold_requested"
+  | "hold_cleared"
+  | "cosigner_required"
+  | "test_ride_completed"
+  | "decision_pending"
+  | "outside_financing_pending"
+  | "down_payment_pending"
+  | "trade_equity_pending"
+  | "timing_defer_window"
+  | "household_approval_pending"
+  | "docs_or_insurance_pending";
+
+const WALK_IN_OUTCOME_STATES: ReadonlySet<string> = new Set<WalkInOutcomeState>([
+  "none",
+  "deal_finalizing",
+  "deposit_left",
+  "sold_delivered",
+  "hold_requested",
+  "hold_cleared",
+  "cosigner_required",
+  "test_ride_completed",
+  "decision_pending",
+  "outside_financing_pending",
+  "down_payment_pending",
+  "trade_equity_pending",
+  "timing_defer_window",
+  "household_approval_pending",
+  "docs_or_insurance_pending"
+]);
+
+/**
+ * Coerce the parser's raw `state`. Set-based, mirroring `coerceUnmetInventoryWant` — moved out of
+ * the inline ternary chain in llmDraft.ts, which sits at its size ceiling and had to come out net
+ * negative to make room for the return-visit slots. Behaviour is identical: the same fifteen
+ * strings pass, everything else is "none".
+ */
+export function coerceWalkInOutcomeState(raw: unknown): WalkInOutcomeState {
+  const value = String(raw ?? "").trim().toLowerCase();
+  return WALK_IN_OUTCOME_STATES.has(value) ? (value as WalkInOutcomeState) : "none";
+}
+
+/**
  * The explicit notify-verb segment of a staff note ("watch for a 2024 Street Glide" → the part
  * after the verb). Moved here from sendgridInbound.ts unchanged so the eval can exercise the
  * regex that actually runs instead of a hand-copy — the drift that made a cadence eval score
@@ -116,6 +224,9 @@ export const WALK_IN_OUTCOME_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     "unmet_inventory_want",
     "want_is_satisfiable_from_note",
     "want_confidence",
+    "return_visit",
+    "return_day_text",
+    "return_visit_confidence",
     "confidence"
   ],
   properties: {
@@ -149,6 +260,12 @@ export const WALK_IN_OUTCOME_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     },
     want_is_satisfiable_from_note: { type: "boolean" },
     want_confidence: { type: "number" },
+    return_visit: {
+      type: "string",
+      enum: ["none", "committed_day", "committed_day_and_time", "tentative"]
+    },
+    return_day_text: { type: "string" },
+    return_visit_confidence: { type: "number" },
     confidence: { type: "number" }
   }
 };
@@ -161,70 +278,83 @@ export const WALK_IN_OUTCOME_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
 export const WALK_IN_OUTCOME_EXAMPLES: string[] = [
   `EXAMPLE A
 comment: "left $1,000 deposit on motorcycle. coming in 4/6 at 4:00pm to finalize deal. (step 6)"
-output: {"state":"deposit_left","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.95,"confidence":0.98}`,
+output: {"state":"deposit_left","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.95,"return_visit":"committed_day_and_time","return_day_text":"4/6 at 4:00pm","return_visit_confidence":0.9,"confidence":0.98}`,
   `EXAMPLE B
 comment: "thinking it over, will let you know next week"
-output: {"state":"decision_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"next week","unmet_inventory_want":"none","want_is_satisfiable_from_note":false,"want_confidence":0.9,"confidence":0.95}`,
+output: {"state":"decision_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"next week","unmet_inventory_want":"none","want_is_satisfiable_from_note":false,"want_confidence":0.9,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.95}`,
   `EXAMPLE C
 comment: "wants a test ride next week when weather is better"
- output: {"state":"timing_defer_window","explicit_state":true,"test_ride_requested":true,"weather_sensitive":true,"follow_up_window_text":"next week","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.88,"confidence":0.9}`,
+ output: {"state":"timing_defer_window","explicit_state":true,"test_ride_requested":true,"weather_sensitive":true,"follow_up_window_text":"next week","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.88,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.9}`,
   `EXAMPLE D
 comment: "mark this lead on hold until next Friday"
-output: {"state":"hold_requested","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"next Friday","unmet_inventory_want":"none","want_is_satisfiable_from_note":false,"want_confidence":0.9,"confidence":0.94}`,
+output: {"state":"hold_requested","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"next Friday","unmet_inventory_want":"none","want_is_satisfiable_from_note":false,"want_confidence":0.9,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.94}`,
   `EXAMPLE E
 comment: "clear hold and resume follow up"
-output: {"state":"hold_cleared","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":false,"want_confidence":0.9,"confidence":0.94}`,
+output: {"state":"hold_cleared","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":false,"want_confidence":0.9,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.94}`,
   `EXAMPLE F
 comment: "coming in tomorrow to finalize paperwork"
-output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"tomorrow","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.9,"confidence":0.93}`,
+output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"tomorrow","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.9,"return_visit":"committed_day","return_day_text":"tomorrow","return_visit_confidence":0.9,"confidence":0.93}`,
   `EXAMPLE G
 comment: "Sean is looking for a 2026 Dark Billiard Gray Street Glide Limited, we need to order one for him. would like to get a commitment and put an order in for him."
-output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"order","want_is_satisfiable_from_note":false,"want_confidence":0.93,"confidence":0.9}`,
+output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"order","want_is_satisfiable_from_note":false,"want_confidence":0.93,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.9}`,
   `EXAMPLE H
 comment: "going to credit union this week, waiting on approval"
-output: {"state":"outside_financing_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"this week","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.88,"confidence":0.93}`,
+output: {"state":"outside_financing_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"this week","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.88,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.93}`,
   `EXAMPLE I
 comment: "saving up for down payment, should be ready in a few weeks"
-output: {"state":"down_payment_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"few weeks","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.88,"confidence":0.92}`,
+output: {"state":"down_payment_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"few weeks","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.88,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.92}`,
   `EXAMPLE J
 comment: "need to sell my bike first before moving forward"
-output: {"state":"trade_equity_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":false,"want_confidence":0.88,"confidence":0.93}`,
+output: {"state":"trade_equity_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":false,"want_confidence":0.88,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.93}`,
   `EXAMPLE K
 comment: "need to talk to my wife first"
-output: {"state":"household_approval_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":false,"want_confidence":0.88,"confidence":0.93}`,
+output: {"state":"household_approval_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":false,"want_confidence":0.88,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.93}`,
   `EXAMPLE L
 comment: "picked out accessories and wants to go over final numbers this week"
-output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"this week","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.88,"confidence":0.9}`,
+output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"this week","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.88,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.9}`,
   `EXAMPLE M
 comment: "looking for a 2026 Street Glide Limited in Dark Billiard Gray, please watch and let me know when one comes in"
-output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"open_search","want_is_satisfiable_from_note":false,"want_confidence":0.96,"confidence":0.78}`,
+output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"open_search","want_is_satisfiable_from_note":false,"want_confidence":0.96,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.78}`,
   `EXAMPLE N
 comment: "Gary was a walk in and is buying 2026 Street Glide Limited. Trading in 2016 Ultra Limited and 2024 Pan Am Special. Had to discount bike to close deal. Plans on closing 4/24 (Step 6)"
-output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"4/24","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.95,"confidence":0.96}`,
+output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"4/24","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.95,"return_visit":"committed_day","return_day_text":"4/24","return_visit_confidence":0.9,"confidence":0.96}`,
   `EXAMPLE O
 comment: "Thank for coming in and tell him it was nice working with him. I will be in touch about delivery and parts status. (Step 8)"
-output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.9,"confidence":0.95}`,
+output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.9,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.95}`,
   `EXAMPLE P
 comment: "Stopped in, really liked the dark billiard and gray 2026 Street Glide. Would also like to watch for a 2024-2025 pre-owned street glide. Reach follow up on 5/23/26. (Step 2)"
-output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"5/23/26","unmet_inventory_want":"open_search","want_is_satisfiable_from_note":false,"want_confidence":0.94,"confidence":0.88}`,
+output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"5/23/26","unmet_inventory_want":"open_search","want_is_satisfiable_from_note":false,"want_confidence":0.94,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.88}`,
   `EXAMPLE Q
 comment: "Would like to take some time to go over finances. Going on a trip end of the month. Definitely interested in the bike."
-output: {"state":"decision_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.85,"confidence":0.9}`,
+output: {"state":"decision_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.85,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.9}`,
   `EXAMPLE R
 comment: "Was in for the Back the Blue ride and was asking about pre-owned trikes. Showed him and his wife Kim the 2019 we have in the back (waiting on lien release). Is looking for 2017-2020 Tri Glide in the $25,000 range (Step 2)"
-output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"open_search","want_is_satisfiable_from_note":false,"want_confidence":0.92,"confidence":0.6}`,
+output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"open_search","want_is_satisfiable_from_note":false,"want_confidence":0.92,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.6}`,
   `EXAMPLE S
 comment: "Wants to test ride 2026 Street Glide 3. Has 2019 Street Glide special for trade. (Step 2)"
-output: {"state":"none","explicit_state":false,"test_ride_requested":true,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.9,"confidence":0.6}`,
+output: {"state":"none","explicit_state":false,"test_ride_requested":true,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.9,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.6}`,
   `EXAMPLE T
 comment: "Wants to see the 2026 Street Glide in Teal Thunder / Vivid Black with chrome trim. Should be delivered 7/22 (Step 6)"
-output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"incoming_allocated","want_is_satisfiable_from_note":true,"want_confidence":0.93,"confidence":0.6}`,
+output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"incoming_allocated","want_is_satisfiable_from_note":true,"want_confidence":0.93,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.6}`,
   `EXAMPLE U
 comment: "Interested in the 2023 120th Anniversary Road Glide Special. Wants us to call him when we get it through service (Step 2)"
-output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"specific_unit","want_is_satisfiable_from_note":true,"want_confidence":0.92,"confidence":0.6}`,
+output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"specific_unit","want_is_satisfiable_from_note":true,"want_confidence":0.92,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.6}`,
   `EXAMPLE V
 comment: "Looking for trike models. Was going to wait until spring of 2027 but saw the 2019 we had in back. Wants to take a test ride on new and pre-owned (Step 2)"
-output: {"state":"none","explicit_state":false,"test_ride_requested":true,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"open_search","want_is_satisfiable_from_note":false,"want_confidence":0.8,"confidence":0.6}`
+output: {"state":"none","explicit_state":false,"test_ride_requested":true,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"open_search","want_is_satisfiable_from_note":false,"want_confidence":0.8,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.6}`,
+  // W-Y teach the return-visit lanes off real production notes. W is the Ed Szulist turn this slot
+  // was built for; X is the dateless version of the same intent; Y is the trap — a date that is
+  // OURS. (P "Reach follow up on 5/23/26" and T "Should be delivered 7/22" are the other two
+  // our-date shapes, already in this corpus and now annotated none.)
+  `EXAMPLE W
+comment: "COMING BACK NXT WEEK TUESDAY AUGUST 4TH TO TEST RIDE A FEW DIFFERENT SPORTSTERS (Step 5)"
+output: {"state":"none","explicit_state":false,"test_ride_requested":true,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.7,"return_visit":"committed_day","return_day_text":"Tuesday August 4th","return_visit_confidence":0.95,"confidence":0.6}`,
+  `EXAMPLE X
+comment: "Showed him the pre-owned wall. Says he will stop in to check them out (Step 2)"
+output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.7,"return_visit":"tentative","return_day_text":"","return_visit_confidence":0.9,"confidence":0.6}`,
+  `EXAMPLE Y
+comment: "Ordered his 2026 Road Glide, projected ship date is 7/29 (Step 2)"
+output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"order","want_is_satisfiable_from_note":false,"want_confidence":0.9,"return_visit":"none","return_day_text":"","return_visit_confidence":0.95,"confidence":0.6}`
 ];
 
 /**
@@ -297,6 +427,26 @@ export function buildWalkInOutcomePrompt(args: {
     "- When the note names a specific in-stock bike AND a broader search, the broader search wins:",
     "  open_search. When you are unsure which lane, answer none — a wrong watch becomes an",
     "  unsolicited text weeks later, which is worse than no watch.",
+    "",
+    // A day the CUSTOMER commits to walking in on is a different question from follow_up_window_text
+    // (when WE reach out) and from the shipping/delivery dates that fill these notes. Ed Szulist
+    // +17167255404: the note named the day and the reply never mentioned it.
+    "SEPARATELY AGAIN, classify the customer's RETURN VISIT — is the customer coming back in, and",
+    "did the note name when? This is about THEIR visit, never about our own schedule.",
+    "- return_visit=committed_day: the note says they are coming back and names a day or date, and",
+    "  no specific time of day is settled yet.",
+    "- return_visit=committed_day_and_time: they are coming back and BOTH the day and a time are",
+    "  already settled ('coming in 4/6 at 4:00pm').",
+    "- return_visit=tentative: they said they would be back but named no day.",
+    "- return_visit=none: no return commitment at all.",
+    "- return_day_text: the day phrase EXACTLY as the note wrote it ('Tuesday August 4th', '4/24',",
+    "  'tomorrow'); empty string when there is none. Never invent or reformat a date.",
+    "- return_visit_confidence is 0..1 for this classification only, independent of `confidence`.",
+    "- A date that is OURS is return_visit=none: a projected ship date, a spot delivery, when a unit",
+    "  lands, or a day WE said we would reach out. Only a day the CUSTOMER is walking in on counts.",
+    "- A day they are coming in on belongs in return_day_text, never in follow_up_window_text.",
+    "- If you are unsure whether the day is theirs or ours, answer none. Overreading it means asking",
+    "  a customer to confirm a visit they never promised.",
     "",
     ...WALK_IN_OUTCOME_EXAMPLES,
     "",
