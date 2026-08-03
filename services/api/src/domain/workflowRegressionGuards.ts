@@ -2175,12 +2175,69 @@ export function isExternalDealerApprovalTransferQuestionText(text: string | null
   return hasApproval && hasOtherDealer && hasTransferAsk;
 }
 
-export function buildExternalDealerApprovalTransferReply(creditAppUrl?: string | null): string {
+/**
+ * Did this lead already put a credit application in with US?
+ *
+ * Structured extraction off the lead record — no LLM, no guessing at the customer's words. The
+ * dealer-specific credit-app invite is only useful to someone who has NOT applied here yet; a
+ * customer who arrived on our own credit-application lead source has one on file already, so
+ * inviting them to "complete our store application" reads as if we lost their paperwork.
+ *
+ * FAIL DIRECTION (deliberately conservative — only strong signals count): a false NEGATIVE just
+ * appends the store link the way we always have (today's behavior, harmless). A false POSITIVE
+ * withholds a link someone actually needed, so this returns true only when the lead record says
+ * plainly that the application came to us.
+ */
+export function hasOwnCreditApplicationOnFile(
+  conv?: {
+    classification?: { bucket?: string | null; cta?: string | null } | null;
+    lead?: { source?: string | null; inquiry?: string | null } | null;
+  } | null
+): boolean {
+  const cta = String(conv?.classification?.cta ?? "").trim().toLowerCase();
+  if (cta === "hdfs_coa") return true;
+  const source = String(conv?.lead?.source ?? "").trim().toLowerCase();
+  if (
+    source.includes("apply for credit") ||
+    source.includes("coa online") ||
+    source.includes("hdfs coa") ||
+    source.includes("credit application")
+  ) {
+    return true;
+  }
+  const bucket = String(conv?.classification?.bucket ?? "").trim().toLowerCase();
+  const inquiry = String(conv?.lead?.inquiry ?? "");
+  return bucket === "finance_prequal" && /\bapp\s*id\b/i.test(inquiry);
+}
+
+/**
+ * Answer the question that was ASKED: an HDFS approval is portable across Harley dealers.
+ *
+ * Pins finding `+17162605541::human_correction_material` (production turn 2026-07-19T01:01:48Z).
+ * The customer asked "hi does that apply to any harley dealer" and this builder answered only
+ * about OUR store ("it can be used at our store … complete a separate application for our
+ * dealership"), so the general question went unanswered and Joe corrected it by hand 12h later:
+ * "you can use it at any Harley dealer. If you found a bike at another dealership, your HDFS
+ * approval should work there too, you would just have to put an application in with that dealer
+ * so they have access to your open application."
+ *
+ * Every fact the old copy carried is kept — it just leads with the portable answer instead of
+ * the store-centric one, and it drops the redundant apply-here link for a customer whose
+ * application we already hold. The reply must not depend on the paragraph break: the outbound
+ * body observed in production had the "\n\n" flattened to a single space.
+ */
+export function buildExternalDealerApprovalTransferReply(
+  creditAppUrl?: string | null,
+  conv?: Parameters<typeof hasOwnCreditApplicationOnFile>[0]
+): string {
   const url = String(creditAppUrl ?? "").trim();
   const base =
-    "Yes — if that approval was through Harley-Davidson Financial Services, it can be used at our store. " +
-    "We do still need you to complete a separate application for our dealership because Harley-Davidson does not transfer the application over to us. " +
-    "It will not be another credit inquiry.";
+    "Yes — an approval through Harley-Davidson Financial Services is good at any Harley dealer, not just us. " +
+    "Each dealership does have to put in its own application so they can pull up your open approval, " +
+    "and that isn't another credit inquiry.";
+  if (hasOwnCreditApplicationOnFile(conv)) {
+    return `${base} We already have your application on file here.`;
+  }
   if (!url) {
     return `${base} I can send you the link to complete our store application.`;
   }
