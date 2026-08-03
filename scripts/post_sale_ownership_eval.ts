@@ -22,13 +22,15 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { parsePostSaleOwnershipWithLLM } from "../services/api/src/domain/llmDraft.ts";
-import { decidePostSaleOwnershipTurn } from "../services/api/src/domain/routeStateReducer.ts";
+import {
+  decidePostSaleOwnershipTurn,
+  decideCadenceLifecycle
+} from "../services/api/src/domain/routeStateReducer.ts";
 
 // --- 1) Source guard. ---
 const index = fs.readFileSync("services/api/src/index.ts", "utf8");
 const llm = fs.readFileSync("services/api/src/domain/llmDraft.ts", "utf8");
 const reducer = fs.readFileSync("services/api/src/domain/routeStateReducer.ts", "utf8");
-const store = fs.readFileSync("services/api/src/domain/conversationStore.ts", "utf8");
 
 assert.ok(/export async function parsePostSaleOwnershipWithLLM/.test(llm), "parser must be exported");
 assert.ok(/POST_SALE_OWNERSHIP_PARSER_JSON_SCHEMA/.test(llm), "strict JSON schema const must exist");
@@ -58,11 +60,30 @@ assert.ok(
   /cadence\.status === "stopped" && cadence\.stopReason === "appointment_booked"/.test(index),
   'the sold-lead revive must stay scoped to stopReason "appointment_booked" (so "no_longer_owns" sticks)'
 );
-// stopFollowUpCadence must not treat "no_longer_owns" as one of the preserved-reason bypasses.
-assert.ok(
-  /reason === "manual_handoff" \|\| reason === "purchase_delivery"/.test(store),
-  "stopFollowUpCadence's post_sale preserve-list must stay narrow (manual_handoff/purchase_delivery only)"
-);
+// The post_sale preserve-list must stay NARROW: `stopFollowUpCadence` spares a post-sale chase for
+// exactly two reasons, and "no_longer_owns" must never become a third — a customer who told us the
+// bike is gone must not keep getting post-sale touches. Asserted through the referee that now owns
+// the rule (decideCadenceLifecycle, PR #468) rather than by matching source text, so moving the rule
+// behind a referee cannot break this pin while a widened preserve-list slips through.
+{
+  const spared = (reason: string) =>
+    !decideCadenceLifecycle({
+      verb: "stop",
+      hasRecord: true,
+      status: "active",
+      kind: "post_sale",
+      reason
+    }).apply;
+  assert.ok(spared("manual_handoff"), "manual_handoff must still spare a post_sale chase");
+  assert.ok(spared("purchase_delivery"), "purchase_delivery must still spare a post_sale chase");
+  assert.ok(
+    !spared("no_longer_owns"),
+    'a "no_longer_owns" stop must NOT be spared — the customer told us the bike is gone'
+  );
+  for (const reason of ["closed", "sold", "opt_out", "not_interested", "appointment_booked", ""]) {
+    assert.ok(!spared(reason), `the post_sale preserve-list must stay narrow — "${reason}" leaked in`);
+  }
+}
 
 // --- 2) Decision-table coverage (pure). ---
 type Row = {
