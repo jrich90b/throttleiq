@@ -218,6 +218,76 @@ assert.ok(
   `a stop-texting turn with no criteria must still close the lead, got ${cleanStop.disposition}`
 );
 
+// 9) THE FIX — chasing OUR silence is a demand for a response, never a goodbye.
+// Production miss (Robert Spencer +17169408998, 2026-07-30, replay P1): a service lead was told
+// "our service department will reach out shortly", nobody reached out, and his chase-up
+// "Forget about me?" parsed stepping_back → the lead we had already let down was CLOSED with
+// "I hear you. If anything changes down the road, just give me a shout."
+const SERVICE_PROMISE = {
+  direction: "out" as const,
+  body: "Hey Robert, it's Alexandra over at American Harley-Davidson. Thanks — I’ve received your service request. I’ll have our service department reach out shortly."
+};
+const silenceChase = await disp("Forget about me?", [SERVICE_PROMISE]);
+assert.ok(
+  !CLOSEOUT_DISPOSITIONS.has(silenceChase.disposition),
+  `a customer chasing our dropped follow-up must NOT close the lead — got ${silenceChase.disposition}`
+);
+assert.equal(
+  silenceChase.disposition,
+  "none",
+  `"Forget about me?" should parse as none, got ${silenceChase.disposition}`
+);
+
+// 9b) GENERALIZATION — paraphrased chase (no verbatim overlap with the few-shot).
+const silenceChaseParaphrase = await disp("Hello?? Did you guys forget about me", [
+  { direction: "out", body: "I'll get those payment numbers together and text them over to you this afternoon." }
+]);
+assert.ok(
+  !CLOSEOUT_DISPOSITIONS.has(silenceChaseParaphrase.disposition),
+  `a paraphrased silence-chase must NOT close the lead — got ${silenceChaseParaphrase.disposition}`
+);
+
+// 10) THE FIX — waiting on another person's decision is a dependency pause, not a closeout.
+// Production miss (Todd Glynn +17164490433, 2026-04-30): a test-ride lead waiting on his son's
+// co-decision ("on hold kinda till my son decides if he is going to get one also") parsed
+// stepping_back → a warm TWO-bike household got the goodbye taper and was closed.
+const dependencyPause = await disp(
+  "I'm on hold kinda till my son decides if he is going to get one also",
+  [
+    {
+      direction: "out",
+      body: "If the test ride for the Road Glide Limited is still on your list, I can help get it set up."
+    }
+  ]
+);
+assert.ok(
+  !CLOSEOUT_DISPOSITIONS.has(dependencyPause.disposition),
+  `a dependency pause must NOT close the lead — got ${dependencyPause.disposition}`
+);
+assert.equal(
+  dependencyPause.disposition,
+  "none",
+  `waiting on the son's decision should parse as none, got ${dependencyPause.disposition}`
+);
+
+// 10b) GENERALIZATION — same shape, different relative, no verbatim overlap with the few-shot.
+const dependencyPauseParaphrase = await disp(
+  "Kind of in a holding pattern until my brother figures out if he's buying one too"
+);
+assert.ok(
+  !CLOSEOUT_DISPOSITIONS.has(dependencyPauseParaphrase.disposition),
+  `a paraphrased dependency pause must NOT close the lead — got ${dependencyPauseParaphrase.disposition}`
+);
+
+// 10c) REGRESSION GUARD — a SELF-deferral with a promise to reach out later must still close
+// (protects EXAMPLE L against the dependency-pause carve-out bleeding into "never close").
+const selfDefer = await disp("Nothing to do with anyone else, I'm just not ready. I'll reach out when I am.");
+assert.equal(
+  selfDefer.disposition,
+  "defer_no_window",
+  `a self-deferral with no dependency should stay defer_no_window, got ${selfDefer.disposition}`
+);
+
 console.log(
-  "PASS customer disposition eval — price-objection carve-out + alert-keeper live-ask carve-out + decide-soon window + sell-outright-to-dealer carve-out + qualification-answer carve-out (none / defer_no_window / defer_with_window / sell_on_own)"
+  "PASS customer disposition eval — price-objection carve-out + alert-keeper live-ask carve-out + decide-soon window + sell-outright-to-dealer carve-out + qualification-answer carve-out + silence-chase carve-out + dependency-pause carve-out (none / defer_no_window / defer_with_window / sell_on_own)"
 );

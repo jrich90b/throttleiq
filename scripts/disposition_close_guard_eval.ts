@@ -228,8 +228,14 @@ assert.ok(
   "all disposition closeout gates must pass open todos"
 );
 const llmSource = await fs.readFile(path.resolve("services/api/src/domain/llmDraft.ts"), "utf8");
+// The few-shot corpus lives in the extracted prompt module (source_size_ratchet:eval forced
+// the move); the prompt RULES still ride inline in parseCustomerDispositionWithLLM.
+const dispositionPromptSource = await fs.readFile(
+  path.resolve("services/api/src/domain/customerDispositionPrompt.ts"),
+  "utf8"
+);
 assert.match(
-  llmSource,
+  dispositionPromptSource,
   /I am going to take care of the pipes myself/,
   "disposition parser few-shots pin the production fixture"
 );
@@ -244,9 +250,32 @@ assert.match(
   "disposition parser rules carve out the alert-keeper / live-ask turn"
 );
 assert.match(
-  llmSource,
+  dispositionPromptSource,
   /Could o see pictures of that 883 and the price/,
   "disposition parser few-shots pin the Jaydon Gerolimos production fixture"
+);
+// 2026-08-03 carve-outs: chasing OUR silence and waiting on another person's decision are
+// never goodbyes. Pin the few-shots (module) and the rules (inline) so a prompt edit cannot
+// silently drop either lesson.
+assert.match(
+  dispositionPromptSource,
+  /Forget about me\?/,
+  "disposition parser few-shots pin the Robert Spencer silence-chase production fixture"
+);
+assert.match(
+  dispositionPromptSource,
+  /on hold kinda till my son decides/,
+  "disposition parser few-shots pin the Todd Glynn dependency-pause production fixture"
+);
+assert.match(
+  llmSource,
+  /Chasing OUR silence is never a goodbye/,
+  "disposition parser rules carve out the silence-chase turn"
+);
+assert.match(
+  llmSource,
+  /Waiting on ANOTHER PERSON'S decision/,
+  "disposition parser rules carve out the dependency-pause turn"
 );
 
 // ---------------------------------------------------------------------------
@@ -322,7 +351,7 @@ assert.match(
   "disposition parser rules carve out the answer-to-our-question turn"
 );
 assert.match(
-  llmSource,
+  dispositionPromptSource,
   /lowest monthly payments is the best for me at this moment/,
   "disposition parser few-shots pin the Shad Stymus production fixture"
 );
