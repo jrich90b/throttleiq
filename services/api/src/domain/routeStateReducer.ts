@@ -4868,6 +4868,122 @@ export function decideReschedulePendingLatch(
   };
 }
 
+// ===================================================================================================
+// THE INVENTORY RECORD THAT CLOSED THIS LEAD IS GONE — "does the conversation REOPEN?"
+//
+// One question, three causes, and it writes THREE Tier-1 fields at once (`hold`/`sale`, `status`,
+// `closedReason`) plus the chase. Two places answered it inline:
+//
+//   clearLinkedInventoryAvailabilityConversations (index.ts ~8630)  staff un-marked a unit as
+//       held or sold, so every lead we closed against that unit has to be reconsidered. Two
+//       near-identical arms, hold and sale, that had drifted apart.
+//   processInventoryHolds (index.ts ~7736)  a hold is cleared because the unit SOLD. It clears the
+//       hold record and deliberately does NOT reopen — and that is right, not an oversight.
+//
+// FAIL DIRECTION, and it is the unusual one. Everywhere else in this file the safe answer is "do
+// less". Here the irreversible thing already happened: we CLOSED a live lead because a bike was
+// spoken for. If that turns out to be wrong, staying closed means a real buyer is silently dropped
+// and no follow-up will ever run. So for a cause that genuinely frees the unit, REOPENING is the
+// safe answer. What must stay conservative is the CAUSE test: an unrecognized cause changes nothing.
+//
+// THE PRESERVED DISAGREEMENTS between the two arms of the un-mark lane:
+//
+//   DIVERGENCE 1 — how `closedReason` is matched. The hold arm uses a loose word test (`hold`
+//     appearing anywhere in the reason); the sale arm demands the reason be exactly "sold". So a
+//     lead closed with a wordier sold-ish reason reopens on the hold arm's rules but not the sale
+//     arm's. Preserved, because tightening the hold arm would strand leads we closed with
+//     free-text hold reasons, and loosening the sale arm would reopen leads that really did buy.
+//
+//   DIVERGENCE 2 — the chase. The sale arm STOPS the post-sale cadence before resuming normal
+//     follow-up; the hold arm stops nothing, it only flips the mode back to active. Preserved:
+//     a post-sale chase talks about a bike the customer no longer bought and must not keep running,
+//     whereas a hold never started a cadence of its own to stop.
+//
+// PURE + CLOCK-FREE: the caller owns the record matching, the writes and the timestamps.
+// ===================================================================================================
+
+export type InventoryAvailabilityReopenCause =
+  | "hold_released" // staff un-marked the unit as held — it is available again
+  | "sale_reversed" // staff un-marked the unit as sold — it is available again
+  | "hold_superseded_by_sale"; // the hold went away because the unit SOLD — not a release
+
+export type InventoryAvailabilityReopenInput = {
+  cause: InventoryAvailabilityReopenCause | string;
+  /** The stored `closedReason`, exactly as it is. Each cause applies its own matcher (divergence 1). */
+  closedReason?: string | null;
+  /** The stored `followUp.reason`. */
+  followUpReason?: string | null;
+  /** The stored `followUpCadence.kind`. */
+  cadenceKind?: string | null;
+};
+
+export type InventoryAvailabilityReopenDecision = {
+  /** Drop the stale `hold` / `sale` record off the conversation. */
+  clearRecord: boolean;
+  /** Reopen: `status` back to "open", `closedAt` and `closedReason` cleared. */
+  reopen: boolean;
+  /** Stop the running cadence before resuming. Sale arm only today (divergence 2). */
+  stopCadence: boolean;
+  /** Put follow-up back into "active". */
+  resumeFollowUp: boolean;
+  /** Names the preserved disagreement when this cause is the odd one out for THIS input. */
+  divergence: string | null;
+  why: string;
+};
+
+export function decideInventoryAvailabilityReopen(
+  input: InventoryAvailabilityReopenInput
+): InventoryAvailabilityReopenDecision {
+  const cause = String(input.cause ?? "").trim();
+  const recognized =
+    cause === "hold_released" || cause === "sale_reversed" || cause === "hold_superseded_by_sale";
+  // The unit is genuinely free again. `hold_superseded_by_sale` is NOT — the bike sold.
+  const freesTheUnit = cause === "hold_released" || cause === "sale_reversed";
+
+  const reason = String(input.closedReason ?? "");
+  // DIVERGENCE 1, preserved verbatim: a loose word test on the hold arm, an exact match on the sale
+  // arm. Both are tests against STORED STATE we wrote ourselves, not comprehension of a customer.
+  const closedForThisCause =
+    cause === "hold_released"
+      ? /\bhold\b/i.test(reason)
+      : cause === "sale_reversed"
+        ? reason.trim().toLowerCase() === "sold"
+        : false;
+
+  const followUpReason = String(input.followUpReason ?? "");
+  const chaseIsAboutThisCause =
+    cause === "hold_released"
+      ? followUpReason === "unit_hold" || followUpReason === "order_hold"
+      : cause === "sale_reversed"
+        ? followUpReason === "post_sale" || String(input.cadenceKind ?? "") === "post_sale"
+        : false;
+
+  return {
+    clearRecord: recognized,
+    reopen: freesTheUnit && closedForThisCause,
+    // DIVERGENCE 2, preserved: only the sale arm stops a cadence, because only it can be facing a
+    // post-sale chase that is now talking about a bike the customer did not buy.
+    stopCadence: cause === "sale_reversed" && chaseIsAboutThisCause,
+    resumeFollowUp: freesTheUnit && chaseIsAboutThisCause,
+    divergence: !freesTheUnit && recognized
+      ? "hold_cleared_by_a_sale_never_reopens_the_conversation"
+      : freesTheUnit && !closedForThisCause && !!reason.trim()
+        ? cause === "hold_released"
+          ? "hold_arm_reopens_on_a_loose_word_match_in_closedReason"
+          : "sale_arm_reopens_only_on_an_exact_sold_closedReason"
+        : null,
+    why: !recognized
+      ? `unrecognized inventory-availability cause "${cause}" — refused, nothing may change`
+      : !freesTheUnit
+        ? "the hold went away because the unit SOLD — clear the stale hold record, but the lead " +
+          "stays closed; the bike is spoken for"
+        : closedForThisCause
+          ? `${cause}: the unit is available again and this lead was closed against it — reopen`
+          : `${cause}: the unit is available again but this lead was not closed against it ` +
+            `(closedReason "${reason.trim() || "none"}") — clear the record only`
+  };
+}
+
 /**
  * Should a Traffic Log Pro walk-in note start an inventory watch?
  *

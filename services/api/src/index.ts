@@ -510,6 +510,7 @@ import {
   applyAppointmentTeardown,
   applyAppointmentBookingRecord,
   applyReschedulePendingLatch,
+  applyInventoryAvailabilityReopen,
   applyAppointmentConfirmRecord,
   clearAppointmentStaffPromptState
 } from "./domain/conversationStore.js";
@@ -7733,7 +7734,10 @@ async function processInventoryHolds() {
       if (soldRecordForHold || (conv && isSoldOrPostSaleConversation(conv))) {
         await clearInventoryHoldRefs({ stockId: hold.stockId, vin: hold.vin, key: hold.id });
         if (conv?.hold && inventoryAvailabilityRecordMatches(conv.hold, hold.stockId ?? hold.id, hold.vin)) {
-          conv.hold = undefined;
+          // Same question as the un-mark lane, different cause: this hold went away because the unit
+          // SOLD, so the record is stale but the lead stays closed. The referee is what makes that
+          // "no reopen" an answered question rather than an omission.
+          applyInventoryAvailabilityReopen(conv, { cause: "hold_superseded_by_sale" });
           saveConversation(conv);
         }
         closeUnitHoldQuestionsForConversation(conv?.id ?? hold.convId);
@@ -8637,28 +8641,11 @@ async function clearLinkedInventoryAvailabilityConversations(
     if (!conv) continue;
     let changed = false;
     if (flags.hold && conv.hold && inventoryAvailabilityRecordMatches(conv.hold, stockId, vin)) {
-      conv.hold = undefined;
-      if (/\bhold\b/i.test(String(conv.closedReason ?? ""))) {
-        conv.status = "open";
-        conv.closedAt = undefined;
-        conv.closedReason = undefined;
-      }
-      if (conv.followUp?.reason === "unit_hold" || conv.followUp?.reason === "order_hold") {
-        setFollowUpMode(conv, "active", "inventory_marked_available");
-      }
+      applyInventoryAvailabilityReopen(conv, { cause: "hold_released" });
       changed = true;
     }
     if (flags.sold && conv.sale && inventoryAvailabilityRecordMatches(conv.sale, stockId, vin)) {
-      conv.sale = undefined;
-      if (String(conv.closedReason ?? "").trim().toLowerCase() === "sold") {
-        conv.status = "open";
-        conv.closedAt = undefined;
-        conv.closedReason = undefined;
-      }
-      if (conv.followUp?.reason === "post_sale" || conv.followUpCadence?.kind === "post_sale") {
-        stopFollowUpCadence(conv, "inventory_marked_available");
-        setFollowUpMode(conv, "active", "inventory_marked_available");
-      }
+      applyInventoryAvailabilityReopen(conv, { cause: "sale_reversed" });
       changed = true;
     }
     if (changed) {

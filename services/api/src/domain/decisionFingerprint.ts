@@ -497,6 +497,30 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     }, ["decideReschedulePendingLatch"]);
   }
 
+  // Sampled once PER CAUSE. The whole question is whether a lead we CLOSED against a bike comes back
+  // open, and the three causes answer it differently on the same lead — so one sample would hide the
+  // divergences the un-stacking preserved. PROBE: the cause is held fixed per sample; everything else
+  // is the lead's real stored closedReason / follow-up reason / cadence kind, which is exactly what
+  // the two `closedReason` matchers disagree about.
+  for (const cause of ["hold_released", "sale_reversed", "hold_superseded_by_sale"] as const) {
+    add(`inventoryAvailabilityReopen:${cause}`, conv => {
+      if (!conv || typeof reducer.decideInventoryAvailabilityReopen !== "function") return undefined;
+      const decision = reducer.decideInventoryAvailabilityReopen({
+        cause, // PROBE
+        closedReason: conv.closedReason ?? null,
+        followUpReason: conv.followUp?.reason ?? null,
+        cadenceKind: conv.followUpCadence?.kind ?? null
+      });
+      return {
+        clearRecord: decision.clearRecord,
+        reopen: decision.reopen,
+        stopCadence: decision.stopCadence,
+        resumeFollowUp: decision.resumeFollowUp,
+        divergence: decision.divergence
+      };
+    }, ["decideInventoryAvailabilityReopen"]);
+  }
+
   return registry;
 }
 
