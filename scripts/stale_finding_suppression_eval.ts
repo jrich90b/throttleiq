@@ -23,6 +23,7 @@ import {
   DISPOSITIONS,
   dispositionBoundaryMs,
   isDisposition,
+  occurrenceMsOf,
   parseDispositionLedgerPayload,
   partitionByDispositions,
   POLICY_DISPOSITIONS,
@@ -288,6 +289,73 @@ const rec = (over: Partial<DispositionRecord> = {}): DispositionRecord => ({
   assert.equal(suppressed.length, 0);
 }
 
+// 20b. An OPERATOR REPORT is datable by `reportedAt` alone — the reported_issue source never sets
+//      occurredAt (it is only an UPPER BOUND on the offending reply, deliberately kept separate at
+//      the source). Before this, every code-state disposition on a reported_issue key suppressed
+//      NOTHING: measured 2026-08-02, 23 such ledger records vs 65 findings still in the feed, and
+//      this loop re-triaged 4 leads it had disposed 90 minutes earlier.
+{
+  const opReport = (over: Record<string, unknown> = {}) => ({
+    convId: "+17169013675",
+    leadKey: "+17169013675",
+    dimension: "reported_issue",
+    category: "feedback" as const,
+    severity: "P2" as const,
+    healed: false,
+    detail: "operator-reported (cadence): purchase interest is 4-6 months, should be a long term cadence",
+    reportedAt: "2026-07-16T21:41:04.399Z",
+    ...over
+  });
+  const disposed = rec({
+    key: "+17169013675::reported_issue",
+    disposition: "fixed",
+    deployTs: "2026-07-17T16:10:12.000Z"
+  });
+
+  const pre = partitionByDispositions([opReport()], { ledger: ledgerOf(disposed) });
+  assert.equal(pre.suppressed.length, 1, "a report filed BEFORE the fix boundary is suppressed");
+  assert.equal(pre.kept.length, 0);
+  assert.equal(pre.regressions.length, 0);
+  assert.match(
+    pre.suppressed[0].reason,
+    /2026-07-16T21:41:04\.399Z/,
+    "the reason names the timestamp actually compared, not 'undefined'"
+  );
+
+  // FAIL-SAFE PRESERVED: an upper bound can only err by looking NEWER than the event, so a report
+  // filed after the fix resurfaces as a regression rather than being eaten.
+  const post = partitionByDispositions([opReport({ reportedAt: "2026-08-02T12:00:00.000Z" })], {
+    ledger: ledgerOf(disposed)
+  });
+  assert.equal(post.regressions.length, 1, "a report filed AFTER the fix comes back as a regression");
+  assert.equal(post.suppressed.length, 0, "a post-fix report is never suppressed");
+
+  // A POLICY disposition stays timeless — it never depended on a date either way.
+  const policy = partitionByDispositions([opReport({ reportedAt: "2030-01-01T00:00:00.000Z" })], {
+    ledger: ledgerOf(rec({ key: "+17169013675::reported_issue", disposition: "no-action" }))
+  });
+  assert.equal(policy.suppressed.length, 1, "no-action suppresses regardless of the report date");
+}
+
+// 20c. `occurredAt` always WINS: reportedAt is only the fallback for sources that omit the event.
+{
+  assert.equal(
+    occurrenceMsOf({ occurredAt: "2026-07-01T00:00:00.000Z", reportedAt: "2026-07-20T00:00:00.000Z" }),
+    Date.parse("2026-07-01T00:00:00.000Z"),
+    "the true event time beats the upper bound"
+  );
+  assert.equal(
+    occurrenceMsOf({ reportedAt: "2026-07-20T00:00:00.000Z" }),
+    Date.parse("2026-07-20T00:00:00.000Z"),
+    "reportedAt carries the date when the source omits occurredAt"
+  );
+  assert.ok(!Number.isFinite(occurrenceMsOf({})), "neither field ⇒ undatable ⇒ caller keeps the finding");
+  assert.ok(
+    !Number.isFinite(occurrenceMsOf({ occurredAt: "not-a-date", reportedAt: null })),
+    "an unparseable pair stays undatable — never silently suppressed"
+  );
+}
+
 // 21. FAIL-SAFE: no ledger, an empty ledger, or a different key suppresses NOTHING.
 {
   assert.equal(partitionByDispositions([dz()], { ledger: null }).kept.length, 1, "no ledger → keep");
@@ -366,5 +434,5 @@ const rec = (over: Partial<DispositionRecord> = {}): DispositionRecord => ({
 }
 
 console.log(
-  "PASS stale-finding suppression eval (suppress pre-fix / keep uncertain / ledger integrity / wiring + already-shipped echoes: named-fix-postdates-event / regression-safe / scope / wiring + disposition ledger: permanent policy suppression / regression-of-disposed fail-safe / boundary / parse+upsert fail-safety / vocabulary / wiring)"
+  "PASS stale-finding suppression eval (suppress pre-fix / keep uncertain / ledger integrity / wiring + already-shipped echoes: named-fix-postdates-event / regression-safe / scope / wiring + disposition ledger: permanent policy suppression / regression-of-disposed fail-safe / boundary / operator-report reportedAt fallback / parse+upsert fail-safety / vocabulary / wiring)"
 );

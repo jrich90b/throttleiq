@@ -171,8 +171,33 @@ export type DisposableFinding = {
   convId?: string | null;
   dimension?: string | null;
   occurredAt?: string | null;
+  /** Upper bound on the triggering event (operator "Report issue" time) — see occurrenceMsOf. */
+  reportedAt?: string | null;
   [k: string]: unknown;
 };
+
+/**
+ * When a code-state disposition may treat this finding as pre-fix.
+ *
+ * `occurredAt` is the triggering event and is always preferred. But a whole SOURCE never sets it:
+ * an operator "Report issue" (dimension `reported_issue`) carries only `reportedAt`, deliberately
+ * kept separate at the source so the stale-finding suppressor can't mistake an upper bound for the
+ * event (conversationOutcomeAudit.ts, OutcomeAnomaly field note). Undated ⇒ KEPT, so before this
+ * fallback EVERY `fixed`/`stale-echo` disposition on a reported_issue key suppressed nothing:
+ * measured 2026-08-02, 23 such records sat in the ledger while all 65 of their findings stayed in
+ * the feed, and the burndown loop re-triaged leads it had itself disposed 90 minutes earlier.
+ *
+ * An upper bound is SOUND here in a way it is not at the source, because of the direction of the
+ * comparison: suppression requires `ts <= boundary`, and since `event <= reportedAt`, proving
+ * `reportedAt <= boundary` proves `event <= boundary` too. The error can only ever fall the safe
+ * way — a report filed after the fix looks NEWER than it is, so it resurfaces as a regression
+ * rather than being eaten. That is the same fail-direction the rest of this module keeps.
+ */
+export function occurrenceMsOf(finding: DisposableFinding | null | undefined): number {
+  const occurredMs = Date.parse(String(finding?.occurredAt ?? ""));
+  if (Number.isFinite(occurredMs)) return occurredMs;
+  return Date.parse(String(finding?.reportedAt ?? "")); // NaN when neither is datable ⇒ caller keeps it
+}
 
 export type DispositionSuppression<T = DisposableFinding> = {
   anomaly: T;
@@ -228,7 +253,7 @@ export function partitionByDispositions<T extends DisposableFinding>(
       continue;
     }
     const boundaryMs = dispositionBoundaryMs(record);
-    const occurredMs = Date.parse(String(a?.occurredAt ?? ""));
+    const occurredMs = occurrenceMsOf(a);
     if (!Number.isFinite(occurredMs)) {
       // Can't date the occurrence ⇒ can't prove it predates the fix ⇒ keep (fail-safe).
       kept.push(a);
@@ -238,12 +263,15 @@ export function partitionByDispositions<T extends DisposableFinding>(
       kept.push(a);
       continue;
     }
+    // Name the timestamp we actually compared (an operator report has only `reportedAt`), so the
+    // reason line stays auditable instead of reading "event undefined".
+    const occurredIso = new Date(occurredMs).toISOString();
     if (occurredMs > boundaryMs) {
       regressions.push({
         anomaly: a,
         key,
         record,
-        reason: `regression-of-disposed: event ${a.occurredAt} postdates the ${record.disposition} boundary ${record.deployTs ?? record.at}`
+        reason: `regression-of-disposed: event ${occurredIso} postdates the ${record.disposition} boundary ${record.deployTs ?? record.at}`
       });
       continue;
     }
@@ -251,7 +279,7 @@ export function partitionByDispositions<T extends DisposableFinding>(
       anomaly: a,
       key,
       record,
-      reason: `disposed ${record.disposition} by ${record.by} — event ${a.occurredAt} predates the boundary ${record.deployTs ?? record.at}`
+      reason: `disposed ${record.disposition} by ${record.by} — event ${occurredIso} predates the boundary ${record.deployTs ?? record.at}`
     });
   }
   return { kept, suppressed, regressions };
