@@ -581,8 +581,18 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 //   (`if (conv.appointment) conv.appointment.reschedulePending = false;`, ~62947) that the
 //   adjacency rule had been folding into the block above it, so it now counts in its own right.
 //   `appointment` 11 -> 9. It belongs to the CLEAR question and is queued with it, not lost.
+// 146 -> 139: the inventory-availability REOPEN un-stacking (this commit). A CODE change, and the
+//   biggest single move so far because it is one question wearing three Tier-1 fields at once.
+//   `clearLinkedInventoryAvailabilityConversations` (staff un-marks a unit as held/sold) ran two
+//   near-identical arms that had drifted, and `processInventoryHolds` (a hold cleared because the
+//   unit SOLD) answered the same question a third way; all three now ask
+//   `decideInventoryAvailabilityReopen` through `applyInventoryAvailabilityReopen`.
+//   `hold` 5 -> 0 and OFF the queue entirely — the first Tier-1 field fully cleared. `status` 5 -> 4,
+//   `closedReason` 5 -> 4. The cluster heuristic this memory recorded paid off exactly as predicted:
+//   several fields' writers sitting within a few lines of each other were ONE question, worth more
+//   per PR than the biggest single field.
 // RATCHET DOWN ONLY.
-const UNREFEREED_WRITER_BASELINE = 146;
+const UNREFEREED_WRITER_BASELINE = 139;
 
 {
   const sourceFiles: SourceFile[] = [];

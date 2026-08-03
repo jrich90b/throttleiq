@@ -106,7 +106,14 @@ const CEILINGS: Ceiling[] = [
     // to applyReschedulePendingLatch (conversationStore), which asks decideReschedulePendingLatch
     // (routeStateReducer). Taken against main's REAL count (71_432), which the ceiling was sitting
     // exactly on — so this slice funded itself.
-    max: 71_427,
+    // 71_427 -> 71_414. The inventory-availability REOPEN un-stacking: two drifted arms in
+    // clearLinkedInventoryAvailabilityConversations plus the stale-hold sweep in
+    // processInventoryHolds collapse into three one-line calls to applyInventoryAvailabilityReopen
+    // (conversationStore), which asks decideInventoryAvailabilityReopen (routeStateReducer).
+    // NOTE: the first draft of this slice put the decide call INLINE in index.ts and the file GREW
+    // by 24 lines. The ceiling caught it, which is exactly its job — the fix was to move the writes
+    // behind the store wrapper like every previous un-stacking, not to raise the number.
+    max: 71_414,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

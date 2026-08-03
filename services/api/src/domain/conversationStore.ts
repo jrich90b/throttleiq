@@ -14,6 +14,9 @@ import {
   decideManualCadenceRestart,
   isRealReplyProvider,
   decideBurnedCadenceLadderRealign,
+  decideInventoryAvailabilityReopen,
+  type InventoryAvailabilityReopenCause,
+  type InventoryAvailabilityReopenDecision,
   decideReschedulePendingLatch,
   type ReschedulePendingLatchLane,
   type ReschedulePendingLatchDecision,
@@ -5251,6 +5254,35 @@ export function applyReschedulePendingLatch(
   }
   conv.appointment.reschedulePending = true;
   conv.appointment.updatedAt = nowIso();
+  return decision;
+}
+
+// The ONE place that reacts to "the inventory record that closed this lead is gone". Two callers
+// answered it inline — the un-mark endpoint (two drifted arms, hold and sale) and the stale-hold
+// sweep — writing `hold`/`sale`, `status` and `closedReason` on their own reading. See
+// `decideInventoryAvailabilityReopen` for the two preserved divergences and the fail direction,
+// which is the unusual one: here REOPENING is the safe answer, because the irreversible thing
+// (closing a live lead against a bike) already happened.
+export function applyInventoryAvailabilityReopen(
+  conv: Conversation,
+  input: { cause: InventoryAvailabilityReopenCause | string }
+): InventoryAvailabilityReopenDecision {
+  const decision = decideInventoryAvailabilityReopen({
+    cause: input.cause,
+    closedReason: conv?.closedReason ?? null,
+    followUpReason: conv?.followUp?.reason ?? null,
+    cadenceKind: conv?.followUpCadence?.kind ?? null
+  });
+  if (!conv || !decision.clearRecord) return decision;
+  if (input.cause === "sale_reversed") conv.sale = undefined;
+  else conv.hold = undefined;
+  if (decision.reopen) {
+    conv.status = "open";
+    conv.closedAt = undefined;
+    conv.closedReason = undefined;
+  }
+  if (decision.stopCadence) stopFollowUpCadence(conv, "inventory_marked_available");
+  if (decision.resumeFollowUp) setFollowUpMode(conv, "active", "inventory_marked_available");
   return decision;
 }
 
