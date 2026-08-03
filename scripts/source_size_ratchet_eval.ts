@@ -118,7 +118,11 @@ const CEILINGS: Ceiling[] = [
     // licence/credit-pending staff note, the manual-outbound seller-photo request) collapse into
     // calls to applyCadenceReplacement (conversationStore), which asks decideCadenceReplacement
     // (routeStateReducer). The fourth site was already in the store.
-    max: 71_404,
+    // 71_404 -> 71_390. The appointment-ATTRIBUTION un-stacking: `setAppointmentBookedBy`'s
+    // six-field normalization and `onAppointmentBooked`'s confirmedBy inference both collapse into
+    // calls to applyAppointmentAttribution (conversationStore), which asks
+    // decideAppointmentAttribution (routeStateReducer).
+    max: 71_390,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

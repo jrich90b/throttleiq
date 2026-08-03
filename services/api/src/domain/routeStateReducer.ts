@@ -5697,3 +5697,144 @@ export function decideWalkInInventoryWatchTurn(
         : `no watchable want (${want || "unclassified"}) and no explicit notify verb`
   };
 }
+
+// ===================================================================================================
+// WHO BOOKED THIS APPOINTMENT — "and what do we record when nobody told us?"
+//
+// WHAT WAS FIGHTING. Two places write `appointment.bookedBy` and they answer different halves of
+// the same question with different rules:
+//
+//   setAppointmentBookedBy (index.ts)  the caller HANDS IN an attribution — nine booking paths do
+//                                      this (the customer-ack booking, the voice-transcript
+//                                      booking, the public link, the staff console, the
+//                                      manual-outbound lanes)
+//   onAppointmentBooked (index.ts)     nobody handed one in, so INFER it from `confirmedBy`
+//
+// The inference is not a curiosity: of the eighteen places that call `onAppointmentBooked`, eleven
+// reach it without any explicit attribution above them, so for those the inference IS the record.
+//
+// THE THREE PRESERVED DIVERGENCES:
+//
+//   1. OVERWRITE vs FILL-A-BLANK. The explicit lane writes over an attribution already on file; the
+//      inference refuses to touch one. So a later booking path can rewrite who booked an
+//      appointment, while the inference never can. Preserved: an explicit attribution is somebody
+//      stating a fact, and the fresher statement winning is the defensible reading.
+//
+//   2. A CUSTOMER'S CONFIRMATION IS FILED AS THE AGENT'S BOOKING. `confirmedBy: "customer"` infers
+//      `{ actor: "ai", channel: "sms" }` — the customer did the confirming, and we record the agent
+//      as the booker over SMS, with the channel hard-coded rather than read off the thread the way
+//      every explicit lane passes it. (`confirmedBy: "salesperson"` infers `{ human, manual }`,
+//      which has the same hard-coded-channel shape but attributes to the right party.) Preserved:
+//      `bookedBy` drives reporting and attribution, not what any customer receives, so changing it
+//      is a decision about how the dealership counts its own bookings.
+//
+//   3. AN UNRECOGNIZED `confirmedBy` RECORDS NOTHING AT ALL. Blank, "staff", anything else — the
+//      appointment simply carries no booker. Preserved, and it is the safe direction: an absent
+//      attribution reads as unknown, where a guessed one reads as fact.
+//
+// FAIL DIRECTION. `bookedBy` never gates a message, a close, or a booking — it is a record of who
+// did something that already happened. So the dangerous direction here is a CONFIDENT WRONG
+// attribution, not a missing one, and an unrecognized lane therefore writes nothing.
+//
+// PURE + CLOCK-FREE: the caller owns the write and the timestamps.
+
+export type AppointmentAttributionLane =
+  | "explicit" // a booking path handed us the attribution
+  | "inferred"; // nobody did — read it off `confirmedBy`
+
+/**
+ * Structural mirror of the store's `AppointmentBookedBy`. Declared here rather than imported
+ * because this module stays free of store types — actor/channel are plain strings so a decision
+ * never has to know the store's unions, and the applier does the narrowing.
+ */
+export type AppointmentAttributionRecord = {
+  actor: string;
+  channel: string;
+  userId?: string | null;
+  userName?: string | null;
+  sourceMessageId?: string | null;
+  inferred?: boolean;
+};
+
+export type AppointmentAttributionInput = {
+  lane: AppointmentAttributionLane | string;
+  /** Is there an appointment record to attribute at all? */
+  hasAppointment: boolean;
+  /** Is an attribution already on file? Only the inference defers to it (divergence 1). */
+  hasExistingAttribution: boolean;
+  /** Explicit lane: what the caller handed in. Absent = nothing to write. */
+  supplied?: Partial<AppointmentAttributionRecord> | null;
+  /** Inferred lane: the stored `appointment.confirmedBy`, exactly as it is. */
+  confirmedBy?: string | null;
+};
+
+export type AppointmentAttributionDecision = {
+  write: boolean;
+  /** The attribution to store. Only set when `write`. */
+  bookedBy?: AppointmentAttributionRecord;
+  divergence: string | null;
+  why: string;
+};
+
+/** What each recognized `confirmedBy` infers. Anything absent from this table records nothing. */
+const APPOINTMENT_ATTRIBUTION_INFERENCE: Record<string, { actor: string; channel: string }> = {
+  salesperson: { actor: "human", channel: "manual" },
+  customer: { actor: "ai", channel: "sms" }
+};
+
+export function decideAppointmentAttribution(
+  input: AppointmentAttributionInput
+): AppointmentAttributionDecision {
+  const lane = String(input?.lane ?? "").trim();
+  if (!input?.hasAppointment) {
+    return { write: false, divergence: null, why: "no appointment record to attribute" };
+  }
+
+  if (lane === "explicit") {
+    const supplied = input.supplied;
+    if (!supplied) return { write: false, divergence: null, why: "explicit: the caller handed in nothing" };
+    return {
+      write: true,
+      // The six-key shape the helper has always written, normalizations included: a blank
+      // userId/userName/sourceMessageId becomes undefined, and `inferred` is only ever true or gone.
+      bookedBy: {
+        actor: supplied.actor,
+        channel: supplied.channel,
+        userId: supplied.userId ?? undefined,
+        userName: supplied.userName ?? undefined,
+        sourceMessageId: supplied.sourceMessageId ?? undefined,
+        inferred: supplied.inferred === true ? true : undefined
+      } as AppointmentAttributionRecord,
+      divergence: input.hasExistingAttribution ? "explicit_overwrites_an_existing_attribution" : null,
+      why: input.hasExistingAttribution
+        ? "explicit: rewrote an attribution already on file — the fresher statement wins"
+        : `explicit: recorded ${String(supplied.actor ?? "?")} via ${String(supplied.channel ?? "?")}`
+    };
+  }
+
+  if (lane === "inferred") {
+    if (input.hasExistingAttribution) {
+      return { write: false, divergence: null, why: "inferred: an attribution is already on file — never overwrite one" };
+    }
+    const confirmedBy = String(input.confirmedBy ?? "").toLowerCase();
+    const inference = APPOINTMENT_ATTRIBUTION_INFERENCE[confirmedBy];
+    if (!inference) {
+      return {
+        write: false,
+        divergence: "an_unrecognized_confirmedBy_records_no_attribution_at_all",
+        why: `inferred: nothing to go on (confirmedBy "${confirmedBy || "blank"}") — left unattributed`
+      };
+    }
+    return {
+      write: true,
+      // The three-key shape the inference has always written — no userId/userName/sourceMessageId
+      // keys at all, unlike the explicit lane's six.
+      bookedBy: { actor: inference.actor, channel: inference.channel, inferred: true } as AppointmentAttributionRecord,
+      divergence:
+        confirmedBy === "customer" ? "customer_confirmation_is_filed_as_the_agents_booking" : null,
+      why: `inferred: ${confirmedBy} confirmed, so recorded ${inference.actor} via ${inference.channel}`
+    };
+  }
+
+  return { write: false, divergence: null, why: `unrecognized attribution lane "${lane}" — recorded nothing` };
+}
