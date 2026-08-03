@@ -4146,57 +4146,17 @@ export function updateConversationContact(
   scheduleSave();
 }
 
-
-function ensureAppointment(conv: Conversation): AppointmentMemory {
-  if (!conv.appointment) {
-    conv.appointment = { status: "none", updatedAt: nowIso(), acknowledged: false };
-  }
-  return conv.appointment;
-}
-
-const TIME_RE = /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i;
-const DAY_RE = /\b(today|tomorrow|mon(day)?|tue(sday)?|wed(nesday)?|thu(rsday)?|fri(day)?|sat(urday)?|sun(day)?)\b/i;
-
-export function updateAppointmentFromInbound(
-  conv: Conversation,
-  inboundText: string,
-  sourceMessageId?: string
-) {
-  const text = (inboundText || "").toLowerCase();
-
-  if (/(cancel|reschedule|another time|change the time)/.test(text)) {
-    conv.appointment = { status: "none", updatedAt: nowIso(), sourceMessageId };
-    scheduleSave();
-    return;
-  }
-
-  const hasTime = TIME_RE.test(text);
-  const hasDay = DAY_RE.test(text);
-
-  if (hasTime && hasDay) {
-    conv.appointment = {
-      status: "confirmed",
-      whenText: inboundText.trim(),
-      whenIso: null,
-      confirmedBy: "customer",
-      updatedAt: nowIso(),
-      sourceMessageId,
-      acknowledged: false
-    };
-    scheduleSave();
-    return;
-  }
-
-  const appt = ensureAppointment(conv);
-  if (appt.status !== "none" && /(works|sounds good|see you|perfect|ok|okay|yes)/.test(text)) {
-    appt.status = "confirmed";
-    appt.confirmedBy = "customer";
-    appt.updatedAt = nowIso();
-    appt.sourceMessageId = sourceMessageId;
-    appt.acknowledged = false;
-    scheduleSave();
-  }
-}
+// REMOVED (2026-08-02): `updateAppointmentFromInbound` + its `ensureAppointment`/TIME_RE/DAY_RE
+// helpers. It read customer intent with keyword regexes ("cancel|reschedule", a bare weekday +
+// clock match, "works|sounds good|ok|yes") and, on a match, WROTE the appointment record whole —
+// wiping it to `status: "none"` or asserting `status: "confirmed", confirmedBy: "customer"`.
+// That is comprehension by regex on a Tier-1 field (AGENTS.md forbids it), and its fail-direction
+// is unsafe in both directions: "ok" in any sentence confirms an appointment nobody agreed to, and
+// the word "cancel" anywhere erases a booked one. It had ZERO callers — the live appointment path
+// runs through the booking-intent parser and the `applyAppointment*` referees — so this was a dormant
+// landmine, not behaviour: any future caller would have silently regressed appointment handling.
+// The two `conv.appointment = {...}` writes it contributed are why `appointment` still shows an
+// unrefereed fight surface it never actually fought in.
 
 export function setLastSuggestedSlots(conv: Conversation, slots: any[]) {
   conv.scheduler = conv.scheduler ?? { updatedAt: nowIso(), lastSuggestedSlots: [] };

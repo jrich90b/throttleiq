@@ -562,8 +562,16 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 //   stop being true one level down, since two writers cannot disagree about when a record last
 //   changed. This does not un-stack anything; it stops the queue counting work that does not exist,
 //   which #455 exposed when removing three writers moved the number by one.
+// 150 -> 148: the DEAD keyword appointment writer, deleted (this commit). A CODE change.
+//   `updateAppointmentFromInbound` (conversationStore) decided the appointment record from keyword
+//   regexes over raw customer text — "cancel|reschedule" wiped it to `status: "none"`, a bare
+//   weekday+clock match asserted `status: "confirmed", confirmedBy: "customer"` — and it had ZERO
+//   callers anywhere in the tracked tree. So it never fought anyone; it was a dormant landmine that
+//   the queue was, correctly, counting as two independent writers of a Tier-1 field. Removing it is
+//   provably behaviour-preserving (nothing in the serving path imported it) and closes the two
+//   whole-record `conv.appointment = {...}` writes. `appointment` 13 -> 11.
 // RATCHET DOWN ONLY.
-const UNREFEREED_WRITER_BASELINE = 150;
+const UNREFEREED_WRITER_BASELINE = 148;
 
 {
   const sourceFiles: SourceFile[] = [];
