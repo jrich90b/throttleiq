@@ -51,9 +51,14 @@ import {
   typicalPeakOutboundPerHour,
   buildRevertPlan,
   decideCanaryGate,
+  measureCanarySlice,
+  decideCanaryProgress,
   DEFAULT_CANARY_THRESHOLDS,
+  DEFAULT_CANARY_PROGRESS,
   type CanaryCounters,
-  type CanaryVerdict
+  type CanaryVerdict,
+  type CanaryMeasurement,
+  type CanaryProgressConfig
 } from "../services/api/src/domain/canaryHealth.ts";
 
 type BaselineFile = {
@@ -71,6 +76,15 @@ type BaselineFile = {
   storePath?: string;
   storeConversations?: number;
   storeNewestOutboundMs?: number | null;
+  /**
+   * PROGRESSIVE MEASUREMENT (2026-08-03). Present => this canary is measured as a series of short
+   * slices under a run-length rule (canaryHealth.decideCanaryProgress), and `windowMs` is only the
+   * BASELINE lookback. ABSENT => a legacy one-shot before/after canary, judged the old way.
+   * The legacy path is kept deliberately: a canary armed before this shipped is live on the box
+   * right now, and a rework that stranded it would be the same class of bug it is fixing.
+   */
+  progress?: CanaryProgressConfig;
+  measurements?: CanaryMeasurement[];
 };
 
 function arg(name: string): string | undefined {
@@ -260,6 +274,84 @@ if (mode === "baseline") {
  * Judge a captured baseline against what has happened since, and PRINT the comparison.
  * Returns null when the window has not elapsed — not-yet-ready is never a verdict.
  */
+/**
+ * PROGRESSIVE ADVANCE — measure every slice that has fully elapsed and is not already recorded,
+ * then apply the run-length rule. Returns null while still watching (pending stays put).
+ *
+ * Idempotent by slice index, so it does not matter whether this runs once a day or every hour:
+ * a slice is measured exactly once, and re-running only picks up newly-elapsed ones.
+ */
+function advanceCanary(baseline: BaselineFile): { verdict: CanaryVerdict | null; measurements: CanaryMeasurement[] } {
+  const config = baseline.progress ?? DEFAULT_CANARY_PROGRESS;
+  const measurements = [...(baseline.measurements ?? [])];
+  const conversations = loadConversations();
+  const peak = baseline.typicalPeakOutboundPerHour ?? typicalPeakOutboundPerHour(conversations);
+
+  // Measure each fully-elapsed slice we have not recorded yet.
+  for (let i = measurements.length; i < config.count; i++) {
+    const sliceStartMs = baseline.takenAtMs + i * config.intervalMs;
+    const sliceEndMs = sliceStartMs + config.intervalMs;
+    if (nowMs < sliceEndMs) break; // not finished; a partial slice reads as a collapse
+
+    const sliceCounters = computeCanaryCounters(conversations, { startMs: sliceStartMs, endMs: sliceEndMs });
+    const runaway = detectRunaway(sliceCounters.outboundToCustomer, config.intervalMs, peak);
+    const m = measureCanarySlice({
+      baselineCounters: baseline.counters,
+      baselineWindowMs: baseline.windowMs,
+      sliceCounters,
+      sliceWindowMs: config.intervalMs,
+      runaway
+    });
+    measurements.push({
+      atMs: nowMs,
+      sliceStartMs,
+      sliceEndMs,
+      counters: sliceCounters,
+      status: m.status,
+      ...(m.fatal ? { fatal: true } : {}),
+      reason: m.reason
+    });
+  }
+
+  const progress = decideCanaryProgress({ measurements, config });
+  const sha = baseline.deployedSha.slice(0, 8) || "(unrecorded)";
+  console.log(
+    `canary progress — sha ${sha} · baseline ${Math.round(baseline.windowMs / 3_600_000)}h ` +
+      `· slices ${Math.round(config.intervalMs / 3_600_000)}h x${config.count} ` +
+      `· tolerate ${config.failureLimit} fail, promote on ${config.consecutiveSuccessLimit} clean`
+  );
+  for (const m of measurements) {
+    const when = new Date(m.sliceStartMs).toISOString().slice(5, 16).replace("T", " ");
+    console.log(
+      `  ${String(m.status).padEnd(12)} ${when}  sends=${m.counters.outboundToCustomer} ` +
+        `drafts=${m.counters.draftsProduced} convs=${m.counters.activeConversations}  — ${m.reason}`
+    );
+  }
+  console.log(`  => ${progress.status.toUpperCase()}: ${progress.reason}\n`);
+
+  if (progress.status === "watching") return { verdict: null, measurements };
+
+  const verdict: CanaryVerdict = {
+    status: progress.status,
+    breaches:
+      progress.status === "regressed"
+        ? measurements.filter(m => m.status === "fail").flatMap(m => [
+            {
+              metric: "slice" as any,
+              kind: (m.fatal ? "runaway" : "increase") as any,
+              baseline: 0,
+              current: m.counters.outboundToCustomer,
+              limit: config.failureLimit,
+              detail: `slice ${new Date(m.sliceStartMs).toISOString()} — ${m.reason}`
+            }
+          ])
+        : [],
+    blockers: progress.status === "unknown" ? [progress.reason] : [],
+    reason: progress.reason
+  };
+  return { verdict, measurements };
+}
+
 function judgeBaseline(baseline: BaselineFile): CanaryVerdict | null {
   const watchEndMs = baseline.takenAtMs + baseline.windowMs;
 
@@ -348,21 +440,36 @@ if (mode === "arm") {
     );
     process.exit(2);
   }
-  const hours = Number(arg("hours") ?? 48) || 48;
-  const payload = captureBaseline(hours);
+  // THE BASELINE IS NOW A LONG LOOKBACK, decoupled from how long we wait for a verdict.
+  // Before 2026-08-03 one `--hours` did both jobs, so clearing the 20-send floor and answering
+  // quickly were in direct conflict and neither worked. 14 days here is ~360 sends — far above any
+  // floor — while the verdict still arrives in ~24h via the slice schedule below.
+  const baselineHours = Number(arg("baseline-hours") ?? arg("hours") ?? 336) || 336;
+  const progress: CanaryProgressConfig = {
+    intervalMs: (Number(arg("interval-hours") ?? 0) || DEFAULT_CANARY_PROGRESS.intervalMs / 3_600_000) * 3_600_000,
+    count: Number(arg("count") ?? 0) || DEFAULT_CANARY_PROGRESS.count,
+    failureLimit: Number(arg("failure-limit") ?? NaN) >= 0 ? Number(arg("failure-limit")) : DEFAULT_CANARY_PROGRESS.failureLimit,
+    consecutiveSuccessLimit: Number(arg("promote-after") ?? 0) || DEFAULT_CANARY_PROGRESS.consecutiveSuccessLimit
+  };
+  const payload: BaselineFile = { ...captureBaseline(baselineHours), progress, measurements: [] };
   fs.mkdirSync(canaryDir(), { recursive: true });
   fs.writeFileSync(pendingPath(), JSON.stringify(payload, null, 2));
   const c = payload.counters;
+  const sliceH = progress.intervalMs / 3_600_000;
   console.log(
-    `canary ARMED on ${payload.deployedSha.slice(0, 8) || "(unrecorded)"} — ${hours}h window -> ${pendingPath()}\n` +
-      `  before: sends=${c.outboundToCustomer} drafts=${c.draftsProduced} closed=${c.conversationsClosed} ` +
-      `held=${c.draftsHeld} convs=${c.activeConversations} · typical busy hour=${payload.typicalPeakOutboundPerHour}/h`
+    `canary ARMED on ${payload.deployedSha.slice(0, 8) || "(unrecorded)"} -> ${pendingPath()}\n` +
+      `  baseline ${baselineHours}h: sends=${c.outboundToCustomer} drafts=${c.draftsProduced} ` +
+      `closed=${c.conversationsClosed} held=${c.draftsHeld} convs=${c.activeConversations} ` +
+      `· typical busy hour=${payload.typicalPeakOutboundPerHour}/h\n` +
+      `  watch: ${sliceH}h slices x${progress.count} (max ${sliceH * progress.count}h) · ` +
+      `tolerate ${progress.failureLimit} failed · promote after ${progress.consecutiveSuccessLimit} consecutive clean ` +
+      `(~${sliceH * progress.consecutiveSuccessLimit}h)\n` +
+      `  expected per slice: ~${(c.outboundToCustomer * (sliceH / baselineHours)).toFixed(1)} sends`
   );
   if (c.outboundToCustomer < DEFAULT_CANARY_THRESHOLDS.minBaselineOutbound) {
     console.log(
-      "  NOTE: too quiet to judge a deploy against " +
-        `(${c.outboundToCustomer} < ${DEFAULT_CANARY_THRESHOLDS.minBaselineOutbound} sends). ` +
-        "The judgement will return UNKNOWN — widen --hours."
+      `  NOTE: the BASELINE is thin (${c.outboundToCustomer} < ${DEFAULT_CANARY_THRESHOLDS.minBaselineOutbound} sends) — ` +
+        "widen --baseline-hours. Slices will read inconclusive until it can support a ratio."
     );
   }
   process.exit(0);
@@ -378,8 +485,23 @@ if (mode === "judge") {
     console.error("canary_watch judge: nothing is pending — no deploy is being watched.");
     process.exit(2);
   }
-  const verdict = judgeBaseline(baseline);
-  if (!verdict) process.exit(2); // window still open; pending stays exactly where it is
+  // Progressive canaries advance slice-by-slice; legacy ones (armed before 2026-08-03) keep the
+  // old one-shot path so a canary already in flight still concludes.
+  let verdict: CanaryVerdict | null;
+  if (baseline.measurements) {
+    const advanced = advanceCanary(baseline);
+    // Persist the slices measured this run either way, so the work is never redone and a
+    // long-running watch survives restarts.
+    fs.writeFileSync(
+      pendingPath(),
+      JSON.stringify({ ...baseline, measurements: advanced.measurements }, null, 2)
+    );
+    if (!advanced.verdict) process.exit(2); // still watching; pending stays put
+    verdict = advanced.verdict;
+  } else {
+    verdict = judgeBaseline(baseline);
+    if (!verdict) process.exit(2); // window still open; pending stays exactly where it is
+  }
 
   appendHistory({
     judgedAtMs: nowMs,
