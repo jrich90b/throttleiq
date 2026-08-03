@@ -23,6 +23,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { parseIncomingInventoryPurposeWithLLM } from "../services/api/src/domain/llmDraft.ts";
 import { decideIncomingInventoryPurpose } from "../services/api/src/domain/routeStateReducer.ts";
+import { applyIncomingInventoryPurposeDecision } from "../services/api/src/domain/pendingIncomingInventory.ts";
 
 let n = 0;
 
@@ -42,7 +43,28 @@ assert.ok(/decideIncomingInventoryPurpose/.test(routerV2), "decision must be re-
 assert.ok(/purpose\?: "trade_in" \| "sourced_for_purchase" \| "factory_order" \| "unclear"/.test(store), "purpose must be persisted on PendingIncomingInventory");
 // Wired: the state applier comprehends the purpose and stores it.
 assert.ok(/parseIncomingInventoryPurposeWithLLM\(\{/.test(index), "the state applier must call the parser");
-assert.ok(/pending\.purpose = purposeDecision\.purpose/.test(index), "the decision must set the stored purpose");
+// BEHAVIOR, not source text. The assignment moved into applyIncomingInventoryPurposeDecision
+// (pendingIncomingInventory) when index.ts was pulled under its size ceiling, so pinning the old
+// literal `pending.purpose = purposeDecision.purpose` only proved where a line of code sat. Call
+// the applier and assert what it DOES — which is the thing that must never regress.
+{
+  const applied: any = {};
+  applyIncomingInventoryPurposeDecision(applied, { purpose: "factory_order", allocation: "for_this_customer" });
+  assert.equal(applied.purpose, "factory_order", "the decision must set the stored purpose");
+  assert.equal(applied.allocation, "for_this_customer", "the decision must fill an unset allocation");
+  // An allocation already established must never be downgraded by a later, thinner turn.
+  const established: any = { allocation: "spoken_for_other" };
+  applyIncomingInventoryPurposeDecision(established, { purpose: "trade_in", allocation: "unclear" });
+  assert.equal(established.allocation, "spoken_for_other", "an established allocation is never overwritten");
+  assert.equal(established.purpose, "trade_in", "…but the purpose still updates");
+  const unclearAlloc: any = {};
+  applyIncomingInventoryPurposeDecision(unclearAlloc, { purpose: "unclear", allocation: "unclear" });
+  assert.equal(unclearAlloc.allocation, undefined, "an unclear allocation is never stored");
+}
+assert.ok(
+  /applyIncomingInventoryPurposeDecision\(/.test(index),
+  "the state applier must route the purpose decision through the shared applier"
+);
 // A prior confident read is carried forward instead of re-parsing on every ack turn.
 assert.ok(/priorPurpose && priorPurpose !== "unclear"/.test(index), "a prior confident purpose must be carried forward");
 // BOTH reply paths (live + regenerate) plus ADF intake must await the async applier — route parity.

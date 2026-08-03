@@ -126,7 +126,13 @@ const CEILINGS: Ceiling[] = [
     // appointment-outcome "sold" close (the conversation header and the to-do endpoint) each wrote
     // status/closedAt/closedReason inline; both now call applyLeadCloseout (conversationStore),
     // which asks decideLeadCloseout (routeStateReducer). Net -4 after the import line.
-    max: 71_386,
+    // 71_386 -> 71_373. The arrival-notify task work went the same way rather than landing here:
+    // the purpose decision, the comprehended-arrival capture and BOTH state-reconcile heals (dedup
+    // + re-date) collapse into applyIncomingInventoryPurposeDecision /
+    // applyComprehendedArrivalToPending (pendingIncomingInventory) and
+    // healPendingIncomingNotifyTodosAcross (conversationStore). Net -11 INCLUDING the new feature,
+    // which is the point: this guard is what turned a +44 patch into a reduction.
+    max: 71_373,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
