@@ -561,6 +561,38 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     }, ["decideCloseoutReversal"]);
   }
 
+  // Sampled once per (verb x reason class). The four verbs answer this differently on the SAME lead,
+  // and `stop`'s post-sale protection turns on the REASON, so a single reason would hide divergence
+  // 1 entirely. PROBE: verb and reason are held fixed per sample; `hasRecord`, `status` and `kind`
+  // are the lead's real stored chase, which is what the verbs disagree about.
+  const CADENCE_LIFECYCLE_PROBES = [
+    { verb: "stop", reason: "manual_handoff" },
+    { verb: "stop", reason: "opt_out" },
+    { verb: "pause", reason: "manual_outbound" },
+    { verb: "resume", reason: "" },
+    { verb: "close", reason: "not_interested" }
+  ] as const;
+  for (const probe of CADENCE_LIFECYCLE_PROBES) {
+    add(`cadenceLifecycle:${probe.verb}${probe.reason ? `:${probe.reason}` : ""}`, conv => {
+      if (!conv || typeof reducer.decideCadenceLifecycle !== "function") return undefined;
+      const decision = reducer.decideCadenceLifecycle({
+        verb: probe.verb, // PROBE
+        hasRecord: !!conv.followUpCadence,
+        status: conv.followUpCadence?.status ?? null,
+        kind: conv.followUpCadence?.kind ?? null,
+        reason: probe.reason // PROBE
+      });
+      return {
+        apply: decision.apply,
+        nextStatus: decision.nextStatus,
+        clearNextDue: decision.clearNextDue,
+        clearPause: decision.clearPause,
+        clearStopReason: decision.clearStopReason,
+        divergence: decision.divergence
+      };
+    }, ["decideCadenceLifecycle"]);
+  }
+
   return registry;
 }
 

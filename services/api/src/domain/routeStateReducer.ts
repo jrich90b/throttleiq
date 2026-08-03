@@ -5141,6 +5141,153 @@ export function decideCloseoutReversal(input: CloseoutReversalInput): CloseoutRe
   };
 }
 
+// ===================================================================================================
+// THE CHASE'S STATE MACHINE — "may this caller stop / pause / resume the follow-up cadence?"
+//
+// `followUpCadence` is the field that TEXTS people. Four places moved it between active, paused and
+// stopped, each with its own preconditions and its own idea of which companion fields get cleared:
+//
+//   stop     stopFollowUpCadence(conv, reason)      the general "end this chase" verb
+//   pause    pauseFollowUpCadence(conv, until, r)   hush it until a date, keep it alive
+//   resume   resumeFollowUpCadence(conv, tz)        bring a STOPPED chase back
+//   close    closeConversation(conv, reason)        stopped the chase INLINE, bypassing `stop`
+//
+// FAIL DIRECTION: fewer texts. Refusing a transition leaves the chase where it is, and the states
+// this referee can refuse into (stopped, or a protected post-sale chase) are all quieter than the
+// alternative. An unrecognized verb changes nothing.
+//
+// THE PRESERVED DISAGREEMENTS, all three only visible once the four sat side by side:
+//
+//   DIVERGENCE 1 — only `stop` protects a post-sale / long-term chase. `stopFollowUpCadence` refuses
+//     when the reason is "manual_handoff" or "purchase_delivery" and the chase is post_sale or
+//     long_term: a service question or a "be there in 10 minutes" is expected post-sale chatter, not
+//     a reason to kill the sequence the sale itself started. `close` writes the same field with no
+//     such check. Preserved, and it is not reachable today — closeConversation is never called with
+//     either of those two reasons — but writing it down is the point: the protection belongs to the
+//     REASON, not to the function that happens to hold it.
+//
+//   DIVERGENCE 2 — `close` leaves the pause fields standing. `stop` clears `pausedUntil` and
+//     `pauseReason` alongside `nextDueAt`; the inline stop inside closeConversation clears only
+//     `nextDueAt`, so a closed lead can keep a "paused until <date>" stamp on a stopped chase.
+//     Preserved: it is a stale label on an already-stopped chase, it sends nothing, and clearing it
+//     here would be a behavior change smuggled into a cleanup.
+//
+//   DIVERGENCE 3 — `pause` has no post-sale protection at all. It hushes any ACTIVE chase whatever
+//     its kind, where `stop` would refuse for the same reason. Preserved: pausing is reversible and
+//     quieter, which is the safe direction; refusing here would make us text MORE.
+//
+// PURE + CLOCK-FREE: the caller owns the dates, the offsets and the writes.
+// ===================================================================================================
+
+export type CadenceLifecycleVerb =
+  | "stop" // stopFollowUpCadence — end this chase
+  | "pause" // pauseFollowUpCadence — hush it until a date, keep it alive
+  | "resume" // resumeFollowUpCadence — bring a STOPPED chase back
+  | "close"; // closeConversation — the lead is closed, so the chase ends with it
+
+/** Reasons that must NOT kill a post-sale / long-term chase. See divergence 1. */
+const CADENCE_STOP_PROTECTED_REASONS = new Set<string>(["manual_handoff", "purchase_delivery"]);
+/** Kinds that survive those reasons. */
+const CADENCE_PROTECTED_KINDS = new Set<string>(["post_sale", "long_term"]);
+
+export type CadenceLifecycleInput = {
+  verb: CadenceLifecycleVerb | string;
+  /**
+   * Is there a `followUpCadence` OBJECT at all? Deliberately separate from `status`: `stop` gated on
+   * the object's existence and `close` on the status being set, and a record carrying no status
+   * would have been treated differently by the two. Preserved rather than tidied.
+   */
+  hasRecord?: boolean;
+  /** The stored `followUpCadence.status`, exactly as it is. */
+  status?: string | null;
+  /** The stored `followUpCadence.kind`. */
+  kind?: string | null;
+  /** The caller's reason. Only `stop` reads it (divergence 1). */
+  reason?: string | null;
+};
+
+export type CadenceLifecycleDecision = {
+  /** May this transition happen at all? False means the caller writes nothing. */
+  apply: boolean;
+  /** The status to write. `null` when the verb does not change the status (pause). */
+  nextStatus: "active" | "stopped" | null;
+  /** Clear `nextDueAt`. */
+  clearNextDue: boolean;
+  /** Clear `pausedUntil` + `pauseReason`. NOT implied by stopping (divergence 2). */
+  clearPause: boolean;
+  /** Clear `stopReason`. */
+  clearStopReason: boolean;
+  /** Names the preserved disagreement when this verb is the odd one out for THIS input. */
+  divergence: string | null;
+  why: string;
+};
+
+export function decideCadenceLifecycle(input: CadenceLifecycleInput): CadenceLifecycleDecision {
+  const verb = String(input.verb ?? "").trim();
+  const recognized = verb === "stop" || verb === "pause" || verb === "resume" || verb === "close";
+  const status = String(input.status ?? "").trim();
+  const kind = String(input.kind ?? "").trim();
+  const reason = String(input.reason ?? "").trim();
+  const hasChase = !!status;
+  const hasRecord = input.hasRecord ?? hasChase;
+  const protectedChase =
+    CADENCE_STOP_PROTECTED_REASONS.has(reason) && CADENCE_PROTECTED_KINDS.has(kind);
+
+  // Every verb needs a cadence RECORD to move — all four originals returned early without one.
+  const apply = !recognized || !hasRecord
+    ? false
+    : verb === "stop"
+      ? !protectedChase
+      : verb === "pause"
+        ? status === "active"
+        : verb === "resume"
+          ? status === "stopped"
+          : /* close */ hasChase;
+
+  const refused = { clearNextDue: false, clearPause: false, clearStopReason: false };
+  const writes = !apply
+    ? refused
+    : verb === "stop"
+      ? { clearNextDue: true, clearPause: true, clearStopReason: false }
+      : verb === "pause"
+        ? refused
+        : verb === "resume"
+          ? { clearNextDue: false, clearPause: true, clearStopReason: true }
+          : /* close, DIVERGENCE 2 */ { clearNextDue: true, clearPause: false, clearStopReason: false };
+
+  return {
+    apply,
+    nextStatus: !apply
+      ? null
+      : verb === "resume"
+        ? "active"
+        : verb === "pause"
+          ? null
+          : "stopped",
+    ...writes,
+    divergence:
+      verb === "stop" && hasRecord && protectedChase
+        ? "only_the_stop_verb_protects_a_post_sale_or_long_term_chase"
+        : verb === "close" && apply && CADENCE_PROTECTED_KINDS.has(kind)
+          ? "closing_the_lead_stops_a_protected_chase_that_stop_would_have_spared"
+          : verb === "pause" && apply && CADENCE_PROTECTED_KINDS.has(kind)
+            ? "pause_hushes_a_protected_chase_that_stop_would_have_spared"
+            : null,
+    why: !recognized
+      ? `unrecognized cadence-lifecycle verb "${verb}" — refused, the chase stays where it is`
+      : !hasRecord
+        ? `${verb}: there is no chase on this lead — nothing to move`
+        : !apply
+          ? verb === "stop"
+            ? `stop: refused — a ${kind} chase survives "${reason}"; that is expected post-sale ` +
+              "traffic, not a reason to kill the sequence the sale started"
+            : `${verb}: refused — the chase is "${status}", not the state this verb moves from`
+          : verb === "pause"
+            ? `pause: the chase is hushed until the caller's date, still alive`
+            : `${verb}: the chase moves to ${verb === "resume" ? "active" : "stopped"}`
+  };
+}
+
 /**
  * Should a Traffic Log Pro walk-in note start an inventory watch?
  *
