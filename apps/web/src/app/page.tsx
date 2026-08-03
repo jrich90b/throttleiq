@@ -5867,6 +5867,18 @@ export default function Home() {
     const conv =
       selectedConv?.id === convId ? selectedConv : await fetchConversationDetail(convId);
     setSoldModalConv(conv);
+    // Seed "sold by" from the conversation we actually opened. The Update-Lead dropdown seeds this
+    // itself (see the closeReason === "sold" effect), but an outcome-modal chain has no closeReason
+    // and may target a conv that isn't selectedConv — so resolve it here, off `conv`, and never
+    // clobber a pick the manager already made.
+    const apptSalespersonId = String(conv?.appointment?.bookedSalespersonId ?? "").trim();
+    const knownOption = (id: string) => Boolean(id) && soldByOptions.some(sp => sp.id === id);
+    const seededSoldById =
+      String(conv?.sale?.soldById ?? "").trim() ||
+      (knownOption(String(authUser?.id ?? "")) ? String(authUser.id) : "") ||
+      (knownOption(apptSalespersonId) ? apptSalespersonId : "") ||
+      (soldByOptions.length === 1 ? soldByOptions[0].id : "");
+    if (seededSoldById) setSoldById(prev => prev || seededSoldById);
     const leadOptions = buildSoldLeadRefOptions(conv);
     const existingSaleLeadRef = String(conv?.sale?.leadRef ?? "").trim();
     const defaultLeadRef =
@@ -11460,6 +11472,7 @@ export default function Home() {
     setAppointmentOutcomeError(null);
     try {
       const shouldOpenHold = appointmentOutcomeSecondary === "hold";
+      const shouldOpenSold = appointmentOutcomeSecondary === "sold";
       const resp = await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/appointment/outcome`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -11483,6 +11496,8 @@ export default function Home() {
       setSaveToast("Appointment outcome saved.");
       if (shouldOpenHold) {
         await openHoldModal(selectedConv.id);
+      } else if (shouldOpenSold) {
+        await openSoldModal(selectedConv.id);
       }
     } catch (err: any) {
       setAppointmentOutcomeError(err?.message ?? "Failed to save appointment outcome");
@@ -15189,6 +15204,7 @@ export default function Home() {
 	                    if (!appointmentCloseTarget) return;
 	                    const convId = appointmentCloseTarget.convId;
 	                    const shouldOpenHold = appointmentCloseSecondaryOutcome === "hold";
+	                    const shouldOpenSold = appointmentCloseSecondaryOutcome === "sold";
 	                    setAppointmentCloseSaving(true);
 	                    try {
 	                      await markTodoDone(
@@ -15203,6 +15219,12 @@ export default function Home() {
 	                      setAppointmentCloseTarget(null);
 	                      if (shouldOpenHold) {
 	                        await openHoldModal(convId);
+	                      } else if (shouldOpenSold) {
+	                        // "Sold" must name the unit, same as "Hold" does. Without this the backend
+	                        // stamps conv.sale from lead.vehicle — the bike they ASKED about, which is
+	                        // routinely not the bike they bought (+17168614216: asked 2024 Street Glide,
+	                        // bought a 2025 Breakout).
+	                        await openSoldModal(convId);
 	                      }
 	                    } finally {
 	                      setAppointmentCloseSaving(false);
