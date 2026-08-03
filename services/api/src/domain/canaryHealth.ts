@@ -417,6 +417,38 @@ export type CanaryGateDecision = {
   reason: string;
 };
 
+/**
+ * THE GATE IS A CIRCUIT BREAKER, NOT A TURNSTILE (Joe ruling 2026-08-03, revising his own 8/2
+ * "one deploy watch at a time" rule after it was shown to be unsatisfiable at this dealership).
+ *
+ * The 8/2 rule: any open canary blocks the next behaviour deploy, so a bad deploy has ONE suspect.
+ * Right in principle, arithmetically impossible here:
+ *
+ *   - `minBaselineOutbound` is 20 sends and this store sends ~26/DAY, so a window able to support a
+ *     verdict at all is ~a day wide. Measured 2026-08-03: a live 48h capture returned 19 sends —
+ *     UNDER the floor. The comparative check abstains (UNKNOWN) on an ordinary week.
+ *   - The unstack loop merges every 20 minutes and supervised batches ship 6 PRs at once, so the
+ *     48h of quiet the rule assumes never arrives.
+ *   - UNKNOWN and never-judged BOTH blocked, so the first abstention latched the gate shut with no
+ *     path back open. The 8/2 canary sat OPEN from 18:13Z on an all-zero baseline (it had read the
+ *     stale base store — see detectStaleStore) and would have judged UNKNOWN on 8/4, which blocks,
+ *     permanently. The loop's deploys were frozen while supervised deploys walked past it.
+ *
+ * A gate that is always shut protects nothing — it gets overridden, which is what happened on three
+ * consecutive deploys. So the slow comparative check stops being a per-deploy blocker and becomes a
+ * DAILY HEALTH READING. What still blocks is the state that means real harm:
+ *
+ *   BLOCK <= the last judged verdict was REGRESSED (customers measurably got worse)
+ *   ALLOW <= anything else, with the current watch state reported
+ *
+ * FAIL DIRECTION. This deliberately trades "a regression might span several commits" for "the
+ * breaker still works and is not routinely overridden". The protections that survive are the ones
+ * that function at this cadence: `detectRunaway` (hourly, needs no baseline, catches the
+ * catastrophic flood), the ci:eval suite, and the nightly corpus replay. Attribution for a slow
+ * regression comes from those, not from freezing the pipeline.
+ *
+ * PURE + CLOCK-FREE: the caller passes `nowMs` in, so this stays unit-testable.
+ */
 export function decideCanaryGate(input: {
   pending: CanaryPending;
   /** The verdict of the most recently JUDGED canary, if any. */
@@ -426,54 +458,102 @@ export function decideCanaryGate(input: {
   const pending = input.pending ?? null;
   const last = input.lastVerdictStatus ?? null;
 
+  // Computed on every branch so a caller can still report WHAT is being watched and whether it is
+  // ripe to judge. The watch keeps running; it just no longer holds the door shut.
+  let pendingReady = false;
+  let minutesRemaining = 0;
+  let watching = "nothing is pending";
   if (pending) {
     const endMs = Number(pending.takenAtMs) + Number(pending.windowMs);
     const remainingMs = endMs - Number(input.nowMs);
-    const minutesRemaining = remainingMs > 0 ? Math.ceil(remainingMs / 60_000) : 0;
-    return {
-      mayDeployBehaviour: false,
-      pendingReady: remainingMs <= 0,
-      minutesRemaining,
-      reason:
-        remainingMs > 0
-          ? `a canary is still open on ${pending.deployedSha.slice(0, 8) || "(unrecorded)"} — ${minutesRemaining} min left in its window`
-          : `a canary on ${pending.deployedSha.slice(0, 8) || "(unrecorded)"} is ready to judge but has not been judged yet`
-    };
+    pendingReady = remainingMs <= 0;
+    minutesRemaining = remainingMs > 0 ? Math.ceil(remainingMs / 60_000) : 0;
+    const sha = pending.deployedSha.slice(0, 8) || "(unrecorded)";
+    watching = pendingReady
+      ? `a canary on ${sha} is ready to judge`
+      : `a canary is open on ${sha} — ${minutesRemaining} min left in its window`;
   }
 
-  if (last === "healthy") {
-    return {
-      mayDeployBehaviour: true,
-      pendingReady: false,
-      minutesRemaining: 0,
-      reason: "the last canary returned HEALTHY and nothing is pending"
-    };
-  }
-
+  // The ONE blocking condition: a measured regression is the only state where shipping more
+  // behaviour on top makes things worse rather than merely less attributable.
   if (last === "regressed") {
     return {
       mayDeployBehaviour: false,
-      pendingReady: false,
-      minutesRemaining: 0,
+      pendingReady,
+      minutesRemaining,
       reason: "the last canary REGRESSED — deal with that before shipping more behaviour"
     };
   }
 
-  if (last === "unknown") {
+  const note =
+    last === "healthy"
+      ? "the last canary returned HEALTHY"
+      : last === "unknown"
+        ? "the last canary abstained (UNKNOWN — too little traffic to compare), which is not a regression"
+        : "no canary has been judged yet";
+  return {
+    mayDeployBehaviour: true,
+    pendingReady,
+    minutesRemaining,
+    reason: `${note}; ${watching}`
+  };
+}
+
+/**
+ * THE WRONG-STORE GUARD — why the 2026-08-02 canary recorded all zeros.
+ *
+ * `canary_watch` resolves its store from CONVERSATIONS_DB_PATH, else DATA_DIR, else a relative
+ * path. Miss the env var on the box and it silently reads the STALE BASE store
+ * (/home/ubuntu/throttleiq-runtime/data, frozen 2026-06-16, 471 convs) instead of the dealer's.
+ * That store defeats every guard we had: it is non-empty, and it carries 3,720 lifetime outbound
+ * messages so `findDeadCounters` sees nothing dead — but it has had ZERO activity since June, so
+ * every recent window reads 0. That is exactly the all-zero baseline armed on 2026-08-02, and it is
+ * the same family as the deploy `--profile` footgun (CLAUDE.md): a silent default pointing at the
+ * base store instead of the dealer's.
+ *
+ * The tell a lifetime-counter check cannot see: the store's newest activity predates the window we
+ * are about to measure. A genuinely quiet dealership still has SOMETHING recent; a wrong or frozen
+ * store does not.
+ *
+ * FAIL DIRECTION: refusing to arm fails toward having NO canary plus a loud error, never toward a
+ * baseline of zeros — which would clear any deploy it was ever compared against, since "after" can
+ * only be >= 0.
+ */
+export function detectStaleStore(input: {
+  /** Newest outbound message timestamp anywhere in the store, ms. */
+  newestOutboundMs: number | null;
+  nowMs: number;
+  windowMs: number;
+}): { stale: boolean; ageHours: number; reason: string } {
+  const newest = Number(input.newestOutboundMs ?? 0);
+  if (!Number.isFinite(newest) || newest <= 0) {
+    return { stale: true, ageHours: Infinity, reason: "the store has no dated outbound messages at all" };
+  }
+  const ageHours = (Number(input.nowMs) - newest) / 3_600_000;
+  const windowStart = Number(input.nowMs) - Number(input.windowMs);
+  if (newest < windowStart) {
     return {
-      mayDeployBehaviour: false,
-      pendingReady: false,
-      minutesRemaining: 0,
-      reason: "the last canary concluded nothing (UNKNOWN) — that is not a clean bill of health"
+      stale: true,
+      ageHours,
+      reason:
+        `the store's newest outbound message is ${Math.floor(ageHours)}h old, predating the ` +
+        `${Math.round(Number(input.windowMs) / 3_600_000)}h baseline window entirely — a wrong or frozen store, not a quiet one`
     };
   }
+  return { stale: false, ageHours, reason: "the store has activity inside the baseline window" };
+}
 
-  // No pending canary AND no judged verdict ever recorded. This is the state the loop was in
-  // before this gate existed, and it must BLOCK: "we have never measured one" is not "all clear".
-  return {
-    mayDeployBehaviour: false,
-    pendingReady: false,
-    minutesRemaining: 0,
-    reason: "no canary has ever been judged — arm one on the next deploy before shipping behaviour"
-  };
+/** Newest outbound (sent or drafted) message timestamp in the store, or null if there is none. */
+export function newestOutboundAtMs(conversations: any[]): number | null {
+  let newest = 0;
+  for (const conv of conversations ?? []) {
+    for (const m of Array.isArray(conv?.messages) ? conv.messages : []) {
+      if (m?.direction !== "out") continue;
+      const provider = String(m?.provider ?? "").toLowerCase();
+      if (provider !== DRAFT_PROVIDER && !SEND_PROVIDERS.has(provider)) continue;
+      const t = ms(m?.at);
+      if (Number.isFinite(t) && t > newest) newest = t;
+    }
+  }
+  return newest > 0 ? newest : null;
 }

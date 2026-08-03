@@ -30,7 +30,9 @@ import {
   computeCanaryCounters,
   decideCanaryVerdict,
   detectRunaway,
+  detectStaleStore,
   findDeadCounters,
+  newestOutboundAtMs,
   typicalPeakOutboundPerHour,
   buildRevertPlan,
   decideCanaryGate,
@@ -305,13 +307,15 @@ ok(DEFAULT_CANARY_THRESHOLDS.minBaselineOutbound > 0, "there is always a minimum
 ok(DEFAULT_CANARY_THRESHOLDS.runawayMinPerHour > 0, "and an absolute runaway floor");
 
 // =================================================================================================
-// THE DEPLOY GATE — "has the last behaviour deploy been judged, so another one may go out?"
+// THE DEPLOY GATE — a CIRCUIT BREAKER, not a turnstile (Joe ruling 2026-08-03).
 //
-// This is what makes the readiness loop's rate limit mechanical rather than a promise. Its ONLY
-// dangerous failure is opening when it should not: that launders an unwatched deploy as watched,
-// which is the same false-green the verdict table above exists to prevent. So every state that is
-// not a RECORDED HEALTHY blocks — including "we have never measured one", which is the state the
-// loop was actually in before this existed.
+// Until 8/3 every state that was not a recorded HEALTHY blocked. That is unsatisfiable here: the
+// 20-send floor against ~26 sends/day means the comparative check abstains (UNKNOWN) on an ordinary
+// week, and UNKNOWN blocked — so the first abstention latched the gate shut with no path back open,
+// while merges land every 20 minutes. A permanently-shut gate gets overridden, which is what
+// happened on three consecutive deploys. Now only a MEASURED REGRESSION blocks; the watch still
+// runs and still reports, and the fast runaway tripwire (above) is the protection that works at
+// this cadence.
 // =================================================================================================
 {
   const HOUR = 3_600_000;
@@ -323,45 +327,110 @@ ok(DEFAULT_CANARY_THRESHOLDS.runawayMinPerHour > 0, "and an absolute runaway flo
     ...over
   });
 
-  // --- a canary that is still running blocks -----------------------------------------------------
+  // --- an open canary no longer blocks, but still reports what it is watching --------------------
   const open = decideCanaryGate({ pending: pending(), lastVerdictStatus: "healthy", nowMs: NOW });
-  eq(open.mayDeployBehaviour, false, "an OPEN canary blocks the next behaviour deploy");
-  eq(open.pendingReady, false, "...and is not yet ready to judge");
-  ok(open.minutesRemaining > 0, "...reporting how long is left");
+  eq(open.mayDeployBehaviour, true, "an OPEN canary does NOT block — the watch is not a turnstile");
+  eq(open.pendingReady, false, "...it is not yet ready to judge");
+  ok(open.minutesRemaining > 0, "...and it still reports how long is left");
+  ok(open.reason.includes("abc1234d"), "...naming the sha under watch so the report is actionable");
 
-  // --- a window that has elapsed but was never judged still blocks --------------------------------
+  // --- an elapsed-but-unjudged window is flagged ripe, and still does not block -------------------
   const ripe = decideCanaryGate({
     pending: pending({ takenAtMs: NOW - 60 * HOUR }),
     lastVerdictStatus: null,
     nowMs: NOW
   });
-  eq(ripe.mayDeployBehaviour, false, "an elapsed-but-unjudged canary still blocks");
-  eq(ripe.pendingReady, true, "...but is flagged ready so something comes back and judges it");
+  eq(ripe.mayDeployBehaviour, true, "an elapsed-but-unjudged canary does not freeze the pipeline");
+  eq(ripe.pendingReady, true, "...but IS flagged ready so something comes back and judges it");
   eq(ripe.minutesRemaining, 0, "...with no time left on the clock");
 
-  // --- only a recorded HEALTHY with nothing pending opens the gate --------------------------------
-  eq(
-    decideCanaryGate({ pending: null, lastVerdictStatus: "healthy", nowMs: NOW }).mayDeployBehaviour,
-    true,
-    "a judged HEALTHY with nothing pending is the ONE state that opens the gate"
-  );
-
-  // --- every other terminal state blocks ----------------------------------------------------------
+  // --- THE ONE BLOCKING STATE --------------------------------------------------------------------
   eq(
     decideCanaryGate({ pending: null, lastVerdictStatus: "regressed", nowMs: NOW }).mayDeployBehaviour,
     false,
-    "a REGRESSED verdict blocks until it is dealt with"
+    "a REGRESSED verdict is the ONE state that blocks — customers measurably got worse"
   );
   eq(
-    decideCanaryGate({ pending: null, lastVerdictStatus: "unknown", nowMs: NOW }).mayDeployBehaviour,
+    decideCanaryGate({ pending: pending(), lastVerdictStatus: "regressed", nowMs: NOW }).mayDeployBehaviour,
     false,
-    "UNKNOWN blocks — a run that concluded nothing is not a clean bill of health"
+    "...and REGRESSED still blocks even while a newer canary is open"
+  );
+
+  // --- abstention and inexperience are NOT regressions --------------------------------------------
+  eq(
+    decideCanaryGate({ pending: null, lastVerdictStatus: "unknown", nowMs: NOW }).mayDeployBehaviour,
+    true,
+    "UNKNOWN does not block — at 26 sends/day abstaining is the normal case, not a fault signal"
   );
   eq(
     decideCanaryGate({ pending: null, lastVerdictStatus: null, nowMs: NOW }).mayDeployBehaviour,
-    false,
-    "NEVER MEASURED blocks — 'we have no record' must never round up to 'all clear'"
+    true,
+    "NEVER MEASURED does not block — otherwise the gate can never open for the first time"
   );
+  eq(
+    decideCanaryGate({ pending: null, lastVerdictStatus: "healthy", nowMs: NOW }).mayDeployBehaviour,
+    true,
+    "a judged HEALTHY with nothing pending is clear"
+  );
+}
+
+// =================================================================================================
+// THE WRONG-STORE GUARD — the bug that produced the all-zero 2026-08-02 baseline.
+//
+// canary_watch resolves its store from CONVERSATIONS_DB_PATH, else DATA_DIR, else a relative path.
+// Miss the env var on the box and it reads the STALE BASE store (frozen 2026-06-16): non-empty,
+// 3,720 LIFETIME sends so findDeadCounters sees nothing dead, but zero activity since June — so
+// every recent window reads 0. A zero baseline clears any deploy, because "after" can only be >= 0.
+// The tell a lifetime check cannot see: newest activity predating the window being measured.
+// =================================================================================================
+{
+  const HOUR = 3_600_000;
+  const NOW = 1_754_000_000_000;
+  const WINDOW = 48 * HOUR;
+
+  const fresh = detectStaleStore({ newestOutboundMs: NOW - 2 * HOUR, nowMs: NOW, windowMs: WINDOW });
+  eq(fresh.stale, false, "a store with activity inside the window is usable");
+
+  // A genuinely QUIET dealership — last send 40h ago — is still inside a 48h window and must pass.
+  // This is the false-positive that would make the guard unusable, so it is pinned explicitly.
+  const quiet = detectStaleStore({ newestOutboundMs: NOW - 40 * HOUR, nowMs: NOW, windowMs: WINDOW });
+  eq(quiet.stale, false, "a QUIET store inside the window is not a stale store");
+
+  // The real 8/2 shape: base store frozen ~47 days before the arm.
+  const frozen = detectStaleStore({
+    newestOutboundMs: NOW - 47 * 24 * HOUR,
+    nowMs: NOW,
+    windowMs: WINDOW
+  });
+  eq(frozen.stale, true, "a store frozen weeks ago is REFUSED — this is the 8/2 all-zero baseline");
+  ok(frozen.reason.includes("frozen store"), "...and says plainly that it is the wrong store");
+
+  // Just past the boundary — 49h against a 48h window — must be caught, not rounded away.
+  eq(
+    detectStaleStore({ newestOutboundMs: NOW - 49 * HOUR, nowMs: NOW, windowMs: WINDOW }).stale,
+    true,
+    "a store whose newest activity falls just outside the window is stale"
+  );
+
+  eq(
+    detectStaleStore({ newestOutboundMs: null, nowMs: NOW, windowMs: WINDOW }).stale,
+    true,
+    "a store with no dated outbound at all is refused, never treated as quiet"
+  );
+
+  // The projection that feeds the guard: only real sends/drafts count, never voice/payment LOG rows,
+  // or a store idle since June would look 'fresh' because a call was logged on it yesterday.
+  const convs = [
+    { messages: [{ direction: "out", provider: "twilio", at: new Date(NOW - 3 * HOUR).toISOString() }] },
+    { messages: [{ direction: "out", provider: "voice_call", at: new Date(NOW).toISOString() }] },
+    { messages: [{ direction: "in", provider: "twilio", at: new Date(NOW).toISOString() }] }
+  ];
+  eq(
+    newestOutboundAtMs(convs),
+    NOW - 3 * HOUR,
+    "newestOutboundAtMs counts sends/drafts only — a logged voice call is not the agent messaging anyone"
+  );
+  eq(newestOutboundAtMs([]), null, "an empty store has no newest outbound");
 }
 
 console.log(`PASS canary auto-revert — abstains rather than false-greens (${checks} checks)`);
