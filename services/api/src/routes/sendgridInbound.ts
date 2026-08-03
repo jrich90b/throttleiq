@@ -46,6 +46,7 @@ import {
   computeFollowUpDueAt,
   markPricingEscalated,
   closeConversation,
+  applySoldCloseout,
   setContactPreference,
   parseRequestedDayTime,
   parseRequestedDateOnly,
@@ -7644,7 +7645,35 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       );
       stopFollowUpCadence(conv, "manual_handoff");
       if (hasSoldSignal) {
+        // A walk-in note saying sold/delivered IS a sale — record it, or the two consumers that
+        // define "won" both miss: pipelineFunnel reads closedReason === "sold" || sale.soldAt (so
+        // this delivered bike scored LOST), and decideCloseoutReversal's sold-sticky reads the
+        // same pair (so a bare "thanks" reopened the completed deal into the working inbox).
+        // closeConversation first for the housekeeping (todos, cadence, watch pause, save), then
+        // the sold-closeout REFEREE stamps the sale and the final "sold" reason. The note names
+        // no unit, so no soldKey — never fall back to the inquiry vehicle, that's the #470
+        // wrong-bike trap; the referee's unit-less arm deliberately leaves any hold standing.
+        // The staff todo above carries the "which bike?" question; naming it later via
+        // Update Lead > Sold overwrites this stub.
         closeConversation(conv, "sold_walkin_note");
+        if (!conv.sale?.soldAt) {
+          applySoldCloseout(conv, {
+            nowIso: new Date().toISOString(),
+            sale: {
+              ...conv.sale,
+              soldAt: new Date().toISOString(),
+              note:
+                [
+                  String(conv.sale?.note ?? "").trim(),
+                  "Recorded from a Traffic Log Pro walk-in note (no unit named — pick the bike via Update Lead > Sold)."
+                ]
+                  .filter(Boolean)
+                  .join(" | ")
+            },
+            soldKey: null,
+            holdMatchesSoldUnit: false
+          });
+        }
       }
     } else if (hasCompletedTestRideSignal) {
       conv.dialogState = { name: "test_ride_booked", updatedAt: new Date().toISOString() };
