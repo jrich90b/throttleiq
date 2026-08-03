@@ -85,7 +85,6 @@ import {
   parseDialogActWithLLM,
   parseInventoryEntitiesWithLLM,
   parseIntentWithLLM,
-  parseSemanticSlotsWithLLM,
   parseRoutingDecisionWithLLM,
   parseResponseControlWithLLM,
   parseBookingIntentWithLLM,
@@ -106,6 +105,7 @@ import {
   parseIncomingInventoryPurposeWithLLM,
   parseManualOutboundPromiseWithLLM
 } from "../domain/llmDraft.js";
+import { parseSemanticSlotsMergedAwareWithLLM } from "../domain/emailLaneSlots.js";
 import {
   buildPhoneLogRecapDraft,
   decidePhoneLogRecapDraft,
@@ -4172,7 +4172,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
           !!conv.inventoryWatch);
       if (watchParserEligible && watchParserHint) {
         try {
-          const semantic = await parseSemanticSlotsWithLLM({
+          // Email-lane cutover (2026-08-03): merged-parser aware, so an email reply
+          // and the identical SMS reply are read by the SAME parser. Falls back to
+          // the legacy semantic call when LLM_EMAIL_UNIFIED_SLOT_LIVE is unset.
+          const semantic = await parseSemanticSlotsMergedAwareWithLLM({
             text: bodyText,
             history: buildEffectiveHistory(conv, 12),
             lead: conv.lead,
@@ -4925,7 +4928,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       })
     ),
     safeParser("semantic_slots", () =>
-      parseSemanticSlotsWithLLM({
+      // Email-lane cutover (2026-08-03) — see parseSemanticSlotsMergedAwareWithLLM.
+      parseSemanticSlotsMergedAwareWithLLM({
         text: effectiveInquiry,
         history: adfHistory,
         lead: activeAdfLeadProfile,
