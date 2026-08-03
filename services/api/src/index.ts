@@ -840,7 +840,7 @@ import {
   isFollowUpReminderOnlyText,
   isServiceStatusUpdateQuestionText,
   isServiceSchedulingAvailabilityRequestText,
-  isDealerVisitTimeCheckInText,
+  isDealerVisitTimeCheckInWithoutServiceText,
   hasExplicitCalendarDateForScheduleMemory,
   isImmediateChatCallbackAvailabilityText,
   isIncidentalInfoAcknowledgementText,
@@ -30108,18 +30108,17 @@ function hasSalesSchedulingOverrideText(text: string | null | undefined): boolea
   );
 }
 
-function isServiceDepartmentSchedulingRequest(conv: any, text: string | null | undefined): boolean {
+const isDealerVisitTimeCheckInWithoutService = (conv: any): boolean => isDealerVisitTimeCheckInWithoutServiceText(String(getLastNonVoiceOutbound(conv)?.body ?? ""));
+
+function isServiceDepartmentSchedulingRequest(conv: any, text: string | null | undefined, opts?: { applyVisitCheckInDeferral?: boolean }): boolean {
   const source = String(text ?? "").trim();
   if (!source) return false;
   if (!hasServiceDepartmentContext(conv)) return false;
   if (hasSalesSchedulingOverrideText(source)) return false;
-  // The customer is ANSWERING a dealer-initiated visit-time check-in ("what time are you coming in?")
-  // — that's a visit confirmation for the scheduling cluster, not a customer-initiated service request.
-  // Defer so a sticky service-classified lead doesn't get "I'll have SERVICE check availability" for a
-  // plain visit time (Bobby Kindred, 2026-06-25). Reads OUR last outbound (dealer framing). If that
-  // check-in was explicitly about SERVICE timing, keep service routing (don't defer).
-  const lastOutboundBody = String(getLastNonVoiceOutbound(conv)?.body ?? "");
-  if (isDealerVisitTimeCheckInText(lastOutboundBody) && !/\bservice\b/i.test(lastOutboundBody)) return false;
+  // The customer is ANSWERING our own visit-time check-in ("what time are you coming in?") — a visit
+  // confirmation for the scheduling cluster, not a service request (Bobby Kindred, 2026-06-25). Default
+  // TRUE = the hard gate; the two service-handoff sites opt out and let the referee weigh the parser.
+  if ((opts?.applyVisitCheckInDeferral ?? true) && isDealerVisitTimeCheckInWithoutService(conv)) return false;
   const signals = detectSchedulingSignals(source);
   return (
     signals.explicit ||
@@ -30166,7 +30165,8 @@ async function resolveServiceSchedulingHandoffDecision(
     customerNamedServiceThisTurn,
     parserPurpose: parse?.purpose ?? null,
     parserConfidence: parse?.confidence ?? null,
-    confidenceMin: SERVICE_VISIT_PURPOSE_CONFIDENCE_MIN
+    confidenceMin: SERVICE_VISIT_PURPOSE_CONFIDENCE_MIN,
+    dealerVisitTimeCheckIn: isDealerVisitTimeCheckInWithoutService(conv)
   });
   return {
     route: decision.route,
@@ -54667,9 +54667,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       }
     );
   }
-  if (event.provider === "twilio" && isServiceDepartmentSchedulingRequest(conv, event.body)) {
-    // Parser-first check before the service department claims the turn — MIRROR of the live
-    // path (Justin Alley, 2026-07-21). Shared resolver = two-path parity.
+  if (event.provider === "twilio" && isServiceDepartmentSchedulingRequest(conv, event.body, { applyVisitCheckInDeferral: false })) {
+    // Parser-first check before the service department claims the turn — MIRROR of the live path
+    // (Justin Alley, 2026-07-21). Two-path parity; the check-in deferral is now the referee's.
     const serviceHandoffDecision = await resolveServiceSchedulingHandoffDecision(conv, event.body);
     if (serviceHandoffDecision.route === "defer_to_scheduling_cluster") {
       recordRouteOutcome("regen", "service_scheduling_handoff_deferred_sales_visit", {
@@ -65266,10 +65266,10 @@ if (authToken && signature) {
     const reply = "Sorry about that — I’ve cancelled that appointment.";
     return publishLiveTwilioReply(reply, { turnSchedulingIntent: true });
   }
-  if (event.provider === "twilio" && isServiceDepartmentSchedulingRequest(conv, event.body)) {
-    // Parser-first check before the service department claims the turn: a sales thread soaked
-    // in "service" words about the SALE bike's history must keep its visit-time turn in the
-    // sales scheduling cluster (Justin Alley, 2026-07-21). Shared resolver = regen parity.
+  if (event.provider === "twilio" && isServiceDepartmentSchedulingRequest(conv, event.body, { applyVisitCheckInDeferral: false })) {
+    // Parser-first check before the service department claims the turn: a sales thread soaked in
+    // "service" words about the SALE bike's history must keep its visit-time turn in the sales
+    // scheduling cluster (Justin Alley, 2026-07-21). Regen parity; check-in deferral = referee's.
     const serviceHandoffDecision = await resolveServiceSchedulingHandoffDecision(conv, event.body);
     if (serviceHandoffDecision.route === "defer_to_scheduling_cluster") {
       recordRouteOutcome("live", "service_scheduling_handoff_deferred_sales_visit", {

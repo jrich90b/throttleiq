@@ -291,6 +291,25 @@ export function isDealerVisitTimeCheckInText(textRaw: string | null | undefined)
   );
 }
 
+/**
+ * The check-in above, AND it did not itself name the service department — the exact pair the
+ * service-scheduling handoff defers on. Kept here (not inline in index.ts) so the two callers that
+ * hand it to `decideServiceSchedulingHandoffTurn` and the ones that apply it as a hard gate all
+ * read the SAME predicate.
+ *
+ * The `service` word test is doing two different jobs, and only one of them is legitimate: it is a
+ * fine deterministic read of whether OUR OWN framing was explicitly a service check-in, but it is
+ * NOT a competent judge of whether the visit IS one. A post-sale repair booked in plain English
+ * ("let me know when you want to bring it in and we can put a new sticker on the bike") never says
+ * the word — Edward Trouse +17166281539, operator-reported 2026-08-01, whose "Probably around 4pm"
+ * was booked as a SALES appointment. That judgement now belongs to the typed visit-purpose parser
+ * via the referee; this predicate only reports what our framing literally said.
+ */
+export function isDealerVisitTimeCheckInWithoutServiceText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "");
+  return isDealerVisitTimeCheckInText(text) && !/\bservice\b/i.test(text);
+}
+
 export function isManualOutboundBookingConfirmationText(textRaw: string | null | undefined): boolean {
   const text = String(textRaw ?? "").toLowerCase();
   if (!text.trim()) return false;
