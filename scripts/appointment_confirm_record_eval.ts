@@ -190,4 +190,42 @@ const SLOT = {
   eq(conv.appointment.updatedAt, "2026-01-01T00:00:00.000Z", "the applier leaves the save to its caller");
 }
 
+// --- 8/3 wiring triage (theme B3): the four SELF-BOOKING lanes actually CALL the referee ----------
+// Three live-SMS lanes + the email lane booked a real calendar event, hand-stamped
+// status/confirmedBy/acknowledged, and never cleared the reschedule latch — so a customer who just
+// booked kept `reschedulePending: true`, and their next day/time text was answered with "let's
+// find you another time" for the appointment they had just made. The referee (divergence 2, RULED
+// 8/2) clears the latch for booked lanes; these pins keep the lanes routed through it.
+{
+  const fsMod = await import("node:fs");
+  const api = fsMod.readFileSync("services/api/src/index.ts", "utf8");
+  const sendgrid = fsMod.readFileSync("services/api/src/routes/sendgridInbound.ts", "utf8");
+
+  const apiRefereeCalls = api.match(/applyAppointmentConfirmRecord\(conv, "customer_confirm_booking"\)/g) ?? [];
+  eq(
+    apiRefereeCalls.length >= 4,
+    true,
+    `index.ts must route the customer-booking confirms through the referee (found ${apiRefereeCalls.length}, need >= 4: the confirm-book path + the three self-booking lanes)`
+  );
+  const sgRefereeCalls = sendgrid.match(/applyAppointmentConfirmRecord\(conv, "customer_confirm_booking"\)/g) ?? [];
+  eq(sgRefereeCalls.length >= 1, true, "the email lane's self-booking must route through the referee too");
+
+  // Ratchet, down-only: the remaining hand-rolled confirm stamps. The 6 leftovers are the
+  // reschedule-confirm/auto-book lanes that DO clear the latch themselves (the un-stack loop's
+  // future work). Raising this number means a NEW lane hand-stamped a confirm instead of asking
+  // the referee — do not raise it.
+  const handRolled = api.match(/conv\.appointment\.confirmedBy = "customer"/g) ?? [];
+  eq(
+    handRolled.length <= 6,
+    true,
+    `hand-rolled confirmedBy stamps in index.ts must not grow (found ${handRolled.length}, ceiling 6)`
+  );
+  eq(
+    (sendgrid.match(/conv\.appointment\.confirmedBy = "customer"/g) ?? []).length,
+    0,
+    "the email lane must have ZERO hand-rolled confirm stamps"
+  );
+  checks += 4;
+}
+
 console.log(`appointment_confirm_record:eval OK — ${checks} checks`);

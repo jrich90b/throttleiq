@@ -69911,12 +69911,11 @@ if (authToken && signature) {
             );
 
             conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
-            conv.appointment.status = "confirmed";
+            // Referee: stamps confirm fields AND clears the reschedule latch (RULED 8/2, div. 2).
+            applyAppointmentConfirmRecord(conv, "customer_confirm_booking");
             conv.appointment.whenText = match.startLocal ?? formatSlotLocal(match.start, tz);
             conv.appointment.whenIso = match.start;
-            conv.appointment.confirmedBy = "customer";
             conv.appointment.updatedAt = new Date().toISOString();
-            conv.appointment.acknowledged = true;
             conv.appointment.bookedEventId = eventObj.id ?? null;
             conv.appointment.bookedEventLink = eventObj.htmlLink ?? null;
             conv.appointment.bookedSalespersonId = match.salespersonId ?? null;
@@ -70115,12 +70114,11 @@ if (authToken && signature) {
             );
 
             conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
-            conv.appointment.status = "confirmed";
+            // Referee: stamps confirm fields AND clears the reschedule latch (RULED 8/2, div. 2).
+            applyAppointmentConfirmRecord(conv, "customer_confirm_booking");
             conv.appointment.whenText = formatSlotLocal(exact.start, cfg.timezone);
             conv.appointment.whenIso = exact.start;
-            conv.appointment.confirmedBy = "customer";
             conv.appointment.updatedAt = new Date().toISOString();
-            conv.appointment.acknowledged = true;
             conv.appointment.bookedEventId = eventObj.id ?? null;
             conv.appointment.bookedEventLink = eventObj.htmlLink ?? null;
             conv.appointment.bookedSalespersonId = exact.salespersonId ?? null;
@@ -70276,12 +70274,11 @@ if (authToken && signature) {
             );
 
             conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
-            conv.appointment.status = "confirmed";
+            // Referee: stamps confirm fields AND clears the reschedule latch (RULED 8/2, div. 2).
+            applyAppointmentConfirmRecord(conv, "customer_confirm_booking");
             conv.appointment.whenText = match.startLocal ?? formatSlotLocal(match.start, cfg.timezone);
             conv.appointment.whenIso = match.start;
-            conv.appointment.confirmedBy = "customer";
             conv.appointment.updatedAt = new Date().toISOString();
-            conv.appointment.acknowledged = true;
             conv.appointment.bookedEventId = eventObj.id ?? null;
             conv.appointment.bookedEventLink = eventObj.htmlLink ?? null;
             conv.appointment.bookedSalespersonId = match.salespersonId ?? null;
