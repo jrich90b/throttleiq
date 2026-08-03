@@ -5205,6 +5205,54 @@ export function applySoldCloseout(
 }
 
 /**
+ * A sold signal that names NO unit (a walk-in "delivered" note, a staff sold outcome from a panel
+ * with no picker): stamp the sale through the sold-closeout referee's unit-less arm so the deal
+ * counts as WON (pipelineFunnel + decideCloseoutReversal both read closedReason/sale.soldAt)
+ * without inventing a bike — falling back to lead.vehicle is the #470 wrong-bike trap (the
+ * customer inquired on one bike and bought another). Never overwrites an already-recorded sale;
+ * a later Update Lead > Sold with a real unit overwrites the stub.
+ */
+export function applyUnitLessSoldSaleStub(
+  conv: Conversation,
+  input: { nowIso: string; provenanceNote?: string }
+): SoldCloseoutDecision | null {
+  if (conv.sale?.soldAt) return null;
+  const provenanceNote =
+    input.provenanceNote ??
+    "Recorded from a sold outcome with no unit named — pick the bike via Update Lead > Sold.";
+  return applySoldCloseout(conv, {
+    nowIso: input.nowIso,
+    sale: {
+      ...conv.sale,
+      soldAt: input.nowIso,
+      note: [String(conv.sale?.note ?? "").trim(), provenanceNote].filter(Boolean).join(" | ")
+    },
+    soldKey: null,
+    holdMatchesSoldUnit: false
+  });
+}
+
+/**
+ * The CRM & Calendar Updates panel's outcome -> follow-up-action mapping (lifted out of the
+ * /questions/:convId/:questionId/done endpoint so the policy is evaluable and index.ts shrinks).
+ * "sold" maps to archive_sold — the bare "archive" it used to get recorded NO sale, so the
+ * pipeline funnel scored a delivered bike as LOST.
+ */
+export function deriveAttendanceOutcomeAction(
+  outcome?: string | null,
+  followUpAction?: string | null
+): string | undefined {
+  if (followUpAction) return followUpAction;
+  if (!outcome) return undefined;
+  if (outcome === "sold") return "archive_sold";
+  if (outcome === "hold") return "pause_indef";
+  if (outcome === "undecided") return "resume";
+  // Joe-approved 2026-07-02: a no-show re-engages the NEXT BUSINESS DAY (1-2 days), not 72h flat.
+  if (outcome === "no_show") return "pause_next_business_day";
+  return undefined;
+}
+
+/**
  * Wipes the staff-prompt bookkeeping off an appointment (the "we already texted the rep" markers
  * and the outcome-reply token). Lifted out of index.ts with the teardown un-stacking so the field
  * set and its referee live together, and so an eval can exercise the real code rather than a copy.

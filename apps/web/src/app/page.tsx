@@ -10460,6 +10460,11 @@ export default function Home() {
 	    await load();
 	    if (outcome === "hold") {
 	      await openHoldModal(q.convId);
+	    } else if (outcome === "sold") {
+	      // Same rule as the outcome modals (#470): "Sold" must name the unit. Without this chain
+	      // the CRM & Calendar Updates panel recorded a sold outcome with NO sale at all — the
+	      // backend maps it to a bare archive, invisible to every sold report.
+	      await openSoldModal(q.convId);
 	    }
 	  }
 
@@ -11853,6 +11858,17 @@ export default function Home() {
 
   async function reopenConv() {
     if (!selectedConv) return;
+    // Re-opening ERASES the recorded sale server-side. Delete gets a confirm; this destroys a
+    // closed-won record just as permanently, so it confirms too — but only when a sale exists
+    // (re-opening an archived non-sale thread stays one click).
+    if (selectedConv.sale?.soldAt) {
+      const saleLabel = String(selectedConv.sale?.label ?? "").trim();
+      const soldByName = String(selectedConv.sale?.soldByName ?? "").trim();
+      const ok = window.confirm(
+        `Re-opening clears the recorded sale${saleLabel ? ` (${saleLabel}${soldByName ? `, sold by ${soldByName}` : ""})` : ""}. Continue?`
+      );
+      if (!ok) return;
+    }
     await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/reopen`, {
       method: "POST",
       headers: { "Content-Type": "application/json" }
