@@ -166,6 +166,48 @@ export type TaskFulfillmentVerdict = {
 /** Minimum confidence to auto-close. High by design — biased toward leaving open. */
 export const TASK_AUTO_CLOSE_MIN_CONFIDENCE = 0.85;
 
+// ---------------------------------------------------------------------------
+// QUIET-TRIGGERED tasks may only be closed by NEW dealer activity (+19074412693, reported 7/19).
+//
+// Three task generators mint a task precisely BECAUSE the thread has gone quiet — the stale-handoff
+// safety net ("no activity in N days"), the in-process-deal nudge ("quiet since <date>") and the
+// no-reply call prompt ("No reply after N texts"). Each one ASSERTS, at creation, that everything
+// already in the thread failed to move the lead. But the fulfillment closer judges a task against a
+// window of the last 8 messages with no lower time bound, and the auto-close BACKFILL sweeps in the
+// SAME maintenance tick that mints them — so the task was created at second 0 and closed at second 6
+// by the very message whose silence created it.
+//
+// Live evidence (AH store, 2026-08-03): 143 of 400 high-confidence auto-closes fired within 120s of
+// their task's creation, dominated by these three families — e.g. "Follow up with Kt — handed off
+// (apparel request), no activity in 19 days" closed 3.3s later by a 19-day-old message, and Roger
+// McCleskey (+19074412693) whose credit-app handoff task and both later nudges were each closed in
+// under 10s by the same 7/18 "I received your credit application" text. That is what the operator
+// reported as "i don't see the finance outcome task anymore on this lead".
+//
+// Rule: a quiet-triggered task closes only on a fresh dealer OUTBOUND trigger. An inbound trigger or
+// a backfill re-check cannot introduce dealer activity the task did not already discount — if a
+// pre-existing outbound HAD fulfilled it, that outbound's own trigger would have closed it before
+// the quiet sweep ever minted the task.
+//
+// AGENTS.md bucket: SIDE-EFFECT / STATE gate (deterministic allowed; it reads OUR OWN task summary,
+// never customer intent) — same shape as decideReplyOwedTaskClose's "outbound_not_after_creation".
+// FAIL DIRECTION: this only ever REFUSES a close, so it fails toward a task staying in the inbox for
+// staff, never toward silently dropping a live lead. Staff's next real send closes it normally.
+// ---------------------------------------------------------------------------
+
+/**
+ * Marker substrings for the quiet-triggered family, matched against OUR OWN generated summaries:
+ *   "Follow up with <who> — handed off (<x>), no activity in <n> days …" (index.ts ~32739)
+ *   "Nudge <who>? Deal in process (<x>), quiet since <date> …"           (index.ts ~33095)
+ *   "No reply after <n> texts - worth a quick call."                     (index.ts ~34454)
+ */
+export const QUIET_TRIGGERED_TODO_MARKERS = ["no activity in ", "quiet since ", "No reply after "] as const;
+
+export function isQuietTriggeredTask(task: { summary?: string | null }): boolean {
+  const summary = String(task?.summary ?? "");
+  return QUIET_TRIGGERED_TODO_MARKERS.some(marker => summary.includes(marker));
+}
+
 export type TaskAutoCloseDecision = { close: boolean; reason: string };
 
 /**
@@ -180,6 +222,10 @@ export function decideTaskAutoClose(input: {
   eligible: boolean;
   verdict: TaskFulfillmentVerdict | null;
   minConfidence?: number;
+  /** The task itself, when the caller has it — required to apply the quiet-triggered guard. */
+  task?: { summary?: string | null } | null;
+  /** true only when this run was triggered by a fresh dealer OUTBOUND (not an inbound / backfill). */
+  dealerOutboundTrigger?: boolean;
 }): TaskAutoCloseDecision {
   const min = input.minConfidence ?? TASK_AUTO_CLOSE_MIN_CONFIDENCE;
   if (!input.eligible) return { close: false, reason: "ineligible_task" };
@@ -187,6 +233,11 @@ export function decideTaskAutoClose(input: {
   if (!input.verdict.fulfilled) return { close: false, reason: "not_fulfilled" };
   if (!(typeof input.verdict.confidence === "number" && input.verdict.confidence >= min)) {
     return { close: false, reason: "below_confidence" };
+  }
+  // A task minted BECAUSE the thread went quiet cannot be fulfilled by what was already in the
+  // thread. Reported BEFORE the flag check so the shadow log shows the real blocker.
+  if (input.task && isQuietTriggeredTask(input.task) && !input.dealerOutboundTrigger) {
+    return { close: false, reason: "quiet_task_needs_new_outbound" };
   }
   if (!input.enabled) return { close: false, reason: "shadow_would_close" };
   return { close: true, reason: "fulfilled_high_confidence" };

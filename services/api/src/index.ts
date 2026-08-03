@@ -14677,7 +14677,7 @@ async function runTaskFulfillmentAutoClose(
     const enabled = isTaskFulfillmentAutoCloseEnabled();
     for (const task of eligible) {
       const verdict = verdicts.find(v => v.taskId === task.id) ?? null;
-      const decision = decideTaskAutoClose({ enabled, eligible: true, verdict });
+      const decision = decideTaskAutoClose({ enabled, eligible: true, verdict, task, dealerOutboundTrigger: isOutboundTrigger });
       // Persist the verdict on the task so staff can see WHY it did/didn't auto-close.
       if (verdict) {
         setTodoAutoCloseCheck(conv.id, task.id, {

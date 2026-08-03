@@ -20,6 +20,7 @@ import {
   REPLY_OWED_TODO_MARKER,
   REPLY_OWED_TODO_MARKER_DEAL,
   isReplyOwedTask,
+  isQuietTriggeredTask,
   decideReplyOwedTaskClose,
   describeOutboundMedia,
   outboundActivityText
@@ -121,6 +122,95 @@ assert.equal(
   }).close,
   false,
   "a stricter minConfidence is honored"
+);
+
+// ---------------------------------------------------------------------------
+// QUIET-TRIGGERED tasks may only close on NEW dealer activity (+19074412693, reported 7/19).
+// Roger McCleskey's credit-app handoff task was minted at second 0 by the quiet sweep and closed
+// at second 6 by the same tick's backfill, citing a 3-day-old "I received your credit application"
+// text — the very silence that created the task. Live: 143 of 400 high-confidence closes fired
+// within 120s of their task's creation. Fail direction: this only ever REFUSES a close.
+// ---------------------------------------------------------------------------
+
+const quietTaskSummaries = [
+  "Follow up with Roger — handed off (credit app), no activity in 3 days and no follow-up scheduled.",
+  "Nudge Roger? Deal in process (credit app), quiet since 2026-07-18 — your call whether/when to follow up.",
+  "No reply after 4 texts - worth a quick call."
+];
+for (const summary of quietTaskSummaries) {
+  assert.equal(isQuietTriggeredTask({ summary }), true, `quiet-triggered family recognized: ${summary.slice(0, 40)}`);
+  assert.deepEqual(
+    decideTaskAutoClose({
+      enabled: true,
+      eligible: true,
+      verdict: fulfilledHigh,
+      task: { summary },
+      dealerOutboundTrigger: false
+    }),
+    { close: false, reason: "quiet_task_needs_new_outbound" },
+    "a backfill / inbound re-check cannot close a task the quiet sweep just minted"
+  );
+  assert.deepEqual(
+    decideTaskAutoClose({
+      enabled: true,
+      eligible: true,
+      verdict: fulfilledHigh,
+      task: { summary },
+      dealerOutboundTrigger: true
+    }),
+    { close: true, reason: "fulfilled_high_confidence" },
+    "a FRESH dealer outbound still closes the quiet task normally — staff's next send clears it"
+  );
+}
+
+// Ordinary tasks are untouched by the guard, on either trigger.
+for (const summary of [
+  "Notify Don when the 2016 Freewheeler trade arrives or is ready to show.",
+  "Promised over text: send pictures of the Deadwood when it arrives"
+]) {
+  assert.equal(isQuietTriggeredTask({ summary }), false, "an ordinary task is not quiet-triggered");
+  assert.equal(
+    decideTaskAutoClose({
+      enabled: true,
+      eligible: true,
+      verdict: fulfilledHigh,
+      task: { summary },
+      dealerOutboundTrigger: false
+    }).close,
+    true,
+    "an ordinary task still closes on a backfill / inbound re-check (Paul Foley 6/22 stays fixed)"
+  );
+}
+
+// A caller that passes no task keeps the pre-guard behavior exactly (the guard needs the summary).
+assert.deepEqual(
+  decideTaskAutoClose({ enabled: true, eligible: true, verdict: fulfilledHigh }),
+  { close: true, reason: "fulfilled_high_confidence" },
+  "no task supplied => unchanged decision"
+);
+// The guard is reported ahead of the dark-flag shadow so the trace names the real blocker.
+assert.deepEqual(
+  decideTaskAutoClose({
+    enabled: false,
+    eligible: true,
+    verdict: fulfilledHigh,
+    task: { summary: quietTaskSummaries[0] },
+    dealerOutboundTrigger: false
+  }),
+  { close: false, reason: "quiet_task_needs_new_outbound" },
+  "dark: the quiet guard, not shadow_would_close, is the reported reason"
+);
+// Guard order: a weak verdict is still rejected on confidence first.
+assert.deepEqual(
+  decideTaskAutoClose({
+    enabled: true,
+    eligible: true,
+    verdict: { taskId: "t1", fulfilled: true, confidence: 0.5 },
+    task: { summary: quietTaskSummaries[1] },
+    dealerOutboundTrigger: false
+  }),
+  { close: false, reason: "below_confidence" },
+  "confidence is still judged before the quiet guard"
 );
 
 // ---------------------------------------------------------------------------
