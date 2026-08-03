@@ -618,8 +618,17 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 //   stores an attribution a booking path hands in, `onAppointmentBooked` INFERS one from
 //   `confirmedBy` when nobody did (the live path for 11 of the 18 booking call sites). Both now ask
 //   `decideAppointmentAttribution` through `applyAppointmentAttribution`. `appointment` 9 -> 7.
+// 122 -> 116: the LEAD-closeout un-stacking (this commit). "When a lead's thread closes, what else
+//   has to settle?" was answered in three places: `closeConversation` (the generic close) and TWO
+//   hand-maintained copies of the appointment-outcome "sold" lane — the conversation header and the
+//   to-do endpoint — each hand-writing `status`/`closedAt`/`closedReason` and bypassing
+//   `closeConversation` entirely. All three now ask `decideLeadCloseout` through `applyLeadCloseout`.
+//   THREE Tier-1 fields cleared to ZERO at once: `status` 2 -> 0, `closedReason` 2 -> 0,
+//   `closedAt` 1 -> 0. The second sold copy was INVISIBLE to the queue until the first was rewired
+//   (the collapse artifact #455/#462 both recorded) — re-measure after every rewire, never assume
+//   the listed sites are all of them.
 // RATCHET DOWN ONLY.
-const UNREFEREED_WRITER_BASELINE = 122;
+const UNREFEREED_WRITER_BASELINE = 116;
 
 {
   const sourceFiles: SourceFile[] = [];

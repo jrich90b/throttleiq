@@ -951,6 +951,7 @@ import {
   applyCadenceReplacement,
   applyAppointmentAttribution,
   applySoldCloseout,
+  applyLeadCloseout,
   resolveNoShowFollowUpDueAt,
   pauseFollowUpCadence,
   stopFollowUpCadence,
@@ -41851,9 +41852,7 @@ app.post("/conversations/:id/appointment/outcome", requirePermission("canEditApp
         label,
         note: appointmentOutcomeNote || undefined
       };
-      conv.status = "closed";
-      conv.closedAt = nowIso;
-      conv.closedReason = "sold";
+      applyLeadCloseout(conv, { nowIso, lane: "appointment_outcome_sold", reason: "sold" });
       markOpenTodosDoneForConversation(conv.id);
       setFollowUpMode(conv, "active", "post_sale");
       startPostSaleCadence(conv, nowIso, cfg.timezone);
@@ -42966,9 +42965,11 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
           label,
           note: effectiveAppointmentOutcomeNote || undefined
         };
-        conv.status = "closed";
-        conv.closedAt = nowIsoValue;
-        conv.closedReason = "sold";
+        applyLeadCloseout(conv, {
+          nowIso: nowIsoValue,
+          lane: "appointment_outcome_sold",
+          reason: "sold"
+        });
         markOpenTodosDoneForConversation(conv.id);
         setFollowUpMode(conv, "active", "post_sale");
         startPostSaleCadence(conv, nowIsoValue, cfg.timezone);

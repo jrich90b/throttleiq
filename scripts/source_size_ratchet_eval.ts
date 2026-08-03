@@ -122,7 +122,11 @@ const CEILINGS: Ceiling[] = [
     // six-field normalization and `onAppointmentBooked`'s confirmedBy inference both collapse into
     // calls to applyAppointmentAttribution (conversationStore), which asks
     // decideAppointmentAttribution (routeStateReducer).
-    max: 71_390,
+    // 71_390 -> 71_386. The LEAD-closeout un-stacking: the two hand-maintained copies of the
+    // appointment-outcome "sold" close (the conversation header and the to-do endpoint) each wrote
+    // status/closedAt/closedReason inline; both now call applyLeadCloseout (conversationStore),
+    // which asks decideLeadCloseout (routeStateReducer). Net -4 after the import line.
+    max: 71_386,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

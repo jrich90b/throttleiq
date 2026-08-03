@@ -18,7 +18,7 @@ import path from "node:path";
 
 process.env.CONVERSATIONS_DB_PATH =
   process.env.CONVERSATIONS_DB_PATH || path.join(os.tmpdir(), `closed-watch-eval-${Date.now()}.json`);
-const { closeConversation, upsertConversationByLeadKey } = await import(
+const { closeConversation, applyLeadCloseout, upsertConversationByLeadKey } = await import(
   "../services/api/src/domain/conversationStore.ts"
 );
 
@@ -64,12 +64,26 @@ const api = fs.readFileSync("services/api/src/index.ts", "utf8");
 assert.match(api, /if \(!closed \|\| !hasActiveInventoryWatch\(conv\)\) continue;/, "reconcile gates on closed + active watch");
 assert.match(api, /pauseInventoryWatches\(conv\)/, "reconcile pauses the watches");
 assert.match(api, /closed_watch_paused/, "route outcome recorded");
-// And the write-time guard lives in closeConversation.
 const store = fs.readFileSync("services/api/src/domain/conversationStore.ts", "utf8");
-assert.match(store, /export function closeConversation[\s\S]*?if \(w && w\.status !== "paused"\) w\.status = "paused";/, "closeConversation pauses active watches");
 // Union both watch fields (the single + the array) — one source of truth so the heal/close/detector agree.
 assert.match(store, /export function collectInventoryWatches/, "collectInventoryWatches unions single + array");
-assert.match(store, /export function closeConversation[\s\S]*?for \(const w of collectInventoryWatches\(conv\)\)/, "closeConversation enumerates via collectInventoryWatches");
-n += 5;
+n += 4;
+
+// --- the write-time guard, asserted BEHAVIOURALLY ------------------------------------------------
+// It now lives in `applyLeadCloseout` (the lead-closeout referee's applier) and `closeConversation`
+// asks it. Two source-text pins used to assert it by matching closeConversation's BODY; both broke
+// the moment the loop was extracted, even though behavior was provably unchanged (decision
+// equivalence IDENTICAL). A pin on where code SITS cannot tell a regression from a refactor — so
+// these are behaviour checks now. Same guard, one that survives the next extraction.
+const cRef: any = upsertConversationByLeadKey("+15559000006", "suggest");
+cRef.inventoryWatch = { status: "active", model: "Sportster S" }; // legacy single
+cRef.inventoryWatches = [{ status: "active", model: "Nightster" }, { status: "paused", model: "Iron" }];
+applyLeadCloseout(cRef, { nowIso: new Date().toISOString(), lane: "generic_close", reason: "opt_out" });
+ok(cRef.inventoryWatch.status === "paused", "the applier pauses the legacy SINGLE watch");
+ok(
+  cRef.inventoryWatches.every((w: any) => w.status === "paused"),
+  "...and every watch in the array — i.e. it enumerates via collectInventoryWatches, not one field"
+);
+ok(cRef.status === "closed", "and the applier is what stamps the thread closed");
 
 console.log(`PASS closed-conversation watch-pause eval (${n} assertions)`);
