@@ -14,6 +14,9 @@ import {
   decideManualCadenceRestart,
   isRealReplyProvider,
   decideBurnedCadenceLadderRealign,
+  decideReschedulePendingLatch,
+  type ReschedulePendingLatchLane,
+  type ReschedulePendingLatchDecision,
   type AppointmentBookingLane,
   type AppointmentBookingRecordDecision,
   type AppointmentConfirmLane,
@@ -5222,6 +5225,32 @@ export function applyAppointmentBookingRecord(
   appt.bookedSalespersonId = input.bookedSalespersonId ?? null;
   if (decision.recordMatchedSlot && input.matchedSlot) appt.matchedSlot = input.matchedSlot;
   if (decision.clearReschedulePending) appt.reschedulePending = false;
+  return decision;
+}
+
+// The ONE place that ARMS `appointment.reschedulePending` — the inverse of the two referees above,
+// which own clearing it. Three call sites used to arm it inline on their own preconditions; they now
+// ask `decideReschedulePendingLatch` (see that referee for the preserved divergence about whether an
+// appointment record must already exist, and why the latch is a routing switch rather than a note).
+//
+// Deliberately does NOT touch cadence, todos or the staff-notify record: each caller answers those
+// its own way, and pulling them in here would change behavior rather than centralize it.
+export function applyReschedulePendingLatch(
+  conv: Conversation,
+  input: { lane: ReschedulePendingLatchLane | string }
+): ReschedulePendingLatchDecision {
+  const decision = decideReschedulePendingLatch({
+    lane: input.lane,
+    hasAppointmentRecord: !!conv?.appointment,
+    reschedulePending: conv?.appointment?.reschedulePending ?? null
+  });
+  if (!conv || !decision.arm) return decision;
+  if (!conv.appointment) {
+    if (!decision.createRecordIfAbsent) return decision;
+    conv.appointment = { status: "none", updatedAt: nowIso() };
+  }
+  conv.appointment.reschedulePending = true;
+  conv.appointment.updatedAt = nowIso();
   return decision;
 }
 

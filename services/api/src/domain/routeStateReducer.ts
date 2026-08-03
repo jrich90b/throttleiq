@@ -4757,6 +4757,117 @@ export function decideAppointmentBookingRecord(
   };
 }
 
+// ===================================================================================================
+// SOMETHING SAYS THIS LEAD OWES US A REBOOK — "do we ARM the reschedule latch?"
+//
+// The third referee in the appointment family, and the one with the most customer risk.
+// `decideAppointmentConfirmRecord` and `decideAppointmentBookingRecord` both decide when the latch
+// is CLEARED. Nobody owned the opposite question, so three places armed it on their own:
+//
+//   appointment_outcome_reschedule_draft  a rebook offer was just SENT after staff recorded the
+//                                         appointment as missed/cancelled (index.ts ~20050)
+//   staff_context_note                    a staff note parsed as an explicit cancel/reschedule
+//                                         request (applyAppointmentStateFromContextNote)
+//   customer_inbound_cancel_reschedule    the CUSTOMER's own message parsed as cancel/reschedule,
+//                                         on a non-human thread (index.ts ~61080)
+//
+// WHY THE LATCH IS NOT A NOTE. `pendingRescheduleCarriesTurnIntent` (and its regen twin at
+// index.ts ~55663) uses it to read the lead's NEXT message as "they want to move their appointment".
+// Arming it wrongly means a customer gets answered about rescheduling something they never raised;
+// failing to arm it costs a rebook we should have chased. Both directions touch a customer, which is
+// why this sits in Tier 1.
+//
+// THE ONE DISAGREEMENT — must an appointment record already EXIST?
+//   The two staff-side lanes require one and skip silently without it: the outcome-draft lane is
+//   guarded by `if (conv?.appointment)`, and the context-note lane returns early unless the record
+//   exists AND carries real context (a booked event, a `confirmed` status, or an already-standing
+//   latch). The CUSTOMER lane requires nothing — it manufactures a `{ status: "none" }` stub and
+//   latches on that.
+//
+//   PRESERVED, and ruled NOT a defect. This is the lane's INPUT, not a fight about the same
+//   question. The staff lanes are INFERRING a rebook debt from a record we hold, so with no record
+//   there is nothing to infer from. The customer lane has the customer saying it in their own words
+//   this turn — the strongest evidence there is — and a lead who says "I need to move my
+//   appointment" when we hold nothing is exactly the lead we must not answer as if they said
+//   nothing. Fail-direction agrees: for a staff inference, arming on a phantom record fails toward
+//   messaging about an appointment that never existed; for the customer lane, NOT arming fails
+//   toward ignoring what they just told us. See ruling 5 in the joe-autonomous-rulings ledger.
+//
+// FAIL DIRECTION for an unrecognized lane: REFUSE to arm. A missed rebook chase costs us a
+// follow-up; a wrongly armed latch mis-routes the customer's next message.
+//
+// PURE + CLOCK-FREE: the caller stamps `updatedAt`; this decides only whether to arm and whether the
+// lane may mint a record to arm on.
+// ===================================================================================================
+
+export type ReschedulePendingLatchLane =
+  | "appointment_outcome_reschedule_draft" // we just SENT a rebook offer after a missed/cancelled appt
+  | "staff_context_note" // a staff note read as an explicit cancel/reschedule request
+  | "customer_inbound_cancel_reschedule"; // the customer's own message said cancel/reschedule
+
+/**
+ * The lane driven by the CUSTOMER'S OWN WORDS this turn. See the divergence above — this is the only
+ * lane allowed to mint an appointment record to latch on, because it is the only one not inferring
+ * the rebook debt from a record we already hold.
+ */
+const RESCHEDULE_LATCH_CUSTOMER_SPEECH_LANES = new Set<string>([
+  "customer_inbound_cancel_reschedule"
+]);
+
+export type ReschedulePendingLatchInput = {
+  lane: ReschedulePendingLatchLane | string;
+  /** Does this conversation carry an appointment record right now? */
+  hasAppointmentRecord: boolean;
+  /** The stored latch, exactly as it stands. Only used to say honestly whether this is a no-op. */
+  reschedulePending?: boolean | null;
+};
+
+export type ReschedulePendingLatchDecision = {
+  /** Arm the latch. False means the caller must not write anything. */
+  arm: boolean;
+  /** This lane may mint a `{ status: "none" }` record to arm on. Customer-speech lane only. */
+  createRecordIfAbsent: boolean;
+  /** Names the preserved disagreement when this lane is the odd one out for THIS input. */
+  divergence: string | null;
+  why: string;
+};
+
+export function decideReschedulePendingLatch(
+  input: ReschedulePendingLatchInput
+): ReschedulePendingLatchDecision {
+  const lane = String(input.lane ?? "").trim();
+  const customerSpeech = RESCHEDULE_LATCH_CUSTOMER_SPEECH_LANES.has(lane);
+  const recognized =
+    customerSpeech ||
+    lane === "appointment_outcome_reschedule_draft" ||
+    lane === "staff_context_note";
+  const hasRecord = input.hasAppointmentRecord === true;
+  const alreadyLatched = input.reschedulePending === true;
+
+  // A staff lane with no record to reason about has nothing to arm — today it skips silently, and
+  // that is the safe answer, not an oversight.
+  const arm = recognized && (hasRecord || customerSpeech);
+
+  return {
+    arm,
+    createRecordIfAbsent: customerSpeech,
+    divergence:
+      recognized && !hasRecord
+        ? customerSpeech
+          ? "customer_speech_lane_mints_an_appointment_record_to_latch_on"
+          : "staff_inference_lane_refuses_to_latch_without_an_appointment_record"
+        : null,
+    why: !recognized
+      ? `unrecognized reschedule-latch lane "${lane}" — refused, the latch may not be armed`
+      : !hasRecord
+        ? customerSpeech
+          ? `${lane}: the customer asked for a new time in their own words and we hold no ` +
+            "appointment — mint the record and arm, rather than answer as if they said nothing"
+          : `${lane}: no appointment record to infer a rebook debt from — skipped, as today`
+        : `${lane}: this lead owes us a rebook — latch armed${alreadyLatched ? " (already standing)" : ""}`
+  };
+}
+
 /**
  * Should a Traffic Log Pro walk-in note start an inventory watch?
  *

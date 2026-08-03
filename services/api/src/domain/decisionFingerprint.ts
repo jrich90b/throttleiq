@@ -470,6 +470,33 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     }, ["decideAppointmentBookingRecord"]);
   }
 
+  // Sampled once PER LANE, because the whole disagreement this referee owns is between lanes: the
+  // customer-speech lane may mint an appointment record to latch on and the two staff-inference
+  // lanes may not, so a single sample would hide exactly that. PROBE: the lane is held fixed per
+  // sample; the only stored state consulted is whether the lead has an appointment record and what
+  // the latch currently says, so between a baseline and a candidate run only the arbitration itself
+  // can move the fingerprint. Note this registry entry deliberately does NOT early-return on a
+  // missing `conv.appointment` — "no record" is the input the divergence turns on.
+  for (const lane of [
+    "appointment_outcome_reschedule_draft",
+    "staff_context_note",
+    "customer_inbound_cancel_reschedule"
+  ] as const) {
+    add(`reschedulePendingLatch:${lane}`, conv => {
+      if (!conv || typeof reducer.decideReschedulePendingLatch !== "function") return undefined;
+      const decision = reducer.decideReschedulePendingLatch({
+        lane, // PROBE
+        hasAppointmentRecord: !!conv.appointment,
+        reschedulePending: conv.appointment?.reschedulePending ?? null
+      });
+      return {
+        arm: decision.arm,
+        createRecordIfAbsent: decision.createRecordIfAbsent,
+        divergence: decision.divergence
+      };
+    }, ["decideReschedulePendingLatch"]);
+  }
+
   return registry;
 }
 

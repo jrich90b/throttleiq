@@ -509,6 +509,7 @@ import {
   releaseHeldDraft,
   applyAppointmentTeardown,
   applyAppointmentBookingRecord,
+  applyReschedulePendingLatch,
   applyAppointmentConfirmRecord,
   clearAppointmentStaffPromptState
 } from "./domain/conversationStore.js";
@@ -20056,10 +20057,7 @@ async function maybeQueueAppointmentOutcomeRescheduleDraft(args: {
   }
 
   appendOutbound(conv, "salesperson", toNumber, reply, "draft_ai");
-  if (conv?.appointment) {
-    conv.appointment.reschedulePending = true;
-    conv.appointment.updatedAt = new Date().toISOString();
-  }
+  applyReschedulePendingLatch(conv, { lane: "appointment_outcome_reschedule_draft" });
   recordRouteOutcome("live", "appointment_outcome_reschedule_draft", {
     convId: conv.id,
     leadKey: conv.leadKey,
@@ -25513,8 +25511,7 @@ async function applyAppointmentStateFromContextNote(
       lastSuggestedSlots: conv.scheduler?.lastSuggestedSlots
     });
     if (booking?.explicitRequest && (booking.intent === "cancel" || booking.intent === "reschedule")) {
-      conv.appointment.reschedulePending = true;
-      conv.appointment.updatedAt = now;
+      applyReschedulePendingLatch(conv, { lane: "staff_context_note" });
       recordAppointmentOutcome(getOutcomeStaffNotifyTarget(conv), "context_note_booking", {
         status: "follow_up",
         note: booking.intent === "cancel"
@@ -61081,9 +61078,7 @@ if (authToken && signature) {
         }
       : undefined;
     const todo = addTodo(conv, "call", summary, event.providerMessageId, owner, schedule);
-    conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
-    conv.appointment.reschedulePending = true;
-    conv.appointment.updatedAt = new Date().toISOString();
+    applyReschedulePendingLatch(conv, { lane: "customer_inbound_cancel_reschedule" });
     setDialogState(conv, "schedule_request");
     const requestedDay = cancellationWithoutNewTime
       ? ""
