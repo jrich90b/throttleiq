@@ -122,7 +122,7 @@ import {
 import {
   filterCadenceUnavailableItemsByRequestedYear,
   isTradeSellCadenceContext,
-  excludeWatchOfferWhenInStock
+  excludeWatchOfferWhenInStock, leadModelGoneFromInventoryFeed
 } from "./domain/cadenceInventoryGuard.js";
 import { activateManualQuoteDeliveredFollowUp } from "./domain/manualQuoteFollowUp.js";
 import { resolveSalesTopicHint } from "./domain/salesTopicHint.js";
@@ -13835,15 +13835,15 @@ async function maybeApplyLeadUnitAvailabilityDisclosure(
 async function leadUnitUnavailableForValueGate(conv: any): Promise<boolean> {
   try {
     const stockId =
-      String(conv?.lead?.vehicle?.stockId ?? conv?.lead?.vehicle?.stock ?? conv?.lead?.stockId ?? "")
-        .trim() || null;
+      String(conv?.lead?.vehicle?.stockId ?? conv?.lead?.vehicle?.stock ?? conv?.lead?.stockId ?? "").trim() || null;
     const vin = String(conv?.lead?.vehicle?.vin ?? conv?.lead?.vin ?? "").trim() || null;
-    if (!stockId && !vin) return false;
+    if (!stockId && !vin) return await leadModelGoneFromInventoryFeed(conv);
     const holds = await listInventoryHolds();
     const solds = await listInventorySolds();
     const soldKey = normalizeInventorySoldKey(stockId, vin);
     const holdKey = normalizeInventoryHoldKey(stockId, vin);
-    return !!(soldKey && solds?.[soldKey]) || !!(holdKey && holds?.[holdKey]);
+    const soldOrHeld = !!(soldKey && solds?.[soldKey]) || !!(holdKey && holds?.[holdKey]);
+    return soldOrHeld || (await leadModelGoneFromInventoryFeed(conv));
   } catch {
     return false;
   }
