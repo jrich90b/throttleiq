@@ -4984,6 +4984,163 @@ export function decideInventoryAvailabilityReopen(
   };
 }
 
+// ===================================================================================================
+// SOMETHING WANTS A CLOSED LEAD BACK IN THE WORKING INBOX — "may it reopen, and does that erase the
+// closeout?"
+//
+// The companion question to `decideInventoryAvailabilityReopen` above, for every reopen cause that
+// is NOT an inventory record disappearing. Four places answered it inline, each writing `status`,
+// `closedAt` and `closedReason` on its own reading:
+//
+//   appendInbound (conversationStore.ts ~2362)   a customer texted a closed thread. The only arm
+//       that may REFUSE: sold threads stay sold, and a bare content-free ack must not drag a
+//       hold / archived / declined thread back into the working inbox.
+//   POST /conversations/:id/reopen (index.ts ~41408)   staff pressed Reopen. Unconditional.
+//   the walk-in HOLD note (sendgridInbound.ts ~7652)   a CRM walk-in note says a bike is being held
+//       for this customer.
+//   the walk-in HOLD-CLEAR note (sendgridInbound.ts ~7668)   a CRM walk-in note says the hold is over.
+//
+// FAIL DIRECTION: same unusual one as the inventory referee. The irreversible thing (closing a live
+// lead) already happened, so REOPENING is the safe answer — a lead wrongly left closed is silently
+// dropped and no follow-up ever runs. What stays conservative is the refusal arm: it is driven
+// entirely by state WE wrote (`closedReason`, `sale`, `hold`, `followUp.reason`) plus one narrow
+// deterministic bare-ack test, never by comprehension of what the customer meant.
+//
+// AN UNRECOGNIZED CAUSE CHANGES NOTHING. Reopening is safe for the four causes above precisely
+// because each one is a human or a customer asking for this lead again; a cause this referee does
+// not know is not evidence of anything.
+//
+// THE PRESERVED DISAGREEMENTS, both real and both visible only once the four sat side by side:
+//
+//   DIVERGENCE 1 — only the CUSTOMER arm can be refused. Staff Reopen and both walk-in notes reopen
+//     unconditionally; a customer's own message is filtered by the sold / hold-ack / archived-ack
+//     rules. Preserved: staff clicking Reopen and a salesperson's walk-in note are explicit human
+//     instructions, while "thanks!" on a completed sale must not resurrect the deal.
+//
+//   DIVERGENCE 2 — the walk-in arms reopen WITHOUT erasing a non-hold closeout. They set the status
+//     back to open but only clear `closedReason`/`closedAt` when the stored reason mentions "hold",
+//     so a lead closed `not_interested` that later gets a walk-in hold note comes back open while
+//     still claiming it was closed for not-interested. The other two arms always erase the whole
+//     closeout. Preserved as-is: erasing more would destroy the record of WHY staff closed the lead,
+//     and the thread is open either way, which is the direction that matters.
+//
+// PURE + CLOCK-FREE: the caller owns the reads, the bare-ack test and the writes.
+// ===================================================================================================
+
+export type CloseoutReversalCause =
+  | "customer_inbound" // a customer texted/emailed a closed thread
+  | "staff_reopen" // staff pressed Reopen in the console
+  | "walkin_hold_note" // a CRM walk-in note says a bike is being held for this customer
+  | "walkin_hold_clear"; // a CRM walk-in note says the hold is over
+
+export type CloseoutReversalInput = {
+  cause: CloseoutReversalCause | string;
+  /** Is the conversation closed right now? Only the customer arm cares (it is a no-op when open). */
+  isClosed: boolean;
+  /** The stored `closedReason`, exactly as it is. */
+  closedReason?: string | null;
+  /** The stored `followUp.reason`. */
+  followUpReason?: string | null;
+  /** Does the conversation carry a `sale.soldAt`? */
+  hasSoldSale?: boolean;
+  /** Does the conversation carry a `hold` record? */
+  hasHoldRecord?: boolean;
+  /**
+   * CUSTOMER ARM ONLY: the inbound was a bare, content-free acknowledgement and carried no media.
+   * Computed by the caller (`isBareAckInboundText`) — a deterministic side-effect gate, not
+   * comprehension. Ignored for every other cause.
+   */
+  bareAck?: boolean;
+  /** CUSTOMER ARM ONLY: `isDeclineCloseoutReason(closedReason)` — our own closeout vocabulary. */
+  declineCloseoutReason?: boolean;
+};
+
+export type CloseoutReversalDecision = {
+  /** Put `status` back to "open". */
+  reopen: boolean;
+  /** Also clear `closedAt` + `closedReason` — NOT always implied by `reopen` (divergence 2). */
+  clearCloseout: boolean;
+  /** Names the preserved disagreement when this cause is the odd one out for THIS input. */
+  divergence: string | null;
+  why: string;
+};
+
+export function decideCloseoutReversal(input: CloseoutReversalInput): CloseoutReversalDecision {
+  const cause = String(input.cause ?? "").trim();
+  const recognized =
+    cause === "customer_inbound" ||
+    cause === "staff_reopen" ||
+    cause === "walkin_hold_note" ||
+    cause === "walkin_hold_clear";
+  const walkIn = cause === "walkin_hold_note" || cause === "walkin_hold_clear";
+
+  const closedReason = String(input.closedReason ?? "").toLowerCase();
+  const followUpReason = String(input.followUpReason ?? "").toLowerCase();
+  const bareAck = !!input.bareAck;
+
+  // SOLD stays closed no matter what: post-sale texts are worked in the sold bucket, and a
+  // genuinely NEW purchase forks a fresh journey — reopening the sold lead would pull completed
+  // deals back into the inbox on every "thanks!".
+  const soldSticky =
+    closedReason === "sold" || !!input.hasSoldSale || /\bpost_sale\b/.test(followUpReason);
+  // A HOLD deal (bike held for the customer, purchase in progress) is NOT sold: a real customer
+  // message there is live deal traffic and must reopen the thread so it surfaces (Joe ruling
+  // 2026-07-16; David Miller +17163440581). Only a bare content-free ack leaves it closed.
+  const holdSticky =
+    !soldSticky &&
+    (/\bhold\b/.test(closedReason) ||
+      !!input.hasHoldRecord ||
+      /\b(unit_hold|order_hold|manual_hold)\b/.test(followUpReason));
+  const stickyClosed = soldSticky || (holdSticky && bareAck);
+  // Staff-archived + a bare content-free ack (no media) => stay archived. A CLEAN DECLINE closeout
+  // ("No thanks") archives on the same terms (Joe ruling 2026-07-22).
+  const archivedAckHold = (/archive/.test(closedReason) || !!input.declineCloseoutReason) && bareAck;
+  const customerMayReopen = !!input.isClosed && !stickyClosed && !archivedAckHold;
+
+  // DIVERGENCE 2, preserved verbatim: the walk-in arms only erase a closeout that mentions "hold".
+  const walkInClearsCloseout = !!closedReason && /\bhold\b/.test(closedReason);
+
+  const reopen = !recognized ? false : cause === "customer_inbound" ? customerMayReopen : true;
+  const clearCloseout = !recognized
+    ? false
+    : cause === "customer_inbound"
+      ? customerMayReopen
+      : walkIn
+        ? walkInClearsCloseout
+        : true;
+
+  return {
+    reopen,
+    clearCloseout,
+    divergence: !recognized
+      ? null
+      : cause === "customer_inbound" && !!input.isClosed && !customerMayReopen
+        ? "only_the_customer_arm_may_be_refused_a_reopen"
+        : walkIn && reopen && !clearCloseout
+          ? "walkin_note_reopens_but_keeps_a_non_hold_closeout_reason"
+          : null,
+    why: !recognized
+      ? `unrecognized closeout-reversal cause "${cause}" — refused, nothing may change`
+      : cause === "customer_inbound"
+        ? !input.isClosed
+          ? "customer_inbound: the thread is already open — nothing to reverse"
+          : customerMayReopen
+            ? "customer_inbound: a real message on a closed thread — reopen and clear the closeout"
+            : soldSticky
+              ? "customer_inbound: this lead is SOLD — post-sale traffic stays in the sold bucket"
+              : holdSticky
+                ? "customer_inbound: a bare ack on a HOLD thread — not live deal traffic, stays closed"
+                : "customer_inbound: a bare ack on an archived/declined thread — stays archived"
+        : cause === "staff_reopen"
+          ? "staff_reopen: staff asked for this lead back — reopen and clear the whole closeout"
+          : clearCloseout
+            ? `${cause}: a walk-in note about the hold, and the lead was closed against a hold — ` +
+              "reopen and clear the closeout"
+            : `${cause}: a walk-in note about the hold — reopen, but the stored closedReason ` +
+              `("${String(input.closedReason ?? "").trim() || "none"}") is not a hold, so it stands`
+  };
+}
+
 /**
  * Should a Traffic Log Pro walk-in note start an inventory watch?
  *

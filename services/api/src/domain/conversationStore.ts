@@ -17,6 +17,9 @@ import {
   decideInventoryAvailabilityReopen,
   type InventoryAvailabilityReopenCause,
   type InventoryAvailabilityReopenDecision,
+  decideCloseoutReversal,
+  type CloseoutReversalCause,
+  type CloseoutReversalDecision,
   decideReschedulePendingLatch,
   type ReschedulePendingLatchLane,
   type ReschedulePendingLatchDecision,
@@ -2350,42 +2353,14 @@ export function applyDeferCloseSoftPause(conv: Conversation, reason?: string | n
 }
 
 export function appendInbound(conv: Conversation, evt: InboundMessageEvent) {
-  if (conv.status === "closed") {
-    const closedReason = String(conv.closedReason ?? "").toLowerCase();
-    // SOLD stays closed no matter what: post-sale texts are worked in the sold bucket, and a
-    // genuinely NEW purchase forks a fresh journey (journey-intent parser in
-    // resolveInboundConversationForSms) — reopening the sold lead would pull completed deals
-    // back into the inbox on every "thanks!".
-    const soldSticky =
-      closedReason === "sold" ||
-      !!conv.sale?.soldAt ||
-      /\bpost_sale\b/.test(String(conv.followUp?.reason ?? "").toLowerCase());
-    // A HOLD deal (bike held for the customer, purchase in progress) is NOT sold: a real
-    // customer message there is live deal traffic and must reopen the thread so it surfaces
-    // (Joe ruling 2026-07-16; David Miller +17163440581 — closed-with-hold since 4/20, texted
-    // "I am on my way" on 7/3 to pick the bike up and the thread stayed buried in the
-    // archived box). Only a bare content-free ack leaves a hold thread closed.
-    const holdSticky =
-      !soldSticky &&
-      (/\bhold\b/.test(closedReason) ||
-        !!conv.hold ||
-        /\b(unit_hold|order_hold|manual_hold)\b/.test(
-          String(conv.followUp?.reason ?? "").toLowerCase()
-        ));
-    const bareAck = !(evt.mediaUrls && evt.mediaUrls.length) && isBareAckInboundText(evt.body);
-    const stickyClosed = soldSticky || (holdSticky && bareAck);
-    // Staff-archived + a bare content-free ack (no media) => stay archived. Any real message,
-    // question, or attachment still reopens (fail-safe toward reopening). A CLEAN DECLINE
-    // closeout ("No thanks") archives on the same terms (Joe ruling 2026-07-22) so a stray
-    // "ok"/👍 can't drag a lead the customer already declined back into the working inbox.
-    const archivedAckHold =
-      (/archive/.test(closedReason) || isDeclineCloseoutReason(closedReason)) && bareAck;
-    if (!stickyClosed && !archivedAckHold) {
-      conv.status = "open";
-      conv.closedAt = undefined;
-      conv.closedReason = undefined;
-    }
-  }
+  // A customer texted a closed thread. ONE referee (decideCloseoutReversal) now says whether that
+  // reopens it — the sold / hold-ack / archived-ack rules that used to live here inline, and that
+  // the staff Reopen endpoint and the walk-in hold notes each answered their own way.
+  applyCloseoutReversal(conv, {
+    cause: "customer_inbound",
+    inboundBody: evt.body,
+    inboundHasMedia: !!(evt.mediaUrls && evt.mediaUrls.length)
+  });
   conv.messages.push({
     id: makeId("msg"),
     direction: "in",
@@ -5283,6 +5258,48 @@ export function applyInventoryAvailabilityReopen(
   }
   if (decision.stopCadence) stopFollowUpCadence(conv, "inventory_marked_available");
   if (decision.resumeFollowUp) setFollowUpMode(conv, "active", "inventory_marked_available");
+  return decision;
+}
+
+// The ONE place that un-does a closeout for a cause that is NOT an inventory record disappearing.
+// Four callers answered it inline — the customer-inbound reopen (this file), the staff Reopen
+// endpoint (index.ts) and the two walk-in hold notes (sendgridInbound.ts) — each writing `status`,
+// `closedAt` and `closedReason` on its own reading. See `decideCloseoutReversal` for the two
+// preserved divergences and the fail direction (REOPEN is the safe answer; the refusal arm is the
+// conservative one). Writes only; the caller still owns `updatedAt` / saving.
+export function applyCloseoutReversal(
+  conv: Conversation,
+  input: {
+    cause: CloseoutReversalCause | string;
+    /** CUSTOMER ARM ONLY: the inbound body and whether it carried media. */
+    inboundBody?: string | null;
+    inboundHasMedia?: boolean;
+  }
+): CloseoutReversalDecision {
+  const isClosed = conv?.status === "closed";
+  const customerArm = input.cause === "customer_inbound";
+  // The bare-ack test is the customer arm's only non-stored input, and the referee ignores it for
+  // every other cause — so it is only worth computing where it can matter.
+  const bareAck =
+    customerArm && isClosed
+      ? !input.inboundHasMedia && isBareAckInboundText(input.inboundBody)
+      : false;
+  const decision = decideCloseoutReversal({
+    cause: input.cause,
+    isClosed,
+    closedReason: conv?.closedReason ?? null,
+    followUpReason: conv?.followUp?.reason ?? null,
+    hasSoldSale: !!conv?.sale?.soldAt,
+    hasHoldRecord: !!conv?.hold,
+    bareAck,
+    declineCloseoutReason: customerArm ? isDeclineCloseoutReason(conv?.closedReason ?? null) : false
+  });
+  if (!conv) return decision;
+  if (decision.reopen) conv.status = "open";
+  if (decision.clearCloseout) {
+    conv.closedAt = undefined;
+    conv.closedReason = undefined;
+  }
   return decision;
 }
 

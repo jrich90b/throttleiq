@@ -591,8 +591,16 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 //   `closedReason` 5 -> 4. The cluster heuristic this memory recorded paid off exactly as predicted:
 //   several fields' writers sitting within a few lines of each other were ONE question, worth more
 //   per PR than the biggest single field.
+// 139 -> 132: the CLOSEOUT-REVERSAL un-stacking (this commit) — the companion question to the one
+//   above, for every reopen cause that is NOT an inventory record disappearing. Four places un-did a
+//   closeout inline on their own reading: `appendInbound` (a customer texted a closed thread),
+//   `POST /conversations/:id/reopen` (staff pressed Reopen) and the two walk-in hold notes in
+//   sendgridInbound. All four now ask `decideCloseoutReversal` through `applyCloseoutReversal`.
+//   `status` 4 -> 2, `closedReason` 4 -> 2, `closedAt` 3 -> 1 — and what is LEFT on those fields is
+//   the sibling question (closing a lead), not this one. Same cluster heuristic again: three fields
+//   whose writers sat on consecutive lines were one question.
 // RATCHET DOWN ONLY.
-const UNREFEREED_WRITER_BASELINE = 139;
+const UNREFEREED_WRITER_BASELINE = 132;
 
 {
   const sourceFiles: SourceFile[] = [];
