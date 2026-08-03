@@ -65,7 +65,8 @@ export function shouldSuppressCadenceAck(
   if (!conv) return false;
 
   const recentHumanOutbound = (conv.messages ?? []).some(m => {
-    if (m?.direction !== "out" || m?.provider !== "human") return false;
+    // delivered === false is a recorded-but-unsendable fallback row, not a human driving.
+    if (m?.direction !== "out" || m?.provider !== "human" || (m as any)?.delivered === false) return false;
     const atMs = parseMs(m?.at);
     if (Number.isNaN(atMs)) return false;
     return nowMs - atMs >= 0 && nowMs - atMs <= windowMs;

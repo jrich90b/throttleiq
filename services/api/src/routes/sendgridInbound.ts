@@ -2822,7 +2822,9 @@ function isReplyToSalespersonEmailThread(conv: any): boolean {
   const to = String(lastOutbound.to ?? "");
   const looksLikeEmail = from.includes("@") || to.includes("@");
   if (!looksLikeEmail) return false;
-  return lastOutbound.provider === "human";
+  // delivered === false is the cadence's own unsendable fallback — the customer never received
+  // it, so their reply is NOT "a reply to a salesperson's thread".
+  return lastOutbound.provider === "human" && lastOutbound.delivered !== false;
 }
 
 function getLeadIdentifiers(conv: any, fromEmail?: string) {

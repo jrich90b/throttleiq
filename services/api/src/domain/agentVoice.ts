@@ -199,11 +199,20 @@ export function buildAgentIntro(
 export const CUSTOMER_FACING_OUTBOUND_PROVIDERS = new Set(["twilio", "sendgrid", "human", "web_widget"]);
 
 export function hasCustomerReceivedOutbound(
-  messages: ReadonlyArray<{ direction?: string | null; provider?: string | null } | null | undefined> | null | undefined
+  messages:
+    | ReadonlyArray<{ direction?: string | null; provider?: string | null; delivered?: boolean | null } | null | undefined>
+    | null
+    | undefined
 ): boolean {
   if (!Array.isArray(messages)) return false;
   return messages.some(
-    m => m?.direction === "out" && CUSTOMER_FACING_OUTBOUND_PROVIDERS.has(String(m?.provider ?? ""))
+    m =>
+      m?.direction === "out" &&
+      CUSTOMER_FACING_OUTBOUND_PROVIDERS.has(String(m?.provider ?? "")) &&
+      // A recorded-but-unsendable fallback row (delivered: false) reached nobody — counting it
+      // skips the intro on the customer's REAL first message, the exact failure this file exists
+      // to prevent. Absent means delivered (pre-marker history).
+      m?.delivered !== false
   );
 }
 
@@ -217,13 +226,41 @@ export function hasCustomerReceivedOutbound(
  * in the americanharley store are `draftStatus: "stale"`). Feeding one to a reviewer as a prior
  * `out:` turn invents a conversation that never happened — see `buildCustomerReceivedHistory`.
  */
-export function keepCustomerReceivedOutbounds<T extends { direction?: string | null; provider?: string | null }>(
-  messages: ReadonlyArray<T> | null | undefined
-): T[] {
+export function keepCustomerReceivedOutbounds<
+  T extends { direction?: string | null; provider?: string | null; delivered?: boolean | null }
+>(messages: ReadonlyArray<T> | null | undefined): T[] {
   if (!Array.isArray(messages)) return [];
   return messages.filter(
-    m => m?.direction !== "out" || CUSTOMER_FACING_OUTBOUND_PROVIDERS.has(String(m?.provider ?? ""))
+    m =>
+      m?.direction !== "out" ||
+      (CUSTOMER_FACING_OUTBOUND_PROVIDERS.has(String(m?.provider ?? "")) && m?.delivered !== false)
   );
+}
+
+/**
+ * Did a REAL human send actually reach this customer inside the window? The proactive-cadence
+ * loop uses this to decide "a rep is driving, downgrade to draft-only" — before the delivered
+ * marker existed it read any provider "human" row, so the cadence's own unsendable fallback
+ * (recorded as "human") benched the cadence for 14 days on a thread no human ever touched.
+ */
+export function hasRecentDeliveredHumanOutbound(
+  messages:
+    | ReadonlyArray<
+        { direction?: string | null; provider?: string | null; delivered?: boolean | null; at?: string | null } | null | undefined
+      >
+    | null
+    | undefined,
+  nowMs: number,
+  windowMs: number = 14 * 24 * 60 * 60 * 1000
+): boolean {
+  if (!Array.isArray(messages)) return false;
+  return messages.some(m => {
+    if (m?.direction !== "out" || m?.provider !== "human" || m?.delivered === false) return false;
+    const atMs = new Date(String(m?.at ?? "")).getTime();
+    if (Number.isNaN(atMs)) return false;
+    // Same window arithmetic the inline block used (no lower bound) — behavior-preserving lift.
+    return nowMs - atMs <= windowMs;
+  });
 }
 
 /**
