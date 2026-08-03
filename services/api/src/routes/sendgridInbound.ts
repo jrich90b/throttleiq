@@ -46,6 +46,7 @@ import {
   computeFollowUpDueAt,
   markPricingEscalated,
   closeConversation,
+  applyAppointmentConfirmRecord,
   setContactPreference,
   parseRequestedDayTime,
   parseRequestedDateOnly,
@@ -9017,12 +9018,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
           );
 
           conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
-          conv.appointment.status = "confirmed";
+          // Referee: stamps confirm fields AND clears the reschedule latch (RULED 8/2, div. 2).
+          applyAppointmentConfirmRecord(conv, "customer_confirm_booking");
           conv.appointment.whenText = formatSlotLocal(exact.start, cfg.timezone);
           conv.appointment.whenIso = exact.start;
-          conv.appointment.confirmedBy = "customer";
           conv.appointment.updatedAt = new Date().toISOString();
-          conv.appointment.acknowledged = true;
           conv.appointment.bookedEventId = eventObj.id ?? null;
           conv.appointment.bookedEventLink = eventObj.htmlLink ?? null;
           conv.appointment.bookedSalespersonId = exact.salespersonId ?? null;
