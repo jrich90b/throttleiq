@@ -488,6 +488,28 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     }, ["decideSoldCloseout"]);
   }
 
+  // Added 2026-08-03 with the LEAD-closeout un-stacking (the sibling of the block above: that one
+  // answers "does the unit hold come off", this one "what does closing itself entail"). Sampled
+  // once PER LANE, because the lanes are the whole disagreement — the generic close pauses the
+  // lead's active inventory watches at write time and the appointment-outcome sold lane does not.
+  // PROBE: the lane is held fixed per sample (it is a property of the CALL SITE, not of stored
+  // state); the reason is projected from what this lead actually has stored, so between a baseline
+  // and a candidate run only the arbitration itself can move the fingerprint.
+  for (const lane of ["generic_close", "appointment_outcome_sold"] as const) {
+    add(`leadCloseout:${lane}`, conv => {
+      if (typeof reducer.decideLeadCloseout !== "function") return undefined;
+      const decision = reducer.decideLeadCloseout({
+        lane, // PROBE
+        reason: str(conv?.closedReason) ?? undefined
+      });
+      return {
+        closedReason: decision.closedReason ?? null,
+        pauseActiveWatches: decision.pauseActiveWatches,
+        divergence: decision.divergence
+      };
+    }, ["decideLeadCloseout"]);
+  }
+
   // Added 2026-08-02 with the appointment-CONFIRM un-stacking. Sampled once PER LANE, because the
   // whole point of this referee is that the slot-match lane answers `acknowledged` and the
   // reschedule latch differently from the two booked lanes — a single sample would hide exactly

@@ -3864,6 +3864,66 @@ export function decideSoldCloseout(input: SoldCloseoutInput): SoldCloseoutDecisi
   };
 }
 
+// When a lead's thread CLOSES, what else has to settle? One referee for what were two independent
+// answers. This is the SIBLING of `decideSoldCloseout` and deliberately not merged with it: that
+// one answers "does the unit HOLD come off", this one answers "what does closing itself entail".
+//
+// THE TWO LANES, and they were never equal:
+//   generic_close            `closeConversation(conv, reason)` — every ordinary close, any reason.
+//   appointment_outcome_sold the console header's appointment outcome "sold", which hand-wrote
+//                            `status`/`closedAt`/`closedReason` itself and never routed through
+//                            `closeConversation` at all.
+//
+// THE DIVERGENCE, PRESERVED AS-IS (named, not fixed): `closeConversation` pauses every ACTIVE
+// inventory watch at write time — a reopen must not refire "it's available again!" at someone who
+// already closed or bought (the `watch_active_on_closed` leak the outcome auditor surfaced 6/25).
+// The appointment-outcome sold lane does not, so between that write and the next maintenance tick
+// the lead keeps a live watch on a closed, SOLD thread. It is genuinely mitigated rather than
+// merely unnoticed: the state-invariant reconcile pauses watches on any conversation carrying
+// `closedAt`/`closedReason`/`sale.soldAt`, and its own comment names this exact gap. So the
+// exposure is the window between the two, not a permanent leak — which is why it is preserved
+// here and raised separately instead of being "tidied" inside a behavior-preserving un-stacking.
+//
+// FAIL DIRECTION for whoever changes this later: pausing a watch is REVERSIBLE (the record stays,
+// the fire engine just skips it) while an alert already texted to someone who bought is not, so an
+// unresolved lane should pause. That is an argument for changing the sold lane, and it belongs in
+// its own `fix/` PR with its own evidence — not in this one.
+export type LeadCloseoutLane = "generic_close" | "appointment_outcome_sold";
+
+export type LeadCloseoutInput = {
+  lane: LeadCloseoutLane;
+  /**
+   * The reason the caller supplies. Passed through UNCHANGED, including `undefined` — a bare
+   * `closeConversation(conv)` stores no reason today, and readers distinguish that from a string.
+   */
+  reason?: string | undefined;
+};
+
+export type LeadCloseoutDecision = {
+  /** Exactly what gets stored on `conv.closedReason`. */
+  closedReason: string | undefined;
+  /** Pause every ACTIVE inventory watch at write time. Only the generic lane does today. */
+  pauseActiveWatches: boolean;
+  /** Names the preserved disagreement when this lane is the odd one out. */
+  divergence: string | null;
+  why: string;
+};
+
+export function decideLeadCloseout(input: LeadCloseoutInput): LeadCloseoutDecision {
+  const sold = input.lane === "appointment_outcome_sold";
+  return {
+    // The sold lane hard-codes "sold"; the generic lane stores whatever it was handed.
+    closedReason: sold ? "sold" : input.reason,
+    pauseActiveWatches: !sold,
+    divergence: sold
+      ? "appointment_outcome_sold_leaves_active_watches_running_until_the_reconcile_tick"
+      : null,
+    why: sold
+      ? "sold from the appointment outcome — the thread closes, active watches left to the reconcile tick"
+      : "an ordinary close — the thread closes and every active inventory watch is paused at write time"
+  };
+}
+
 // Who may release a HELD draft — one referee for what were six independent decisions.
 //
 // `draftHeld` is the "being fixed" marker: the quality gate withheld a reply, so staff see a card

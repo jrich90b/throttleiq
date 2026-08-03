@@ -10,6 +10,9 @@ import {
   decideCadenceStart,
   decideHeldDraftRelease,
   decideSoldCloseout,
+  decideLeadCloseout,
+  type LeadCloseoutLane,
+  type LeadCloseoutDecision,
   decideAppointmentTeardown,
   decideManualCadenceRestart,
   isRealReplyProvider,
@@ -5521,19 +5524,41 @@ export function pruneInventoryWatchesByModel(
   return { kept, removed: watches.length - kept.length };
 }
 
-export function closeConversation(conv: Conversation, reason?: string) {
+// The ONE place a lead's thread is stamped closed — `closeConversation` and the console's
+// appointment-outcome "sold" lane (index.ts) both ask `decideLeadCloseout` for what closing
+// entails, instead of each hand-writing the same three fields. See that referee for the divergence
+// it preserves (the sold lane leaves active inventory watches to the reconcile tick).
+//
+// Deliberately does NOT stamp `conv.updatedAt` or save: `closeConversation` does both right after,
+// and the outcome lane's caller saves. Adding a write here would change persisted timestamps,
+// which a behavior-preserving cleanup must not do.
+export function applyLeadCloseout(
+  conv: Conversation,
+  input: { nowIso: string; lane: LeadCloseoutLane; reason?: string }
+): LeadCloseoutDecision {
+  const decision = decideLeadCloseout({ lane: input.lane, reason: input.reason });
   conv.status = "closed";
-  conv.closedAt = nowIso();
-  conv.closedReason = reason;
-  markOpenTodosDoneForConversation(conv.id);
-  applyCadenceLifecycle(conv, { verb: "close", reason, stopReason: reason ?? "closed" });
+  conv.closedAt = input.nowIso;
+  conv.closedReason = decision.closedReason;
   // A closed conversation must not keep an ACTIVE inventory watch — a reopen could refire
   // "it's available again!" to a customer who already closed/bought. Pause every active watch
   // (reversible; the watch-fire engine skips paused). Write-time guard; the reconcile tick is the
-  // catch-all for close paths that don't route through here (e.g. applyOutcomeSold).
-  for (const w of collectInventoryWatches(conv)) {
-    if (w && w.status !== "paused") w.status = "paused";
+  // catch-all for close paths whose lane opts out (see the referee).
+  if (decision.pauseActiveWatches) {
+    for (const w of collectInventoryWatches(conv)) {
+      if (w && w.status !== "paused") w.status = "paused";
+    }
   }
+  return decision;
+}
+
+// ORDERING NOTE. The watch pause used to sit AFTER `applyCadenceLifecycle`; it now runs inside the
+// applier, i.e. before it. Inert: `applyCadenceLifecycle` reads and writes only `followUpCadence`
+// and `followUp` — it never looks at a watch — so neither can see the other's result.
+export function closeConversation(conv: Conversation, reason?: string) {
+  applyLeadCloseout(conv, { nowIso: nowIso(), lane: "generic_close", reason });
+  markOpenTodosDoneForConversation(conv.id);
+  applyCadenceLifecycle(conv, { verb: "close", reason, stopReason: reason ?? "closed" });
   conv.updatedAt = nowIso();
   scheduleSave();
 }
