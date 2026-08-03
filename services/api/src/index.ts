@@ -14,7 +14,7 @@ import OpenAI, { toFile } from "openai";
 import { google } from "googleapis";
 import sharp from "sharp";
 import { orchestrateInbound, evaluateTestRideInventoryGate, buildBlockedTestRideInventoryDraft } from "./domain/orchestrator.js";
-import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildWatchAvailableReply, buildCholoWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, resolveIntroducedOwnerFirstName, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, hasCustomerReceivedOutbound } from "./domain/agentVoice.js";
+import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildWatchAvailableReply, buildCholoWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, resolveIntroducedOwnerFirstName, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, hasCustomerReceivedOutbound, hasRecentDeliveredHumanOutbound } from "./domain/agentVoice.js";
 import {
   postSaleVehicleIsNew,
   postSaleAccessoryOrEnjoyMessage,
@@ -931,6 +931,7 @@ import {
   appendInbound,
   isDuplicateInboundEvent,
   appendOutbound,
+  appendUndeliveredOutbound,
   ensureInitialSmsOptOutFooter,
   listConversations,
   getConversation,
@@ -34334,12 +34335,9 @@ async function processDueFollowUpsUnlocked() {
     }
     const systemMode = effectiveMode(conv);
     const forceAutoSendPostSaleCadence = isPostSale;
-    const recentHumanOutboundInLoop = (conv.messages ?? []).some((m: any) => {
-      if (m?.direction !== "out" || m?.provider !== "human") return false;
-      const atMs = new Date(String(m?.at ?? "")).getTime();
-      if (Number.isNaN(atMs)) return false;
-      return now.getTime() - atMs <= 14 * 24 * 60 * 60 * 1000;
-    });
+    // Delivered-aware (agentVoice): the cadence's own unsendable fallback rows no longer read as
+    // "a rep is driving" and bench the cadence for 14 days on an untouched thread.
+    const recentHumanOutboundInLoop = hasRecentDeliveredHumanOutbound(conv.messages, now.getTime());
     const manualSenderInLoop =
       !!(conv.manualSender?.userId || conv.manualSender?.userName) || recentHumanOutboundInLoop;
     const enforceSalesReviewForCadence = manualSenderInLoop && !isPostSale;
@@ -34504,7 +34502,7 @@ async function processDueFollowUpsUnlocked() {
           console.log("[followup] duplicate email fallback suppressed", { convId: conv.id, to: emailTo });
           continue;
         }
-        appendOutbound(conv, "salesperson", emailTo!, fallbackMessage, "human", undefined, mediaUrls);
+        appendUndeliveredOutbound(conv, "salesperson", emailTo!, fallbackMessage, mediaUrls);
         maybeAddCallTodoForFollowUp();
       } else {
         try {
@@ -34545,7 +34543,7 @@ async function processDueFollowUpsUnlocked() {
           details: e?.message ?? String(e)
         });
         const fallbackMessage = formatEmailBodyForConversation(emailMessage ?? message, conv);
-        appendOutbound(conv, "salesperson", emailTo!, fallbackMessage, "human", undefined, mediaUrls);
+        appendUndeliveredOutbound(conv, "salesperson", emailTo!, fallbackMessage, mediaUrls);
         maybeAddCallTodoForFollowUp();
       }
       }
@@ -34566,7 +34564,7 @@ async function processDueFollowUpsUnlocked() {
         console.log("[followup] duplicate sms fallback suppressed", { convId: conv.id, to });
         continue;
       }
-      appendOutbound(conv, "salesperson", to, smsMessage, "human", undefined, mediaUrls);
+      appendUndeliveredOutbound(conv, "salesperson", to, smsMessage, mediaUrls);
       queueTlpLogForConversation(conv); // [tlp-autosend-log] cadence SMS fallback auto-send → CRM log
       if (isPostSale) {
         const retired = retireSupersededPostSaleCloseoutDrafts(conv, smsMessage);
@@ -34736,7 +34734,7 @@ async function processAppointmentConfirmations() {
         status: "pending",
         ...triggerMeta
       };
-      appendOutbound(conv, "salesperson", toNumber, smsMessage, "human");
+      appendUndeliveredOutbound(conv, "salesperson", toNumber, smsMessage);
       queueTlpLogForConversation(conv); // [tlp-autosend-log] appointment-confirm fallback auto-send → CRM log
     }
   }
@@ -42110,7 +42108,7 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
         return { sent: false, reason: "suppressed" };
       }
       if (!accountSid || !authToken || !from) {
-        appendOutbound(conv, "salesperson", toNumber, smsMessage, "human");
+        appendUndeliveredOutbound(conv, "salesperson", toNumber, smsMessage);
         return { sent: false, reason: "twilio_not_configured" };
       }
       try {
@@ -42119,7 +42117,7 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
         appendOutbound(conv, from, toNumber, smsMessage, "twilio", msg.sid);
         return { sent: true, sid: msg.sid };
       } catch (e: any) {
-        appendOutbound(conv, "salesperson", toNumber, smsMessage, "human");
+        appendUndeliveredOutbound(conv, "salesperson", toNumber, smsMessage);
         return { sent: false, reason: "send_failed" };
       }
     };

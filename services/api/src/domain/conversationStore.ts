@@ -790,6 +790,16 @@ export type Message = {
   callMethod?: "cell" | "extension";
   draftStatus?: "pending" | "stale";
   /**
+   * Outbound rows only, and only ever written as `false`: this content was RECORDED but never
+   * reached the customer (a send failure or missing credentials — the cadence advanced on it and
+   * the CRM logged it, so the row must exist, but no one received it). Absent means delivered —
+   * the pre-existing default, so history needs no migration. Consumers answering "what has this
+   * customer actually heard from us?" must skip `delivered === false`; treating an undelivered
+   * row as received is the 8/3 triage's F1 defect (skipped intro on the REAL first message, the
+   * judge grading against ghost text, the cadence benching itself for 14 days).
+   */
+  delivered?: boolean;
+  /**
    * Voice rows only. Parser-confirmed (high confidence) that the CUSTOMER took part in a live
    * two-way call, so this thread counts as engaged — see customerEngagedWithCadence. Stamped once
    * at ingest; absent means "not confirmed", never "confirmed false".
@@ -2650,6 +2660,26 @@ export function appendOutbound(
   // back to its pre-send value afterward so a mass send tags the thread without reordering the Inbox.
   conv.inboxActivityAt = conv.updatedAt;
   scheduleSave();
+  return message;
+}
+
+/**
+ * Record an outbound that could NOT be sent (send failure, missing Twilio/SendGrid credentials).
+ * The row must exist — the cadence advanced on this content and the CRM log carries it — but the
+ * customer never received it, so it is stamped `delivered: false` and every "what has the
+ * customer heard from us?" consumer skips it. These rows kept the legacy `provider: "human"` so
+ * the duplicate-outbound suppressors keep matching them; the marker, not the provider, now says
+ * whether it reached anyone. Genuine staff console sends do NOT come through here.
+ */
+export function appendUndeliveredOutbound(
+  conv: Conversation,
+  from: string,
+  to: string,
+  body: string,
+  mediaUrls?: string[]
+) {
+  const message = appendOutbound(conv, from, to, body, "human", undefined, mediaUrls);
+  if (message) message.delivered = false;
   return message;
 }
 
