@@ -36,8 +36,12 @@ import {
   typicalPeakOutboundPerHour,
   buildRevertPlan,
   decideCanaryGate,
+  measureCanarySlice,
+  decideCanaryProgress,
+  scaleCounters,
   DEFAULT_CANARY_THRESHOLDS,
-  type CanaryCounters
+  type CanaryCounters,
+  type CanaryMeasurement
 } from "../services/api/src/domain/canaryHealth.ts";
 
 let checks = 0;
@@ -431,6 +435,116 @@ ok(DEFAULT_CANARY_THRESHOLDS.runawayMinPerHour > 0, "and an absolute runaway flo
     "newestOutboundAtMs counts sends/drafts only — a logged voice call is not the agent messaging anyone"
   );
   eq(newestOutboundAtMs([]), null, "an empty store has no newest outbound");
+}
+
+// =================================================================================================
+// PROGRESSIVE MEASUREMENT — many small slices under a run-length rule (Argo Rollouts shape).
+//
+// The one-shot canary could not work at 26 sends/day because `windowMs` was BOTH the baseline
+// lookback and the wait for a verdict: widening it to clear the 20-send floor delayed the answer by
+// exactly as much. The baseline is now a LONG lookback and slices are SHORT, so the floor is
+// cleared once at arm time while verdicts stay timely.
+// =================================================================================================
+{
+  const HOUR = 3_600_000;
+  const BASELINE_H = 336; // 14 days
+  // A realistic American Harley baseline: ~26 sends/day over 14 days.
+  const baseline: CanaryCounters = {
+    outboundToCustomer: 364,
+    draftsProduced: 168,
+    conversationsClosed: 28,
+    draftsHeld: 14,
+    activeConversations: 322
+  };
+  const slice = (over: Partial<CanaryCounters> = {}): CanaryCounters => ({
+    outboundToCustomer: 9,
+    draftsProduced: 4,
+    conversationsClosed: 1,
+    draftsHeld: 0,
+    activeConversations: 8,
+    ...over
+  });
+  const measure = (counters: CanaryCounters, runaway?: any) =>
+    measureCanarySlice({
+      baselineCounters: baseline,
+      baselineWindowMs: BASELINE_H * HOUR,
+      sliceCounters: counters,
+      sliceWindowMs: 8 * HOUR,
+      runaway
+    });
+
+  // --- THE HEADLINE: a 14-day baseline makes an 8h slice conclusive at this volume ---------------
+  eq(
+    measure(slice()).status,
+    "pass",
+    "a normal 8h slice against a 14-day baseline CONCLUDES — a 48h baseline could not"
+  );
+  const scaled = scaleCounters(baseline, (8 * HOUR) / (BASELINE_H * HOUR));
+  ok(
+    scaled.outboundToCustomer > 8 && scaled.outboundToCustomer < 9,
+    "the long baseline scales to ~8.7 expected sends for an 8h slice"
+  );
+
+  // --- both failure modes still register ----------------------------------------------------------
+  eq(measure(slice({ outboundToCustomer: 40 })).status, "fail", "a send flood in one slice FAILS that slice");
+  eq(measure(slice({ draftsProduced: 0 })).status, "fail", "the agent going quiet (draft collapse) FAILS that slice");
+  const fatal = measure(slice(), { runaway: true, perHour: 60, limit: 42 });
+  eq(fatal.status, "fail", "a runaway slice fails");
+  eq(fatal.fatal, true, "...and is FATAL — terminal on sight, exempt from the run-length rule");
+
+  // --- a thin baseline abstains rather than false-passing ------------------------------------------
+  eq(
+    measureCanarySlice({
+      baselineCounters: { ...baseline, outboundToCustomer: 8 },
+      baselineWindowMs: BASELINE_H * HOUR,
+      sliceCounters: slice(),
+      sliceWindowMs: 8 * HOUR
+    }).status,
+    "inconclusive",
+    "a baseline too thin to support a ratio yields INCONCLUSIVE, never a false pass"
+  );
+
+  // --- THE RUN-LENGTH RULE ------------------------------------------------------------------------
+  const m = (status: "pass" | "fail" | "inconclusive", fatal = false): CanaryMeasurement => ({
+    atMs: 0, sliceStartMs: 0, sliceEndMs: 0, counters: slice(), status, ...(fatal ? { fatal: true } : {}), reason: ""
+  });
+  const progress = (ms: CanaryMeasurement[]) => decideCanaryProgress({ measurements: ms });
+
+  eq(progress([m("pass")]).status, "watching", "one clean slice is not yet a verdict");
+  eq(progress([m("pass"), m("pass"), m("pass")]).status, "healthy", "3 consecutive clean slices PROMOTE early (~24h)");
+
+  // A single bad slice must NOT revert — at this volume that would be a wolf-crier.
+  eq(progress([m("fail")]).status, "watching", "ONE failed slice does not revert — that is noise here");
+  eq(progress([m("fail"), m("fail")]).status, "watching", "two failed slices are still inside tolerance");
+  eq(progress([m("fail"), m("fail"), m("fail")]).status, "regressed", "exceeding the failure tolerance IS a regression");
+  eq(progress([m("fail", true)]).status, "regressed", "a single FATAL runaway slice is terminal on sight");
+
+  // INCONCLUSIVE IS NEUTRAL — the property that stops quiet nights deciding anything.
+  eq(
+    progress([m("pass"), m("inconclusive"), m("pass"), m("pass")]).status,
+    "healthy",
+    "a quiet overnight slice does NOT reset a passing streak"
+  );
+  eq(
+    progress([m("inconclusive"), m("inconclusive"), m("inconclusive")]).status,
+    "watching",
+    "inconclusive slices never accumulate into a failure"
+  );
+  eq(
+    progress(Array.from({ length: 9 }, () => m("inconclusive"))).status,
+    "unknown",
+    "a full watch that concluded NOTHING is UNKNOWN — still not a clean bill of health"
+  );
+  eq(
+    progress([m("fail"), ...Array.from({ length: 8 }, () => m("pass"))]).status,
+    "healthy",
+    "one early failure inside tolerance still promotes once the streak is clean"
+  );
+  eq(
+    progress([m("pass"), m("pass"), m("fail"), m("pass")]).consecutivePasses,
+    1,
+    "a failed slice RESETS the consecutive-pass streak — the three clean ones must be CONSECUTIVE"
+  );
 }
 
 console.log(`PASS canary auto-revert — abstains rather than false-greens (${checks} checks)`);

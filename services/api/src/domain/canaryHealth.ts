@@ -499,6 +499,230 @@ export function decideCanaryGate(input: {
   };
 }
 
+// =================================================================================================
+// PROGRESSIVE MEASUREMENT — many small readings with a run-length rule, instead of one big
+// before/after comparison (2026-08-03, adopting the Argo Rollouts AnalysisRun shape).
+//
+// WHY THE OLD SHAPE COULD NOT WORK HERE. `windowMs` was BOTH the baseline lookback AND the wait
+// before a verdict, so the two requirements fought each other: widening the window to clear the
+// 20-send floor also delayed the answer by the same amount. At ~26 sends/day a 48h baseline
+// carries ~19-40 sends — straddling the floor — so the check abstained on ordinary weeks and no
+// setting of a single knob fixed it.
+//
+// SPLITTING THE KNOB IS THE FIX. The baseline is now a LONG lookback (default 14 days ~ 360 sends
+// here, far above any floor, and adequacy is checked ONCE at arm time), while measurements are
+// SHORT slices taken on a schedule. Each slice is compared against the baseline scaled to the same
+// duration, so `decideCanaryVerdict` — and every threshold already reasoned about and pinned — is
+// reused unchanged.
+//
+// WHAT THIS DOES AND DOES NOT BUY. It does NOT create statistical power for a subtle regression;
+// nothing does at this volume, and pretending otherwise is how a canary starts crying wolf. What
+// it buys is (a) the ability to reach HEALTHY at all rather than abstaining forever, (b) a verdict
+// in ~24h instead of 48h when things are fine, and (c) reliable detection of the failure mode we
+// actually fear — a GROSS regression, which shows up as consecutive bad slices, not one noisy one.
+//
+// FAIL DIRECTION: a single bad slice never reverts anything (low-volume noise would make that a
+// wolf-crier). Only `failureLimit` exceeded does. A runaway is exempt and terminal on sight — it
+// never needed a baseline and an order-of-magnitude flood is not noise.
+// =================================================================================================
+
+export type CanaryMeasurementStatus = "pass" | "fail" | "inconclusive";
+
+export type CanaryMeasurement = {
+  atMs: number;
+  sliceStartMs: number;
+  sliceEndMs: number;
+  counters: CanaryCounters;
+  status: CanaryMeasurementStatus;
+  /** A runaway: terminal on sight, no run-length rule applies. */
+  fatal?: boolean;
+  reason: string;
+};
+
+export type CanaryProgressConfig = {
+  /** How long each measured slice is. */
+  intervalMs: number;
+  /** Maximum number of slices before the watch gives up. */
+  count: number;
+  /** Failures TOLERATED; exceeding this is a regression. Argo's `failureLimit`. */
+  failureLimit: number;
+  /** Consecutive passes that promote early. Argo's `consecutiveSuccessLimit`. */
+  consecutiveSuccessLimit: number;
+};
+
+/**
+ * Tuned to this dealership, not to taste: ~26 sends/day means an 8h slice carries ~9 sends, which
+ * is enough for a gross-regression signal but not for fine drift. 3 consecutive clean slices
+ * promotes at ~24h; 9 slices caps the watch at ~72h.
+ */
+export const DEFAULT_CANARY_PROGRESS: CanaryProgressConfig = {
+  intervalMs: 8 * 3_600_000,
+  count: 9,
+  failureLimit: 2,
+  consecutiveSuccessLimit: 3
+};
+
+/**
+ * Scale counters to a different window length so a long baseline can be compared to a short slice.
+ *
+ * Rounded to 2dp: these numbers are quoted verbatim in operator-facing breach text, and
+ * "drafting collapsed 4.333333333333333 -> 0" reads as a bug in the tool. The effect on a ratio
+ * against a x0.34 floor is immaterial.
+ */
+export function scaleCounters(counters: CanaryCounters, factor: number): CanaryCounters {
+  const f = Number.isFinite(factor) && factor > 0 ? factor : 0;
+  const at = (n: number) => Math.round(n * f * 100) / 100;
+  return {
+    outboundToCustomer: at(counters.outboundToCustomer),
+    draftsProduced: at(counters.draftsProduced),
+    conversationsClosed: at(counters.conversationsClosed),
+    draftsHeld: at(counters.draftsHeld),
+    activeConversations: at(counters.activeConversations)
+  };
+}
+
+/**
+ * One slice -> pass / fail / inconclusive.
+ *
+ * The baseline's ADEQUACY was established once at arm time against the long lookback, so the
+ * per-slice call deliberately relaxes the sample floors — re-applying a 20-send floor to a scaled
+ * 8h slice would make every slice inconclusive, which is the bug this whole rework exists to kill.
+ * What still makes a slice inconclusive is the scaled baseline being too small to support ANY
+ * ratio (`minSliceOutbound`), which is an honest "this slice cannot say".
+ */
+export function measureCanarySlice(input: {
+  baselineCounters: CanaryCounters;
+  baselineWindowMs: number;
+  sliceCounters: CanaryCounters;
+  sliceWindowMs: number;
+  thresholds?: CanaryThresholds;
+  runaway?: { runaway: boolean; perHour: number; limit: number };
+  /** Scaled-baseline sends below which a slice cannot conclude. */
+  minSliceOutbound?: number;
+}): { status: CanaryMeasurementStatus; fatal: boolean; verdict: CanaryVerdict; reason: string } {
+  const thresholds = input.thresholds ?? DEFAULT_CANARY_THRESHOLDS;
+  const minSlice = input.minSliceOutbound ?? 3;
+
+  // A runaway is terminal on sight and needs no baseline at all.
+  if (input.runaway?.runaway) {
+    const verdict = decideCanaryVerdict(null, null, thresholds, input.runaway);
+    return {
+      status: "fail",
+      fatal: true,
+      verdict,
+      reason: `runaway: ${input.runaway.perHour}/h against a ceiling of ${input.runaway.limit}`
+    };
+  }
+
+  const factor =
+    Number(input.baselineWindowMs) > 0 ? Number(input.sliceWindowMs) / Number(input.baselineWindowMs) : 0;
+  const scaled = scaleCounters(input.baselineCounters, factor);
+
+  if (scaled.outboundToCustomer < minSlice) {
+    return {
+      status: "inconclusive",
+      fatal: false,
+      verdict: {
+        status: "unknown",
+        breaches: [],
+        blockers: [`slice expects only ${scaled.outboundToCustomer.toFixed(1)} send(s) (need ${minSlice})`],
+        reason: "this slice is too small to support a ratio"
+      },
+      reason: `slice too small: expected ~${scaled.outboundToCustomer.toFixed(1)} sends (need ${minSlice})`
+    };
+  }
+
+  // Sample floors are relaxed here ON PURPOSE — see the doc comment above.
+  const sliceThresholds: CanaryThresholds = {
+    ...thresholds,
+    minBaselineOutbound: 0,
+    minBaselineConversations: 0
+  };
+  const verdict = decideCanaryVerdict(scaled, input.sliceCounters, sliceThresholds, input.runaway);
+  if (verdict.status === "regressed") {
+    return { status: "fail", fatal: false, verdict, reason: verdict.breaches[0]?.detail ?? verdict.reason };
+  }
+  if (verdict.status === "healthy") {
+    return { status: "pass", fatal: false, verdict, reason: "every guarded counter stayed inside its limit" };
+  }
+  return { status: "inconclusive", fatal: false, verdict, reason: verdict.blockers[0] ?? verdict.reason };
+}
+
+export type CanaryProgressDecision = {
+  status: "watching" | "healthy" | "regressed" | "unknown";
+  reason: string;
+  passes: number;
+  failures: number;
+  inconclusive: number;
+  consecutivePasses: number;
+};
+
+/**
+ * The run-length rule over completed measurements.
+ *
+ * INCONCLUSIVE IS NEUTRAL: it neither counts as a failure nor resets a passing streak. A quiet
+ * overnight stretch must not undo three clean daytime slices — treating silence as evidence is
+ * exactly the false-green this module exists to avoid, and treating it as a failure would revert
+ * good deploys every night.
+ */
+export function decideCanaryProgress(input: {
+  measurements: CanaryMeasurement[];
+  config?: CanaryProgressConfig;
+}): CanaryProgressDecision {
+  const config = input.config ?? DEFAULT_CANARY_PROGRESS;
+  const measurements = Array.isArray(input.measurements) ? input.measurements : [];
+
+  const passes = measurements.filter(m => m.status === "pass").length;
+  const failures = measurements.filter(m => m.status === "fail").length;
+  const inconclusive = measurements.filter(m => m.status === "inconclusive").length;
+
+  let consecutivePasses = 0;
+  for (let i = measurements.length - 1; i >= 0; i--) {
+    const s = measurements[i].status;
+    if (s === "pass") consecutivePasses += 1;
+    else if (s === "fail") break;
+    // inconclusive: neutral, keep scanning back
+  }
+
+  const base = { passes, failures, inconclusive, consecutivePasses };
+
+  if (measurements.some(m => m.fatal)) {
+    return { ...base, status: "regressed", reason: "a runaway send flood fired — terminal on sight" };
+  }
+  if (failures > config.failureLimit) {
+    return {
+      ...base,
+      status: "regressed",
+      reason: `${failures} failed slice(s) against a tolerance of ${config.failureLimit}`
+    };
+  }
+  if (consecutivePasses >= config.consecutiveSuccessLimit) {
+    return {
+      ...base,
+      status: "healthy",
+      reason: `${consecutivePasses} consecutive clean slice(s) — promoted early`
+    };
+  }
+  if (measurements.length >= config.count) {
+    return passes > 0
+      ? {
+          ...base,
+          status: "healthy",
+          reason: `watch ran its full ${config.count} slice(s): ${passes} clean, ${failures} failed (tolerance ${config.failureLimit})`
+        }
+      : {
+          ...base,
+          status: "unknown",
+          reason: `watch ran its full ${config.count} slice(s) and NOTHING was conclusive — not a clean bill of health`
+        };
+  }
+  return {
+    ...base,
+    status: "watching",
+    reason: `${measurements.length}/${config.count} slice(s): ${passes} clean, ${failures} failed, ${inconclusive} inconclusive`
+  };
+}
+
 /**
  * THE WRONG-STORE GUARD — why the 2026-08-02 canary recorded all zeros.
  *
