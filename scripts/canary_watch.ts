@@ -45,7 +45,9 @@ import {
   computeCanaryCounters,
   decideCanaryVerdict,
   detectRunaway,
+  detectStaleStore,
   findDeadCounters,
+  newestOutboundAtMs,
   typicalPeakOutboundPerHour,
   buildRevertPlan,
   decideCanaryGate,
@@ -61,6 +63,14 @@ type BaselineFile = {
   counters: CanaryCounters;
   /** The store's own busiest hour, so the fast tripwire scales with the dealership. */
   typicalPeakOutboundPerHour: number;
+  /**
+   * WHICH store this was measured against. Recorded because the 2026-08-02 canary armed on an
+   * all-zero baseline and nothing in the file said where those zeros came from — it had read the
+   * stale base store. Provenance turns "the counters look wrong" into a one-look diagnosis.
+   */
+  storePath?: string;
+  storeConversations?: number;
+  storeNewestOutboundMs?: number | null;
 };
 
 function arg(name: string): string | undefined {
@@ -124,12 +134,16 @@ function appendHistory(row: Record<string, unknown>): void {
   fs.appendFileSync(historyPath(), `${JSON.stringify(row)}\n`);
 }
 
+/** The store path the last loadConversations() actually resolved — recorded into the baseline. */
+let resolvedStorePath = "";
+
 function loadConversations(): any[] {
   const dbPath =
     process.env.CONVERSATIONS_DB_PATH ||
     (process.env.DATA_DIR
       ? path.join(process.env.DATA_DIR, "conversations.json")
       : path.resolve("services/api/data/conversations.json"));
+  resolvedStorePath = dbPath;
   if (!fs.existsSync(dbPath)) {
     console.error(`canary_watch: conversations store not found at ${dbPath}`);
     process.exit(2);
@@ -183,12 +197,34 @@ function captureBaseline(hours: number): BaselineFile {
     process.exit(2);
   }
 
+  // WRONG-STORE GUARD. findDeadCounters above only sees LIFETIME totals, so the stale base store
+  // (frozen 2026-06-16, 3,720 lifetime sends, zero since) sails straight through it and produces a
+  // baseline of zeros — which is precisely what was armed on 2026-08-02. A store whose newest
+  // activity predates the window we are about to measure is the wrong store, not a quiet one.
+  const newestOutboundMs = newestOutboundAtMs(conversations);
+  const staleness = detectStaleStore({ newestOutboundMs, nowMs, windowMs });
+  if (staleness.stale) {
+    console.error(
+      `canary_watch: refusing to build a baseline from ${resolvedStorePath}\n` +
+        `  ${staleness.reason}.\n` +
+        `  ${conversations.length} conversations, newest outbound ${
+          newestOutboundMs ? new Date(newestOutboundMs).toISOString() : "(none)"
+        }.\n` +
+        "  Point CONVERSATIONS_DB_PATH at the DEALER's store (a copy of\n" +
+        "  <runtime>/<dealer>/data/conversations.json), not the base runtime store."
+    );
+    process.exit(2);
+  }
+
   return {
     takenAtMs: nowMs,
     windowMs,
     deployedSha: arg("sha") ?? currentSha(),
     counters: computeCanaryCounters(conversations, { startMs: nowMs - windowMs, endMs: nowMs }),
-    typicalPeakOutboundPerHour: typicalPeakOutboundPerHour(conversations)
+    typicalPeakOutboundPerHour: typicalPeakOutboundPerHour(conversations),
+    storePath: resolvedStorePath,
+    storeConversations: conversations.length,
+    storeNewestOutboundMs: newestOutboundMs
   };
 }
 
@@ -297,11 +333,18 @@ if (mode === "check") {
 if (mode === "arm") {
   const existing = readPending();
   if (existing && !flag("replace")) {
-    const gate = decideCanaryGate({ pending: existing, nowMs });
+    // NOT a failure, and deliberately NOT phrased with the gate's reason any more: since 2026-08-03
+    // an open canary no longer blocks deploys, so `decideCanaryGate` returning "may deploy" here
+    // would read as a contradiction. One watch at a time still holds for the WATCH itself — the
+    // daily judge clears the pending one, and the next deploy after that arms fresh.
+    const endMs = Number(existing.takenAtMs) + Number(existing.windowMs);
+    const ready = endMs - nowMs <= 0;
     console.error(
-      `canary_watch arm: refusing — ${gate.reason}.\n` +
-        "  Judge it first (`canary_watch judge`). Arming over an open canary would discard the only\n" +
-        "  record of what the previous deploy was being measured against. Pass --replace to override."
+      `canary_watch arm: a canary is already being watched on ${existing.deployedSha.slice(0, 8) || "(unrecorded)"}` +
+        `${ready ? " and is READY TO JUDGE" : ` (${Math.ceil((endMs - nowMs) / 60_000)} min left)`}.\n` +
+        "  Not arming a second one — that would discard the only record of what the previous deploy\n" +
+        "  was measured against. Run `canary_watch judge` to close it out, or pass --replace.\n" +
+        "  The deploy itself is NOT blocked by this; only a REGRESSED verdict blocks."
     );
     process.exit(2);
   }
