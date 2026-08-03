@@ -947,6 +947,7 @@ import {
   startFollowUpCadence,
   applyCadenceQuietWindow,
   applyCadenceRevival,
+  applyCadenceReplacement,
   applySoldCloseout,
   resolveNoShowFollowUpDueAt,
   pauseFollowUpCadence,
@@ -19421,13 +19422,11 @@ async function applyFinanceOutcomeStatusFromSignal(
       reason: "financing_declined",
       updatedAt: nowIsoValue
     };
-    conv.followUpCadence = {
-      status: "active",
-      anchorAt: nowIsoValue,
-      nextDueAt: computeFollowUpDueAt(nowIsoValue, FINANCE_DECLINED_DAY_OFFSETS[0], cfg.timezone),
-      stepIndex: 0,
-      kind: "long_term"
-    };
+    applyCadenceReplacement(conv, {
+      trigger: "finance_declined",
+      anchorAtIso: nowIsoValue,
+      timeZone: cfg.timezone
+    });
     if (syncAppointmentOutcome && conv.appointment) {
       recordAppointmentOutcome(getOutcomeStaffNotifyTarget(conv), "finance_signal",
         { status: "financing_declined", note: reasonText }, nowIsoValue);
@@ -26125,17 +26124,13 @@ async function applyActionStateFromContextNote(
       ? parsedWindow.until.toISOString()
       : computeFollowUpDueAt(nowIso(), defaultDays, timezone);
     const cadenceUpdatedAt = nowIso();
-    conv.followUpCadence = {
-      status: "active",
-      anchorAt: dueAtIso,
-      nextDueAt: dueAtIso,
-      stepIndex: 0,
-      kind: "engaged",
-      contextTag: "license_credit_pending",
-      contextTagUpdatedAt: cadenceUpdatedAt,
-      scheduleInviteCount: 0,
-      scheduleMuted: false
-    };
+    applyCadenceReplacement(conv, {
+      trigger: "license_credit_pending",
+      anchorAtIso: cadenceUpdatedAt,
+      timeZone: timezone,
+      dueAtIso,
+      contextTag: "license_credit_pending"
+    });
     if (conv.followUp?.mode !== "holding_inventory" && conv.followUp?.mode !== "manual_handoff") {
       setFollowUpMode(conv, "active", "license_credit_pending");
     }
@@ -35093,17 +35088,12 @@ async function maybeStartCadence(
     : null;
   if (manualCadenceContext?.contextTag === "seller_photo_details_request") {
     setFollowUpMode(conv, "active", manualCadenceContext.followUpReason);
-    conv.followUpCadence = {
-      status: "active",
-      anchorAt: now,
-      nextDueAt: computeFollowUpDueAt(now, FOLLOW_UP_DAY_OFFSETS[0], cfg.timezone),
-      stepIndex: 0,
-      kind: "engaged",
-      contextTag: manualCadenceContext.contextTag,
-      contextTagUpdatedAt: now,
-      scheduleInviteCount: 0,
-      scheduleMuted: false
-    };
+    applyCadenceReplacement(conv, {
+      trigger: "seller_photo_details_request",
+      anchorAtIso: now,
+      timeZone: cfg.timezone,
+      contextTag: manualCadenceContext.contextTag
+    });
     conv.manualContext = {
       status: "inferred",
       contextTag: manualCadenceContext.contextTag,

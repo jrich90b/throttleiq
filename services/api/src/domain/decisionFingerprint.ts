@@ -399,6 +399,45 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     }, ["decideCadenceRevival"]);
   }
 
+  // Added 2026-08-03 with the cadence-REPLACEMENT un-stacking (the four sites that mint a whole new
+  // `followUpCadence` object over whatever is running). PROBE: the trigger is held fixed per sample
+  // and the realign lane's non-cadence inputs are read off the lead, so the only thing that can move
+  // a fingerprint between baseline and candidate is the arbitration applied to this lead's own
+  // stored chase. The three non-realign lanes ignore every realign input, so passing them is inert.
+  for (const trigger of [
+    "finance_declined",
+    "license_credit_pending",
+    "seller_photo_details_request",
+    "over_eager_engaged_realign"
+  ] as const) {
+    add(`cadenceReplacement:${trigger}`, conv => {
+      if (typeof reducer.decideCadenceReplacement !== "function") return undefined;
+      const decision = reducer.decideCadenceReplacement({
+        trigger, // PROBE
+        existing: conv?.followUpCadence
+          ? { status: conv.followUpCadence.status, kind: conv.followUpCadence.kind }
+          : null,
+        // PROBE: held TRUE so the realign lane's REMAINING gates are what vary per lead. The
+        // predicate itself (`cadenceTempoCappedToLongTerm`) is pinned by cadence_tempo_timeframe_cap.
+        tempoCappedToLongTerm: true,
+        conversationClosed: Boolean(conv?.closedAt || conv?.closedReason || (conv as any)?.sale?.soldAt),
+        appointmentBooked: Boolean(conv?.appointment?.bookedEventId),
+        followUpMode: conv?.followUp?.mode ?? null,
+        followUpReason: conv?.followUp?.reason ?? null,
+        hasInventoryWatch: Boolean(conv?.inventoryWatch)
+      });
+      return {
+        replace: decision.replace,
+        kind: decision.kind ?? null,
+        ladder: decision.ladder ?? null,
+        anchor: decision.anchor ?? null,
+        writeInviteBudget: decision.writeInviteBudget ?? null,
+        writeContextTag: decision.writeContextTag ?? null,
+        divergence: decision.divergence
+      };
+    }, ["decideCadenceReplacement"]);
+  }
+
   // Added 2026-08-02 with the SOLD-closeout un-stacking. Sampled once WITH a named unit and once
   // WITHOUT, because that is the whole disagreement between the two paths: the appointment-outcome
   // path refuses a sale with no unit, the console endpoint accepts one and leaves the lead's hold

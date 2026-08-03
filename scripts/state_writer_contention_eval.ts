@@ -607,8 +607,14 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 //   A FIFTH pause writer is deliberately NOT in this slice: the health-recovery pause extension
 //   (index.ts ~9347) stamps `pausedUntil`/`pauseReason` on a chase whatever its status, where the
 //   `pause` verb requires "active". Sibling question, queued, not silently folded in.
+// 128 -> 124: the CADENCE REPLACEMENT un-stacking (this commit). The companion to the lifecycle
+//   slice: four places MINT a whole new `followUpCadence` object over whatever is running, so
+//   `decideCadenceStart`'s "refuse when a cadence already exists" guard never applies to them —
+//   finance declined, the licence/credit-pending staff note, the manual-outbound seller-photo
+//   request, and the over-eager-engaged healer. All four now ask `decideCadenceReplacement` through
+//   `applyCadenceReplacement`. `followUpCadence` 9 -> 5. Three divergences preserved and named.
 // RATCHET DOWN ONLY.
-const UNREFEREED_WRITER_BASELINE = 128;
+const UNREFEREED_WRITER_BASELINE = 124;
 
 {
   const sourceFiles: SourceFile[] = [];
