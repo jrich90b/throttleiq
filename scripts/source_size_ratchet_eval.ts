@@ -101,7 +101,12 @@ const CEILINGS: Ceiling[] = [
     // now call applyAppointmentBookingRecord (conversationStore), which asks
     // decideAppointmentBookingRecord (routeStateReducer). Taken against main's REAL count (71_437),
     // not the ceiling's 2 lines of headroom — a ceiling is a cap, never a budget to spend.
-    max: 71_432,
+    // 71_432 -> 71_427. The reschedule-latch ARM un-stacking: three inline blocks that each armed
+    // `appointment.reschedulePending` on their own preconditions collapse into three one-line calls
+    // to applyReschedulePendingLatch (conversationStore), which asks decideReschedulePendingLatch
+    // (routeStateReducer). Taken against main's REAL count (71_432), which the ceiling was sitting
+    // exactly on — so this slice funded itself.
+    max: 71_427,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

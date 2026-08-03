@@ -570,8 +570,19 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 //   the queue was, correctly, counting as two independent writers of a Tier-1 field. Removing it is
 //   provably behaviour-preserving (nothing in the serving path imported it) and closes the two
 //   whole-record `conv.appointment = {...}` writes. `appointment` 13 -> 11.
+// 148 -> 146: the reschedule-latch ARM un-stacking (this commit). A CODE change. Three places armed
+//   `appointment.reschedulePending` on their own preconditions — the outcome-reschedule draft, the
+//   staff context note, and the customer's own cancel/reschedule message — while the two existing
+//   referees only ever owned CLEARING it. All three now ask `decideReschedulePendingLatch` through
+//   `applyReschedulePendingLatch`. Memory's slicing advice was followed: "who may ARM the latch"
+//   is its own PR, separate from "who must CLEAR it".
+//   ONLY -2 for three writers removed, and the reason is the same one #455 recorded rather than
+//   hid: taking the arm site out of index.ts ~61080 un-collapsed a neighbouring CLEAR write
+//   (`if (conv.appointment) conv.appointment.reschedulePending = false;`, ~62947) that the
+//   adjacency rule had been folding into the block above it, so it now counts in its own right.
+//   `appointment` 11 -> 9. It belongs to the CLEAR question and is queued with it, not lost.
 // RATCHET DOWN ONLY.
-const UNREFEREED_WRITER_BASELINE = 148;
+const UNREFEREED_WRITER_BASELINE = 146;
 
 {
   const sourceFiles: SourceFile[] = [];
