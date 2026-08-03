@@ -20,6 +20,9 @@ import {
   decideCloseoutReversal,
   type CloseoutReversalCause,
   type CloseoutReversalDecision,
+  decideCadenceLifecycle,
+  type CadenceLifecycleVerb,
+  type CadenceLifecycleDecision,
   decideReschedulePendingLatch,
   type ReschedulePendingLatchLane,
   type ReschedulePendingLatchDecision,
@@ -4915,24 +4918,38 @@ export function applyManualCadenceRestart(
   return decision;
 }
 
-export function stopFollowUpCadence(conv: Conversation, reason: string) {
-  if (!conv.followUpCadence) return;
-  // Post-sale and long-term cadences should continue even when sales flow triggers
-  // manual handoff (for example, service requests or internal coordination), or when
-  // post-sale pickup/delivery-logistics chatter ("I'll be there in 10 minutes") routes
-  // through applyPurchaseDeliveryLogisticsDecision — that's expected post-sale small talk,
-  // not a reason to kill the cadence the sale itself just started.
-  if (
-    (reason === "manual_handoff" || reason === "purchase_delivery") &&
-    (conv.followUpCadence.kind === "post_sale" || conv.followUpCadence.kind === "long_term")
-  ) {
-    return;
+// The ONE place that moves the chase between active, paused and stopped. Four callers used to do it
+// on their own preconditions — this verb, `pauseFollowUpCadence`, `resumeFollowUpCadence` and the
+// inline stop inside `closeConversation`. See `decideCadenceLifecycle` for the three preserved
+// divergences (who protects a post-sale chase, and who clears the pause fields) and the fail
+// direction. Writes the status + flag fields only; dates and offsets stay with the caller.
+export function applyCadenceLifecycle(
+  conv: Conversation,
+  input: { verb: CadenceLifecycleVerb | string; reason?: string | null; stopReason?: string | null }
+): CadenceLifecycleDecision {
+  const cad = conv?.followUpCadence;
+  const decision = decideCadenceLifecycle({
+    verb: input.verb,
+    hasRecord: !!cad,
+    status: cad?.status ?? null,
+    kind: cad?.kind ?? null,
+    reason: input.reason ?? null
+  });
+  if (!cad || !decision.apply) return decision;
+  if (decision.nextStatus) cad.status = decision.nextStatus;
+  if (input.verb === "stop" || input.verb === "close") cad.stopReason = input.stopReason ?? undefined;
+  if (decision.clearStopReason) cad.stopReason = undefined;
+  if (decision.clearNextDue) cad.nextDueAt = undefined;
+  if (decision.clearPause) {
+    cad.pausedUntil = undefined;
+    cad.pauseReason = undefined;
   }
-  conv.followUpCadence.status = "stopped";
-  conv.followUpCadence.stopReason = reason;
-  conv.followUpCadence.nextDueAt = undefined;
-  conv.followUpCadence.pausedUntil = undefined;
-  conv.followUpCadence.pauseReason = undefined;
+  return decision;
+}
+
+export function stopFollowUpCadence(conv: Conversation, reason: string) {
+  const decision = applyCadenceLifecycle(conv, { verb: "stop", reason, stopReason: reason });
+  if (!decision.apply) return;
   conv.updatedAt = nowIso();
   scheduleSave();
 }
@@ -4944,9 +4961,7 @@ export function stopFollowUpCadence(conv: Conversation, reason: string) {
 // `ensureCadenceActive` resume used on customer-reply resumes.
 export function resumeFollowUpCadence(conv: Conversation, timeZone: string) {
   const cad = conv.followUpCadence;
-  if (!cad || cad.status !== "stopped") return;
-  cad.status = "active";
-  cad.stopReason = undefined;
+  if (!applyCadenceLifecycle(conv, { verb: "resume" }).apply || !cad) return;
   cad.anchorAt = cad.anchorAt ?? nowIso();
   const offsets =
     cad.kind === "long_term"
@@ -4959,14 +4974,12 @@ export function resumeFollowUpCadence(conv: Conversation, timeZone: string) {
     cad.kind === "post_sale"
       ? computePostSaleDueAt(cad.anchorAt, offsets[idx], timeZone)
       : computeFollowUpDueAt(cad.anchorAt, offsets[idx], timeZone);
-  cad.pausedUntil = undefined;
-  cad.pauseReason = undefined;
   conv.updatedAt = nowIso();
   scheduleSave();
 }
 
 export function pauseFollowUpCadence(conv: Conversation, untilIso: string, reason?: string) {
-  if (!conv.followUpCadence || conv.followUpCadence.status !== "active") return;
+  if (!applyCadenceLifecycle(conv, { verb: "pause", reason }).apply || !conv.followUpCadence) return;
   conv.followUpCadence.pausedUntil = untilIso;
   conv.followUpCadence.pauseReason = reason ?? "manual_outbound";
   const until = new Date(untilIso);
@@ -5356,11 +5369,7 @@ export function closeConversation(conv: Conversation, reason?: string) {
   conv.closedAt = nowIso();
   conv.closedReason = reason;
   markOpenTodosDoneForConversation(conv.id);
-  if (conv.followUpCadence?.status) {
-    conv.followUpCadence.status = "stopped";
-    conv.followUpCadence.stopReason = reason ?? "closed";
-    conv.followUpCadence.nextDueAt = undefined;
-  }
+  applyCadenceLifecycle(conv, { verb: "close", reason, stopReason: reason ?? "closed" });
   // A closed conversation must not keep an ACTIVE inventory watch — a reopen could refire
   // "it's available again!" to a customer who already closed/bought. Pause every active watch
   // (reversible; the watch-fire engine skips paused). Write-time guard; the reconcile tick is the

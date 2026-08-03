@@ -599,8 +599,16 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 //   `status` 4 -> 2, `closedReason` 4 -> 2, `closedAt` 3 -> 1 — and what is LEFT on those fields is
 //   the sibling question (closing a lead), not this one. Same cluster heuristic again: three fields
 //   whose writers sat on consecutive lines were one question.
+// 132 -> 128: the CADENCE LIFECYCLE un-stacking (this commit). `followUpCadence` is the field that
+//   TEXTS people, and four callers moved it between active, paused and stopped on their own
+//   preconditions: `stopFollowUpCadence`, `pauseFollowUpCadence`, `resumeFollowUpCadence` and an
+//   inline stop inside `closeConversation` that bypassed the stop verb entirely. All four now ask
+//   `decideCadenceLifecycle` through `applyCadenceLifecycle`. `followUpCadence` 13 -> 9.
+//   A FIFTH pause writer is deliberately NOT in this slice: the health-recovery pause extension
+//   (index.ts ~9347) stamps `pausedUntil`/`pauseReason` on a chase whatever its status, where the
+//   `pause` verb requires "active". Sibling question, queued, not silently folded in.
 // RATCHET DOWN ONLY.
-const UNREFEREED_WRITER_BASELINE = 132;
+const UNREFEREED_WRITER_BASELINE = 128;
 
 {
   const sourceFiles: SourceFile[] = [];
