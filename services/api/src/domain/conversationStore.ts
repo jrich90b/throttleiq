@@ -73,7 +73,8 @@ import {
 } from "./leadInGuards.js";
 import {
   isPendingIncomingInventoryNotifyTodoSummary,
-  planPendingIncomingNotifyDedup
+  planPendingIncomingNotifyDedup,
+  shouldVoiceAttemptKeepArrivalNotifyTaskOpen
 } from "./pendingIncomingInventory.js";
 import { isFollowUpCadenceHeld } from "./cadenceHoldTtl.js";
 
@@ -7042,8 +7043,21 @@ export function snoozeTodo(convId: string, todoId: string, dueAtIso: string): To
 export function markOpenCallTodosDoneForCompletedVoiceAttempt(convId: string): number {
   let count = 0;
   const doneAt = nowIso();
+  const nowMs = Date.parse(doneAt);
   for (const task of todos) {
     if (task.convId !== convId || task.status !== "open" || task.reason !== "call") continue;
+    // A connected call does not deliver a bike that hasn't shipped yet: an arrival-notify task
+    // still dated in the FUTURE survives this closer (Joe Catalano +17164324480 — his 8/25 CVO
+    // reminder was wiped by an 8/1 call). Referee lives with the task's identity in
+    // pendingIncomingInventory.ts; every other call task closes exactly as before.
+    if (
+      shouldVoiceAttemptKeepArrivalNotifyTaskOpen({
+        summary: task.summary,
+        dueAt: task.dueAt,
+        nowMs
+      })
+    )
+      continue;
     task.status = "done";
     task.doneAt = doneAt;
     count += 1;

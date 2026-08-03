@@ -121,4 +121,97 @@ assert.ok(
   );
 }
 
+// --- A connected call does not deliver a bike that hasn't shipped yet (Joe Catalano,
+//     +17164324480, operator-reported 2026-08-01 "Should this have created a watch?").
+//     His arrival-notify task was correctly created and dated off the unit's 8/25 ship date; a
+//     call that connected on 8/1 ran the blunt closer and marked the 8/25 reminder done 24 days
+//     early — even though the fulfillment judge had ruled `not_fulfilled` that same morning.
+//     Nothing was left to fire when the bike lands. Pinned BOTH ways: a future-dated arrival
+//     reminder survives, an ordinary call-back task due tomorrow still closes.
+{
+  const { shouldVoiceAttemptKeepArrivalNotifyTaskOpen } = await import(
+    "../services/api/src/domain/pendingIncomingInventory.ts"
+  );
+  const nowMs = Date.parse("2026-08-01T14:54:08.919Z");
+  assert.equal(
+    shouldVoiceAttemptKeepArrivalNotifyTaskOpen({
+      summary: "Notify Joe Catalano when the 2026 FLHXSE CVO Street Glide arrives or is ready to show.",
+      dueAt: "2026-08-25T13:00:00.000Z",
+      nowMs
+    }),
+    true,
+    "an arrival-notify task still dated in the future survives a reached call"
+  );
+  assert.equal(
+    shouldVoiceAttemptKeepArrivalNotifyTaskOpen({
+      summary: "Notify Joe Catalano when the 2026 FLHXSE CVO Street Glide arrives or is ready to show.",
+      dueAt: "2026-07-25T13:00:00.000Z",
+      nowMs
+    }),
+    false,
+    "once the arrival date has passed, a reached call closes the notify task exactly as before"
+  );
+  assert.equal(
+    shouldVoiceAttemptKeepArrivalNotifyTaskOpen({
+      summary: "Notify Joe Catalano when the 2026 FLHXSE CVO Street Glide arrives or is ready to show.",
+      dueAt: null,
+      nowMs
+    }),
+    false,
+    "an UNDATED arrival-notify task keeps today's behavior (the guard only protects a dated window)"
+  );
+  assert.equal(
+    shouldVoiceAttemptKeepArrivalNotifyTaskOpen({
+      summary: "Call requested: get off at three thirty.",
+      dueAt: "2026-08-02T13:00:00.000Z",
+      nowMs
+    }),
+    false,
+    "an ordinary call-back task due tomorrow is genuinely fulfilled by the call and still closes"
+  );
+
+  const arrivalConv = {
+    id: "voice-arrival-conv",
+    leadKey: "+17164324480",
+    status: "open",
+    mode: "suggest",
+    messages: [],
+    lead: { firstName: "Joe", phone: "+17164324480" },
+    updatedAt: new Date().toISOString()
+  } as any;
+  const farFuture = new Date(Date.now() + 24 * 24 * 60 * 60 * 1000).toISOString();
+  const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  store.addTodo(
+    arrivalConv,
+    "call",
+    "Notify Joe Catalano when the 2026 FLHXSE CVO Street Glide arrives or is ready to show.",
+    "source_arrival_notify",
+    undefined,
+    { dueAt: farFuture },
+    "followup",
+    { skipMerge: true }
+  );
+  store.addTodo(
+    arrivalConv,
+    "call",
+    "Call requested: get off at three thirty.",
+    "source_callback",
+    undefined,
+    { dueAt: tomorrow },
+    "todo",
+    { skipMerge: true }
+  );
+  const arrivalClosed = store.markOpenCallTodosDoneForCompletedVoiceAttempt(arrivalConv.id);
+  assert.equal(arrivalClosed, 1, "a reached call closes the call-back task only");
+  const stillOpen = store
+    .listOpenTodos()
+    .filter((task: any) => task.convId === arrivalConv.id)
+    .map((task: any) => String(task.summary ?? ""));
+  assert.equal(stillOpen.length, 1, "exactly one task survives the reached call");
+  assert.ok(
+    /arrives or is ready to show/i.test(stillOpen[0]),
+    "the surviving task is the future-dated arrival reminder, not the call-back"
+  );
+}
+
 console.log("PASS voice call follow-up eval");
