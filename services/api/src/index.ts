@@ -9921,7 +9921,7 @@ function applyExternalDealerApprovalTransferDecision(args: {
     source: args.decision.source,
     confidence: args.decision.confidence
   });
-  return buildExternalDealerApprovalTransferReply(args.creditAppUrl);
+  return buildExternalDealerApprovalTransferReply(args.creditAppUrl, args.conv);
 }
 
 function resolveFinanceTermQuestionDecision(

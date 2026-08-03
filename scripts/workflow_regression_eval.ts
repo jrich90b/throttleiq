@@ -30,6 +30,7 @@ import {
   cleanCatalogModelNameForDisplay,
   extractInventoryStockIdMention,
   getBroadScheduleWindowLabel,
+  hasOwnCreditApplicationOnFile,
   hasPriorCustomerFacingOutbound,
   hasRideChallengeSignupAcknowledgement,
   hasInventoryWatchConfirmationText,
@@ -512,10 +513,65 @@ const cases: Case[] = [
     expected: false
   },
   {
-    id: "external_dealer_approval_transfer_reply_professional",
+    // Pins finding +17162605541::human_correction_material (production turn 2026-07-19T01:01:48Z):
+    // "hi does that apply to any harley dealer" got a store-centric answer ("it can be used at our
+    // store"), so the question as asked went unanswered and Joe corrected it by hand 12h later.
+    // The reply now leads with the portable answer and still carries the per-dealer application fact.
+    id: "external_dealer_approval_transfer_reply_answers_any_dealer_scope",
     actual: buildExternalDealerApprovalTransferReply("https://credit.example/app"),
     expected:
-      "Yes — if that approval was through Harley-Davidson Financial Services, it can be used at our store. We do still need you to complete a separate application for our dealership because Harley-Davidson does not transfer the application over to us. It will not be another credit inquiry.\n\nhttps://credit.example/app"
+      "Yes — an approval through Harley-Davidson Financial Services is good at any Harley dealer, not just us. Each dealership does have to put in its own application so they can pull up your open approval, and that isn't another credit inquiry.\n\nhttps://credit.example/app"
+  },
+  {
+    // The customer of the pinned turn arrived on "Marketplace - Apply for Credit" with an App ID —
+    // we already hold their application, so the apply-here link is redundant and reads as if we
+    // lost their paperwork. The portable answer stays; the link goes away.
+    id: "external_dealer_approval_transfer_reply_omits_link_when_app_on_file",
+    actual: buildExternalDealerApprovalTransferReply("https://credit.example/app", {
+      classification: { bucket: "finance_prequal", cta: "hdfs_coa" },
+      lead: {
+        source: "Marketplace - Apply for Credit",
+        inquiry: "App ID: 1014049064, Model Year: 2017, Model: Breakout,"
+      }
+    }),
+    expected:
+      "Yes — an approval through Harley-Davidson Financial Services is good at any Harley dealer, not just us. Each dealership does have to put in its own application so they can pull up your open approval, and that isn't another credit inquiry. We already have your application on file here."
+  },
+  {
+    // The inbound shape the route was originally built for (approved at ANOTHER dealer — is it good
+    // here?) must still get our store link: one answer covers both directions.
+    id: "external_dealer_approval_transfer_reply_still_invites_when_no_app_on_file",
+    actual: buildExternalDealerApprovalTransferReply("https://credit.example/app", {
+      classification: { bucket: "inventory_interest", cta: "check_availability" },
+      lead: { source: "Marketplace - Private Party Listing", inquiry: "Interested in the Road Glide" }
+    }).includes("https://credit.example/app"),
+    expected: true
+  },
+  {
+    id: "external_dealer_approval_transfer_reply_falls_back_without_url",
+    actual: buildExternalDealerApprovalTransferReply(null),
+    expected:
+      "Yes — an approval through Harley-Davidson Financial Services is good at any Harley dealer, not just us. Each dealership does have to put in its own application so they can pull up your open approval, and that isn't another credit inquiry. I can send you the link to complete our store application."
+  },
+  {
+    // Fail direction: only a strong "the application came to us" signal suppresses the link. A bare
+    // prequalify lead has not filed a full application here, so it still gets invited.
+    id: "own_credit_application_on_file_requires_a_strong_lead_signal",
+    actual: hasOwnCreditApplicationOnFile({
+      classification: { bucket: "finance_prequal", cta: "prequalify" },
+      lead: { source: "Marketplace - Prequalify", inquiry: "Prequalification request" }
+    }),
+    expected: false
+  },
+  {
+    // Two-path parity guard: the live webhook (/webhooks/twilio) and /conversations/:id/regenerate
+    // must not drift. Both route through applyExternalDealerApprovalTransferDecision, which is the
+    // ONLY place allowed to build this reply — a second call site is how the two paths split.
+    id: "external_dealer_approval_transfer_reply_built_in_exactly_one_place",
+    actual: (
+      readFileSync("services/api/src/index.ts", "utf8").match(/buildExternalDealerApprovalTransferReply\(/g) ?? []
+    ).length,
+    expected: 1
   },
   {
     id: "multi_day_schedule_options_preserve_friday_or_saturday",

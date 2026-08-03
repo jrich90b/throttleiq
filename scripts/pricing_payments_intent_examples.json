@@ -268,6 +268,25 @@
     }
   },
   {
+    "id": "payments_approval_portability_any_dealer_general",
+    "history": [
+      {
+        "direction": "in",
+        "body": "WEB LEAD (ADF) Source: Marketplace - Apply for Credit Ref: 11649 Name: christopher killian Phone: 7162605541 Year: 2017 Vehicle: Harley-Davidson Breakout Inquiry: App ID: 1014049064, Model Year: 2017, Model: Breakout,"
+      },
+      {
+        "direction": "out",
+        "body": "Hey christopher, it's Alexandra over at American Harley-Davidson. Thanks — I received your credit application. I’ll have our finance team reach out."
+      }
+    ],
+    "text": "hi does that apply to any harley dealer",
+    "expected": {
+      "intent": "payments",
+      "explicit_request": true,
+      "asks_external_approval_transfer": true
+    }
+  },
+  {
     "id": "payments_rider_to_rider_private_seller_facilitation",
     "text": "Hi Joe, sorry to text you after hours but had a quick question. Would you be able to facilitate a \"trade\" for a used bike I found with a private seller? Would the rider to rider program work for something like this?",
     "expected": {
