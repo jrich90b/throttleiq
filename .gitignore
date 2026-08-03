@@ -1,5 +1,13 @@
 # dependencies
-node_modules/
+# No trailing slash ON PURPOSE. A per-routine worktree symlinks node_modules in from the base
+# checkout (scripts/routine_worktree.ts); `node_modules/` matches only real DIRECTORIES, so the
+# symlink shows up as untracked `?? services/api/node_modules` and trips the deploy script's
+# clean-tree guard ("Local services/api ... tree is dirty"). Verified 2026-08-03 in a scratch
+# repo: trailing slash => `?? services/api/node_modules`, no slash => ignored.
+# On the current dev box this was masked by a `node_modules` line in .git/info/exclude — which is
+# LOCAL and never shared, so a fresh clone (or the deploy box) would hit it. Matching by name here
+# makes the repo self-sufficient instead of depending on one machine's untracked exclude file.
+node_modules
 
 # build output
 dist/
@@ -55,3 +63,7 @@ sample.adf.xml
 .agents/
 .claude/skills/
 skills-lock.json
+
+# worktrees Claude Code creates for `claude --worktree` / `isolation: worktree` subagents.
+# (Our scheduled routines put theirs OUTSIDE the repo — see docs/routine_worktrees.md.)
+.claude/worktrees/
