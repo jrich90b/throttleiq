@@ -7,6 +7,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { RUNNER_REVOKED_EXIT_CODE } from "../services/api/src/domain/portalRunnerHandoff.ts";
+import { describeMdfUploadOutcome } from "./lib/mdfUploadOutcome.ts";
 import {
   ANSIRA_CLAIMS_LIST_URL,
   ANSIRA_FORM_CONTROLS,
@@ -1826,33 +1827,56 @@ async function runPlaywrightPortalDraft(claim: MdfClaimEntry, options: RunnerOpt
     );
     const supportPaths = (await Promise.all(supportFiles.map(file => downloadPortalFile(file, tempDir)))).filter(Boolean) as string[];
     const fileInputs = await page.locator('input[type="file"][name="files[]"]').all();
+    // COUNT WHAT ATTACHED, NEVER WHAT WAS DOWNLOADED. The old summary reported
+    // `invoicePathGroups.flat().length` — the files we had ready — so a row we never managed to
+    // attach still read as uploaded. These two counters are incremented ONLY after setInputFiles
+    // resolves for that control. See scripts/lib/mdfUploadOutcome.ts for the incident.
+    let attachedInvoiceFiles = 0;
+    let attachedSupportFiles = 0;
     for (let i = 0; i < invoicePathGroups.length; i += 1) {
       const paths = invoicePathGroups[i];
-      if (!paths.length || !fileInputs[i]) continue;
-      const label = `uploading invoice row ${i + 1} of ${invoicePathGroups.length} (${paths
-        .map(p => path.basename(p))
-        .join(", ")})`;
+      if (!paths.length) continue;
+      const names = paths.map(p => path.basename(p)).join(", ");
+      // A MISSING CONTROL IS A FAILED UPLOAD, NOT A NO-OP. This used to `continue` silently, so a
+      // form whose invoice-row upload boxes did not render (the usual cause is Ansira changing the
+      // form) produced a draft with no invoice and a summary that said it had one.
+      if (!fileInputs[i]) {
+        uploadFailures.push(
+          `invoice row ${i + 1} (${names}): no upload control found on the form — the file was never attached (Ansira form may have changed; re-sync the runner selectors)`
+        );
+        continue;
+      }
+      const label = `uploading invoice row ${i + 1} of ${invoicePathGroups.length} (${names})`;
       setPortalRunStep(label);
       // Bound each row: one wedged upload used to eat the entire run budget and then be
       // reported as an unresponsive Chrome. A row that times out is SKIPPED and named, so the
       // remaining rows still upload and the summary says which file did not attach.
       try {
         await withStepTimeout(label, UPLOAD_STEP_TIMEOUT_MS, fileInputs[i].setInputFiles(paths.length === 1 ? paths[0] : paths));
+        attachedInvoiceFiles += paths.length;
         await page.waitForTimeout(5000);
         await setInvoiceFileCategories(page, i + 1);
       } catch (err: any) {
-        uploadFailures.push(`invoice row ${i + 1}: ${err?.message ?? err}`);
+        uploadFailures.push(`invoice row ${i + 1} (${names}): ${err?.message ?? err}`);
       }
     }
     const supportInput = fileInputs[invoicePathGroups.length] ?? fileInputs[1];
+    if (supportPaths.length && !supportInput) {
+      // Same silent skip on the supporting-documents side.
+      uploadFailures.push(
+        `supporting documents (${supportPaths.map(p => path.basename(p)).join(", ")}): no upload control found on the form — the files were never attached (Ansira form may have changed; re-sync the runner selectors)`
+      );
+    }
     if (supportPaths.length && supportInput) {
       const supportLabel = `uploading ${supportPaths.length} supporting document(s)`;
       setPortalRunStep(supportLabel);
-      await withStepTimeout(supportLabel, UPLOAD_STEP_TIMEOUT_MS, supportInput.setInputFiles(supportPaths)).catch(
-        (err: any) => {
+      await withStepTimeout(supportLabel, UPLOAD_STEP_TIMEOUT_MS, supportInput.setInputFiles(supportPaths))
+        .then(() => {
+          attachedSupportFiles += supportPaths.length;
+        })
+        .catch((err: any) => {
           uploadFailures.push(`supporting documents: ${err?.message ?? err}`);
-        }
-      );
+        });
       await page.waitForTimeout(8000);
       const supportCategoryCount = await page.locator('select[name^="files["][name$="[file_category]"]').count();
       for (let i = 0; i < supportCategoryCount; i += 1) {
@@ -1874,20 +1898,25 @@ async function runPlaywrightPortalDraft(claim: MdfClaimEntry, options: RunnerOpt
     const claimId = resultText.match(/Claim ID:\s*([A-Z0-9]+)/i)?.[1] || "";
     const status = resultText.match(/Status:\s*([^\n]+)/i)?.[1]?.trim() || "unknown";
     const saved = /successfully saved|Status:\s*Incomplete/i.test(resultText);
+    // Never let a partial upload pass as a clean save — a draft missing an invoice looks
+    // identical to a complete one in the console, and the dealer finds out at Harley. The counts
+    // and the warning both come from ATTACHED totals, so a shortfall is loud even when nothing
+    // threw (the 2026-08-03 silent-skip incident).
+    const uploadReport = describeMdfUploadOutcome({
+      plannedInvoiceFiles: invoicePathGroups.flat().length,
+      attachedInvoiceFiles,
+      plannedSupportFiles: supportPaths.length,
+      attachedSupportFiles,
+      failures: uploadFailures
+    });
     const summary = [
       saved ? "Ansira MDF draft saved successfully." : "Ansira MDF draft run finished, but save confirmation was not detected.",
       claimId ? `Claim ID: ${claimId}.` : "Claim ID was not detected.",
       `Status: ${status}.`,
       `Filled ${claim.packet.claimType || "media"} claim for ${claim.title}.`,
       `Filled ${Math.max(invoices.length, invoicePathGroups.length)} invoice section(s).`,
-      `Uploaded ${invoicePathGroups.flat().length} invoice file(s) and ${supportPaths.length} supporting file(s).`,
-      // Never let a partial upload pass as a clean save — a draft missing an invoice looks
-      // identical to a complete one in the console, and the dealer finds out at Harley.
-      ...(uploadFailures.length
-        ? [
-            `ATTENTION - ${uploadFailures.length} file upload(s) did NOT attach and must be added by hand before submitting: ${uploadFailures.join("; ")}.`
-          ]
-        : []),
+      uploadReport.countsLine,
+      ...(uploadReport.attentionLine ? [uploadReport.attentionLine] : []),
       "Did not click final Submit.",
       "Human review still needed before final submission."
     ].join(" ");
