@@ -132,7 +132,12 @@ const CEILINGS: Ceiling[] = [
     // applyComprehendedArrivalToPending (pendingIncomingInventory) and
     // healPendingIncomingNotifyTodosAcross (conversationStore). Net -11 INCLUDING the new feature,
     // which is the point: this guard is what turned a +44 patch into a reduction.
-    max: 71_373,
+    // 71_373 -> 71_360. The inventory-HOLD-record un-stacking: the two hand-maintained copies of
+    // "put this bike on hold for this lead" (the appointment-outcome held lane and the console's
+    // manual-resolution endpoint) each wrote the same fourteen fields plus the cadence/mode
+    // aftermath inline; both now call applyInventoryHoldRecord (conversationStore), which asks
+    // decideInventoryHoldRecord (routeStateReducer). Net -13 after the import line.
+    max: 71_360,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

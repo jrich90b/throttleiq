@@ -511,6 +511,7 @@ import {
   applyAppointmentBookingRecord,
   applyReschedulePendingLatch,
   applyInventoryAvailabilityReopen,
+  applyInventoryHoldRecord,
   applyCloseoutReversal,
   applyAppointmentConfirmRecord,
   clearAppointmentStaffPromptState
@@ -20481,25 +20482,14 @@ async function applyOutcomeHold(conv: any, unit: OutcomeUnitInput, note: string 
     };
     await setInventoryHold({ stockId: unit.stockId, vin: unit.vin, hold: holdEntry });
   }
-  conv.hold = {
-    key: holdKey,
-    onOrder: isOnOrderHold || undefined,
-    stockId: unit.stockId,
-    vin: unit.vin,
-    year: unit.year,
-    make: unit.make,
-    model: unit.model,
-    trim: unit.trim,
-    color: unit.color,
-    label: unit.label,
+  applyInventoryHoldRecord(conv, {
+    lane: "appointment_outcome",
+    holdKey,
+    onOrder: isOnOrderHold,
+    unit,
     note,
-    reason: isOnOrderHold ? "order_hold" : "unit_hold",
-    createdAt,
-    updatedAt: nowIso
-  };
-  const holdReason = isOnOrderHold ? "order_hold" : "unit_hold";
-  stopFollowUpCadence(conv, holdReason);
-  setFollowUpMode(conv, "paused_indefinite", holdReason);
+    nowIso
+  });
   return null;
 }
 
@@ -42217,7 +42207,6 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
         await clearInventoryHold(prevKey, null);
       }
       const createdAt = conv.hold?.createdAt ?? nowIso;
-      const holdReason = holdOnOrder ? "order_hold" : "unit_hold";
       if (holdKey) {
         const holdEntry = {
           id: holdKey,
@@ -42232,26 +42221,24 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
         };
         await setInventoryHold({ stockId: holdStockId, vin: holdVin, hold: holdEntry });
       }
-      conv.hold = {
-        key: holdKey || undefined,
-        onOrder: holdOnOrder || undefined,
-        stockId: holdStockId,
-        vin: holdVin,
-        year: holdYear,
-        make: holdMake,
-        model: holdModel,
-        trim: holdTrim,
-        color: holdColor,
-        label: holdLabel,
+      applyInventoryHoldRecord(conv, {
+        lane: "console_resolution",
+        holdKey,
+        onOrder: holdOnOrder,
+        unit: {
+          stockId: holdStockId,
+          vin: holdVin,
+          year: holdYear,
+          make: holdMake,
+          model: holdModel,
+          trim: holdTrim,
+          color: holdColor,
+          label: holdLabel
+        },
         note: holdNote,
-        reason: holdReason,
-        createdAt,
-        updatedAt: nowIso
-      };
-      stopFollowUpCadence(conv, holdReason);
-      if (!shouldApplyWatch && conv.followUp?.mode !== "manual_handoff") {
-        setFollowUpMode(conv, "paused_indefinite", holdReason);
-      }
+        nowIso,
+        watchApplied: shouldApplyWatch
+      });
       cadenceNotice = holdOnOrder ? "Bike on order marked on hold." : "Unit marked on hold.";
     } else if (effectiveResolution === "hold_clear") {
       const clearKey = holdKey ?? conv.hold?.key ?? null;
