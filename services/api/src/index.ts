@@ -511,6 +511,7 @@ import {
   applyAppointmentBookingRecord,
   applyReschedulePendingLatch,
   applyInventoryAvailabilityReopen,
+  applyCloseoutReversal,
   applyAppointmentConfirmRecord,
   clearAppointmentStaffPromptState
 } from "./domain/conversationStore.js";
@@ -41408,9 +41409,8 @@ app.post("/conversations/:id/close", async (req, res) => {
 app.post("/conversations/:id/reopen", (req, res) => {
   const conv = getConversation(req.params.id);
   if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
-  conv.status = "open";
-  conv.closedAt = undefined;
-  conv.closedReason = undefined;
+  // Staff pressed Reopen — the unconditional arm of decideCloseoutReversal.
+  applyCloseoutReversal(conv, { cause: "staff_reopen" });
   if (conv.sale) {
     conv.sale = undefined;
   }

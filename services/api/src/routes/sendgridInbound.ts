@@ -26,6 +26,7 @@ import {
   updateHoldingFromInbound,
   confirmAppointmentIfMatchesSuggested,
   applyCadenceRevival,
+  applyCloseoutReversal,
   startFollowUpCadence,
   applyMetaPromoInitialCadence,
   resolveInitialAdfCadencePlan,
@@ -7652,11 +7653,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     } else if (hasHoldSignal) {
       const nowIso = new Date().toISOString();
       const createdAt = conv.hold?.createdAt ?? nowIso;
-      conv.status = "open";
-      if (conv.closedReason && /\bhold\b/i.test(String(conv.closedReason))) {
-        conv.closedReason = undefined;
-        conv.closedAt = undefined;
-      }
+      applyCloseoutReversal(conv, { cause: "walkin_hold_note" });
       conv.hold = {
         ...conv.hold,
         note: walkInCleanedComment || event.body || "Walk-in hold note",
@@ -7668,11 +7665,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       stopFollowUpCadence(conv, "manual_hold");
     } else if (hasResumeHoldSignal) {
       conv.hold = undefined;
-      conv.status = "open";
-      if (conv.closedReason && /\bhold\b/i.test(String(conv.closedReason))) {
-        conv.closedReason = undefined;
-        conv.closedAt = undefined;
-      }
+      applyCloseoutReversal(conv, { cause: "walkin_hold_clear" });
       setFollowUpMode(conv, "active", "manual_hold_clear");
       const cfg = await getSchedulerConfig();
       applyCadenceRevival(conv, {

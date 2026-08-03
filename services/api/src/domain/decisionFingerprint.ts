@@ -521,6 +521,46 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     }, ["decideInventoryAvailabilityReopen"]);
   }
 
+  // Sampled once per (cause × customer-arm switch), same reasoning as above: the four reopen causes
+  // answer this differently on the SAME lead, so one sample would hide the divergences the
+  // un-stacking preserved. PROBE: the cause, `bareAck` and `declineCloseoutReason` are held fixed
+  // per sample — `bareAck` is the switch the sticky rules turn on, and the decline vocabulary test
+  // only matters when it is true. Everything else is the lead's real stored closeout state
+  // (`status`, `closedReason`, `followUp.reason`, `sale.soldAt`, `hold`), which is exactly what the
+  // arms disagree about. `isClosed` is NOT probed: it is stored state.
+  const CLOSEOUT_REVERSAL_PROBES = [
+    { cause: "customer_inbound", bareAck: false, decline: false },
+    { cause: "customer_inbound", bareAck: true, decline: false },
+    { cause: "customer_inbound", bareAck: true, decline: true },
+    { cause: "staff_reopen", bareAck: false, decline: false },
+    { cause: "walkin_hold_note", bareAck: false, decline: false },
+    { cause: "walkin_hold_clear", bareAck: false, decline: false }
+  ] as const;
+  for (const probe of CLOSEOUT_REVERSAL_PROBES) {
+    const label =
+      probe.cause === "customer_inbound"
+        ? `${probe.cause}:ack=${probe.bareAck}:decline=${probe.decline}`
+        : probe.cause;
+    add(`closeoutReversal:${label}`, conv => {
+      if (!conv || typeof reducer.decideCloseoutReversal !== "function") return undefined;
+      const decision = reducer.decideCloseoutReversal({
+        cause: probe.cause, // PROBE
+        isClosed: conv.status === "closed",
+        closedReason: conv.closedReason ?? null,
+        followUpReason: conv.followUp?.reason ?? null,
+        hasSoldSale: !!conv.sale?.soldAt,
+        hasHoldRecord: !!conv.hold,
+        bareAck: probe.bareAck, // PROBE
+        declineCloseoutReason: probe.decline // PROBE
+      });
+      return {
+        reopen: decision.reopen,
+        clearCloseout: decision.clearCloseout,
+        divergence: decision.divergence
+      };
+    }, ["decideCloseoutReversal"]);
+  }
+
   return registry;
 }
 
