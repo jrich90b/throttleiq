@@ -546,7 +546,8 @@ import {
   createCalendar,
   createRecurringBlock,
   deleteEvent,
-  moveEvent
+  moveEvent,
+  cancelSupersededBookedEvent
 } from "./domain/googleCalendar.js";
 import {
   generateCandidateSlots,
@@ -53385,7 +53386,11 @@ app.post("/conversations/:id/send", async (req, res) => {
       const whenUtc = localPartsToUtcDate(schedulerTimezone, requested).toISOString();
       const whenText = formatSlotLocal(whenUtc, schedulerTimezone);
       conv.appointment = conv.appointment ?? { status: "none", updatedAt: nowIso() };
-      if (confirmsPendingAppointmentRequest && existingBookedAppointmentIsPast) {
+      if (String(conv.appointment.bookedEventId ?? "").trim()) {
+        // B1: a NEW booking supersedes the old event — cancel a still-upcoming one (else it orphans on a rep's calendar), then clear so the new books.
+        if (!existingBookedAppointmentIsPast) {
+          await cancelSupersededBookedEvent(getAuthedCalendarClient, getSchedulerConfigHot, conv.appointment);
+        }
         conv.appointment.bookedEventId = null;
         conv.appointment.bookedEventLink = null;
         conv.appointment.bookedSalespersonId = null;

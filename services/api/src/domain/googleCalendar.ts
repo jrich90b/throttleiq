@@ -445,3 +445,41 @@ export async function createRecurringBlock(
 export async function deleteEvent(calendar: any, calendarId: string, eventId: string) {
   await calendar.events.delete({ calendarId, eventId });
 }
+
+/**
+ * Cancel a previously-booked appointment event that a NEW booking is superseding (8/3 wiring
+ * triage, theme B1: staff rebooked a lead who already had a FUTURE appointment — the old event
+ * was neither cancelled nor rebooked-over, so it orphaned on a rep's calendar with no pointer
+ * left to clean it up, while the record's teardown told staff the booking "could not be made").
+ * Calendar resolution mirrors the 24h-confirm cancel: the booked salesperson's configured
+ * calendar first, the stored matchedSlot's calendar as fallback. Returns true when a cancel was
+ * issued. Never throws — losing the cancel must not lose the new booking.
+ */
+export async function cancelSupersededBookedEvent(
+  getCalendarClient: () => Promise<any>,
+  getCfg: () => Promise<{ timezone?: string; salespeople?: Array<{ id?: string; calendarId?: string }> | null }>,
+  appt: {
+    bookedEventId?: string | null;
+    bookedSalespersonId?: string | null;
+    matchedSlot?: { calendarId?: string | null } | null;
+  } | null | undefined
+): Promise<boolean> {
+  // The getters are passed in (not their results) so EVERY fallible await lives inside this
+  // try — a calendar-auth failure must cost only the cancel, never the caller's new booking.
+  try {
+    const eventId = String(appt?.bookedEventId ?? "").trim();
+    if (!eventId) return false;
+    const cfg = await getCfg();
+    const calendarId =
+      (cfg.salespeople ?? []).find(p => p?.id === appt?.bookedSalespersonId)?.calendarId ??
+      appt?.matchedSlot?.calendarId ??
+      "";
+    if (!calendarId) return false;
+    await updateEventDetails(await getCalendarClient(), calendarId, eventId, cfg.timezone ?? "America/New_York", {
+      status: "cancelled"
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
