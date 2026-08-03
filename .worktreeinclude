@@ -1,0 +1,12 @@
+# Gitignored files copied into every worktree Claude Code creates (`claude --worktree`,
+# `isolation: worktree` subagents, desktop parallel sessions). Without these the gates run
+# without their API keys and fail in a way that looks like a code objection rather than a
+# missing secret. Uses .gitignore syntax; only files that are BOTH matched here and gitignored
+# are copied, so tracked files are never duplicated.
+#
+# Our scheduled routines do NOT go through this file — they call
+# `scripts/routine_worktree.ts create`, which SYMLINKS these instead of copying, so a rotated
+# key takes effect everywhere at once and cleanup never leaves a stale secret on disk.
+# See docs/routine_worktrees.md.
+.env
+services/api/.env
