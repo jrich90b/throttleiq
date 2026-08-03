@@ -440,7 +440,80 @@ assert.match(ocSweep, /inStockModels/, "the open-critic sweep loads + passes the
   );
   eq(hcCls.action, "parser_fix_candidate", "human_correction_material → parser_fix_candidate (Net 2)");
   eq(hcCls.notify, true, "a human correction notifies Joe");
+  // A correction to a PROACTIVE send keeps the tier/action ladder but must NOT be steered as a parser
+  // few-shot — there was no customer turn behind the draft to parse. (+17164368801, 2026-07-14.)
+  const hcProactive = classifyOutcomeAnomaly(
+    { category: "comprehension", dimension: "human_correction_material", healed: false, severity: "P2", correctedSendWasProactive: true },
+    {}
+  );
+  eq(hcProactive.tier, 1, "a proactive-send correction is still Tier 1");
+  eq(hcProactive.notify, true, "a proactive-send correction still notifies Joe");
+  assert.match(hcProactive.rationale, /PROACTIVE send/, "the rationale names the proactive shape");
+  assert.match(hcProactive.rationale, /NOT a parser few-shot/, "the rationale steers AWAY from a parser few-shot");
+  assert.doesNotMatch(
+    hcCls.rationale,
+    /PROACTIVE send/,
+    "a corrected REPLY keeps the original parser-few-shot steering (no false proactive label)"
+  );
+  n += 3;
 }
 n += 4;
+
+// --- 5c-b. human_correction_material: REPLY vs PROACTIVE send. -------------------------------------
+// Production turn (+17164368801, 2026-07-14T19:21:01.872Z): staff replaced "No rush, Mustafa..." —
+// which was FOLLOW_UP_MESSAGES[5] fired by the cadence tick 25s after a live phone call, with the last
+// customer text 34 days earlier. It was surfaced to the loop as a parser few-shot candidate and cost a
+// full iteration to diagnose; the real fix was the post-call cadence breather (#229, d030f1c9).
+{
+  const { correctedSendWasProactive } = await import("../services/api/src/domain/conversationOutcomeAudit.ts");
+  const HC_AT = "2026-06-25T12:00:00.000Z"; // in-window relative to NOW
+  const corrected = (extraMsgs: any[]) => ({
+    id: "+1716hc",
+    humanCorrection: { at: HC_AT, category: "wrong_intent", messageId: "msg_corrected", reason: "r" },
+    messages: [...extraMsgs, { id: "msg_corrected", direction: "out", provider: "twilio", at: HC_AT, body: "x" }]
+  });
+
+  // The production shape: our own send, then voice rows, then the corrected draft — no inbound between.
+  const mustafa = corrected([
+    { id: "m1", direction: "out", provider: "twilio", at: "2026-05-22T12:00:00.000Z", body: "earlier send" },
+    { id: "m2", direction: "out", provider: "voice_call", at: "2026-06-25T11:56:00.000Z", body: "Call initiated" },
+    { id: "m3", direction: "out", provider: "voice_summary", at: "2026-06-25T11:59:00.000Z", body: "summary" }
+  ]);
+  eq(correctedSendWasProactive(mustafa, "msg_corrected"), true, "cadence draft after a call, no inbound => PROACTIVE (+17164368801)");
+  eq(
+    auditConversationOutcome(mustafa, { now: NOW }).find(a => a.dimension === "human_correction_material")?.correctedSendWasProactive,
+    true,
+    "the audit stamps correctedSendWasProactive on the finding"
+  );
+  assert.match(
+    String(auditConversationOutcome(mustafa, { now: NOW }).find(a => a.dimension === "human_correction_material")?.detail),
+    /proactive send/,
+    "the detail line (what act_runner list prints) names the proactive shape"
+  );
+  n++;
+
+  // A genuine REPLY: a customer turn sits between the previous send and the corrected draft.
+  const reply = corrected([
+    { id: "m1", direction: "out", provider: "twilio", at: "2026-06-25T10:00:00.000Z", body: "earlier send" },
+    { id: "m2", direction: "in", provider: "twilio", at: "2026-06-25T11:00:00.000Z", body: "what time Friday?" }
+  ]);
+  eq(correctedSendWasProactive(reply, "msg_corrected"), false, "a customer turn behind the draft => REPLY, not proactive");
+  eq(
+    auditConversationOutcome(reply, { now: NOW }).find(a => a.dimension === "human_correction_material")?.correctedSendWasProactive,
+    false,
+    "a corrected reply is stamped false"
+  );
+  assert.doesNotMatch(
+    String(auditConversationOutcome(reply, { now: NOW }).find(a => a.dimension === "human_correction_material")?.detail),
+    /proactive send/,
+    "a corrected reply's detail carries NO proactive label"
+  );
+  n++;
+
+  // FAIL DIRECTION: unresolvable pin / no history => false (today's behavior), never a false proactive.
+  eq(correctedSendWasProactive(mustafa, "msg_does_not_exist"), false, "unlocatable pin fails toward REPLY (today's behavior)");
+  eq(correctedSendWasProactive(mustafa, null), false, "missing messageId fails toward REPLY");
+  eq(correctedSendWasProactive({ messages: [] }, "msg_corrected"), false, "empty history fails toward REPLY");
+}
 
 console.log(`PASS conversation outcome-audit eval (${n} assertions)`);

@@ -48,7 +48,54 @@ export type OutcomeAnomaly = {
   // the stale-finding suppressor. Its job is to bound the hand-search: the offending reply is at/before
   // it (see scripts/already_shipped_guard.ts --at, which cannot locate the reply on its own).
   reportedAt?: string;
+  // human_correction_material only: was the message staff corrected an UNPROMPTED send (a cadence /
+  // proactive draft) rather than a reply to a customer turn? Set by correctedSendWasProactive below.
+  // The loop reads this to pick the right fix — and to know the finding is not reply-draft
+  // reproducible (reproduceConfirm.ts). Absent on every other dimension.
+  correctedSendWasProactive?: boolean;
 };
+
+/**
+ * Was the message staff corrected an UNPROMPTED (proactive) send rather than a reply?
+ *
+ * WHY (2026-08-03, loop tick on +17164368801): `human_correction_material` was handed to the loop
+ * uniformly as "parser few-shot + replay fixture", but 12 of 27 in-window corrections are edits to a
+ * PROACTIVE send — a cadence-ladder template or an unprompted update, drafted with no customer turn
+ * in front of it. On +17164368801 the "corrected draft" was FOLLOW_UP_MESSAGES[5], fired by the
+ * cadence tick 25s after a live phone call; the real fix was a post-call cadence breather (#229,
+ * d030f1c9), and no parser few-shot could ever have addressed it. Worse, the finding's last inbound
+ * was 34 days stale, so the reproduce-confirm sweep re-drafts an unrelated turn and can neither
+ * confirm nor clear it — the ghost re-surfaced for 19 days and cost a full loop iteration to diagnose.
+ *
+ * The test: walking back from the corrected message, the nearest message that is either an inbound or
+ * a real outbound TEXT send. An inbound ⇒ this was a reply. Anything else (or nothing) ⇒ proactive.
+ * Voice rows (call/summary/transcript) are skipped deliberately: a phone call is not a text send, and
+ * a draft that follows one is still unprompted by any customer TEXT — which is exactly the shape above.
+ *
+ * FAIL DIRECTION: toward "reply" (false). An unresolvable messageId, an empty history, or a pin we
+ * cannot locate all return false, leaving the finding classified exactly as it is today — reproduce-
+ * eligible and parser-steered. We only ever ADD the proactive label when we can prove it from history.
+ */
+export function correctedSendWasProactive(
+  conv: { messages?: Array<Record<string, any>> | null },
+  correctedMessageId: string | null | undefined
+): boolean {
+  const pin = String(correctedMessageId ?? "").trim();
+  if (!pin) return false;
+  const msgs = (conv?.messages ?? []).filter(Boolean);
+  const idx = msgs.findIndex(m => String(m?.id ?? "") === pin);
+  if (idx < 0) return false; // can't locate the corrected message → fail toward today's behavior
+  for (let i = idx - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m?.direction === "in") return false; // a customer turn preceded it → it was a reply
+    const provider = String(m?.provider ?? "");
+    const isVoiceRow = provider.startsWith("voice_");
+    if (m?.direction === "out" && !isVoiceRow && REAL_OUTBOUND_CONTACT_PROVIDERS.has(provider)) {
+      return true; // previous real send with no customer turn in between → unprompted
+    }
+  }
+  return true; // nothing but our own outbounds behind it → unprompted
+}
 
 const CATEGORY_BY_DIMENSION: Record<string, OutcomeCategory> = {
   appointment_confirmed_no_event: "state",
@@ -96,7 +143,7 @@ type AuditableConv = {
   inventoryWatches?: Array<{ status?: string | null }> | null;
   draftHeld?: { at?: string | null; reason?: string | null; heldKind?: string | null; frame?: string | null } | null;
   contextFidelityShadow?: { at?: string | null; frame?: string | null; severity?: string | null; reason?: string | null; draftPreview?: string | null } | null;
-  humanCorrection?: { at?: string | null; category?: string | null; reason?: string | null; steering?: string | null } | null;
+  humanCorrection?: { at?: string | null; category?: string | null; reason?: string | null; steering?: string | null; messageId?: string | null } | null;
   cadenceQualityShadow?: { at?: string | null; overall?: string | null; reason?: string | null; cadenceKind?: string | null } | null;
   messages?: Array<{ direction?: string | null; provider?: string | null; at?: string | null; body?: string | null; sid?: string | null; draftStatus?: string | null; feedback?: { rating?: string | null; at?: string | null } | null }> | null;
   questions?: Array<{ text?: string | null; status?: string | null; createdAt?: string | null }> | null;
@@ -269,12 +316,17 @@ export function auditConversationOutcome(conv: AuditableConv, opts: { now?: Date
   if (hc && Number.isFinite(hcAtMs)) {
     const ageDays = (now.getTime() - hcAtMs) / (1000 * 60 * 60 * 24);
     if (ageDays >= 0 && ageDays <= 21) {
+      const proactive = correctedSendWasProactive(conv, hc.messageId);
       out.push({
         ...base,
         dimension: "human_correction_material",
         severity: "P2",
         healed: false,
-        detail: `staff materially corrected the AI draft (${hc.category ?? "?"})${hc.reason ? ` — ${String(hc.reason).slice(0, 120)}` : ""}`,
+        // The send SHAPE is in the detail because that is the line `act_runner list` prints, and it
+        // flips the diagnosis: a corrected REPLY is a comprehension miss (parse the customer turn
+        // better); a corrected PROACTIVE send had no customer turn to parse at all.
+        detail: `staff materially corrected the AI draft (${hc.category ?? "?"}${proactive ? ", proactive send" : ""})${hc.reason ? ` — ${String(hc.reason).slice(0, 120)}` : ""}`,
+        correctedSendWasProactive: proactive,
         // The correction time is stamped as occurredAt (mirrors negative_feedback below): the corrected
         // draft is at/before it, so a fix commit that postdates it provably postdates the draft. Without
         // this these rows carried NO event time, so the already-shipped echo suppressor could never prove

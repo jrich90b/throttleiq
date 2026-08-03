@@ -165,7 +165,10 @@ export function suppressAlreadyShippedEchoes(
 }
 
 export function classifyOutcomeAnomaly(
-  anomaly: Pick<OutcomeAnomaly, "category" | "dimension" | "healed" | "severity">,
+  anomaly: Pick<
+    OutcomeAnomaly,
+    "category" | "dimension" | "healed" | "severity" | "correctedSendWasProactive"
+  >,
   opts: { persistent?: boolean; graduatedCategories?: Set<string> } = {}
 ): AnomalyClassification {
   const graduated = opts.graduatedCategories?.has(anomaly.dimension) ?? false;
@@ -326,6 +329,21 @@ export function classifyOutcomeAnomaly(
         rationale: `net-new state contradiction (${anomaly.dimension}) → fail-safe write-time guard / reconcile heal`
       };
     case "comprehension":
+      // A staff correction to an UNPROMPTED send is not a comprehension miss: there was no customer
+      // turn in front of the draft to parse. Steering it as "add a parser few-shot" sends the loop
+      // hunting a parser that cannot exist — on +17164368801 the corrected text was a cadence-ladder
+      // template fired 25s after a live call, and the real fix was a post-call cadence breather
+      // (#229). Same tier/action ladder (still a Tier-1 comprehension work order), corrected steering.
+      if (anomaly.dimension === "human_correction_material" && anomaly.correctedSendWasProactive === true) {
+        return {
+          tier: 1,
+          action: "parser_fix_candidate",
+          workOrder: true,
+          autoMergeEligible: graduated,
+          notify: true,
+          rationale: `${anomaly.dimension} on a PROACTIVE send (no customer turn behind the draft) → fix the proactive copy or what GATED the send (cadence ladder / trigger), NOT a parser few-shot; not reply-draft reproducible`
+        };
+      }
       // The draft judge HELD this turn and persisted its diagnosis (frame + steering) → an additive
       // parser few-shot + replay fixture. Customer-facing → notify Joe even as a Tier-1 candidate.
       return {
