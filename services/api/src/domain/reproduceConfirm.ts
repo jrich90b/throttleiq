@@ -85,6 +85,12 @@ export function selectReproduceCandidates(
     if (out.length >= max) break;
     const dimension = String(wo?.dimension ?? "").trim();
     if (!isReproduceEligibleDimension(dimension)) continue;
+    // A correction to a PROACTIVE send has no customer turn behind it, so "re-draft the last inbound
+    // and judge it" measures a DIFFERENT turn — on +17164368801 the last inbound was 34 days older
+    // than the corrected cadence draft. Such a replay can neither confirm nor clear the finding, so
+    // it burns replay budget and the fail-safe keeps the finding forever. Skip it here: skipping =
+    // KEPT/surfacing (identical to being unpinnable below), never suppressed.
+    if (wo?.correctedSendWasProactive === true) continue;
     const convId = String(wo?.convId ?? "").trim();
     if (!convId) continue;
     const key = findingKeyOf(convId, dimension);

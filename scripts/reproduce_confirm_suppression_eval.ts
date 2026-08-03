@@ -58,6 +58,27 @@ assert.equal(picked[1].pinnedMessageId, "msg_h_3");
 // Cap is honored and preserves rank (top-N only).
 assert.equal(selectReproduceCandidates(ranked, { max: 1 }).length, 1);
 assert.equal(selectReproduceCandidates(ranked, { max: 1 })[0].convId, "+1111");
+
+// --- 2b) A correction to a PROACTIVE send is skipped: "re-draft the last inbound" measures a
+// DIFFERENT turn (on +17164368801 the last inbound was 34 days older than the corrected cadence
+// draft), so the replay can neither confirm nor clear it — it only burns budget. Skipping = KEPT
+// and surfacing, exactly like an unpinned finding; it never suppresses anything.
+{
+  const withProactive = [
+    wo("+7164368801", "human_correction_material", "staff materially corrected the AI draft (wrong_intent, proactive send)", {
+      messageId: "msg_p_7",
+      correctedSendWasProactive: true
+    }),
+    wo("+8888", "human_correction_material", "staff corrected a reply", { messageId: "msg_r_8", correctedSendWasProactive: false }),
+    wo("+9999", "human_correction_material", "staff corrected, shape unknown", { messageId: "msg_u_9" })
+  ];
+  const sel = selectReproduceCandidates(withProactive, { max: 8 });
+  assert.deepEqual(
+    sel.map(c => c.convId),
+    ["+8888", "+9999"],
+    "a proactive-send correction is not replayed; a reply and an unlabelled correction still are"
+  );
+}
 assert.equal(selectReproduceCandidates([], { max: 8 }).length, 0);
 assert.equal(selectReproduceCandidates(null, { max: 8 }).length, 0);
 
