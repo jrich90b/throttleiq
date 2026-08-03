@@ -4652,6 +4652,171 @@ export function decideCadenceStart(input: CadenceStartInput): CadenceStartDecisi
   };
 }
 
+// MAY THIS TRIGGER REPLACE THE CHASE ALREADY RUNNING, AND WITH WHAT TEMPO — one referee for what
+// were four independent answers.
+//
+// WHY THIS IS NOT `decideCadenceStart`. That referee guards the three exported ENTRY POINTS
+// (`startFollowUpCadence`, `startPostSaleCadence`, `scheduleLongTermFollowUp`) and its
+// `standard_ramp` lane REFUSES outright when any cadence record exists, active or stopped. The
+// four sites below never go through those entry points: each MINTS the whole
+// `conv.followUpCadence` object itself, so `decideCadenceStart`'s refusal never applies to them.
+// Two philosophies in one field. They are named here side by side rather than merged, because
+// merging them would be a behavior change and this is a behavior-PRESERVING un-stacking.
+//
+// THE THREE PRESERVED DIVERGENCES:
+//   1. ADMISSION. Three of the four (`finance_declined`, `license_credit_pending`,
+//      `seller_photo_details_request`) test the running chase not at all — they overwrite whatever
+//      is there, including a `stopped` cadence somebody deliberately ended, which is exactly what
+//      `decideCadenceStart` refuses to do. Only `over_eager_engaged_realign` looks at the record
+//      first, and it is the odd one out because it is a HEALER: it exists to downshift a chase, so
+//      it has to know which chase it is downshifting.
+//   2. THE INVITE BUDGET. `finance_declined` alone omits `scheduleInviteCount` / `scheduleMuted`
+//      from the record entirely, where the other three write 0 / false. Every reader coalesces
+//      (`cad.scheduleInviteCount ?? 0`, and an absent `scheduleMuted` is falsy), so today the two
+//      shapes behave the same — but they are not the same STORED record, so the omission is
+//      preserved exactly rather than tidied into a uniform shape.
+//   3. THE ANCHOR. `license_credit_pending` anchors the cadence at its own FUTURE due date; every
+//      other lane anchors at the clock read. `anchorAt` is what the ladder-age math reads, and a
+//      future anchor makes `ageDays` negative, which `decideBurnedCadenceLadderRealign` treats as
+//      "no_anchor" and declines to touch. So that lane is exempt from ladder realignment for as
+//      long as its anchor is in the future — the fewer-corrections direction, so preserved.
+//
+// FAIL DIRECTION. Every `replace: true` here throws away a chase and lays a new one, which can
+// only ever START proactive texting. So an unrecognized trigger is REFUSED rather than waved
+// through: a caller that forgets to register its lane loses a cadence, it never gains one.
+//
+// PURE + CLOCK-FREE: the caller supplies the anchor and timezone to the applier; this decides only
+// whether the replacement happens and what shape the record takes.
+
+export type CadenceReplacementTrigger =
+  | "finance_declined" // a finance call came back not-approved — restart on the slow nurture
+  | "license_credit_pending" // staff note: licence + credit app pending — check back on a date
+  | "seller_photo_details_request" // manual outbound asked a seller for photos/details
+  | "over_eager_engaged_realign"; // heal a chase bumped to `engaged` against the lead's own timeline
+
+export type CadenceReplacementInput = {
+  trigger: CadenceReplacementTrigger | string;
+  /** The chase already on the lead, exactly as stored. Absent = nothing to replace. */
+  existing?: { status?: string | null; kind?: string | null } | null;
+  /**
+   * Realign lane only — the rest ignore every field below. The lead's OWN structured purchase
+   * timeframe caps the tempo to long_term (`cadenceTempoCappedToLongTerm`), computed by the caller
+   * so this stays a pure data decision.
+   */
+  tempoCappedToLongTerm?: boolean;
+  /** Realign lane only: closed, sold, or already booked in — all three end the healing. */
+  conversationClosed?: boolean;
+  appointmentBooked?: boolean;
+  /** Realign lane only: `followUp.mode` and `followUp.reason`, exactly as stored. */
+  followUpMode?: string | null;
+  followUpReason?: string | null;
+  /** Realign lane only: the lead is holding for an inventory watch, which owns its own tempo. */
+  hasInventoryWatch?: boolean;
+};
+
+export type CadenceReplacementDecision = {
+  /** Mint a fresh cadence record over whatever is there. False = leave the lead alone. */
+  replace: boolean;
+  /** Tempo of the minted chase. Only set when `replace`. */
+  kind?: "engaged" | "long_term";
+  /** Which day-offset ladder the first due date comes off. Only set when `replace`. */
+  ladder?: "standard" | "long_term" | "finance_declined";
+  /**
+   * `now` = anchor at the applier's clock read and compute the due date off the ladder.
+   * `due` = anchor at the caller's own precomputed due date and use it verbatim (divergence 3).
+   */
+  anchor?: "now" | "due";
+  /** Whether the minted record carries `scheduleInviteCount` / `scheduleMuted` (divergence 2). */
+  writeInviteBudget?: boolean;
+  /** Whether the minted record carries the caller's `contextTag` / `contextTagUpdatedAt`. */
+  writeContextTag?: boolean;
+  /** Names the preserved disagreement when this lane is the odd one out for THIS input. */
+  divergence: string | null;
+  why: string;
+};
+
+/** The per-lane record shape, preserved exactly as each site wrote it inline. */
+const CADENCE_REPLACEMENT_SHAPES: Record<
+  CadenceReplacementTrigger,
+  Required<Pick<CadenceReplacementDecision, "kind" | "ladder" | "anchor" | "writeInviteBudget" | "writeContextTag">>
+> = {
+  finance_declined: {
+    kind: "long_term",
+    ladder: "finance_declined",
+    anchor: "now",
+    writeInviteBudget: false,
+    writeContextTag: false
+  },
+  license_credit_pending: {
+    kind: "engaged",
+    ladder: "standard",
+    anchor: "due",
+    writeInviteBudget: true,
+    writeContextTag: true
+  },
+  seller_photo_details_request: {
+    kind: "engaged",
+    ladder: "standard",
+    anchor: "now",
+    writeInviteBudget: true,
+    writeContextTag: true
+  },
+  over_eager_engaged_realign: {
+    kind: "long_term",
+    ladder: "long_term",
+    anchor: "now",
+    writeInviteBudget: true,
+    writeContextTag: false
+  }
+};
+
+/** Modes that own the schedule outright — the healer must not touch a chase a human is holding. */
+const CADENCE_REALIGN_BLOCKING_MODES = new Set(["manual_handoff", "paused_indefinite", "holding_inventory"]);
+
+export function decideCadenceReplacement(input: CadenceReplacementInput): CadenceReplacementDecision {
+  const trigger = String(input?.trigger ?? "").trim() as CadenceReplacementTrigger;
+  const shape = CADENCE_REPLACEMENT_SHAPES[trigger];
+  if (!shape) {
+    return { replace: false, divergence: null, why: `unrecognized cadence-replacement trigger "${trigger}" — refused` };
+  }
+  const existingStatus = String(input.existing?.status ?? "").trim().toLowerCase();
+  const existingKind = String(input.existing?.kind ?? "").trim().toLowerCase();
+
+  if (trigger === "over_eager_engaged_realign") {
+    // The healer's own admission test, the only one of the four that reads the running chase.
+    let refusal: string | null = null;
+    if (existingStatus !== "active" || existingKind !== "engaged") refusal = "no active engaged chase to downshift";
+    else if (input.tempoCappedToLongTerm !== true) refusal = "the lead's own timeframe does not cap the tempo";
+    else if (input.conversationClosed === true) refusal = "the conversation is closed or sold";
+    else if (input.appointmentBooked === true) refusal = "the lead is already booked in";
+    else if (CADENCE_REALIGN_BLOCKING_MODES.has(String(input.followUpMode ?? "").trim())) {
+      refusal = `a ${String(input.followUpMode).trim()} thread owns its own schedule`;
+    } else if (String(input.followUpReason ?? "").trim() === "inventory_watch" || input.hasInventoryWatch === true) {
+      refusal = "an inventory watch owns this lead's tempo";
+    }
+    if (refusal) return { replace: false, divergence: null, why: `over_eager_engaged_realign: refused — ${refusal}` };
+    return {
+      replace: true,
+      ...shape,
+      divergence: null,
+      why: "over_eager_engaged_realign: re-anchored an over-eager engaged chase onto the long_term nurture"
+    };
+  }
+
+  // The other three lanes: their trigger conditions live upstream (the finance signal, the note's
+  // own cues, `maybeStartCadence`'s early returns) and are about the EVENT, not the chase. Nothing
+  // here tests the running cadence at all — divergence 1, preserved.
+  const overwritesADeliberateStop = existingStatus === "stopped";
+  return {
+    replace: true,
+    ...shape,
+    divergence: overwritesADeliberateStop ? "replaces_a_deliberately_stopped_chase" : null,
+    why: overwritesADeliberateStop
+      ? `${trigger}: replaced a stopped chase — this lane does not ask whether the last one was ended on purpose`
+      : `${trigger}: laid a fresh ${shape.kind} chase over whatever was running`
+  };
+}
+
 // ===================================================================================================
 // MARKING AN APPOINTMENT CONFIRMED — "when we stamp an appointment `confirmed`, what else does the
 // record get: is the customer's word on file (`acknowledged`), and does the reschedule latch clear?"

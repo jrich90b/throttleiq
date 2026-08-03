@@ -21,6 +21,9 @@ import {
   type CloseoutReversalCause,
   type CloseoutReversalDecision,
   decideCadenceLifecycle,
+  decideCadenceReplacement,
+  type CadenceReplacementTrigger,
+  type CadenceReplacementDecision,
   type CadenceLifecycleVerb,
   type CadenceLifecycleDecision,
   decideReschedulePendingLatch,
@@ -4731,26 +4734,22 @@ export function realignOverEagerEngagedCadence(
   timeZone: string,
   now: Date = new Date()
 ): boolean {
-  const cad = conv?.followUpCadence;
-  if (!cad || cad.status !== "active" || cad.kind !== "engaged") return false;
-  // Only when the lead's OWN stated timeframe caps them to long_term — respect a real near-term
-  // engaged buyer (0-3mo / unknown), only downshift the explicitly-far-out ones.
-  if (!cadenceTempoCappedToLongTerm(conv.lead)) return false;
-  if (conv.closedAt || conv.closedReason || (conv as any).sale?.soldAt) return false;
-  if (conv.appointment?.bookedEventId) return false;
-  const mode = String(conv.followUp?.mode ?? "");
-  if (mode === "manual_handoff" || mode === "paused_indefinite" || mode === "holding_inventory") return false;
-  if (conv.followUp?.reason === "inventory_watch" || conv.inventoryWatch) return false;
-  const anchorAtIso = now.toISOString();
-  conv.followUpCadence = {
-    status: "active",
-    anchorAt: anchorAtIso,
-    nextDueAt: computeFollowUpDueAt(anchorAtIso, LONG_TERM_DAY_OFFSETS[0], timeZone),
-    stepIndex: 0,
-    kind: "long_term",
-    scheduleInviteCount: 0,
-    scheduleMuted: false
-  };
+  // The admission test now lives in `decideCadenceReplacement` alongside the three lanes that do
+  // NOT test the running chase — that contrast is the point (divergence 1).
+  const decision = applyCadenceReplacement(conv, {
+    trigger: "over_eager_engaged_realign",
+    anchorAtIso: now.toISOString(),
+    timeZone,
+    realign: {
+      // Only when the lead's OWN stated timeframe caps them to long_term — respect a real
+      // near-term engaged buyer (0-3mo / unknown), only downshift the explicitly-far-out ones.
+      tempoCappedToLongTerm: cadenceTempoCappedToLongTerm(conv.lead),
+      conversationClosed: Boolean(conv.closedAt || conv.closedReason || (conv as any).sale?.soldAt),
+      appointmentBooked: Boolean(conv.appointment?.bookedEventId),
+      hasInventoryWatch: Boolean(conv.inventoryWatch)
+    }
+  });
+  if (!decision.replace) return false;
   conv.updatedAt = nowIso();
   scheduleSave();
   return true;
@@ -5082,6 +5081,81 @@ export function applyCadenceRevival(
     conv.followUpCadence.contextTag = input.engagedContextTag;
     conv.followUpCadence.contextTagUpdatedAt = input.anchorAtIso;
   }
+}
+
+// The ONE place a trigger throws away the chase already running and mints a whole new one — the
+// four former copies (finance declined, the licence/credit-pending staff note, the manual-outbound
+// seller-photo request, and the over-eager-engaged healer) now ask `decideCadenceReplacement`
+// instead of each hand-building the record. See that referee in routeStateReducer.ts for the three
+// divergences it preserves, and for why these four never go through `startFollowUpCadence`.
+//
+// The record's key ORDER matches what each site wrote inline, so the persisted JSON is unchanged.
+//
+// Deliberately does NOT stamp `conv.updatedAt` or call `scheduleSave()` — three of the four call
+// sites already save around this, and the healer stamps for itself on a true return. Adding a
+// write here would change persisted timestamps, which a cleanup must not do.
+export function applyCadenceReplacement(
+  conv: Conversation,
+  input: {
+    trigger: CadenceReplacementTrigger;
+    /** Clock read for the `now` lanes; also the `contextTagUpdatedAt` stamp. */
+    anchorAtIso: string;
+    timeZone: string;
+    /** `license_credit_pending` only: the caller's own precomputed due date (the `due` anchor). */
+    dueAtIso?: string | null;
+    /** The tag the two engaged lanes carry. Ignored by the lanes that write no tag. */
+    contextTag?: string | null;
+    /** Realign lane only — see the referee's input docs. */
+    realign?: {
+      tempoCappedToLongTerm: boolean;
+      conversationClosed: boolean;
+      appointmentBooked: boolean;
+      hasInventoryWatch: boolean;
+    };
+  }
+): CadenceReplacementDecision {
+  const decision = decideCadenceReplacement({
+    trigger: input.trigger,
+    existing: conv.followUpCadence
+      ? { status: conv.followUpCadence.status, kind: conv.followUpCadence.kind }
+      : null,
+    tempoCappedToLongTerm: input.realign?.tempoCappedToLongTerm,
+    conversationClosed: input.realign?.conversationClosed,
+    appointmentBooked: input.realign?.appointmentBooked,
+    followUpMode: conv.followUp?.mode ?? null,
+    followUpReason: conv.followUp?.reason ?? null,
+    hasInventoryWatch: input.realign?.hasInventoryWatch
+  });
+  if (!decision.replace) return decision;
+
+  const offsets =
+    decision.ladder === "finance_declined"
+      ? FINANCE_DECLINED_DAY_OFFSETS
+      : decision.ladder === "long_term"
+        ? LONG_TERM_DAY_OFFSETS
+        : FOLLOW_UP_DAY_OFFSETS;
+  const anchorAt = decision.anchor === "due" ? String(input.dueAtIso ?? input.anchorAtIso) : input.anchorAtIso;
+  const nextDueAt =
+    decision.anchor === "due" ? anchorAt : computeFollowUpDueAt(anchorAt, offsets[0], input.timeZone);
+
+  const record = {
+    status: "active",
+    anchorAt,
+    nextDueAt,
+    stepIndex: 0,
+    kind: decision.kind
+  } as NonNullable<Conversation["followUpCadence"]>;
+  if (decision.writeContextTag) {
+    record.contextTag = input.contextTag ?? undefined;
+    record.contextTagUpdatedAt = input.anchorAtIso;
+  }
+  // Divergence 2: the finance lane leaves these two keys off the record entirely.
+  if (decision.writeInviteBudget) {
+    record.scheduleInviteCount = 0;
+    record.scheduleMuted = false;
+  }
+  conv.followUpCadence = record;
+  return decision;
 }
 
 // The ONE place a recorded sale closes the thread and settles the lead's unit hold — the two

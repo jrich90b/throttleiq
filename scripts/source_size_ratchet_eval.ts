@@ -113,7 +113,12 @@ const CEILINGS: Ceiling[] = [
     // NOTE: the first draft of this slice put the decide call INLINE in index.ts and the file GREW
     // by 24 lines. The ceiling caught it, which is exactly its job — the fix was to move the writes
     // behind the store wrapper like every previous un-stacking, not to raise the number.
-    max: 71_414,
+    // 71_414 -> 71_404. The cadence-REPLACEMENT un-stacking: the three inline "mint a whole new
+    // followUpCadence over whatever is running" object literals (finance declined, the
+    // licence/credit-pending staff note, the manual-outbound seller-photo request) collapse into
+    // calls to applyCadenceReplacement (conversationStore), which asks decideCadenceReplacement
+    // (routeStateReducer). The fourth site was already in the store.
+    max: 71_404,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
