@@ -113,4 +113,90 @@ assert.ok(
   "submitSold must keep refusing a unit-less sale; the outcome path's silent lead.vehicle fallback is the bug being fixed"
 );
 
-console.log("PASS sold_outcome_unit_picker_eval — 14 checks");
+// --- 4) The CRM & Calendar Updates panel (8/3 wiring triage, theme A1). ---
+// The questions panel offers the same "Sold" and used to record NOTHING: the backend mapped it to
+// a bare archive (no conv.sale — the funnel scored the delivered bike LOST), and the frontend
+// chained a follow-up input for "hold" only.
+
+const questionDone = region("async function markQuestionDone(q: QuestionItem)", 1600);
+assert.ok(
+  /outcome === "sold"/.test(questionDone) && /openSoldModal\(/.test(questionDone),
+  "markQuestionDone must chain a 'sold' outcome to openSoldModal — the CRM & Calendar Updates " +
+    "panel is a third door to 'sold' and needs the same unit picker"
+);
+assert.ok(
+  /openHoldModal\(/.test(questionDone),
+  "the pre-existing 'hold' chain in markQuestionDone must survive"
+);
+
+// Backend: the mapping + the stub logic live in conversationStore (evaluable, and index.ts is at
+// its size-ratchet ceiling); the endpoint arm just composes housekeeping + the referee'd helper.
+const { deriveAttendanceOutcomeAction, applyUnitLessSoldSaleStub } = await import(
+  "../services/api/src/domain/conversationStore.ts"
+);
+assert.equal(
+  deriveAttendanceOutcomeAction("sold", null),
+  "archive_sold",
+  "a sold outcome must map to archive_sold, not the bare archive that recorded no sale"
+);
+assert.equal(
+  deriveAttendanceOutcomeAction("sold", "resume"),
+  "resume",
+  "an explicit followUpAction must still win over the outcome-derived one"
+);
+assert.equal(
+  deriveAttendanceOutcomeAction("no_show", null),
+  "pause_next_business_day",
+  "Joe 2026-07-02: a no-show re-engages the next business day — the lift must not lose this"
+);
+
+// The helper stamps a refereed unit-less stub and never overwrites a real sale.
+const stubConv: any = { id: "t", leadKey: "t", mode: "suggest", messages: [] };
+const stubDecision = applyUnitLessSoldSaleStub(stubConv, { nowIso: "2026-08-03T16:00:00.000Z" });
+assert.equal(stubConv.sale?.soldAt, "2026-08-03T16:00:00.000Z", "the stub must stamp sale.soldAt");
+assert.equal(stubConv.closedReason, "sold", "the referee's final closedReason is 'sold'");
+assert.equal(stubConv.sale?.stockId, undefined, "no unit may be invented");
+assert.equal(stubDecision?.releaseHold, false, "unit-less: never release a hold nobody matched");
+const keepSale: any = {
+  id: "t2",
+  leadKey: "t2",
+  mode: "suggest",
+  messages: [],
+  sale: { soldAt: "2026-07-01T00:00:00.000Z", stockId: "S13-25" }
+};
+assert.equal(
+  applyUnitLessSoldSaleStub(keepSale, { nowIso: "2026-08-03T16:00:00.000Z" }),
+  null,
+  "an already-recorded sale must never be overwritten by the stub"
+);
+assert.equal(keepSale.sale.stockId, "S13-25", "the real unit survives");
+
+// And the endpoint arm actually calls the helper (the wiring, not just the policy).
+const API_PATH = "services/api/src/index.ts";
+const api = fs.readFileSync(API_PATH, "utf8");
+const archiveSoldStart = api.indexOf('if (action === "archive_sold") {');
+assert.notEqual(archiveSoldStart, -1, "the archive_sold action arm must exist");
+const archiveSoldArm = api.slice(archiveSoldStart, archiveSoldStart + 700);
+assert.ok(
+  /applyUnitLessSoldSaleStub\(conv,/.test(archiveSoldArm),
+  "archive_sold must stamp the sale via applyUnitLessSoldSaleStub (the referee'd helper)"
+);
+assert.ok(
+  /deriveAttendanceOutcomeAction\(outcome, followUpAction\)/.test(api),
+  "the questions endpoint must derive its action through deriveAttendanceOutcomeAction"
+);
+
+// --- 5) Re-open confirms before erasing a recorded sale (theme A4). ---
+// The server erases conv.sale on reopen; Delete has a confirm, this destroys a closed-won record
+// just as permanently. Gated on a sale existing so archived non-sale threads stay one click.
+const reopenFn = region("async function reopenConv()", 1200);
+assert.ok(
+  /window\.confirm\(/.test(reopenFn),
+  "reopenConv must confirm before the server erases the recorded sale"
+);
+assert.ok(
+  /sale\?\.soldAt/.test(reopenFn),
+  "the reopen confirm must be gated on a sale actually existing — a non-sale reopen stays one click"
+);
+
+console.log("PASS sold_outcome_unit_picker_eval — 30 checks");

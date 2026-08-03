@@ -992,6 +992,8 @@ import {
   addInternalQuestion,
   listOpenQuestions,
   markQuestionDone,
+  applyUnitLessSoldSaleStub,
+  deriveAttendanceOutcomeAction,
   markTodoDone,
   snoozeTodo,
   setTodoAutoCloseCheck,
@@ -45052,6 +45054,15 @@ app.post("/questions/:convId/:questionId/done", (req, res) => {
       closeConversation(conv, "attendance_archive");
       return;
     }
+    if (action === "archive_sold") {
+      // Sold from the CRM & Calendar Updates panel: the bare archive recorded NO sale, so the
+      // funnel scored the delivered bike LOST. Referee'd unit-less stub (see the helper); the
+      // console chains the unit picker right after this save, which overwrites the stub.
+      stopFollowUpCadence(conv, "attendance_archive");
+      closeConversation(conv, "attendance_archive");
+      applyUnitLessSoldSaleStub(conv, { nowIso });
+      return;
+    }
     if (action === "pause_indef") {
       stopFollowUpCadence(conv, "attendance_pause_indef");
       setFollowUpMode(conv, "paused_indefinite", "attendance_pause_indef");
@@ -45083,18 +45094,7 @@ app.post("/questions/:convId/:questionId/done", (req, res) => {
     }
   };
 
-  const derivedAction = () => {
-    if (followUpAction) return followUpAction;
-    if (!outcome) return undefined;
-    if (outcome === "sold") return "archive";
-    if (outcome === "hold") return "pause_indef";
-    if (outcome === "undecided") return "resume";
-    // Joe-approved 2026-07-02: a no-show re-engages the NEXT BUSINESS DAY (1-2 days), not 72h flat.
-    if (outcome === "no_show") return "pause_next_business_day";
-    return undefined;
-  };
-
-  void applyAction(derivedAction());
+  void applyAction(deriveAttendanceOutcomeAction(outcome, followUpAction));
   res.json({ ok: true, question: q });
 });
 

@@ -53,9 +53,16 @@ assert.ok(
   /args\.primaryStatus === "did_not_show"\s*\?\s*resolveNoShowFollowUpDueAt\(now, timezone\)/.test(index),
   "the structured outcome path must anchor a did_not_show fallback on the next business day"
 );
+// 8/3: the outcome->action mapping lifted to conversationStore (deriveAttendanceOutcomeAction,
+// index.ts size-ratchet) — pin the policy where it lives now, and the wiring in index.ts.
+const store = fs.readFileSync("services/api/src/domain/conversationStore.ts", "utf8");
 assert.ok(
-  /if \(outcome === "no_show"\) return "pause_next_business_day";/.test(index),
+  /if \(outcome === "no_show"\) return "pause_next_business_day";/.test(store),
   "the attendance-question path must derive pause_next_business_day for a no-show (72h retired)"
+);
+assert.ok(
+  /deriveAttendanceOutcomeAction\(outcome, followUpAction\)/.test(index),
+  "the questions endpoint must route through deriveAttendanceOutcomeAction so the mapping applies"
 );
 assert.ok(
   /action === "pause_next_business_day"\s*\?\s*resolveNoShowFollowUpDueAt\(nowIso, tz\)/.test(index),
