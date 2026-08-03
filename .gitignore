@@ -67,3 +67,10 @@ skills-lock.json
 # worktrees Claude Code creates for `claude --worktree` / `isolation: worktree` subagents.
 # (Our scheduled routines put theirs OUTSIDE the repo — see docs/routine_worktrees.md.)
 .claude/worktrees/
+
+# Marker that `scripts/routine_worktree.ts` writes at the ROOT of each per-routine worktree —
+# `remove` refuses a directory without it. It necessarily lives INSIDE the checkout, so without
+# this line every routine worktree starts life with an untracked file at its root: noise for a
+# routine told to stage only what it changed, and one careless `git add` from being committed.
+# Caught 2026-08-03 on the first real pilot run, right after #476 merged.
+.throttleiq-routine-worktree
