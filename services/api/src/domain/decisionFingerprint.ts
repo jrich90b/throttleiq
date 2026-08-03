@@ -438,6 +438,31 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     }, ["decideCadenceReplacement"]);
   }
 
+  // Added 2026-08-03 with the appointment-ATTRIBUTION un-stacking. PROBE: the `explicit` lane is
+  // sampled with a FIXED supplied attribution (the record a booking path hands in is a turn input,
+  // not stored state), so what varies per lead is only whether an attribution is already on file —
+  // which is the divergence that lane owns. The `inferred` lane reads entirely off stored state.
+  for (const lane of ["explicit", "inferred"] as const) {
+    add(`appointmentAttribution:${lane}`, conv => {
+      if (typeof reducer.decideAppointmentAttribution !== "function") return undefined;
+      const decision = reducer.decideAppointmentAttribution({
+        lane, // PROBE
+        hasAppointment: Boolean(conv?.appointment),
+        hasExistingAttribution: Boolean(conv?.appointment?.bookedBy),
+        // PROBE: fixed, documented turn input — see the note above.
+        supplied: lane === "explicit" ? { actor: "human", channel: "manual" } : null,
+        confirmedBy: conv?.appointment?.confirmedBy ?? null
+      });
+      return {
+        write: decision.write,
+        actor: decision.bookedBy?.actor ?? null,
+        channel: decision.bookedBy?.channel ?? null,
+        inferred: decision.bookedBy?.inferred ?? null,
+        divergence: decision.divergence
+      };
+    }, ["decideAppointmentAttribution"]);
+  }
+
   // Added 2026-08-02 with the SOLD-closeout un-stacking. Sampled once WITH a named unit and once
   // WITHOUT, because that is the whole disagreement between the two paths: the appointment-outcome
   // path refuses a sale with no unit, the console endpoint accepts one and leaves the lead's hold

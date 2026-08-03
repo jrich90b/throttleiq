@@ -613,8 +613,13 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 //   finance declined, the licence/credit-pending staff note, the manual-outbound seller-photo
 //   request, and the over-eager-engaged healer. All four now ask `decideCadenceReplacement` through
 //   `applyCadenceReplacement`. `followUpCadence` 9 -> 5. Three divergences preserved and named.
+// 124 -> 122: the appointment-ATTRIBUTION un-stacking (this commit). Two writers of
+//   `appointment.bookedBy` answering different halves of one question — `setAppointmentBookedBy`
+//   stores an attribution a booking path hands in, `onAppointmentBooked` INFERS one from
+//   `confirmedBy` when nobody did (the live path for 11 of the 18 booking call sites). Both now ask
+//   `decideAppointmentAttribution` through `applyAppointmentAttribution`. `appointment` 9 -> 7.
 // RATCHET DOWN ONLY.
-const UNREFEREED_WRITER_BASELINE = 124;
+const UNREFEREED_WRITER_BASELINE = 122;
 
 {
   const sourceFiles: SourceFile[] = [];

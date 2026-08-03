@@ -21,6 +21,10 @@ import {
   type CloseoutReversalCause,
   type CloseoutReversalDecision,
   decideCadenceLifecycle,
+  decideAppointmentAttribution,
+  type AppointmentAttributionLane,
+  type AppointmentAttributionRecord,
+  type AppointmentAttributionDecision,
   decideCadenceReplacement,
   type CadenceReplacementTrigger,
   type CadenceReplacementDecision,
@@ -7503,4 +7507,40 @@ export function deleteConversation(convId: string): boolean {
   removedConversationIds.add(conv.id);
   scheduleSave();
   return true;
+}
+
+// The ONE place `appointment.bookedBy` is written — the two former copies (index.ts's
+// `setAppointmentBookedBy`, which records an attribution a booking path handed in, and
+// `onAppointmentBooked`'s fallback, which infers one from `confirmedBy` when nobody did) now ask
+// `decideAppointmentAttribution`. See that referee in routeStateReducer.ts for the three
+// divergences it preserves — including that a CUSTOMER's confirmation is filed as the agent's
+// booking.
+//
+// The two lanes write DIFFERENT key shapes (six keys explicit, three inferred) and that is
+// preserved exactly — the referee returns the record, this only stores it.
+//
+// Deliberately does NOT stamp `conv.updatedAt` or save: every call site already stamps and saves
+// around this, and adding a write here would change persisted timestamps.
+export function applyAppointmentAttribution(
+  conv: Conversation,
+  input: {
+    lane: AppointmentAttributionLane;
+    /** Explicit lane only: the attribution the booking path handed in. */
+    supplied?: Partial<AppointmentAttributionRecord> | null;
+  }
+): AppointmentAttributionDecision {
+  const decision = decideAppointmentAttribution({
+    lane: input.lane,
+    hasAppointment: Boolean(conv.appointment),
+    hasExistingAttribution: Boolean(conv.appointment?.bookedBy),
+    supplied: input.supplied,
+    confirmedBy: conv.appointment?.confirmedBy ?? null
+  });
+  if (decision.write && decision.bookedBy && conv.appointment) {
+    // The referee speaks in plain strings (it carries no store types); the actor/channel unions are
+    // narrowed here. Every value it can produce comes from a caller-supplied record that was already
+    // this type, or from the inference table, whose four values are all members of the unions.
+    conv.appointment.bookedBy = decision.bookedBy as AppointmentBookedBy;
+  }
+  return decision;
 }

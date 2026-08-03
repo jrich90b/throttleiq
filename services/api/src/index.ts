@@ -948,6 +948,7 @@ import {
   applyCadenceQuietWindow,
   applyCadenceRevival,
   applyCadenceReplacement,
+  applyAppointmentAttribution,
   applySoldCloseout,
   resolveNoShowFollowUpDueAt,
   pauseFollowUpCadence,
@@ -12425,15 +12426,7 @@ function setAppointmentBookedBy(
   conv: Conversation,
   bookedBy: NonNullable<Conversation["appointment"]>["bookedBy"]
 ) {
-  if (!conv.appointment || !bookedBy) return;
-  conv.appointment.bookedBy = {
-    actor: bookedBy.actor,
-    channel: bookedBy.channel,
-    userId: bookedBy.userId ?? undefined,
-    userName: bookedBy.userName ?? undefined,
-    sourceMessageId: bookedBy.sourceMessageId ?? undefined,
-    inferred: bookedBy.inferred === true ? true : undefined
-  };
+  applyAppointmentAttribution(conv, { lane: "explicit", supplied: bookedBy });
 }
 
 function closeAppointmentRelatedCallbackReminders(conv: any): number {
@@ -12456,14 +12449,7 @@ function closeAppointmentRelatedCallbackReminders(conv: any): number {
 }
 
 function onAppointmentBooked(conv: any) {
-  if (conv?.appointment && !conv.appointment.bookedBy) {
-    const confirmedBy = String(conv.appointment.confirmedBy ?? "").toLowerCase();
-    if (confirmedBy === "salesperson") {
-      conv.appointment.bookedBy = { actor: "human", channel: "manual", inferred: true };
-    } else if (confirmedBy === "customer") {
-      conv.appointment.bookedBy = { actor: "ai", channel: "sms", inferred: true };
-    }
-  }
+  applyAppointmentAttribution(conv, { lane: "inferred" });
   if (conv?.closedReason === "sold" || conv?.sale?.soldAt || conv?.followUpCadence?.kind === "post_sale") {
     return;
   }
