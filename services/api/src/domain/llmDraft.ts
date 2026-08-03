@@ -1,6 +1,7 @@
 // services/api/src/domain/llmDraft.ts
 import fs from "node:fs";
 import path from "node:path";
+import { isParserFlagEnabled } from "./llmFlags.js";
 import { fileURLToPath } from "node:url";
 import OpenAI from "openai";
 import type { Conversation } from "./conversationStore.js";
@@ -7784,8 +7785,7 @@ export async function parseTradePayoffWithLLM(args: {
 }): Promise<TradePayoffParse | null> {
   const useLLM =
     process.env.LLM_ENABLED === "1" &&
-    (process.env.LLM_TRADE_PAYOFF_PARSER_ENABLED === "1" ||
-      process.env.LLM_UNIFIED_SLOT_PARSER_ENABLED === "1") &&
+    isParserFlagEnabled("LLM_TRADE_PAYOFF_PARSER_ENABLED") &&
     !!process.env.OPENAI_API_KEY;
   if (!useLLM) return null;
 
@@ -10815,8 +10815,7 @@ export async function parseTradeTargetValueWithLLM(args: {
 }): Promise<TradeTargetValueParse | null> {
   const useLLM =
     process.env.LLM_ENABLED === "1" &&
-    (process.env.LLM_TRADE_TARGET_VALUE_PARSER_ENABLED === "1" ||
-      process.env.LLM_UNIFIED_SLOT_PARSER_ENABLED === "1") &&
+    isParserFlagEnabled("LLM_TRADE_TARGET_VALUE_PARSER_ENABLED") &&
     !!process.env.OPENAI_API_KEY;
   if (!useLLM) return null;
 
@@ -15088,8 +15087,7 @@ export async function parseSemanticSlotsWithLLM(args: {
 }): Promise<SemanticSlotParse | null> {
   const useLLM =
     process.env.LLM_ENABLED === "1" &&
-    (process.env.LLM_SEMANTIC_SLOT_PARSER_ENABLED === "1" ||
-      process.env.LLM_UNIFIED_SLOT_PARSER_ENABLED === "1") &&
+    isParserFlagEnabled("LLM_SEMANTIC_SLOT_PARSER_ENABLED") &&
     !!process.env.OPENAI_API_KEY;
   if (!useLLM) return null;
 

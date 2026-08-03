@@ -197,7 +197,13 @@ export function decideCadenceQualityGate(input: {
   return { action, live: !!input.enabled, reason: input.enabled ? `live_${action}` : `shadow_would_${action}` };
 }
 
-/** Reads CADENCE_QUALITY_JUDGE_ENABLED. Default OFF (dark) — never changes a live cadence draft. */
+/**
+ * Reads CADENCE_QUALITY_JUDGE_ENABLED. Default OFF. When ON it is a LIVE switch, equivalent to
+ * CADENCE_QUALITY_ENFORCE (the two are OR'd at the decider's call site) — before 8/3 this flag
+ * fed only the "should the judge run at all" gate, which shadow-default already held open, so
+ * setting it did NOTHING while its own doc promised live promotion (triage theme D1, the
+ * NO_RESPONSE_JUDGE_ENABLED class).
+ */
 export function isCadenceQualityJudgeEnabled(): boolean {
   const raw = String(process.env.CADENCE_QUALITY_JUDGE_ENABLED ?? "").trim().toLowerCase();
   return raw === "1" || raw === "true" || raw === "yes";

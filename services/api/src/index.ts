@@ -5313,7 +5313,7 @@ async function runCadenceQualityJudgeShadow(
     // see domain/cadenceQualityConsensus.ts). Shadow keeps ONE sample. `sale` = the unit actually
     // BOUGHT, without which a post-sale touch naming the right bike read as a mismatch and was
     // suppressed (+17168614216, 2026-08-01) — see cadenceQualityFacts.ts.
-    const enforce = isCadenceQualityEnforceEnabled();
+    const enforce = isCadenceQualityEnforceEnabled() || isCadenceQualityJudgeEnabled();
     const consensus = await sampleCadenceQualityConsensus(
       () => judgeCadenceQualityWithLLM({
         message: text, channel, cadenceKind, history: buildHistory(conv, 8),
