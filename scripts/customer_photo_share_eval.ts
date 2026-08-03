@@ -24,6 +24,7 @@ const {
   isSalesPhotoShareContext,
   isSalesPhotoShareConversation,
   isTradePhotoShareConversation,
+  resolveCustomerPhotoShareFrame,
   buildTradePhotoShareReply,
   buildTradePhotoShareTodoSummary,
   resolveUploadLocalPath,
@@ -338,14 +339,76 @@ for (const tradeConv of [
   { classification: { cta: "sell_my_bike" } },
   { followUp: { reason: "non_motorcycle_trade" } },
   { dialogState: { name: "trade_init" } },
-  { lead: { source: "Trade Accelerator - Trade In" } }
+  { lead: { source: "Trade Accelerator - Trade In" } },
+  // --- Sell-to-dealer signals (Tom +17164454081, 2026-07-30). He is selling his bike TO us; the
+  // thread carried a seller tag 3m39s before his first photo and the router never read it. Each of
+  // these alone must land on the customer's-own-unit frame.
+  { followUp: { reason: "seller_photo_details_request" } },
+  { followUpCadence: { contextTag: "seller_photo_details_request" } },
+  { manualContext: { contextTag: "seller_photo_details_request" } },
+  { followUp: { reason: "private_party_seller" } },
+  { followUpCadence: { contextTag: "private_party_seller" } },
+  { lead: { sellOption: "cash" } },
+  { lead: { sellOption: "trade" } },
+  { dialogState: { name: "trade_cash" } }
 ]) {
   assert.equal(
     isTradePhotoShareConversation(tradeConv as any),
     true,
-    `trade signal must flip to the trade frame: ${JSON.stringify(tradeConv)}`
+    `owner-unit signal must flip off the inventory-match frame: ${JSON.stringify(tradeConv)}`
   );
 }
+
+// THE PRODUCTION PIN — Tom +17164454081, 2026-07-30T21:43:38Z, exact stored shape.
+// Five photo-only MMS turns each drew "Let me match it against what we've got in stock and coming
+// in" while he was trying to SELL us the motorcycle. classification was null and dialogState unset:
+// the ONLY seller signal in the thread was the follow-up reason / cadence context tag.
+const tomSellerConv = {
+  mode: "human",
+  classification: null,
+  followUp: { reason: "seller_photo_details_request" },
+  followUpCadence: { contextTag: "seller_photo_details_request", kind: "engaged" },
+  dialogState: undefined,
+  lead: { phone: "+17164454081" }
+};
+assert.equal(
+  isTradePhotoShareConversation(tomSellerConv as any),
+  true,
+  "tom_+17164454081_2026_07_30: a seller thread must never take the inventory-match frame"
+);
+assert.deepEqual(
+  resolveCustomerPhotoShareFrame(tomSellerConv as any),
+  { frame: "owner_unit", ownerIntent: "sell_to_dealer" },
+  "tom_+17164454081_2026_07_30: frame is the customer's own unit, sold to the dealership"
+);
+// The reply he actually got, pinned as forbidden for this shape.
+for (const banned of [/match it against/i, /in stock/i, /coming in/i, /what we'?ve got/i]) {
+  assert.ok(
+    !banned.test(buildTradePhotoShareReply("Tom")),
+    `tom_+17164454081_2026_07_30: seller reply must not promise an inventory match (${banned})`
+  );
+}
+
+// Frame accuracy: a trade lead stays trade_in, so its vision prompt is unchanged by this fix.
+assert.deepEqual(
+  resolveCustomerPhotoShareFrame({ classification: { bucket: "trade_in_sell" } } as any),
+  { frame: "owner_unit", ownerIntent: "trade_in" },
+  "a trade lead keeps the trade_in intent (its vision context text must not change)"
+);
+
+// The `trade` substring breadth is KEPT, not tightened — removing it would fail toward the
+// buy-side promise on any trade-flavoured handoff reason we forgot to enumerate.
+assert.equal(
+  isTradePhotoShareConversation({ followUp: { reason: "trade_payoff_request" } } as any),
+  true,
+  "a trade-flavoured handoff reason must stay on the owner-unit frame (breadth is the safe direction)"
+);
+// ...but a customer selling PRIVATELY is not handing us their unit.
+assert.equal(
+  isTradePhotoShareConversation({ followUp: { reason: "sell_on_own" } } as any),
+  false,
+  "sell_on_own is the customer selling privately — not an owner-unit handoff to us"
+);
 // A buyer sharing a bike they like is NOT a trade — keep the inventory-match path.
 assert.equal(
   isTradePhotoShareConversation({ dialogState: { name: "small_talk" }, classification: { bucket: "inventory_interest" } } as any),

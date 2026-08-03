@@ -2849,6 +2849,124 @@ export function decideSellToDealerTurn(input: SellToDealerTurnInput): SellToDeal
   return { kind: "sell_to_dealer_appraisal" };
 }
 
+// Customer photo-share FRAME — whose bike is in this picture? (Tom +17164454081, 2026-07-30.)
+//
+// Tom is selling his motorcycle TO us. He sent five photo-only MMS turns; each drew
+// "Let me match it against what we've got in stock and coming in" — the BUY-side inventory
+// promise. The thread had said "seller" 3m39s before the first photo arrived
+// (followUp.reason = followUpCadence.contextTag = "seller_photo_details_request"), and the photo
+// router never looked.
+//
+// Root cause worth naming: there were THREE separate enumerations of "is this a seller thread" and
+// the photo one was the incomplete one — `isSellLead` (index.ts) and `cadenceInventoryGuard` both
+// already list `seller_photo_details_request` / `private_party_seller`; customerPhotoShare's
+// `isTradePhotoShareConversation` listed only TRADE signals, so an outright seller fell through to
+// the buy-side DEFAULT. That default is the defect: nothing ever asked whose bike it was.
+//
+// Deterministic bucket: reads ALREADY-classified structured state (bucket / CTA / handoff reason /
+// cadence + manual context tag / dialog state / lead source / sellOption). The comprehension that
+// set those ran earlier in the typed intent parsers — this is a route read, never a re-reading of
+// customer text. AGENTS.md permits exactly this as deterministic routing.
+//
+// Fail-direction (AGENTS.md migrate-vs-keep): a MISS here fails toward a confident, wrong,
+// customer-facing claim ("I'll match it against our stock" to a man selling us his bike), so the
+// signal set is deliberately BROAD and the `trade` substring test below is KEPT, not tightened —
+// removing that breadth would fail toward the very miss this referee exists to stop. A false
+// positive costs the appraiser reply + an appraisal todo on a buyer thread: staff-visible,
+// recoverable, no wrong promise. Broad is the safe direction here.
+export type CustomerPhotoShareFrame = "owner_unit" | "buyer_match";
+export type CustomerPhotoShareOwnerIntent = "trade_in" | "sell_to_dealer";
+
+export type CustomerPhotoShareFrameInput = {
+  classificationBucket?: string | null;
+  classificationCta?: string | null;
+  followUpReason?: string | null;
+  cadenceContextTag?: string | null;
+  manualContextTag?: string | null;
+  dialogStateName?: string | null;
+  leadSource?: string | null;
+  // Set by the sell-to-dealer side effect (decideSellToDealerTurn -> lead.sellOption).
+  leadSellOption?: string | null;
+};
+
+export type CustomerPhotoShareFrameDecision = {
+  frame: CustomerPhotoShareFrame;
+  ownerIntent: CustomerPhotoShareOwnerIntent | null;
+};
+
+// Mirrors the seller vocabulary already enumerated in cadenceInventoryGuard + isSellLead. Kept as
+// exact tags (not a substring) because "sell_on_own" — a customer selling privately, NOT to us —
+// must never read as "they are handing us their unit".
+const SELL_TO_DEALER_CONTEXT_TAGS = new Set([
+  "private_party_seller",
+  "seller_photo_details_request",
+  "seller_intake",
+  "seller_vin_miles",
+  "sell:pickup"
+]);
+
+const PHOTO_SHARE_TRADE_INTENT_CTAS = new Set([
+  "value_my_trade",
+  "sell_my_bike",
+  "trade_in_value",
+  "trade_in_sell"
+]);
+
+const PHOTO_SHARE_TRADE_DIALOG_STATES = new Set([
+  "trade_init",
+  "trade_cash",
+  "trade_trade",
+  "trade_either"
+]);
+
+const norm = (value: unknown): string => String(value ?? "").trim().toLowerCase();
+
+export function decideCustomerPhotoShareFrame(
+  input: CustomerPhotoShareFrameInput
+): CustomerPhotoShareFrameDecision {
+  const followUpReason = norm(input.followUpReason);
+  const cadenceContextTag = norm(input.cadenceContextTag);
+  const manualContextTag = norm(input.manualContextTag);
+
+  // 1. SELL-TO-DEALER (they own it and want us to buy it outright). Checked first so the vision
+  //    prompt gets the accurate frame; both arms return owner_unit, so precedence never changes
+  //    WHICH reply class fires — only how the image is described to the parser.
+  const sellOption = norm(input.leadSellOption);
+  if (sellOption === "cash") return { frame: "owner_unit", ownerIntent: "sell_to_dealer" };
+  for (const tag of [followUpReason, cadenceContextTag, manualContextTag]) {
+    if (tag && SELL_TO_DEALER_CONTEXT_TAGS.has(tag)) {
+      return { frame: "owner_unit", ownerIntent: "sell_to_dealer" };
+    }
+  }
+
+  // 2. TRADE-IN (they own it and want its value applied to a purchase) — the pre-existing set,
+  //    unchanged. `sellOption` trade/either lands here: still their unit, still the appraiser.
+  if (sellOption === "trade" || sellOption === "either") {
+    return { frame: "owner_unit", ownerIntent: "trade_in" };
+  }
+  if (norm(input.classificationBucket) === "trade_in_sell") {
+    return { frame: "owner_unit", ownerIntent: "trade_in" };
+  }
+  if (PHOTO_SHARE_TRADE_INTENT_CTAS.has(norm(input.classificationCta))) {
+    return { frame: "owner_unit", ownerIntent: "trade_in" };
+  }
+  // Breadth KEPT on purpose (see the fail-direction note above): any trade-flavoured handoff
+  // reason means the customer owns the unit. Tightening this to an enum would fail unsafe.
+  if (followUpReason === "non_motorcycle_trade" || followUpReason.includes("trade")) {
+    return { frame: "owner_unit", ownerIntent: "trade_in" };
+  }
+  if (PHOTO_SHARE_TRADE_DIALOG_STATES.has(norm(input.dialogStateName))) {
+    return { frame: "owner_unit", ownerIntent: "trade_in" };
+  }
+  // Trade-IN intent specifically — not a "Trade Show" booth lead. Jessica's source is
+  // "Trade Accelerator - Trade In".
+  if (/\btrade[\s-]?in\b|trade accelerator/.test(norm(input.leadSource))) {
+    return { frame: "owner_unit", ownerIntent: "trade_in" };
+  }
+
+  return { frame: "buyer_match", ownerIntent: null };
+}
+
 // Dept-widget intake precedence (the Lynn Kraus class, +17164785613, corpus sweep 2026-07-28).
 // The bike-vs-department clarify (Joe ruling 2026-07-26 #4) shipped as a TWO-state decision —
 // clarify or plain dept ack — in a THREE-state world. Lynn came through the Motor Clothes widget

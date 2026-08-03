@@ -14,6 +14,11 @@ import path from "node:path";
 
 import { describeVehicleImageWithLLM } from "./llmDraft.js";
 import { findInventoryMatches } from "./inventoryFeed.js";
+import {
+  decideCustomerPhotoShareFrame,
+  type CustomerPhotoShareFrameDecision,
+  type CustomerPhotoShareOwnerIntent
+} from "./routeStateReducer.js";
 
 const MEDIA_NOUN_RE = /\b(photo|photos|picture|pictures|pic|pics|image|images|screenshot|screenshots)\b/i;
 const SHARE_VERB_RE = /\b(here(?:'s| is| are)|i (?:just )?sent|sending|attached|i'?m sharing|sent you)\b/i;
@@ -64,39 +69,51 @@ export function isSalesPhotoShareConversation(conv: {
   return isSalesPhotoShareContext(conv?.dialogState?.name ?? null);
 }
 
-const TRADE_INTENT_CTAS = new Set(["value_my_trade", "sell_my_bike", "trade_in_value", "trade_in_sell"]);
-const TRADE_DIALOG_STATES = new Set(["trade_init", "trade_cash", "trade_trade", "trade_either"]);
-
-/**
- * Is this a TRADE-in conversation — the customer is showing us THEIR unit to value, not a bike
- * they like that we'd match against our inventory? A photo here is the trade unit, so the buy-intent
- * "let me match it against what we've got in stock" reply (and its "reply with matching in-stock
- * units" todo) is the wrong frame (Jessica Ornce +17167134728, 2026-06-23: a Trade-Accelerator lead
- * sent photos of her Victory Vegas + camper trailer and drew the inventory-match draft + todo).
- *
- * Reads ALREADY-classified structured state (bucket / CTA / handoff reason / dialog / lead source) —
- * the comprehension that set these ran earlier via the intent parsers, so this is a deterministic
- * route read, not a re-comprehension of the customer's text.
- */
-export function isTradePhotoShareConversation(conv: {
+type PhotoShareFrameConv = {
   classification?: { bucket?: string | null; cta?: string | null } | null;
   followUp?: { reason?: string | null } | null;
+  followUpCadence?: { contextTag?: string | null } | null;
+  manualContext?: { contextTag?: string | null } | null;
   dialogState?: { name?: string | null } | null;
-  lead?: { source?: string | null } | null;
-}): boolean {
-  const bucket = String(conv?.classification?.bucket ?? "").trim().toLowerCase();
-  if (bucket === "trade_in_sell") return true;
-  const cta = String(conv?.classification?.cta ?? "").trim().toLowerCase();
-  if (TRADE_INTENT_CTAS.has(cta)) return true;
-  const followReason = String(conv?.followUp?.reason ?? "").trim().toLowerCase();
-  if (followReason === "non_motorcycle_trade" || followReason.includes("trade")) return true;
-  const dialog = String(conv?.dialogState?.name ?? "").trim().toLowerCase();
-  if (TRADE_DIALOG_STATES.has(dialog)) return true;
-  // Trade-IN intent specifically — not a "Trade Show" booth lead. Jessica's source is
-  // "Trade Accelerator - Trade In".
-  const source = String(conv?.lead?.source ?? "").trim().toLowerCase();
-  if (/\btrade[\s-]?in\b|trade accelerator/.test(source)) return true;
-  return false;
+  lead?: { source?: string | null; sellOption?: string | null } | null;
+};
+
+/**
+ * Whose bike is in this photo — theirs (appraise it) or ours to find (match it)?
+ *
+ * Projects the stored conversation onto `decideCustomerPhotoShareFrame`, the ONE referee that owns
+ * this question (routeStateReducer). It used to be decided here, off a signal set that listed only
+ * TRADE tags — so an outright SELLER (Tom +17164454081, 2026-07-30) fell through to the buy-side
+ * default and was told "let me match it against what we've got in stock" five times while trying to
+ * sell us his motorcycle. `isSellLead` and `cadenceInventoryGuard` already knew he was a seller;
+ * this path was the third, incomplete opinion. Delegating means there is one definition, the way
+ * decideDeptWidgetIntakeTurn delegates to decideSellToDealerTurn.
+ */
+export function resolveCustomerPhotoShareFrame(conv: PhotoShareFrameConv): CustomerPhotoShareFrameDecision {
+  return decideCustomerPhotoShareFrame({
+    classificationBucket: conv?.classification?.bucket ?? null,
+    classificationCta: conv?.classification?.cta ?? null,
+    followUpReason: conv?.followUp?.reason ?? null,
+    cadenceContextTag: conv?.followUpCadence?.contextTag ?? null,
+    manualContextTag: conv?.manualContext?.contextTag ?? null,
+    dialogStateName: conv?.dialogState?.name ?? null,
+    leadSource: conv?.lead?.source ?? null,
+    leadSellOption: conv?.lead?.sellOption ?? null
+  });
+}
+
+/**
+ * Is this a conversation where the photo is the customer's OWN unit — a trade-in or a bike they
+ * want us to buy outright — rather than a bike they like that we'd match against our inventory?
+ * A photo here is their unit, so the buy-intent "let me match it against what we've got in stock"
+ * reply (and its "reply with matching in-stock units" todo) is the wrong frame (Jessica Ornce
+ * +17167134728, 2026-06-23, trade; Tom +17164454081, 2026-07-30, outright sale).
+ *
+ * Name kept for the callers: all three photo-share convergence points in index.ts gate on this,
+ * and both reply frames route the same way (appraiser, never inventory).
+ */
+export function isTradePhotoShareConversation(conv: PhotoShareFrameConv): boolean {
+  return resolveCustomerPhotoShareFrame(conv).frame === "owner_unit";
 }
 
 export function buildCustomerVehiclePhotoShareReply(args: {
@@ -719,11 +736,25 @@ export function buildNonMotorcyclePhotoShareReply(
  * any miss — never guesses a model to a rider. When vision recognizes the
  * image is NOT a motorcycle, diverts to a clarification (never the match reply).
  */
+/**
+ * What we tell vision about the frame. The trade string is BYTE-IDENTICAL to what shipped before
+ * (a null/trade intent keeps today's exact prompt, so no existing trade thread changes behaviour);
+ * the seller variant is purely additive. Thread knowledge the pixels cannot supply: vision can see
+ * that a photo is a title, but can never tell whose motorcycle is in it.
+ */
+function ownerUnitVisionContextText(ownerIntent: CustomerPhotoShareOwnerIntent | null): string {
+  if (ownerIntent === "sell_to_dealer") {
+    return "Customer is showing us their own unit, which they want to sell to the dealership.";
+  }
+  return "Customer is showing a unit they want to trade in.";
+}
+
 async function buildTradePhotoShareResult(args: {
   conv: { messages?: any[]; lead?: any };
   firstName?: string | null;
   anchorAtIso?: string | null;
   dataDir: string;
+  ownerIntent?: CustomerPhotoShareOwnerIntent | null;
 }): Promise<{
   reply: string;
   identifiedFamily: string | null;
@@ -744,7 +775,7 @@ async function buildTradePhotoShareResult(args: {
         const description = await describeVehicleImageWithLLM({
           imageBase64,
           mimeType: mime,
-          contextText: "Customer is showing a unit they want to trade in."
+          contextText: ownerUnitVisionContextText(args.ownerIntent ?? null)
         });
         // VIN/data-plate photo inside a trade thread: recognize the plate + route to the
         // appraiser with the captured VIN, instead of a "non-motorcycle item" hint that would
@@ -813,7 +844,10 @@ export async function buildPhotoShareReplyWithVision(args: {
   // Wins over the part branch below: a part photo from a trade lead still goes to the appraiser
   // (fail-safe — a human sees it).
   if (isTradePhotoShareConversation(args.conv as any)) {
-    return buildTradePhotoShareResult(args);
+    return buildTradePhotoShareResult({
+      ...args,
+      ownerIntent: resolveCustomerPhotoShareFrame(args.conv as any).ownerIntent
+    });
   }
   const fallback = {
     reply: buildCustomerVehiclePhotoShareReply({

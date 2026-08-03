@@ -137,6 +137,23 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     });
   }, ["decideFinanceDeclinedCadence"]);
 
+  // Added 2026-08-03 with the seller-photo frame fix (Tom +17164454081). Sampled as: given this
+  // conversation's stored seller/trade signals, whose bike would we assume a photo shows? Purely a
+  // projection of stored state — no turn text, no vision — so it is genuinely sampleable.
+  add("customerPhotoShareFrame", conv => {
+    if (typeof reducer.decideCustomerPhotoShareFrame !== "function") return undefined;
+    return reducer.decideCustomerPhotoShareFrame({
+      classificationBucket: conv?.classification?.bucket ?? null,
+      classificationCta: conv?.classification?.cta ?? null,
+      followUpReason: conv?.followUp?.reason ?? null,
+      cadenceContextTag: conv?.followUpCadence?.contextTag ?? null,
+      manualContextTag: conv?.manualContext?.contextTag ?? null,
+      dialogStateName: conv?.dialogState?.name ?? null,
+      leadSource: conv?.lead?.source ?? null,
+      leadSellOption: conv?.lead?.sellOption ?? null
+    });
+  }, ["decideCustomerPhotoShareFrame"]);
+
   // Added 2026-08-02 with the burned-cadence-ladder heal (Dennis Daffron +16303628805). Sampled as:
   // given this conversation's CURRENT ladder position and how long the cadence has actually been
   // running, is that a rung the calendar has earned?
