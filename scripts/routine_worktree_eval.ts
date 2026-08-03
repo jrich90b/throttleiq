@@ -11,6 +11,7 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import os from "node:os";
+import { execFileSync } from "node:child_process";
 import {
   MANAGED_DIR_PATTERN,
   MARKER_FILENAME,
@@ -157,6 +158,34 @@ const AT = new Date("2026-08-03T10:14:37.000Z");
   assert.ok(!MARKER_FILENAME.includes("/"), "the marker is a filename, not a path");
 }
 
+// 8. The marker and the wired-in symlinks all sit INSIDE the checkout, so `.gitignore` must cover
+//    them — otherwise every routine worktree starts life with untracked files at its root. Caught
+//    on the first real pilot run (2026-08-03), immediately after #476 merged.
+//
+//    Asserted via `git check-ignore -v`, which names the FILE that did the ignoring, because
+//    "is it ignored?" is not the whole question: a `.git/info/exclude` entry is LOCAL and never
+//    shared, so it passes on the machine that has it and still leaves a fresh clone (or the deploy
+//    box) dirty. That exact masking is what hid the `node_modules/` trailing-slash bug until it was
+//    tested in a scratch repo.
+{
+  const ignoredBy = (relPath: string): string => {
+    try {
+      return execFileSync("git", ["check-ignore", "-v", "--no-index", relPath], { encoding: "utf8" }).trim();
+    } catch {
+      return ""; // exit 1 = not ignored
+    }
+  };
+  for (const rel of [MARKER_FILENAME, "services/api/node_modules", ".env"]) {
+    const verdict = ignoredBy(rel);
+    assert.ok(verdict, `${rel} must be gitignored — a routine worktree would otherwise start dirty`);
+    assert.match(
+      verdict,
+      /(^|\/)\.gitignore:/,
+      `${rel} must be ignored by the TRACKED .gitignore, not a local .git/info/exclude (got: ${verdict})`
+    );
+  }
+}
+
 console.log(
-  "PASS routine worktree eval (stamp / untrusted-name sanitizing / minted shape + pid / removal never escapes the root: root, $HOME, base checkout, sibling clone, traversal, grandchild, relative, prefix / mint-remove round trip / prerequisites fail loud / marker contract)"
+  "PASS routine worktree eval (stamp / untrusted-name sanitizing / minted shape + pid / removal never escapes the root: root, $HOME, base checkout, sibling clone, traversal, grandchild, relative, prefix / mint-remove round trip / prerequisites fail loud / marker contract / marker+symlinks ignored by the TRACKED .gitignore, not a local exclude)"
 );
