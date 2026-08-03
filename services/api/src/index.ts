@@ -969,7 +969,7 @@ import {
   addTodo,
   addCallTodoIfMissing,
   upsertPendingIncomingInventoryNotifyTodo,
-  healPendingIncomingNotifyTodoDuplicates,
+  healPendingIncomingNotifyTodosAcross,
   healStaleHeldFlag,
   isSchedulingLeakConversation,
   realignOverEagerEngagedCadence,
@@ -1050,12 +1050,13 @@ import {
   buildPendingIncomingInventoryCustomerAck,
   buildPendingIncomingInventoryFromConversation,
   buildPendingIncomingInventoryTaskSummary,
-  resolvePendingIncomingNotifyDueAt,
+  applyComprehendedArrivalToPending,
+  applyIncomingInventoryPurposeDecision,
+  pendingIncomingArrivalIsUnknown,
   hasPendingIncomingInventoryContext,
   hasPendingIncomingInventorySignal,
   hasPartsInquirySignal,
   partsTurnPrecedenceEnabled,
-  isPendingIncomingInventoryNotifyTodoSummary,
   shouldHandlePendingIncomingInventoryTurn
 } from "./domain/pendingIncomingInventory.js";
 import { buildCustomerReceivedHistory, buildEffectiveHistory } from "./domain/effectiveContext.js";
@@ -31229,9 +31230,12 @@ async function applyPendingIncomingInventoryState(
   const priorArrivalAt = String(conv.pendingIncomingInventory?.expectedArrivalAt ?? "").trim();
   if (priorArrivalText) pending.expectedArrivalText = priorArrivalText;
   if (priorArrivalAt) pending.expectedArrivalAt = priorArrivalAt;
-  if (priorPurpose && priorPurpose !== "unclear") {
-    pending.purpose = priorPurpose;
-  } else {
+  // The arrival is captured on its OWN condition, not as a side effect of needing the purpose —
+  // see pendingIncomingArrivalIsUnknown for why (pre-#337 records could never acquire one).
+  const needsPurpose = !(priorPurpose && priorPurpose !== "unclear");
+  const needsArrival = pendingIncomingArrivalIsUnknown(pending, opts?.sourceText);
+  if (!needsPurpose) pending.purpose = priorPurpose;
+  if (needsPurpose || needsArrival) {
     const purposeParse = await safeLlmParse("incoming_inventory_purpose_parser", () =>
       parseIncomingInventoryPurposeWithLLM({
         seedText: String(opts?.sourceText ?? "").trim(),
@@ -31239,30 +31243,28 @@ async function applyPendingIncomingInventoryState(
         vehicle: pending.label ?? pending.model ?? null
       })
     );
-    const purposeDecision = decideIncomingInventoryPurpose({
-      parserAccepted: !!purposeParse,
-      purpose: purposeParse?.purpose ?? null,
-      allocation: purposeParse?.allocation ?? null,
-      confidence: purposeParse?.confidence ?? 0,
-      confidenceMin: incomingInventoryPurposeConfidenceMin(),
-      condition: pending.condition ?? null
-    });
-    pending.purpose = purposeDecision.purpose;
-    if (!pending.allocation && purposeDecision.allocation !== "unclear") {
-      pending.allocation = purposeDecision.allocation;
+    if (needsPurpose) {
+      applyIncomingInventoryPurposeDecision(
+        pending,
+        decideIncomingInventoryPurpose({
+          parserAccepted: !!purposeParse,
+          purpose: purposeParse?.purpose ?? null,
+          allocation: purposeParse?.allocation ?? null,
+          confidence: purposeParse?.confidence ?? 0,
+          confidenceMin: incomingInventoryPurposeConfidenceMin(),
+          condition: pending.condition ?? null
+        })
+      );
     }
-    // Arrival wording is COMPREHENDED by the parser above (`expected_arrival_text`), then resolved
-    // to a calendar day by the same resolver the staff-promise tasks use. Never regexed from prose.
     const arrivalText = String(purposeParse?.expectedArrivalText ?? "").trim();
     if (arrivalText && !pending.expectedArrivalText) {
-      pending.expectedArrivalText = arrivalText;
       const tz = (await getSchedulerConfigHot()).timezone || "America/New_York";
-      const arrivalDay = parseRequestedDateOnly(arrivalText, tz);
-      const resolved = resolvePendingIncomingNotifyDueAt({
-        expectedArrivalDay: arrivalDay,
+      applyComprehendedArrivalToPending({
+        pending,
+        arrivalText,
+        arrivalDay: parseRequestedDateOnly(arrivalText, tz),
         nowMs: Date.parse(nowIsoValue)
       });
-      if (resolved.dueAt) pending.expectedArrivalAt = resolved.dueAt;
     }
   }
   if (opts?.acknowledged) pending.acknowledgedAt = nowIsoValue;
@@ -32327,33 +32329,18 @@ async function processDueFollowUpsUnlocked() {
   if (watchInterestFilled > 0) {
     console.log(`[state-reconcile] filled ${watchInterestFilled} placeholder motorcycle-of-interest field(s) from the customer's watch`);
   }
-  // Pending-incoming notify-todo dedup heal: the singleton "Notify when the trade arrives" task
-  // historically duplicated because addTodo dedups by taskClass and the same objective split
-  // across class buckets (Nicholas Braun: 4 open copies, 2026-06-23). The upsert at write-time
-  // prevents new ones; this collapses any that already piled up. Class-agnostic, idempotent.
-  const notifyDupConvIds = new Map<string, number>();
-  for (const t of openTodos) {
-    if (!isPendingIncomingInventoryNotifyTodoSummary(t.summary)) continue;
-    notifyDupConvIds.set(t.convId, (notifyDupConvIds.get(t.convId) ?? 0) + 1);
+  // Pending-incoming notify-todo heals (dedup, then re-date onto the expected arrival) — both owned
+  // by healPendingIncomingNotifyTodosAcross so the sweep and the write path share one rulebook.
+  const notifyHeal = healPendingIncomingNotifyTodosAcross(convById, openTodos);
+  for (const h of notifyHeal.dedup) recordRouteOutcome("manual", "pending_incoming_notify_todo_dedup_heal", h);
+  for (const h of notifyHeal.reDated) recordRouteOutcome("manual", "pending_incoming_notify_todo_arrival_date_heal", h);
+  if (notifyHeal.dedup.length > 0) {
+    const retired = notifyHeal.dedup.reduce((n, h) => n + h.retired, 0);
+    console.log(`[state-reconcile] collapsed ${retired} duplicate pending-incoming notify todo(s)`);
   }
-  let pendingNotifyDupsHealed = 0;
-  for (const [convId, count] of notifyDupConvIds) {
-    if (count < 2) continue;
-    const conv = convById.get(convId);
-    if (!conv) continue;
-    const retired = healPendingIncomingNotifyTodoDuplicates(conv);
-    if (retired <= 0) continue;
-    saveConversation(conv);
-    pendingNotifyDupsHealed += retired;
-    recordRouteOutcome("manual", "pending_incoming_notify_todo_dedup_heal", {
-      convId: conv.id,
-      leadKey: conv.leadKey,
-      retired
-    });
-  }
-  if (pendingNotifyDupsHealed > 0) {
+  if (notifyHeal.reDated.length > 0) {
     console.log(
-      `[state-reconcile] collapsed ${pendingNotifyDupsHealed} duplicate pending-incoming notify todo(s)`
+      `[state-reconcile] re-dated ${notifyHeal.reDated.length} pending-incoming notify todo(s) onto the expected arrival`
     );
   }
   // Ride-challenge cadence realign heal (Joe ruling 2026-07-09, +15857657010): legacy ride-challenge

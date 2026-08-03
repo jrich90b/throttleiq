@@ -45,10 +45,17 @@ assert.ok(
   /upsertPendingIncomingInventoryNotifyTodo\(\s*conv,\s*\n\s*buildPendingIncomingInventoryTaskSummary/.test(index),
   "applyPendingIncomingInventoryState must upsert the notify task (not bare addTodo)"
 );
-// The maintenance reconcile tick must heal any pre-existing duplicate pile.
+// The maintenance reconcile tick must heal any pre-existing duplicate pile. The dedup CALL moved
+// out of index.ts into healPendingIncomingNotifyTodosAcross (conversationStore) when the arrival
+// re-dating heal joined it on the same scan — so pin the sweep the reconcile invokes, and pin that
+// the sweep still performs the dedup, rather than a line of index.ts that no longer exists.
 assert.ok(
-  /healPendingIncomingNotifyTodoDuplicates\(conv\)/.test(index),
-  "the maintenance reconcile must collapse duplicate notify todos"
+  /healPendingIncomingNotifyTodosAcross\(convById, openTodos\)/.test(index),
+  "the maintenance reconcile must run the notify-todo heal sweep"
+);
+assert.ok(
+  /healPendingIncomingNotifyTodoDuplicates\(conv\)/.test(store),
+  "the sweep must still collapse duplicate notify todos"
 );
 
 // --- 2) Pure predicate coverage. ---

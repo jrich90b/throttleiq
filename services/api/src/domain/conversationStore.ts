@@ -84,6 +84,7 @@ import {
 import {
   isPendingIncomingInventoryNotifyTodoSummary,
   planPendingIncomingNotifyDedup,
+  planPendingIncomingNotifyDueAtUpdate,
   shouldVoiceAttemptKeepArrivalNotifyTaskOpen
 } from "./pendingIncomingInventory.js";
 import { isFollowUpCadenceHeld } from "./cadenceHoldTtl.js";
@@ -6742,6 +6743,121 @@ export function healPendingIncomingNotifyTodoDuplicates(conv: Conversation): num
  * any prior duplicates, then refreshes the survivor (preserving its richest summary so an
  * appended ask isn't dropped) or creates one if none exists.
  */
+/**
+ * Move an OPEN arrival-notify task onto the arrival we know, in whichever direction that is.
+ *
+ * Shared by the write path (the upsert below) and the state-reconcile heal, so there is exactly ONE
+ * implementation of "the arrival is the authority" and a task cannot be corrected by one lane and
+ * left wrong by the other. The decision itself is the pure planPendingIncomingNotifyDueAtUpdate;
+ * this function only applies it, plus the reminder bookkeeping that has to touch the record.
+ *
+ * Returns true when the date actually moved.
+ */
+export function applyPendingIncomingNotifyArrivalDate(
+  task: TodoTask,
+  arrivalDueAt: string | null | undefined,
+  nowMs: number = Date.parse(nowIso())
+): boolean {
+  const plan = planPendingIncomingNotifyDueAtUpdate({
+    currentDueAt: task.dueAt ?? null,
+    arrivalDueAt: arrivalDueAt ?? null,
+    nowMs
+  });
+  if (!plan.changed || !plan.dueAt) return false;
+  task.dueAt = plan.dueAt;
+  // Keep an EXISTING reminder consistent with the moved date and re-arm it — the same idiom
+  // snoozeTodo uses. We deliberately do NOT mint a reminder on a task that had none: this change
+  // exists to take noise OUT of the inbox, so it must never add a staff ping that wasn't there.
+  if (String(task.reminderAt ?? "").trim()) {
+    const lead =
+      Number.isFinite(task.reminderLeadMinutes) && (task.reminderLeadMinutes as number) > 0
+        ? (task.reminderLeadMinutes as number)
+        : 30;
+    task.reminderAt = new Date(Date.parse(plan.dueAt) - lead * 60 * 1000).toISOString();
+    task.reminderSentAt = undefined;
+  }
+  return true;
+}
+
+/**
+ * State-reconcile heal: re-date this conversation's OPEN arrival-notify task onto the arrival the
+ * record already stores. This is the backfill for tasks minted before the arrival rule existed, or
+ * stamped with a nearer date by another writer — nothing else ever re-dated them, so Mohamed Ahmed
+ * +17164258647's task still read due 8/3 for an 8/21 bike five days after #337 shipped.
+ *
+ * Reads only stored state (no LLM, no prose), and is idempotent: once the task sits on the arrival
+ * planPendingIncomingNotifyDueAtUpdate reports no change, so the tick stops touching it. Returns
+ * true when the date actually moved.
+ */
+export function healPendingIncomingNotifyTodoArrivalDate(conv: Conversation): boolean {
+  const arrivalAt = String(
+    (conv as any)?.pendingIncomingInventory?.expectedArrivalAt ?? ""
+  ).trim();
+  if (!arrivalAt) return false;
+  const task = todos.find(
+    t =>
+      t.convId === conv.id &&
+      t.status === "open" &&
+      isPendingIncomingInventoryNotifyTodoSummary(t.summary)
+  );
+  if (!task) return false;
+  if (!applyPendingIncomingNotifyArrivalDate(task, arrivalAt)) return false;
+  conv.updatedAt = nowIso();
+  scheduleSave();
+  return true;
+}
+
+/**
+ * State-reconcile sweep for the arrival-notify singleton, across every conversation that has one.
+ *
+ * Two heals on ONE scan, in this order:
+ *  1. DEDUP — collapse copies that piled up before the write-time upsert existed (Nicholas Braun:
+ *     4 open copies, 2026-06-23). Runs first so step 2 dates the SURVIVOR, not a copy about to go.
+ *  2. ARRIVAL DATE — re-date the survivor onto the arrival the record already stores. This is the
+ *     backfill for tasks minted before the arrival rule, or stamped with a nearer date by another
+ *     writer: Mohamed Ahmed +17164258647's task still read due 8/3 for an 8/21 bike five days
+ *     after #337 shipped, because nothing ever re-dated an existing task.
+ *
+ * Saves each conversation it touched. No LLM and no prose — it reads only stored state — and both
+ * heals are idempotent, so a quiet tick does nothing and records nothing.
+ */
+export function healPendingIncomingNotifyTodosAcross(
+  convById: Map<string, Conversation>,
+  openTodos: TodoTask[]
+): {
+  dedup: Array<{ convId: string; leadKey: string; retired: number }>;
+  reDated: Array<{ convId: string; leadKey: string; dueAt: string | null }>;
+} {
+  const convIds = new Set<string>();
+  for (const t of openTodos) {
+    if (isPendingIncomingInventoryNotifyTodoSummary(t.summary)) convIds.add(t.convId);
+  }
+  const dedup: Array<{ convId: string; leadKey: string; retired: number }> = [];
+  const reDated: Array<{ convId: string; leadKey: string; dueAt: string | null }> = [];
+  for (const convId of convIds) {
+    const conv = convById.get(convId);
+    if (!conv) continue;
+    let dirty = false;
+    const retired = healPendingIncomingNotifyTodoDuplicates(conv);
+    if (retired > 0) {
+      dedup.push({ convId: conv.id, leadKey: conv.leadKey, retired });
+      dirty = true;
+    }
+    if (healPendingIncomingNotifyTodoArrivalDate(conv)) {
+      const task = todos.find(
+        t =>
+          t.convId === conv.id &&
+          t.status === "open" &&
+          isPendingIncomingInventoryNotifyTodoSummary(t.summary)
+      );
+      reDated.push({ convId: conv.id, leadKey: conv.leadKey, dueAt: task?.dueAt ?? null });
+      dirty = true;
+    }
+    if (dirty) saveConversation(conv);
+  }
+  return { dedup, reDated };
+}
+
 export function upsertPendingIncomingInventoryNotifyTodo(
   conv: Conversation,
   summary: string,
@@ -6751,9 +6867,8 @@ export function upsertPendingIncomingInventoryNotifyTodo(
    * Due date for the notify task — the unit's EXPECTED ARRIVAL when we know it (Joe ruling
    * 2026-07-29, Mohamed Ahmed +17164258647: "task off the arrival date"). Undefined/null keeps the
    * previous undated behavior, which is the fail-safe: an undated task is merely noisy, whereas
-   * dating one wrongly could hide a real follow-through. On an existing task we only ever FILL a
-   * missing date or pull it EARLIER — a later re-read must never push a task staff can already see
-   * further out.
+   * dating one wrongly could hide a real follow-through. On an EXISTING task a known future arrival
+   * is now the AUTHORITY and moves the date either way — see applyPendingIncomingNotifyArrivalDate.
    */
   dueAt?: string | null
 ): TodoTask | null {
@@ -6775,10 +6890,7 @@ export function upsertPendingIncomingInventoryNotifyTodo(
     const ownerName = String(owner?.name ?? conv?.leadOwner?.name ?? "").trim();
     if (ownerId) survivor.ownerId = ownerId;
     if (ownerName) survivor.ownerName = ownerName;
-    if (dueAtUsable) {
-      const existingMs = Date.parse(String(survivor.dueAt ?? ""));
-      if (!Number.isFinite(existingMs) || dueAtMs < existingMs) survivor.dueAt = dueAtIso;
-    }
+    if (dueAtUsable) applyPendingIncomingNotifyArrivalDate(survivor, dueAtIso);
     conv.updatedAt = nowIso();
     scheduleSave();
     return survivor;

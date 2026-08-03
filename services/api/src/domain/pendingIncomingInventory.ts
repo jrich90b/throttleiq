@@ -461,3 +461,125 @@ export function resolvePendingIncomingNotifyDueAt(args: {
   if (dueMs <= args.nowMs) return { dueAt: null, reason: "arrival_not_in_future" };
   return { dueAt: new Date(dueMs).toISOString(), reason: "expected_arrival" };
 }
+
+/**
+ * Should the "Notify {customer} when the {unit} arrives" task be RE-DATED to the arrival we know?
+ *
+ * Trigger (Mohamed Ahmed +17164258647 again, operator-reported 2026-07-31 — "Why is this overdue
+ * when the bike is not supposed to come in til 8/21", and STILL true on 2026-08-03: the task read
+ * due 8/3 and pinged staff that morning for a bike landing 8/21). #337 dated the task at CREATE
+ * time, but `upsertPendingIncomingInventoryNotifyTodo` would then only ever FILL a missing date or
+ * pull one EARLIER. That rule is what locked the wrong date in: once ANY other writer stamped a
+ * nearer date — a staff snooze, an addTodo carrying a schedule — the arrival could never take
+ * effect, and the task shouted "overdue" for the three weeks nobody could act on it.
+ *
+ * RULE, and it is the whole idea: for THIS one task type a KNOWN FUTURE ARRIVAL IS THE AUTHORITY.
+ * The objective is literally "tell them it arrived", so no date before the arrival can be actioned
+ * and no date after it is soon enough. We therefore move the task in BOTH directions to sit on the
+ * arrival — which is the one thing #337 would not do.
+ *
+ * BUCKET: a pure side-effect/state decision over an ALREADY-COMPREHENDED slot. The arrival wording
+ * was read by `parseIncomingInventoryPurposeWithLLM`'s `expected_arrival_text` and resolved by
+ * `resolvePendingIncomingNotifyDueAt`. No prose is inspected here.
+ *
+ * FAIL DIRECTION — deliberately different from #337, and narrowly so. #337 refused to push any task
+ * later because a task pushed out is a task staff may not chase; that stays right in general. It is
+ * wrong for THIS task, where "due now" is not merely noisy but unactionable, and where an inbox that
+ * cries overdue for three straight weeks is what teaches staff to stop reading it. The blast radius
+ * is held to that one case by three guards: we act ONLY on a known arrival, ONLY when it is still in
+ * the FUTURE, and we never move the task PAST it. Everything else — no arrival, an unparsable one,
+ * an arrival already behind us — returns the current date untouched, i.e. today's behavior.
+ *
+ * The bike showing up EARLY is covered by the inventory watch, which fires on arrival independently
+ * of this task; the task is the safety net for a watch that misses, not the arrival signal itself.
+ */
+export function planPendingIncomingNotifyDueAtUpdate(args: {
+  /** The task's current `dueAt`, if any. */
+  currentDueAt?: string | null;
+  /** The arrival-dated due time from `resolvePendingIncomingNotifyDueAt` (pending.expectedArrivalAt). */
+  arrivalDueAt?: string | null;
+  /** Now, as epoch ms — an arrival already behind us never re-dates a task. */
+  nowMs: number;
+}): { dueAt: string | null; changed: boolean; reason: string } {
+  const current = String(args.currentDueAt ?? "").trim() || null;
+  const arrivalIso = String(args.arrivalDueAt ?? "").trim();
+  const arrivalMs = arrivalIso ? Date.parse(arrivalIso) : Number.NaN;
+  if (!arrivalIso || !Number.isFinite(arrivalMs)) {
+    return { dueAt: current, changed: false, reason: "no_known_arrival" };
+  }
+  if (!Number.isFinite(args.nowMs)) {
+    return { dueAt: current, changed: false, reason: "invalid_now" };
+  }
+  // A stale/late arrival must not drag a task backwards into the past, where the inbox buries it.
+  if (arrivalMs <= args.nowMs) {
+    return { dueAt: current, changed: false, reason: "arrival_not_in_future" };
+  }
+  const arrivalNormalized = new Date(arrivalMs).toISOString();
+  const currentMs = current ? Date.parse(current) : Number.NaN;
+  if (Number.isFinite(currentMs) && currentMs === arrivalMs) {
+    return { dueAt: arrivalNormalized, changed: false, reason: "already_dated_to_arrival" };
+  }
+  return { dueAt: arrivalNormalized, changed: true, reason: "arrival_is_authority" };
+}
+
+/**
+ * Does this pending record still have NO expected arrival, with seed text we could read one from?
+ *
+ * #337 read `expected_arrival_text` only inside the "we still need the purpose" branch, so a record
+ * whose purpose was already settled — i.e. EVERY record established before #337 shipped — skipped
+ * the parser entirely and could never acquire an arrival, no matter how many turns the thread took.
+ * Mohamed Ahmed +17164258647 is exactly that: purpose "factory_order" since 7/29, so his stated 8/21
+ * was permanently unreachable and his task kept reading due today. Capturing the arrival on its OWN
+ * condition is what lets those records heal.
+ *
+ * Bounded cost: true only while the record has NO arrival at all, so it is one extra parse per
+ * record, once, and never again.
+ */
+export function pendingIncomingArrivalIsUnknown(
+  pending: { expectedArrivalText?: string | null; expectedArrivalAt?: string | null },
+  seedText: string | null | undefined
+): boolean {
+  return (
+    !String(pending?.expectedArrivalText ?? "").trim() &&
+    !String(pending?.expectedArrivalAt ?? "").trim() &&
+    !!String(seedText ?? "").trim()
+  );
+}
+
+/**
+ * Record the COMPREHENDED arrival on the pending record, resolved to a due date.
+ *
+ * The wording ("around 8/21", "late August") is read by parseIncomingInventoryPurposeWithLLM's
+ * `expected_arrival_text` and turned into a calendar day by the caller's `parseRequestedDateOnly` —
+ * the same resolver the staff-promise tasks use. Never regexed out of prose. This only stores it.
+ */
+export function applyComprehendedArrivalToPending(args: {
+  pending: { expectedArrivalText?: string | null; expectedArrivalAt?: string | null };
+  arrivalText: string;
+  arrivalDay: { year: number; month: number; day: number } | null;
+  nowMs: number;
+}): void {
+  const text = String(args.arrivalText ?? "").trim();
+  if (!text) return;
+  args.pending.expectedArrivalText = text;
+  const resolved = resolvePendingIncomingNotifyDueAt({
+    expectedArrivalDay: args.arrivalDay,
+    nowMs: args.nowMs
+  });
+  if (resolved.dueAt) args.pending.expectedArrivalAt = resolved.dueAt;
+}
+
+/**
+ * Apply a purpose decision to the pending record. Behavior-preserving extraction from
+ * applyPendingIncomingInventoryState — the allocation is only ever FILLED, never overwritten, which
+ * is what keeps a previously-established allocation from being downgraded by a later thin turn.
+ */
+export function applyIncomingInventoryPurposeDecision(
+  pending: { purpose?: string | null; allocation?: string | null },
+  decision: { purpose: string; allocation: string }
+): void {
+  pending.purpose = decision.purpose as any;
+  if (!pending.allocation && decision.allocation !== "unclear") {
+    pending.allocation = decision.allocation as any;
+  }
+}

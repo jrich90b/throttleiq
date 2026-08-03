@@ -10,11 +10,13 @@ import {
   hasSpokenForIncomingCue,
   isPendingIncomingInventoryAcknowledgementText,
   isPendingIncomingInventoryNotifyTodoSummary,
+  planPendingIncomingNotifyDueAtUpdate,
   resolvePendingIncomingNotifyDueAt,
   shouldHandlePendingIncomingInventoryTurn
 } from "../services/api/src/domain/pendingIncomingInventory.ts";
 import fs from "node:fs";
-import type { Conversation } from "../services/api/src/domain/conversationStore.ts";
+import { applyPendingIncomingNotifyArrivalDate } from "../services/api/src/domain/conversationStore.ts";
+import type { Conversation, TodoTask } from "../services/api/src/domain/conversationStore.ts";
 
 const now = "2026-06-06T17:23:12.000Z";
 
@@ -307,8 +309,8 @@ const idx = fs.readFileSync("services/api/src/index.ts", "utf8");
 const sendgrid = fs.readFileSync("services/api/src/routes/sendgridInbound.ts", "utf8");
 const llm = fs.readFileSync("services/api/src/domain/llmDraft.ts", "utf8");
 assert.ok(
-  /resolvePendingIncomingNotifyDueAt\(/.test(idx),
-  "the shared applier must resolve the notify due date from the expected arrival"
+  /applyComprehendedArrivalToPending\(/.test(idx),
+  "the shared applier must record the comprehended arrival (which resolves the notify due date)"
 );
 assert.ok(
   /pending\.expectedArrivalAt \?\? null/.test(idx),
@@ -319,6 +321,14 @@ assert.equal(
   2,
   "both ADF-lane notify-task sites must pass the arrival date (two-path parity)"
 );
+// …and PASSING the field is not the same as POPULATING it. #337 wired both ADF sites to pass
+// pending.expectedArrivalAt, but neither site ever SET it, so the ADF lane's arrival was always
+// null and this parity pin read green over a value that could not exist. The spoken-for site now
+// records the arrival its already-running parser comprehended.
+assert.ok(
+  /applyComprehendedArrivalToPending\(/.test(sendgrid),
+  "the ADF lane must RECORD the comprehended arrival, not merely pass an always-null field"
+);
 assert.ok(
   /expected_arrival_text/.test(llm),
   "parseIncomingInventoryPurposeWithLLM must comprehend the arrival wording"
@@ -328,4 +338,149 @@ assert.ok(
   "the parser must return the comprehended arrival text"
 );
 
-console.log("PASS pending incoming inventory eval (+ arrival-dated notify task)");
+// ---------------------------------------------------------------------------------------------
+// A KNOWN FUTURE ARRIVAL IS THE AUTHORITY for the notify task's due date.
+//
+// Production defect this pins (Mohamed Ahmed +17164258647, operator-reported 2026-07-31 and STILL
+// reproducing 2026-08-03): the Deadwood task read due 2026-08-03 and pinged staff that morning for
+// a bike landing 2026-08-21. #337 dated the task at CREATE time but would then only FILL a missing
+// date or pull one EARLIER, so once another writer stamped a nearer date the arrival was locked out
+// for good. The task must move onto the arrival in EITHER direction.
+const mohamedTaskNow = Date.parse("2026-08-03T16:00:00.000Z");
+const arrivalIso = "2026-08-21T13:00:00.000Z";
+
+assert.deepEqual(
+  planPendingIncomingNotifyDueAtUpdate({
+    currentDueAt: "2026-08-03T13:00:00.000Z",
+    arrivalDueAt: arrivalIso,
+    nowMs: mohamedTaskNow
+  }),
+  { dueAt: arrivalIso, changed: true, reason: "arrival_is_authority" },
+  "+17164258647: a task dated 8/3 is pushed OUT to the 8/21 arrival — the case #337 could not fix"
+);
+assert.deepEqual(
+  planPendingIncomingNotifyDueAtUpdate({
+    currentDueAt: null,
+    arrivalDueAt: arrivalIso,
+    nowMs: mohamedTaskNow
+  }),
+  { dueAt: arrivalIso, changed: true, reason: "arrival_is_authority" },
+  "an UNDATED task (reads due now, forever) is dated onto the arrival"
+);
+assert.deepEqual(
+  planPendingIncomingNotifyDueAtUpdate({
+    currentDueAt: "2026-09-30T13:00:00.000Z",
+    arrivalDueAt: arrivalIso,
+    nowMs: mohamedTaskNow
+  }),
+  { dueAt: arrivalIso, changed: true, reason: "arrival_is_authority" },
+  "a task parked PAST the arrival is pulled back to it — staff see it the day the bike lands"
+);
+// IDEMPOTENT: the reconcile heal runs every tick, so settling on the arrival must be a no-op.
+assert.deepEqual(
+  planPendingIncomingNotifyDueAtUpdate({
+    currentDueAt: arrivalIso,
+    arrivalDueAt: arrivalIso,
+    nowMs: mohamedTaskNow
+  }),
+  { dueAt: arrivalIso, changed: false, reason: "already_dated_to_arrival" },
+  "a task already sitting on the arrival is left alone (heal is idempotent)"
+);
+
+// FAIL DIRECTION — the blast radius is held to "we know a future arrival". Every other case returns
+// the CURRENT date untouched, i.e. today's behavior. This is what keeps #337's general rule intact:
+// we are not licensing tasks to drift later, only pinning this one to a date it cannot beat.
+for (const [arrival, reason, label] of [
+  [null, "no_known_arrival", "no arrival on the record → untouched"],
+  ["", "no_known_arrival", "an empty arrival → untouched"],
+  ["not-a-date", "no_known_arrival", "an unparsable arrival → untouched"],
+  ["2026-07-01T13:00:00.000Z", "arrival_not_in_future", "an arrival already behind us never backdates a task"]
+] as const) {
+  const got = planPendingIncomingNotifyDueAtUpdate({
+    currentDueAt: "2026-08-03T13:00:00.000Z",
+    arrivalDueAt: arrival as any,
+    nowMs: mohamedTaskNow
+  });
+  assert.equal(got.changed, false, `untouched: ${label}`);
+  assert.equal(got.dueAt, "2026-08-03T13:00:00.000Z", `keeps the current date: ${label}`);
+  assert.equal(got.reason, reason, `reason: ${label}`);
+}
+assert.equal(
+  planPendingIncomingNotifyDueAtUpdate({
+    currentDueAt: null,
+    arrivalDueAt: "2026-07-01T13:00:00.000Z",
+    nowMs: mohamedTaskNow
+  }).dueAt,
+  null,
+  "a stale arrival on an undated task leaves it undated — surfaced NOW, never buried in the past"
+);
+assert.equal(
+  planPendingIncomingNotifyDueAtUpdate({
+    currentDueAt: "2026-08-03T13:00:00.000Z",
+    arrivalDueAt: arrivalIso,
+    nowMs: Number.NaN
+  }).changed,
+  false,
+  "an unusable clock never moves a task"
+);
+
+// The applier: the date moves, and the REMINDER bookkeeping is the conservative half of the rule.
+const withReminder = {
+  id: "t1",
+  dueAt: "2026-08-03T13:00:00.000Z",
+  reminderAt: "2026-08-03T12:30:00.000Z",
+  reminderSentAt: "2026-08-03T12:30:30.375Z"
+} as unknown as TodoTask;
+assert.equal(
+  applyPendingIncomingNotifyArrivalDate(withReminder, arrivalIso, mohamedTaskNow),
+  true,
+  "the applier reports the move"
+);
+assert.equal(withReminder.dueAt, arrivalIso, "the task now comes due on the arrival");
+assert.equal(
+  withReminder.reminderAt,
+  "2026-08-21T12:30:00.000Z",
+  "an EXISTING reminder follows the date at its own lead (default 30m)"
+);
+assert.equal(
+  withReminder.reminderSentAt,
+  undefined,
+  "the reminder is re-armed so it fires for the NEW date, not silently swallowed as already-sent"
+);
+
+// ...and it must never MINT a reminder. This change exists to take noise OUT of the inbox, so a
+// task that never pinged staff must not start pinging them because we re-dated it.
+const withoutReminder = { id: "t2", dueAt: null } as unknown as TodoTask;
+assert.equal(
+  applyPendingIncomingNotifyArrivalDate(withoutReminder, arrivalIso, mohamedTaskNow),
+  true,
+  "an undated task is still re-dated"
+);
+assert.equal(withoutReminder.dueAt, arrivalIso, "…onto the arrival");
+assert.equal(
+  withoutReminder.reminderAt ?? null,
+  null,
+  "a task with NO reminder never gains one — the fix must not add a staff ping"
+);
+const settled = { id: "t3", dueAt: arrivalIso } as unknown as TodoTask;
+assert.equal(
+  applyPendingIncomingNotifyArrivalDate(settled, arrivalIso, mohamedTaskNow),
+  false,
+  "re-running the heal on a settled task reports no change"
+);
+
+// Wiring: the arrival must be captured on its OWN condition, not only when the purpose is unknown.
+// #337 read expected_arrival_text inside the purpose branch, so every record established before it
+// shipped (purpose already settled) could never acquire an arrival — which is precisely why
+// Mohamed's 8/21 stayed unreachable. Behavior-level proxy: the applier and the heal both exist and
+// are reachable from the reconcile pass.
+assert.ok(
+  /needsArrival/.test(idx),
+  "the shared applier must capture the arrival independently of needing the purpose"
+);
+assert.ok(
+  /healPendingIncomingNotifyTodosAcross\(/.test(idx),
+  "the state-reconcile pass must re-date notify todos that are already sitting on a wrong date"
+);
+
+console.log("PASS pending incoming inventory eval (+ arrival-dated notify task, arrival-is-authority)");

@@ -178,6 +178,7 @@ import {
 } from "../domain/initialAdfEmailDraft.js";
 import { buildCreditLeadEmailDraft } from "../domain/creditLeadEmail.js";
 import {
+  applyComprehendedArrivalToPending,
   buildPendingIncomingInventoryFromConversation,
   buildPendingIncomingInventoryInitialAdfReply,
   buildPendingIncomingInventoryTaskSummary,
@@ -7987,6 +7988,25 @@ export async function handleSendgridInbound(req: Request, res: Response) {
             pending.label = [singleYear, modelLabel].filter(Boolean).join(" ").trim() || modelLabel;
           }
           pending.purpose = spokenForDecision.purpose;
+          // Two-path parity for the ARRIVAL VALUE, not just for the field. #337 taught both ADF
+          // sites to PASS pending.expectedArrivalAt into the notify-task upsert, but neither site
+          // ever SET it — so the ADF lane's arrival was always null and its notify task always
+          // undated, while the source-level parity pin still read green. Here the parser has
+          // already run (spokenForParse), so reading its comprehended arrival costs ZERO extra
+          // round trips. (The other ADF site, the initial-ADF one, calls no purpose parser at all;
+          // giving it one is a round-trip decision, so it stays a known gap — see the PR body.)
+          const spokenForArrivalText = String(spokenForParse?.expectedArrivalText ?? "").trim();
+          if (spokenForArrivalText) {
+            applyComprehendedArrivalToPending({
+              pending,
+              arrivalText: spokenForArrivalText,
+              arrivalDay: parseRequestedDateOnly(
+                spokenForArrivalText,
+                (await getSchedulerConfig()).timezone || "America/New_York"
+              ),
+              nowMs: Date.parse(nowIsoValue)
+            });
+          }
           conv.pendingIncomingInventory = pending;
           conv.inventoryWatchPending = undefined;
           conv.dialogState = { name: "pending_incoming_inventory", updatedAt: nowIsoValue } as any;
