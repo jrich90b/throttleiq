@@ -142,7 +142,11 @@ regression shows up the next morning, not in a customer's thread.
   today with budget to spare; effective latency is staff-gated, not model-gated.
 - System prompt is cacheable. `gpt-5-mini`-class model with
   `optionalReasoning` + adequate `max_output_tokens` (the empty-output trap).
-- Kill switch: `TURN_UNDERSTANDING_ENABLED=0` reverts to today's extractors.
+- Kill switches (the REAL levers — `TURN_UNDERSTANDING_ENABLED` was documented here for months
+  but never existed in code; 8/3 wiring triage, theme D3):
+  `LLM_TURN_UNDERSTANDING_PARSER_ENABLED=0` stops the turn-understanding parse itself, and
+  `TURN_UNDERSTANDING_MODEL_AUTHORITY=0` reverts model resolution to the legacy extractors
+  (both default ON since the 2026-06-24 graduation).
 
 ## Honest scope & timing vs June 30
 - **This is NOT a June-30 blocker.** The showcase runs on the current patched
