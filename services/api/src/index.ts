@@ -470,9 +470,10 @@ import {
   webTextWidgetTodoReason
 } from "./domain/webTextWidget.js";
 import type { DailyForecast } from "./domain/weather.js";
-import type {
-  AppointmentOutcomeSource,
-  ManualCadenceRestartContext
+import {
+  decideScheduleInviteBudget,
+  type AppointmentOutcomeSource,
+  type ManualCadenceRestartContext
 } from "./domain/routeStateReducer.js";
 import { resolveTownNearestDealer, formatTownLabel } from "./domain/geo.js";
 import { dataPath, getDataDir } from "./domain/dataDir.js";
@@ -15924,7 +15925,6 @@ const EMAIL_FOLLOW_UP_MESSAGES: Array<(ctx: EmailFollowUpCtx) => string> = [
     `Hi ${name},\n\nWhenever you're ready to revisit ${label}, just reply here and I'll help with next steps.\n\n${bookingLine}\n\nThanks,`
 ];
 
-const SCHEDULE_INVITE_THRESHOLD = 3;
 
 const FRESH_INFO_FOLLOW_UPS = [
   "Hey {name}, quick update with payment info{forLabelClause}. Want me to keep an eye on similar bikes too?",
@@ -34110,9 +34110,9 @@ async function processDueFollowUpsUnlocked() {
         modelYear,
         label: labelWithThe
       };
-      const pool = (conv.followUpCadence.scheduleInviteCount ?? 0) < SCHEDULE_INVITE_THRESHOLD
-        ? FRESH_INFO_FOLLOW_UPS
-        : SOFT_EXIT_FOLLOW_UPS;
+      // Same referee the mute latch asks, so the pool switch and the latch cannot drift apart.
+      const budget = decideScheduleInviteBudget({ inviteCount: conv.followUpCadence.scheduleInviteCount });
+      const pool = budget.spent ? SOFT_EXIT_FOLLOW_UPS : FRESH_INFO_FOLLOW_UPS;
       const messageIdx = (conv.followUpCadence.scheduleInviteCount ?? 0) % pool.length;
       message = renderFollowUpTemplate(pool[messageIdx], baseCtx);
     } else {

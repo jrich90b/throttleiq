@@ -26,6 +26,7 @@ import {
   decideInventoryHoldRecord,
   type InventoryHoldRecordInput,
   type InventoryHoldRecordDecision,
+  decideScheduleInviteBudget,
   decideCadenceLifecycle,
   decideAppointmentAttribution,
   type AppointmentAttributionLane,
@@ -5480,18 +5481,24 @@ export function applyCloseoutReversal(
   return decision;
 }
 
-export function resetScheduleInviteCounter(conv: Conversation) {
-  if (!conv.followUpCadence) return;
-  conv.followUpCadence.scheduleInviteCount = 0;
-  conv.followUpCadence.scheduleMuted = false;
-  conv.updatedAt = nowIso();
-  scheduleSave();
-}
+// `resetScheduleInviteCounter` was DELETED here (2026-08-03). It set `scheduleInviteCount = 0` and
+// `scheduleMuted = false`, and it had ZERO callers anywhere in the repo — one occurrence, its own
+// definition. Not behavior, a dormant landmine: the next person needing "start asking this customer
+// again" would have called it and silently bypassed the invite-budget arbitration below. The lanes
+// that legitimately reset the budget (cadence replacement / revival) already write the pair through
+// their own referees. Same class as the dead `updateAppointmentFromInbound` removed in #461.
 
-export function registerScheduleInviteSent(conv: Conversation, threshold = 3) {
+// Recording that we just asked this customer to come in. Asks `decideScheduleInviteBudget` for the
+// new count and whether the mute latches, so the threshold cannot drift from the one the follow-up
+// composer uses to pick its message pool — those were two independent `3`s in two files before this.
+export function registerScheduleInviteSent(conv: Conversation, threshold?: number) {
   if (!conv.followUpCadence) return;
-  conv.followUpCadence.scheduleInviteCount = (conv.followUpCadence.scheduleInviteCount ?? 0) + 1;
-  if ((conv.followUpCadence.scheduleInviteCount ?? 0) >= threshold) {
+  const decision = decideScheduleInviteBudget({
+    inviteCount: conv.followUpCadence.scheduleInviteCount,
+    threshold
+  });
+  conv.followUpCadence.scheduleInviteCount = decision.nextInviteCount;
+  if (decision.mute) {
     conv.followUpCadence.scheduleMuted = true;
   }
   conv.updatedAt = nowIso();
