@@ -11011,7 +11011,7 @@ export async function parseResponseControlWithLLM(args: {
     "",
     "Classify message intent as one of:",
     "- opt_out: customer requests no texts/messages or asks to stop/cancel/end messages.",
-    "- wrong_number: recipient says this is the wrong number, not them, or asks who this is because the message reached the wrong person.",
+    "- wrong_number: the person WE texted tells us we reached the wrong recipient - this is not their number, they are not the person we are asking for, or they ask who this is because our message did not belong to them. It is always about OUR message landing on the wrong phone; a customer apologizing for a message THEY misdirected to us is NOT wrong_number.",
     "- not_interested: customer clearly declines buying/follow-up for now.",
     "- schedule_request: customer explicitly asks to book/schedule/pick a day/time.",
     "- compliment_only: customer only compliments the bike/team without request/action.",
@@ -11023,6 +11023,7 @@ export async function parseResponseControlWithLLM(args: {
     "- Choose only one intent.",
     "- If customer says STOP/unsubscribe/no more texts => opt_out.",
     "- If customer says wrong number / you have the wrong number / this is not me / who is this because they are not the intended person => wrong_number.",
+    "- A customer who apologizes because THEY sent US a text meant for someone else (sent to the wrong person, wasn't meant for you, went to the wrong contact, meant to send that to my friend) is the OPPOSITE of wrong_number: they know exactly who we are. Use intent=none.",
     "- If customer says not interested / pass / no thanks / not moving forward => not_interested.",
     "- schedule_request only for explicit scheduling intent (appointment/time/day availability).",
     "- compliment_only only if no other request/intent is present.",
@@ -11057,6 +11058,13 @@ export async function parseResponseControlWithLLM(args: {
     'input: "Hi Scott, We are out of town, but I think I will wait on deciding whether to get a Harley. Thanks for checking in with me. Rich" output: {"intent":"not_interested","explicit_request":true,"confidence":0.93}',
     'input: "Wrong number?" output: {"intent":"wrong_number","explicit_request":true,"confidence":0.98}',
     'input: "You have the wrong number" output: {"intent":"wrong_number","explicit_request":true,"confidence":0.98}',
+    // Pins the production miss (Justin Alley +17163390288, 2026-07-21): mid-negotiation on a used
+    // 2017 Breakout, with a 5-6 PM visit set for that evening, he fat-fingered a joke meant for a
+    // friend into OUR thread and apologized. It parsed wrong_number @0.98 -> the reply was
+    // suppressed, related phones were suppressed and the live lead was CLOSED. He is telling us he
+    // knows who we are, not that we reached a stranger.
+    'input: "Oops omg sorry that sooo went to wrong person bahahahahaha that wasn\'t meant for you omg I\'m embarrassed as I was trying to joke with my close friend and it went and sent to you instead" output: {"intent":"none","explicit_request":false,"confidence":0.95}',
+    'input: "sorry, that last text was meant for my wife not you" output: {"intent":"none","explicit_request":false,"confidence":0.95}',
     'input: "You can hold off. Thanks" output: {"intent":"not_interested","explicit_request":true,"confidence":0.94}',
     'input: "I’ll pass man. I just like to ride the new models and check them out. Not a big deal. Thx" output: {"intent":"not_interested","explicit_request":true,"confidence":0.94}',
     'input: "Here is my insurance card" output: {"intent":"none","explicit_request":false,"confidence":0.91}',
