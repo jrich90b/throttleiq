@@ -362,6 +362,50 @@ export function decideCanaryVerdict(
     // A zero baseline has no ratio: 0 -> 1 would otherwise read as an infinite regression and
     // revert a perfectly good deploy.
     if (base <= 0) continue;
+
+    // SENDS ARE JUDGED PER INBOUND MESSAGE, not as a raw count.
+    //
+    // A slice is 8 hours; the baseline is a flat average over 48. A normal weekday BUSINESS MORNING
+    // therefore clears a x2 bound on volume alone. Measured, 2026-08-04: a slice with 59 sends
+    // against a 17.8-send expectation scored x3.31 and FAILED — but it also carried 38 inbound
+    // messages across 18 conversations, i.e. 1.55 sends per customer message against a baseline of
+    // 1.34. The customers were talking; we answered them. That is not a runaway.
+    //
+    // It is not a cosmetic complaint: promotion needs 3 consecutive clean slices, so a check that
+    // fails every busy morning means the canary can NEVER promote, and a canary that cries wolf
+    // gets switched off — which the thresholds above already name as the real failure.
+    //
+    // This is STRICTER where it matters. The failure actually worth reverting for is talking AT
+    // people — more messages per customer message — and that is exactly what the rate measures: a
+    // change that double-texts every lead doubles the rate while inbound stays flat, and still
+    // breaches. Sending into SILENCE is caught too: no inbound means no rate, so it falls through
+    // to the raw comparison below, which is the strict one. The fast runaway tripwire
+    // (`detectRunaway`, sends/hour vs the historical peak) is untouched and needs no baseline.
+    if (metric === "outboundToCustomer") {
+      const baseIn = Number(baseline.inboundFromCustomer) || 0;
+      const nowIn = Number(current.inboundFromCustomer) || 0;
+      if (baseIn > 0 && nowIn > 0) {
+        const baseRate = base / baseIn;
+        const nowRate = now / nowIn;
+        const rateRatio = nowRate / baseRate;
+        if (rateRatio > thresholds.maxIncreaseRatio) {
+          breaches.push({
+            metric,
+            kind: "increase",
+            baseline: base,
+            current: now,
+            limit: thresholds.maxIncreaseRatio,
+            detail:
+              `${metric} ${baseRate.toFixed(2)} -> ${nowRate.toFixed(2)} sends per inbound ` +
+              `(x${rateRatio.toFixed(2)}, limit x${thresholds.maxIncreaseRatio}; ` +
+              `${now} sends against ${nowIn} inbound)`
+          });
+        }
+        continue;
+      }
+      // No usable inbound on either side => fall through to the raw count comparison.
+    }
+
     const ratio = now / base;
     if (ratio > thresholds.maxIncreaseRatio) {
       breaches.push({
