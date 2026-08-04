@@ -17,6 +17,18 @@
  *  - `pause_watch` — "take me off the list". Stop the alerts, KEEP the lead; they may still buy here.
  *  - `acknowledge_and_close` — "I bought one". Congratulate them, say we are here for anything the
  *    bike needs, drop the alerts, and close the lead once that reply actually goes out.
+ *
+ * WHAT THE CALLER DOES WITH THE OUTCOME (prose moved out of index.ts, 2026-08-04, to land under the
+ * source_size_ratchet ceiling — the reasoning belongs next to the decision anyway):
+ *  - The caller is BOTH `/webhooks/twilio` and `/conversations/:id/regenerate` (route-parity law);
+ *    it only applies the side effects this outcome asks for.
+ *  - THE WATCH COMES OFF NOW, not on send. Alerts still running for someone who just bought is the
+ *    exact spam this path exists to stop, and pausing is reversible if they text back.
+ *  - THE CLOSE WAITS FOR A REAL SEND (Joe: "after we send draft and it goes through it should close
+ *    the lead"). `armPendingCloseout` here; `applyPendingCloseoutOnSend` fires it on a DELIVERED
+ *    outbound only. `delivered: false` means the text never reached them, so the lead stays open and
+ *    the arm stays put for the retry. The closeout referee still refuses if the customer has
+ *    written since — an armed close is a request, never a guarantee.
  */
 import { decideWatchOptOutTurn } from "./routeStateReducer.js";
 import { buildAcquiredVehicleAck } from "./agentVoice.js";

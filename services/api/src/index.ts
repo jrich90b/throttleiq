@@ -3195,9 +3195,7 @@ function watchOptOutConfidenceMin(): number {
   return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.7;
 }
 
-// Shared by BOTH /webhooks/twilio and /conversations/:id/regenerate (route-parity law). The read and
-// the reply live in domain/watchOptOutTurn.ts — including why the old keyword pre-filter is gone
-// (Mark Kocsis +17168609533). Here we only apply the side effects the outcome asks for.
+// Both paths (route-parity law); read + reply + rationale live in domain/watchOptOutTurn.ts.
 async function resolveWatchOptOutReply(
   conv: Conversation | null | undefined,
   inboundText: string,
@@ -3218,9 +3216,6 @@ async function resolveWatchOptOutReply(
     confidenceMin: watchOptOutConfidenceMin()
   });
   if (outcome.kind === "none") return null;
-  // The watch comes off NOW, not on send: alerts running for someone who just bought is the exact
-  // spam this path exists to stop, and it is reversible if they text back. The CLOSE is what waits
-  // for a real send (Joe, 2026-08-04) — armed here, fired by the send route.
   const paused = markInventoryWatchOptOut(conv, outcome.reason);
   stopFollowUpCadence(conv, outcome.reason);
   if (outcome.closeAfterSend) armPendingCloseout(conv, outcome.reason);
@@ -52532,10 +52527,6 @@ app.post("/conversations/:id/send", async (req, res) => {
       }
       markAppointmentAcknowledged(conv);
     }
-    // A closeout armed by the acquisition turn fires HERE and only here — on a real, DELIVERED
-    // outbound (Joe, 2026-08-04: "after we send draft and it goes through it should close the
-    // lead"). `delivered: false` means the text never reached them, so the lead stays open and the
-    // arm stays put for the retry. The referee still refuses if the customer has written since.
     if (args.delivered) {
       const closeoutDecision = applyPendingCloseoutOnSend(conv, { nowIso: new Date().toISOString() });
       if (closeoutDecision.kind === "close_lead") {
