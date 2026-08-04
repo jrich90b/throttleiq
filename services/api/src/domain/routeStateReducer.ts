@@ -1603,12 +1603,23 @@ export function decideDealStatusCheckTurn(
 // spamming, so the floor is moderate; the caller may also escalate a clearly-done customer to the
 // disposition closeout, which pauses the watch anyway.)
 // ---------------------------------------------------------------------------
-export type WatchOptOutTurnKind = "pause_watch" | "none";
+// ACQUISITION ARM (Joe, 2026-08-04 — Mark Kocsis +17168609533). A watch alert drew "Thanks for
+// keeping me in mind but I actually just picked up a 2023 street glide anniversary edition." Telling
+// us they BOUGHT A BIKE is not the same as "stop the alerts", and Joe wants it handled differently:
+// congratulate them, say we are here for anything the bike needs, take them off the watch list, and
+// close the lead ONCE THAT REPLY ACTUALLY GOES OUT. Hence a second kind rather than a flag —
+// `pause_watch` deliberately KEEPS a live lead (they may still buy from us), this one does not.
+//
+// FAIL DIRECTION is stricter here than for pause_watch, because closing a live lead is the expensive
+// mistake: it takes the acquisition intent AND the same confidence floor, and the close is DEFERRED
+// — the caller arms it and only a genuinely SENT acknowledgement fires it. A draft staff discard
+// leaves the lead exactly where it was. Everything unsure still falls to `none`.
+export type WatchOptOutTurnKind = "acknowledge_and_close" | "pause_watch" | "none";
 
 export type WatchOptOutTurnInput = {
   hasActiveWatch: boolean;
   parserAccepted: boolean;
-  intent?: string | null; // "watch_opt_out" | "none"
+  intent?: string | null; // "acquired_vehicle" | "watch_opt_out" | "none"
   confidence: number;
   confidenceMin: number;
 };
@@ -1620,11 +1631,64 @@ export type WatchOptOutTurnDecision = {
 export function decideWatchOptOutTurn(input: WatchOptOutTurnInput): WatchOptOutTurnDecision {
   if (!input.hasActiveWatch) return { kind: "none" }; // nothing to remove
   if (!input.parserAccepted) return { kind: "none" };
-  if (input.intent !== "watch_opt_out") return { kind: "none" };
+  const acquired = input.intent === "acquired_vehicle";
+  if (!acquired && input.intent !== "watch_opt_out") return { kind: "none" };
   if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) {
     return { kind: "none" };
   }
-  return { kind: "pause_watch" };
+  return { kind: acquired ? "acknowledge_and_close" : "pause_watch" };
+}
+
+// --- Deferred closeout, fired by an actual SEND (Joe, 2026-08-04) ------------
+// "After we send draft and it goes through it should close the lead."
+//
+// The close cannot happen when the draft is WRITTEN, because in suggest mode a draft is a proposal —
+// staff may edit it, sit on it, or throw it away. So the acquisition turn ARMS a closeout and the
+// send route fires it. Nothing else may write `conv.status` off the back of this: the firing call
+// goes through `applyLeadCloseout`, the one closeout referee (#484).
+//
+// FAIL DIRECTION: refuse. Every uncertain input leaves the lead OPEN, which is recoverable — a lead
+// that should have closed just sits in the inbox, whereas a wrongly closed one silently stops being
+// worked. The interesting refusal is the third: if the customer has said ANYTHING since we armed,
+// they have re-engaged, and whatever they now want outranks a stale "close after send" note.
+export type PendingCloseoutSendKind = "close_lead" | "none";
+
+export type PendingCloseoutSendInput = {
+  /** Is a closeout armed on this conversation at all? */
+  armed: boolean;
+  /** When it was armed (ms). Non-finite = cannot compare = refuse. */
+  armedAtMs: number;
+  /** The newest INBOUND message time (ms), or null when there is none. */
+  lastInboundAtMs: number | null;
+  /** `conv.status === "closed"` — already done, nothing to fire. */
+  alreadyClosed: boolean;
+};
+
+export type PendingCloseoutSendDecision = {
+  kind: PendingCloseoutSendKind;
+  /** Drop the arm even when we refuse to close — a stale arm must not linger and fire later. */
+  clearArm: boolean;
+  why: string;
+};
+
+export function decidePendingCloseoutOnSend(
+  input: PendingCloseoutSendInput
+): PendingCloseoutSendDecision {
+  if (!input.armed) return { kind: "none", clearArm: false, why: "no closeout is armed on this lead" };
+  if (input.alreadyClosed) {
+    return { kind: "none", clearArm: true, why: "the lead is already closed — drop the stale arm" };
+  }
+  if (!Number.isFinite(input.armedAtMs)) {
+    return { kind: "none", clearArm: true, why: "the arm carries no usable timestamp — refuse and drop it" };
+  }
+  if (input.lastInboundAtMs !== null && input.lastInboundAtMs > input.armedAtMs) {
+    return {
+      kind: "none",
+      clearArm: true,
+      why: "the customer has written since we armed — they re-engaged, so the lead stays open"
+    };
+  }
+  return { kind: "close_lead", clearArm: true, why: "the acknowledgement went out — close the lead" };
 }
 
 // --- Post-sale ownership loss (2026-07-08) -----------------------------------

@@ -124,6 +124,25 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     return reducer.isInternationalLeadPhone(phone);
   }, ["isInternationalLeadPhone"]);
 
+  // Added 2026-08-04 (Joe — Mark Kocsis +17168609533). Fully projectable: the armed note and the
+  // last inbound both live on the stored conversation, so a lead that starts closing itself on the
+  // wrong send shows up as a decision DIFF rather than as a lead that quietly left the inbox. The
+  // clock is deliberately unused — this referee compares two stored timestamps to each other.
+  add("pendingCloseoutOnSend", conv => {
+    if (typeof reducer.decidePendingCloseoutOnSend !== "function") return undefined;
+    const armedAt = str(conv?.pendingCloseout?.armedAt);
+    const lastInbound = [...(Array.isArray(conv?.messages) ? conv.messages : [])]
+      .reverse()
+      .find((m: any) => str(m?.direction) === "in");
+    const lastInboundMs = lastInbound ? Date.parse(str(lastInbound?.at) ?? "") : NaN;
+    return reducer.decidePendingCloseoutOnSend({
+      armed: !!conv?.pendingCloseout,
+      armedAtMs: Date.parse(armedAt ?? ""),
+      lastInboundAtMs: Number.isFinite(lastInboundMs) ? lastInboundMs : null,
+      alreadyClosed: str(conv?.status) === "closed"
+    });
+  }, ["decidePendingCloseoutOnSend"]);
+
   // Added 2026-08-01 with PR #398 — the worked example of an un-stacking referee.
   add("financeDeclinedCadence", conv => {
     if (typeof reducer.decideFinanceDeclinedCadence !== "function") return undefined;

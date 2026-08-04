@@ -11,6 +11,8 @@ import {
   decideHeldDraftRelease,
   decideSoldCloseout,
   decideLeadCloseout,
+  decidePendingCloseoutOnSend,
+  type PendingCloseoutSendDecision,
   type LeadCloseoutLane,
   type LeadCloseoutDecision,
   decideAppointmentTeardown,
@@ -881,6 +883,13 @@ export type Conversation = {
   status?: "open" | "closed";
   closedAt?: string;
   closedReason?: string;
+  /**
+   * A closeout waiting on an actual SEND (Joe, 2026-08-04). Armed when the customer tells us they
+   * bought a bike; fired by the send route once the acknowledgement really goes out, never when the
+   * draft is merely written. One writer (`armPendingCloseout`), one consumer
+   * (`applyPendingCloseoutOnSend`), and the close itself still goes through `applyLeadCloseout`.
+   */
+  pendingCloseout?: { reason: string; armedAt: string };
   sale?: {
     soldAt?: string;
     soldById?: string;
@@ -5588,6 +5597,47 @@ export function applyLeadCloseout(
       if (w && w.status !== "paused") w.status = "paused";
     }
   }
+  return decision;
+}
+
+/**
+ * Arm a closeout that only fires when a reply actually goes out (Joe, 2026-08-04: "After we send
+ * draft and it goes through it should close the lead"). Writes nothing but the note itself — the
+ * lead stays open, in the inbox, and fully workable until the send.
+ */
+export function armPendingCloseout(conv: Conversation, reason: string) {
+  conv.pendingCloseout = { reason, armedAt: nowIso() };
+}
+
+/**
+ * Fire (or refuse) an armed closeout because an outbound just went out. Asks
+ * `decidePendingCloseoutOnSend` whether this send earns the close, and routes the close itself
+ * through `applyLeadCloseout` — the one closeout referee — so this never becomes another writer of
+ * `conv.status`. `applyLeadCloseout` also pauses any surviving active watch, which is belt-and-braces
+ * here since the acquisition turn already paused them.
+ *
+ * Returns the decision so callers can log it; a refusal still clears a stale arm.
+ */
+export function applyPendingCloseoutOnSend(
+  conv: Conversation,
+  input: { nowIso: string }
+): PendingCloseoutSendDecision {
+  const armed = conv.pendingCloseout;
+  const lastInbound = [...(conv.messages ?? [])]
+    .reverse()
+    .find(m => String((m as any)?.direction ?? "") === "in");
+  const lastInboundAtMs = lastInbound ? Date.parse(String((lastInbound as any).at ?? "")) : NaN;
+  const decision = decidePendingCloseoutOnSend({
+    armed: !!armed,
+    armedAtMs: Date.parse(String(armed?.armedAt ?? "")),
+    lastInboundAtMs: Number.isFinite(lastInboundAtMs) ? lastInboundAtMs : null,
+    alreadyClosed: conv.status === "closed"
+  });
+  if (decision.kind === "close_lead") {
+    applyLeadCloseout(conv, { nowIso: input.nowIso, lane: "generic_close", reason: armed?.reason });
+    markOpenTodosDoneForConversation(conv.id);
+  }
+  if (decision.clearArm) conv.pendingCloseout = undefined;
   return decision;
 }
 
