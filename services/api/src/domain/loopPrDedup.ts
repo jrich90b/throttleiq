@@ -38,12 +38,20 @@ export function findOpenPrForFindingKey(
   openPrs: OpenPrSummary[] | null | undefined,
   key: string
 ): OpenPrSummary | null {
-  if (!isMeaningfulFindingKey(key)) return null;
+  return findOpenPrsForFindingKey(openPrs, key)[0] ?? null;
+}
+
+/**
+ * EVERY open PR carrying this key. A PR fixes ONE finding, so the COUNT is what the batch
+ * partitioner needs when several distinct findings share a key (see `partitionWorkOrdersByLoopPr`).
+ */
+export function findOpenPrsForFindingKey(
+  openPrs: OpenPrSummary[] | null | undefined,
+  key: string
+): OpenPrSummary[] {
+  if (!isMeaningfulFindingKey(key)) return [];
   const marker = findingKeyMarker(key);
-  for (const pr of openPrs ?? []) {
-    if (typeof pr?.body === "string" && pr.body.includes(marker)) return pr;
-  }
-  return null;
+  return (openPrs ?? []).filter(pr => typeof pr?.body === "string" && pr.body.includes(marker));
 }
 
 export type MergedPrSummary = OpenPrSummary & { mergedAt?: string | null };
@@ -67,17 +75,25 @@ export function findMergedPrForFindingKey(
   key: string,
   opts?: { nowMs?: number; windowDays?: number }
 ): MergedPrSummary | null {
-  if (!isMeaningfulFindingKey(key)) return null;
+  return findMergedPrsForFindingKey(mergedPrs, key, opts)[0] ?? null;
+}
+
+/** EVERY in-window merged PR carrying this key — the count feeds the same coverage cap. */
+export function findMergedPrsForFindingKey(
+  mergedPrs: MergedPrSummary[] | null | undefined,
+  key: string,
+  opts?: { nowMs?: number; windowDays?: number }
+): MergedPrSummary[] {
+  if (!isMeaningfulFindingKey(key)) return [];
   const marker = findingKeyMarker(key);
   const nowMs = opts?.nowMs ?? Date.now();
   const windowMs = (opts?.windowDays ?? 14) * 24 * 60 * 60 * 1000;
-  for (const pr of mergedPrs ?? []) {
-    if (typeof pr?.body !== "string" || !pr.body.includes(marker)) continue;
+  return (mergedPrs ?? []).filter(pr => {
+    if (typeof pr?.body !== "string" || !pr.body.includes(marker)) return false;
     const mergedMs = Date.parse(String(pr.mergedAt ?? ""));
-    if (!Number.isFinite(mergedMs)) continue; // can't prove recency → keep building
-    if (nowMs - mergedMs <= windowMs) return pr;
-  }
-  return null;
+    if (!Number.isFinite(mergedMs)) return false; // can't prove recency → keep building
+    return nowMs - mergedMs <= windowMs;
+  });
 }
 
 /** A work-order / anomaly row — anything carrying a convId + dimension we can key on. */
@@ -89,6 +105,18 @@ export type LoopPrSuppression = {
   prNumber: number;
   state: "open" | "merged";
   mergedAt?: string | null;
+};
+
+/**
+ * A key that MORE findings share than PRs cover: the PR proves one of them is filed, but not
+ * which, so all of them are KEPT and reported here for manual triage.
+ */
+export type LoopPrAmbiguousCoverage = {
+  workOrder: LoopWorkOrder;
+  key: string;
+  findingCount: number;
+  prCount: number;
+  prNumbers: number[];
 };
 
 /**
@@ -104,6 +132,16 @@ export type LoopPrSuppression = {
  * every finding is KEPT. We only ever drop a finding we can PROVE a PR already covers, so we
  * never silently hide a live miss (incl. state anomalies: a watch_fire_miss is dropped only if
  * a PR was literally stamped `<phone>::watch_fire_miss`, i.e. someone already filed it).
+ *
+ * COVERAGE CAP (2026-08-04). `convId::dimension` is not unique: one conversation can carry SEVERAL
+ * DISTINCT findings in the same dimension — Tony Mooradian +17165236994 filed two separate operator
+ * reports, "Pricing was answered but the pricing flag still shows in the inbox" and "I don't think
+ * this one should have been closed", both `reported_issue`. PR #507 fixed the FIRST; the key match
+ * then dropped BOTH, so the wrongful-close report vanished from the work order with no trace but a
+ * "covered by #507" line. A PR covers ONE finding, so suppression is capped at the number of PRs
+ * carrying the key: when more findings share a key than PRs cover it, every one of them is KEPT and
+ * listed in `ambiguous` for manual triage. Same fail-direction as the rest of this module — we drop
+ * a finding only when we can prove coverage, and "some PR covers one of these three" is not proof.
  */
 export function partitionWorkOrdersByLoopPr(
   workOrders: LoopWorkOrder[] | null | undefined,
@@ -113,31 +151,50 @@ export function partitionWorkOrdersByLoopPr(
     nowMs?: number;
     windowDays?: number;
   }
-): { kept: LoopWorkOrder[]; suppressed: LoopPrSuppression[] } {
+): { kept: LoopWorkOrder[]; suppressed: LoopPrSuppression[]; ambiguous: LoopPrAmbiguousCoverage[] } {
   const kept: LoopWorkOrder[] = [];
   const suppressed: LoopPrSuppression[] = [];
+  const ambiguous: LoopPrAmbiguousCoverage[] = [];
+
+  const findingCounts = new Map<string, number>();
+  for (const wo of workOrders ?? []) {
+    const key = findingKeyOf(wo?.convId ?? null, wo?.dimension ?? null);
+    if (!isMeaningfulFindingKey(key)) continue;
+    findingCounts.set(key, (findingCounts.get(key) ?? 0) + 1);
+  }
+
   for (const wo of workOrders ?? []) {
     const key = findingKeyOf(wo?.convId ?? null, wo?.dimension ?? null);
     if (!isMeaningfulFindingKey(key)) {
       kept.push(wo);
       continue;
     }
-    const open = findOpenPrForFindingKey(args.openPrs, key);
+    const opens = findOpenPrsForFindingKey(args.openPrs, key);
+    const mergeds = findMergedPrsForFindingKey(args.mergedPrs, key, {
+      nowMs: args.nowMs,
+      windowDays: args.windowDays
+    });
+    const prNumbers = [...new Set([...opens, ...mergeds].map(pr => pr.number))];
+    if (prNumbers.length === 0) {
+      kept.push(wo);
+      continue;
+    }
+    const findingCount = findingCounts.get(key) ?? 1;
+    if (prNumbers.length < findingCount) {
+      // More distinct findings than filed PRs: we cannot tell which one is covered → keep them all.
+      ambiguous.push({ workOrder: wo, key, findingCount, prCount: prNumbers.length, prNumbers });
+      kept.push(wo);
+      continue;
+    }
+    const open = opens[0];
     if (open) {
       suppressed.push({ workOrder: wo, key, prNumber: open.number, state: "open" });
       continue;
     }
-    const merged = findMergedPrForFindingKey(args.mergedPrs, key, {
-      nowMs: args.nowMs,
-      windowDays: args.windowDays
-    });
-    if (merged) {
-      suppressed.push({ workOrder: wo, key, prNumber: merged.number, state: "merged", mergedAt: merged.mergedAt ?? null });
-      continue;
-    }
-    kept.push(wo);
+    const merged = mergeds[0];
+    suppressed.push({ workOrder: wo, key, prNumber: merged.number, state: "merged", mergedAt: merged.mergedAt ?? null });
   }
-  return { kept, suppressed };
+  return { kept, suppressed, ambiguous };
 }
 
 
