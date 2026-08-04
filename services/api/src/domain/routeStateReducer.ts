@@ -5195,19 +5195,22 @@ export function decideAppointmentConfirmRecord(
 }
 
 // ===================================================================================================
-// A BOOKING ENDPOINT JUST CREATED THE CALENDAR EVENT — "what does the appointment record become?"
+// A CALENDAR WRITE JUST PUT A REAL EVENT ON THIS LEAD'S BOOKS — "what does the appointment record
+// become?"
 //
 // The sibling question to `decideAppointmentConfirmRecord` above, and a DIFFERENT one. That referee
-// owns the three lanes where a CONVERSATION TURN stamps `confirmed`. This one owns the three HTTP
-// endpoints that book a real Google event and then write the record:
+// owns the three lanes where a CONVERSATION TURN stamps `confirmed`. This one owns every place that
+// writes a real Google event and then writes the record:
 //
 //   POST /scheduler/book                 the booking widget — the customer picked one of our slots
 //   POST /public/booking/book            the public booking link we text a lead
 //   POST /conversations/:id/appointment  the console — a salesperson books the lead in by hand
+//   (manual outbound send)               staff texted a time; we book the lead in behind the message
+//   PATCH /calendar/events/:cal/:event   staff EDITED the event straight on the calendar
 //
-// WHAT WAS FIGHTING. All three ran the same eleven-line block of hand-maintained field writes, and
-// the lists had drifted apart. They agree on status/whenText/whenIso/updatedAt/acknowledged and the
-// three booked-event ids. They disagree on two things:
+// WHAT WAS FIGHTING. All five ran their own hand-maintained block of the same field writes, and the
+// lists had drifted apart. They agree on status/whenText/whenIso/updatedAt and the reschedule latch.
+// They disagree on four things:
 //
 //   DIVERGENCE 1 — the `reschedulePending` latch. **FIXED 2026-08-02; all three lanes now clear
 //     it.** The staff lane always did; the two customer lanes left it standing. That latch is what
@@ -5227,8 +5230,24 @@ export function decideAppointmentConfirmRecord(
 //     do not, so their record cannot say which salesperson/calendar window was taken. Lower stakes
 //     (a breadcrumb, not something we assert to a customer). Also preserved and named.
 //
-// `confirmedBy` differs too — "salesperson" for the console lane, "customer" for the two the
-// customer drives — but that is the lane's INPUT, not a disagreement about the same question.
+//   DIVERGENCE 3 — does the lane STAMP `confirmedBy` at all? The three endpoint lanes do. The two
+//     lanes joining here (2026-08-04) leave whatever is already on file untouched. That is not
+//     cosmetic: `confirmedBy` is what `decideAppointmentAttribution` reads when nobody handed it an
+//     explicit actor, and `kpiAnalytics` turns it into the appointment-SETTER label (salesperson vs
+//     ai_sms). Both joining lanes call `setAppointmentBookedBy` explicitly, so attribution is
+//     already answered for them — but stamping `confirmedBy` anyway would move a reported number.
+//     PRESERVED and named; changing a business figure is not a cleanup's call.
+//
+//   DIVERGENCE 4 — does the lane put the customer's word on file (`acknowledged`)? Every lane that
+//     CREATES an event does: the customer or the rep chose that time, so the robotic 24h "Reply YES
+//     to confirm" reminder would re-ask what was just settled. `staff_calendar_edit` does NOT touch
+//     it, because staff dragging an event to a new hour is not the customer agreeing to the new
+//     hour. PRESERVED. Traced to its consumer before preserving:
+//     `shouldSuppressAppointmentConfirmationReminder` (transitionSafety.ts) is the only thing that
+//     reads it, and leaving it alone is the fail-SAFE half — an unacknowledged appointment still
+//     gets its reminder. (The other half IS a real gap: a customer who acknowledged the OLD time
+//     stays acknowledged after staff move it, so she is never re-asked about the new one. That is a
+//     behavior FIX, not a centralization, and belongs in its own PR.)
 //
 // FAIL DIRECTION. Refusing to stamp is the SAFE answer: an unrecorded booking costs a re-ask, while
 // a wrong "confirmed" tells a customer they are on the calendar when nothing holds the slot. An
@@ -5240,7 +5259,25 @@ export function decideAppointmentConfirmRecord(
 export type AppointmentBookingLane =
   | "scheduler_widget_booking" // POST /scheduler/book — customer picked a suggested slot
   | "public_link_booking" // POST /public/booking/book — customer used the public booking link
-  | "staff_console_booking"; // POST /conversations/:id/appointment — a salesperson booked it
+  | "staff_console_booking" // POST /conversations/:id/appointment — a salesperson booked it
+  | "manual_outbound_schedule_booking" // staff texted a time; we book the event behind the send
+  | "staff_calendar_edit"; // PATCH /calendar/events/:calendarId/:eventId — staff moved the event
+
+/**
+ * Lanes that leave `confirmedBy` exactly as they found it (divergence 3). Both hand attribution in
+ * themselves via `setAppointmentBookedBy`, so stamping here would only move the KPI setter label.
+ */
+const APPOINTMENT_BOOKING_LANES_KEEPING_CONFIRMED_BY = new Set<string>([
+  "manual_outbound_schedule_booking",
+  "staff_calendar_edit"
+]);
+
+/**
+ * The one lane that EDITS an event someone else created. It owns its booked-event ids field by
+ * field (it patches only what the calendar actually returned, rather than clearing to null), and it
+ * never claims the customer acknowledged the new time. See divergences 3 and 4.
+ */
+const APPOINTMENT_BOOKING_EDIT_LANE = "staff_calendar_edit";
 
 /** The lanes the CUSTOMER drives. See `confirmedBy` above — an input, not a disagreement. */
 const APPOINTMENT_BOOKING_CUSTOMER_LANES = new Set<string>([
@@ -5254,6 +5291,12 @@ export type AppointmentBookingRecordInput = {
   reschedulePending?: boolean | null;
   /** Does the caller HAVE a slot to record? Only used to name divergence 2 honestly. */
   hasMatchedSlot?: boolean;
+  /**
+   * Does this call carry a TIME to put on the record? Only the edit lane can arrive without one —
+   * staff recolouring or retitling an event changes no hour, and must not restamp `confirmed`.
+   * Every creating lane always has one, so this input cannot move their answer.
+   */
+  hasBookedTime?: boolean;
 };
 
 export type AppointmentBookingRecordDecision = {
@@ -5263,6 +5306,14 @@ export type AppointmentBookingRecordDecision = {
   confirmedBy: "customer" | "salesperson";
   /** Customer's word on file — suppresses the 24h YES/NO confirmation reminder. */
   acknowledged: boolean;
+  /** Write status + whenIso + whenText. False on a metadata-only calendar edit (no hour moved). */
+  stampBookedTime: boolean;
+  /** Write `confirmedBy` at all. False on the two lanes that hand attribution in (divergence 3). */
+  stampConfirmedBy: boolean;
+  /** Put the customer's word on file. False on the staff calendar edit (divergence 4). */
+  stampAcknowledged: boolean;
+  /** Own the booked-event ids. False on the edit lane, which patches them itself (divergence 3/4). */
+  stampBookedEvent: boolean;
   /** Clear the reschedule latch alongside the booking. Staff lane only today (divergence 1). */
   clearReschedulePending: boolean;
   /** Store which slot was taken. Staff lane only today (divergence 2). */
@@ -5277,16 +5328,36 @@ export function decideAppointmentBookingRecord(
 ): AppointmentBookingRecordDecision {
   const lane = String(input.lane ?? "").trim();
   const customerDriven = APPOINTMENT_BOOKING_CUSTOMER_LANES.has(lane);
-  const recognized = customerDriven || lane === "staff_console_booking";
+  const staffDriven =
+    lane === "staff_console_booking" ||
+    lane === "manual_outbound_schedule_booking" ||
+    lane === APPOINTMENT_BOOKING_EDIT_LANE;
+  const recognized = customerDriven || staffDriven;
+  const editLane = lane === APPOINTMENT_BOOKING_EDIT_LANE;
   const latched = input.reschedulePending === true;
+  // Only the edit lane can arrive with no hour to record; every creating lane always carries one,
+  // so this can never move their answer.
+  const stampBookedTime = recognized && (!editLane || input.hasBookedTime === true);
 
   return {
     record: recognized,
     status: "confirmed",
     confirmedBy: customerDriven ? "customer" : "salesperson",
-    // All three booked a real calendar event against a time the customer or the rep chose, so the
-    // robotic "Reply YES to confirm" reminder would re-ask what was just settled.
+    // Every lane that CREATES an event booked it against a time the customer or the rep chose, so
+    // the robotic "Reply YES to confirm" reminder would re-ask what was just settled. The edit lane
+    // is excluded via `stampAcknowledged` — see divergence 4.
     acknowledged: true,
+    stampBookedTime,
+    // Divergence 3, PRESERVED: the two lanes that hand attribution in themselves via
+    // `setAppointmentBookedBy` leave `confirmedBy` alone. Stamping it would move the KPI
+    // appointment-setter label, and a centralization does not get to move a reported number.
+    stampConfirmedBy: recognized && !APPOINTMENT_BOOKING_LANES_KEEPING_CONFIRMED_BY.has(lane),
+    // Divergence 4, PRESERVED: staff dragging an event to a new hour is not the customer agreeing
+    // to the new hour, so the edit lane never puts her word on file.
+    stampAcknowledged: recognized && !editLane,
+    // The edit lane patches the booked-event ids itself — it writes only what Google actually
+    // returned, where the creating lanes clear a missing id to null so no stale event survives.
+    stampBookedEvent: recognized && !editLane,
     // RULED 2026-08-02 (divergence 1, FIXED — was: staff lane only). A booking lane that holds a
     // REAL calendar event clears the latch; that principle was already settled by the sibling
     // referee `decideAppointmentConfirmRecord`, which reserves "leave it standing" for the
@@ -5300,16 +5371,25 @@ export function decideAppointmentBookingRecord(
     // Divergence 2, still preserved and NOT acted on: only the staff lane records which slot it
     // took. A breadcrumb, never asserted to a customer. Named only when a slot actually exists to
     // record, so the flag marks a real gap rather than every customer booking.
-    divergence:
-      recognized && customerDriven && input.hasMatchedSlot === true
-        ? "customer_lane_booking_does_not_record_the_matched_slot"
-        : null,
+    divergence: !recognized
+      ? null
+      : editLane
+        ? // Divergence 4 is the one that can cost a customer a visit, so it is named on every edit.
+          "staff_calendar_edit_does_not_refresh_the_customers_acknowledgement_of_the_new_time"
+        : APPOINTMENT_BOOKING_LANES_KEEPING_CONFIRMED_BY.has(lane)
+          ? "manual_outbound_booking_leaves_confirmedBy_to_the_attribution_writer"
+          : customerDriven && input.hasMatchedSlot === true
+            ? "customer_lane_booking_does_not_record_the_matched_slot"
+            : null,
     why: !recognized
       ? `unrecognized appointment-booking lane "${lane}" — refused, nothing may be stamped`
-      : customerDriven
-        ? `${lane}: the customer booked a real calendar event — their word is on file and the ` +
-          `reschedule latch is cleared${latched ? " (it was standing)" : ""}; the matched slot is not recorded`
-        : `${lane}: a salesperson booked the lead in — latch cleared and the taken slot recorded`
+      : editLane
+        ? `${lane}: staff edited the event${stampBookedTime ? " and moved the hour" : " without moving the hour"} — ` +
+          "latch cleared, but the customer's acknowledgement is left exactly as it was"
+        : customerDriven
+          ? `${lane}: the customer booked a real calendar event — their word is on file and the ` +
+            `reschedule latch is cleared${latched ? " (it was standing)" : ""}; the matched slot is not recorded`
+          : `${lane}: a salesperson booked the lead in — latch cleared and the taken slot recorded`
   };
 }
 

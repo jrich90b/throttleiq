@@ -40003,11 +40003,12 @@ app.patch("/calendar/events/:calendarId/:eventId", requirePermission("canEditApp
           markOpenTodosDoneForConversationByClass(conv.id, ["appointment"]);
         }
       } else {
-        if (startIso) {
-          appt.status = "confirmed";
-          appt.whenIso = startIso;
-          appt.whenText = formatSlotLocal(startIso, tz);
-        }
+        // Staff moved the event: referee owns the arbitration, ids stay here (this lane PATCHES).
+        applyAppointmentBookingRecord(conv, {
+          lane: "staff_calendar_edit",
+          whenIso: startIso || undefined,
+          whenText: startIso ? formatSlotLocal(startIso, tz) : undefined
+        });
         if (updated?.id) appt.bookedEventId = updated.id;
         if (updated?.htmlLink) appt.bookedEventLink = updated.htmlLink;
         if (targetCalendarId) {
@@ -40018,7 +40019,6 @@ app.patch("/calendar/events/:calendarId/:eventId", requirePermission("canEditApp
             appt.bookedSalespersonName = sp.name ?? appt.bookedSalespersonName ?? null;
           }
         }
-        appt.reschedulePending = false;
         onAppointmentBooked(conv);
       }
 
@@ -52872,25 +52872,25 @@ app.post("/conversations/:id/send", async (req, res) => {
         return false;
       }
 
-      appt.status = "confirmed";
-      appt.whenIso = chosenSlot.start;
-      appt.whenText = chosenSlot.startLocal ?? formatSlotLocal(chosenSlot.start, cfg.timezone);
-      appt.updatedAt = new Date().toISOString();
-      appt.acknowledged = true;
-      appt.bookedEventId = eventObj.id ?? null;
-      appt.bookedEventLink = eventObj.htmlLink ?? null;
-      appt.bookedSalespersonId = chosenSlot.salespersonId ?? null;
-      appt.matchedSlot = {
-        salespersonId: chosenSlot.salespersonId ?? undefined,
-        salespersonName: chosenSlot.salespersonName ?? undefined,
-        calendarId: chosenSlot.calendarId,
-        start: chosenSlot.start,
-        end: chosenSlot.end,
-        startLocal: chosenSlot.startLocal,
-        endLocal: chosenSlot.endLocal,
-        appointmentType
-      };
-      appt.reschedulePending = false;
+      // Staff texted a time, we booked it — `confirmedBy` left to setAppointmentBookedBy below.
+      applyAppointmentBookingRecord(conv, {
+        lane: "manual_outbound_schedule_booking",
+        whenIso: chosenSlot.start,
+        whenText: chosenSlot.startLocal ?? formatSlotLocal(chosenSlot.start, cfg.timezone),
+        bookedEventId: eventObj.id ?? null,
+        bookedEventLink: eventObj.htmlLink ?? null,
+        bookedSalespersonId: chosenSlot.salespersonId ?? null,
+        matchedSlot: {
+          salespersonId: chosenSlot.salespersonId ?? undefined,
+          salespersonName: chosenSlot.salespersonName ?? undefined,
+          calendarId: chosenSlot.calendarId,
+          start: chosenSlot.start,
+          end: chosenSlot.end,
+          startLocal: chosenSlot.startLocal,
+          endLocal: chosenSlot.endLocal,
+          appointmentType
+        }
+      });
       if (chosenSlot.salespersonId) {
         setPreferredSalespersonForConv(
           conv,

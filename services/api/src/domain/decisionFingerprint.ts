@@ -625,6 +625,39 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     }, ["decideAppointmentBookingRecord"]);
   }
 
+  // Added 2026-08-04 with the two remaining calendar-write lanes (the manual-outbound send that
+  // books a texted time, and the staff calendar edit). Kept as SEPARATE samples with their own
+  // projection rather than widening the three above: a widened projection would read as a decision
+  // CHANGE on every lead and drown the very signal this harness exists to show. The extra fields
+  // are the four "does this lane stamp it at all" switches — the divergences these two preserve.
+  // PROBE: lane and hasMatchedSlot are held fixed; hasBookedTime is sampled BOTH ways because it is
+  // the only input that can move the edit lane's answer.
+  for (const lane of ["manual_outbound_schedule_booking", "staff_calendar_edit"] as const) {
+    for (const hasBookedTime of [true, false] as const) {
+      add(`appointmentBookingRecord:${lane}:${hasBookedTime ? "timed" : "untimed"}`, conv => {
+        if (!conv?.appointment || typeof reducer.decideAppointmentBookingRecord !== "function") {
+          return undefined;
+        }
+        const decision = reducer.decideAppointmentBookingRecord({
+          lane, // PROBE
+          reschedulePending: conv.appointment?.reschedulePending,
+          hasMatchedSlot: true, // PROBE — caller-side, never stored state
+          hasBookedTime // PROBE
+        });
+        return {
+          record: decision.record,
+          stampBookedTime: decision.stampBookedTime,
+          stampConfirmedBy: decision.stampConfirmedBy,
+          stampAcknowledged: decision.stampAcknowledged,
+          stampBookedEvent: decision.stampBookedEvent,
+          clearReschedulePending: decision.clearReschedulePending,
+          recordMatchedSlot: decision.recordMatchedSlot,
+          divergence: decision.divergence
+        };
+      }, ["decideAppointmentBookingRecord"]);
+    }
+  }
+
   // Sampled once PER LANE, because the whole disagreement this referee owns is between lanes: the
   // customer-speech lane may mint an appointment record to latch on and the two staff-inference
   // lanes may not, so a single sample would hide exactly that. PROBE: the lane is held fixed per
