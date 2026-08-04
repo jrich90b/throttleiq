@@ -69,6 +69,25 @@ export function isScoreableGoldExample(ex: GoldExample | null | undefined): bool
   return true;
 }
 
+/**
+ * The items the scorer will actually grade: scoreable, and on the EVAL side of the hold-out.
+ *
+ * Lives here rather than inline in the runner so the selection can be pinned by CALLING it, not by
+ * grepping the runner's source. A source-text assertion breaks on every legitimate refactor and — the
+ * worse failure — a sloppy re-pin passes while guarding nothing; `eval_source_pin_ratchet` exists to
+ * stop exactly that, and caught this on the first run.
+ *
+ * Scoring the TRAIN side would be marking our own homework: few-shots may draw from it.
+ */
+export function selectScoreableEvalItems<T extends GoldExample>(
+  all: ReadonlyArray<T> | null | undefined,
+  splitOf: (key: string) => "train" | "eval",
+  keyOf: (ex: T) => string
+): T[] {
+  if (!Array.isArray(all)) return [];
+  return all.filter(ex => isScoreableGoldExample(ex) && splitOf(keyOf(ex)) === "eval");
+}
+
 /** Majority of the samples, with a tie or an empty vote resolving to NOT correct (see fail direction). */
 export function tallyVotes(votes: ReadonlyArray<boolean | null | undefined>): boolean {
   const cast = (votes ?? []).filter((v): v is boolean => typeof v === "boolean");

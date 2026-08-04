@@ -27,7 +27,7 @@ import { pairKey, splitFor } from "../services/api/src/domain/goldCorpusHarvest.
 import {
   GOLD_EQUIVALENCE_JSON_SCHEMA,
   buildGoldEquivalencePrompt,
-  isScoreableGoldExample,
+  selectScoreableEvalItems,
   summarizeGoldScore,
   tallyVotes,
   type GoldExample,
@@ -58,10 +58,13 @@ if (!Array.isArray(all) || !all.length) {
   process.exit(2);
 }
 
-// The EVAL split only. `pairKey` is the same dedup key the harvester uses, so an example keeps its
+// The EVAL split only, via the pure selector so the rule is pinned by CALLING it rather than by
+// grepping this file. `pairKey` is the same dedup key the harvester uses, so an example keeps its
 // side of the split forever — a corpus that grew since the last run does not reshuffle the hold-out.
-const evalItems = all.filter(
-  ex => isScoreableGoldExample(ex) && splitFor(pairKey(String(ex.convId ?? ""), String(ex.reply ?? "")), EVAL_FRACTION) === "eval"
+const evalItems = selectScoreableEvalItems(
+  all,
+  key => splitFor(key, EVAL_FRACTION),
+  ex => pairKey(String(ex.convId ?? ""), String(ex.reply ?? ""))
 );
 const items = LIMIT > 0 ? evalItems.slice(0, LIMIT) : evalItems;
 

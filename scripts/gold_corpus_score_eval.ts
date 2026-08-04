@@ -27,6 +27,7 @@ import {
   checkGoldScoreFloor,
   isGoldScoreStale,
   isScoreableGoldExample,
+  selectScoreableEvalItems,
   summarizeGoldScore,
   tallyVotes,
   type GoldItemVerdict
@@ -151,11 +152,26 @@ check("the judge is asked about SUBSTANCE, not wording", () => {
   assert.ok(p.includes("It's $29,399") && p.includes("That one is $29,399 before tax."), "both sides reach the judge");
 });
 
-check("WIRING: the scorer scores the EVAL split only, and never writes to conversations", () => {
-  const src = fs.readFileSync(path.join(repoRoot, "scripts/gold_corpus_score.ts"), "utf8");
-  assert.ok(/splitFor\([\s\S]{0,120}\) === "eval"/.test(src), "must filter to the eval hold-out");
-  assert.ok(!/writeFileSync\([^)]*conversations/i.test(src), "the scorer is read-only on conversations");
-  assert.ok(/resolveReportDir\(/.test(src), "output goes through the report-path convention, not cwd");
+check("SELECTION: only scoreable items, and only the EVAL hold-out, ever get graded", () => {
+  // Pinned by CALLING the selector, not by grepping the runner — a source-text assertion breaks on
+  // every refactor and a sloppy re-pin passes while guarding nothing (eval_source_pin_ratchet).
+  const corpus = [
+    { convId: "a", reply: "real answer", inbound: "What is the out the door price on that Road Glide?" },
+    { convId: "b", reply: "real answer", inbound: "Is the Street Bob still available this week?" },
+    { convId: "c", reply: "", inbound: "What is the price?" }, // unscoreable: no human label
+    { convId: "d", reply: "sure", inbound: "👍" }, // unscoreable: trivial turn
+    { convId: "e", reply: "we are not buying outright", inbound: "Agent: Thank you for calling American Harley Davidson." } // IVR
+  ];
+  const key = (ex: { convId?: string | null }) => String(ex.convId ?? "");
+  const allEval = selectScoreableEvalItems(corpus, () => "eval", key);
+  assert.deepEqual(allEval.map(key), ["a", "b"], "the three unscoreable shapes are dropped");
+
+  const allTrain = selectScoreableEvalItems(corpus, () => "train", key);
+  assert.deepEqual(allTrain, [], "nothing on the TRAIN side is ever graded — that would be marking our own homework");
+
+  const onlyB = selectScoreableEvalItems(corpus, k => (k === "b" ? "eval" : "train"), key);
+  assert.deepEqual(onlyB.map(key), ["b"], "selection follows the split function, per item");
+  assert.deepEqual(selectScoreableEvalItems(null, () => "eval", key), [], "no corpus selects nothing, never throws");
 });
 
 // ---------------------------------------------------------------------------------------------
