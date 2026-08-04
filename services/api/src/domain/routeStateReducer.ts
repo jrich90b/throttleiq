@@ -6191,3 +6191,130 @@ export function decideAppointmentAttribution(
 
   return { write: false, divergence: null, why: `unrecognized attribution lane "${lane}" — recorded nothing` };
 }
+
+/**
+ * ARMING AN INVENTORY WATCH — "a watch is being set on this lead; what does the conversation
+ * record look like afterwards?"
+ *
+ * SIX places used to answer that on their own, each carrying its own copy of the same five-or-six
+ * line block (`inventoryWatches` + the singular mirror + clear the pending ask + the dialog state +
+ * `holding_inventory` + stop the chase): the voice-summary watch (index.ts), the staff context
+ * note (index.ts), the shared confirmation choke point `applyInventoryWatchConfirmation`
+ * (index.ts), the console hold-resolution endpoint (index.ts), the manual-outbound watch
+ * (index.ts) and the email lane (sendgridInbound.ts). Three Tier-2 fields — `inventoryWatch`,
+ * `inventoryWatches`, `inventoryWatchPending` — all decided in the same breath, which is why they
+ * are one question and not three.
+ *
+ * TWO DIVERGENCES, both preserved here rather than tidied away, both about the DIALOG STATE — and
+ * the dialog state is load-bearing for a reason that is not obvious from the write site.
+ * `setDialogState(conv, "inventory_watch_active")` (index.ts) does three things: it clears the
+ * DURABLE watch opt-out (`clearInventoryWatchOptOut`), it writes `conv.dialogState`, and it stamps
+ * `lastIntent`. `inventoryWatchOptOut.ts`'s own header names that transition as THE way a customer
+ * re-subscribes. So a lane that does not pass through the helper arms a watch that
+ * `isInventoryWatchOptedOut` will keep silent forever — the alert cron `continue`s on it.
+ *   1. `console_hold_resolution` sets NO dialog state at all.
+ *   2. `email_inbound` writes `conv.dialogState` DIRECTLY, bypassing the helper.
+ * BLAST RADIUS at the time of writing: 802 conversations, 89 carrying a watch, and **ZERO** with a
+ * durable watch opt-out on file — so this is a PORTABILITY defect, not a live one. It fires the
+ * first time a customer opts out and later re-subscribes through the email lane or a console hold
+ * resolution. Named on the decision; the fix is its own PR, not this cleanup.
+ */
+export type InventoryWatchArmLane =
+  | "voice_summary"
+  | "context_note"
+  | "watch_confirmation"
+  | "console_watch_set"
+  | "console_hold_resolution"
+  | "held_unit_guard"
+  | "manual_outbound"
+  | "email_inbound"
+  | "email_walk_in"
+  | "email_adf_unavailable";
+
+/** How this lane enters the active-watch dialog state — see the divergences above. */
+export type InventoryWatchArmDialogRoute = "helper" | "direct" | "none";
+
+export type InventoryWatchArmInput = {
+  lane: InventoryWatchArmLane;
+  /** How many watches this lane is arming. Zero is not an arm — no caller reaches here with none. */
+  watchCount: number;
+};
+
+export type InventoryWatchArmDecision = {
+  arm: boolean;
+  clearPending: boolean;
+  dialogRoute: InventoryWatchArmDialogRoute;
+  dialogState: "inventory_watch_active" | null;
+  /** True only when this lane's dialog route also reverses a durable watch opt-out. */
+  reversesWatchOptOut: boolean;
+  followUpMode: "holding_inventory";
+  followUpModeReason: string;
+  stopCadenceReason: string;
+  divergence: string | null;
+  why: string;
+};
+
+const INVENTORY_WATCH_ARM_DIALOG_ROUTE: Record<InventoryWatchArmLane, InventoryWatchArmDialogRoute> = {
+  voice_summary: "helper",
+  context_note: "helper",
+  watch_confirmation: "helper",
+  manual_outbound: "helper",
+  console_watch_set: "helper",
+  // Divergence 1 — the console HOLD-RESOLUTION lane leaves the dialog state alone entirely, while
+  // its sibling the console watch-set endpoint (same console, same staff action) calls the helper.
+  console_hold_resolution: "none",
+  // NOT a divergence: the held-unit auto-guard arms a watch NOBODY asked for, so it must not read
+  // as a re-subscribe. `setDialogState`'s own comment names this lane as the deliberate exception,
+  // and `inventoryWatchOptOut.ts` carries a matching held-guard early return.
+  held_unit_guard: "none",
+  // Divergence 2 — all three email arms write the record themselves and skip the helper's side
+  // effects (above all the durable-opt-out reversal).
+  email_inbound: "direct",
+  email_walk_in: "direct",
+  email_adf_unavailable: "direct"
+};
+
+const INVENTORY_WATCH_ARM_DIVERGENCE: Partial<Record<InventoryWatchArmLane, string>> = {
+  console_hold_resolution: "two_console_lanes_disagree_on_whether_arming_a_watch_enters_the_active_dialog_state",
+  email_inbound: "email_lane_writes_the_dialog_state_directly_so_a_durable_watch_opt_out_survives",
+  email_walk_in: "email_lane_writes_the_dialog_state_directly_so_a_durable_watch_opt_out_survives",
+  email_adf_unavailable: "email_lane_writes_the_dialog_state_directly_so_a_durable_watch_opt_out_survives"
+};
+
+/** Pure. */
+export function decideInventoryWatchArm(input: InventoryWatchArmInput): InventoryWatchArmDecision {
+  const dialogRoute = INVENTORY_WATCH_ARM_DIALOG_ROUTE[input.lane] ?? "none";
+  const armed = Number(input.watchCount) > 0;
+  if (!armed) {
+    return {
+      arm: false,
+      clearPending: false,
+      dialogRoute: "none",
+      dialogState: null,
+      reversesWatchOptOut: false,
+      followUpMode: "holding_inventory",
+      followUpModeReason: "inventory_watch",
+      stopCadenceReason: "inventory_watch",
+      divergence: null,
+      why: `${input.lane}: nothing to arm — no watch supplied`
+    };
+  }
+  return {
+    arm: true,
+    clearPending: true,
+    dialogRoute,
+    dialogState: dialogRoute === "none" ? null : "inventory_watch_active",
+    // Only the shared helper reverses the durable opt-out. A direct write does not.
+    reversesWatchOptOut: dialogRoute === "helper",
+    followUpMode: "holding_inventory",
+    followUpModeReason: "inventory_watch",
+    stopCadenceReason: "inventory_watch",
+    divergence: INVENTORY_WATCH_ARM_DIVERGENCE[input.lane] ?? null,
+    why:
+      dialogRoute === "helper"
+        ? `${input.lane}: watch armed, chase stops, and the active-watch transition reverses any durable opt-out`
+        : dialogRoute === "direct"
+          ? `${input.lane}: watch armed, chase stops, dialog state written directly — a durable opt-out survives`
+          : `${input.lane}: watch armed and the chase stops, but the dialog state is left untouched`
+  };
+}
