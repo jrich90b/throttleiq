@@ -125,6 +125,7 @@ import {
   excludeWatchOfferWhenInStock
 } from "./domain/cadenceInventoryGuard.js";
 import { activateManualQuoteDeliveredFollowUp } from "./domain/manualQuoteFollowUp.js";
+import { resolveSalesTopicHint } from "./domain/salesTopicHint.js";
 import {
   addAgentTask,
   findActivePortalDraftTask,
@@ -42626,18 +42627,10 @@ app.get("/todos", requirePermission("canAccessTodos"), async (req, res) => {
         // Phase-2 row context: what the customer last said + whether anyone actually replied
         // after this task existed. Display-only (closes nothing); pinned by task_inbox_context:eval.
         const conversationContext = buildTodoConversationContext(conv, t);
-        // Parser-first badge hint (Phase 3): the money badge previously re-guessed from summary
-        // keywords, missing tasks whose reason is generic (a cadence "call" on a lead the ADF
-        // parser ALREADY classified as a quote request — +17169306602, operator-reported "should
-        // be tagged pricing"). The lead's parsed CTA is the structured source of truth; the web
-        // badge uses this hint only as a FALLBACK when reason/action carry no signal.
-        const classificationCta = String(conv?.classification?.cta ?? "").trim();
-        const salesTopicHint =
-          classificationCta === "request_a_quote"
-            ? "pricing"
-            : classificationCta === "check_availability"
-              ? "availability"
-              : null;
+        // Parser-first badge hint (Phase 3): the lead's parsed CTA, used by the web badge only as a
+        // FALLBACK when the task's own reason/action carry no signal. The CTA opens the topic and a
+        // delivered quote closes it — see resolveSalesTopicHint (domain/salesTopicHint.ts).
+        const salesTopicHint = resolveSalesTopicHint(conv);
         return {
           ...t,
           leadName,

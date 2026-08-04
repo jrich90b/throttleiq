@@ -114,8 +114,93 @@ for (const [todo, expected] of hintCases) {
   const got = salesCriticalKind(todo);
   assert.equal(got, expected, `hint fallback: salesCriticalKind(${JSON.stringify(todo)}) => ${got}, expected ${expected}`);
 }
-// Source guard: GET /todos projects the hint from the parsed classification CTA.
+// Source guard: GET /todos projects the hint (the derivation itself is pinned BEHAVIORALLY below,
+// which replaced a source-text pin on the old inline `classificationCta === "request_a_quote"`).
 assert.match(apiIndex, /salesTopicHint/, "GET /todos must project salesTopicHint");
-assert.match(apiIndex, /classificationCta === "request_a_quote"/, "hint derives from the PARSED classification CTA");
 
-console.log("task_reason_badge:eval ok (incl. parser-first salesTopicHint fallback)");
+// THE HINT EXPIRES WHEN THE PRICE IS ANSWERED (operator, 2026-07-25, Tony Mooradian
+// +17165236994: "Pricing was answered but the pricing flag still shows in the inbox").
+// `classification.cta` is stamped once at intake and never changes, so the Phase-3 fallback above
+// made a lead's ORIGIN badge every later task forever — his SCHEDULING task wore a Pricing chip two
+// months after Scott quoted $20,995. The CTA opens the topic; a delivered quote closes it.
+const { resolveSalesTopicHint, hasDeliveredQuote } = await import(
+  "../services/api/src/domain/salesTopicHint.ts"
+);
+
+const quoteLead = (messages: any[], followUp?: any) => ({
+  classification: { cta: "request_a_quote" },
+  followUp,
+  messages
+});
+
+// Tony's real thread: the ADF quote request, then the dealer's actual answer.
+const TONY_QUOTE_REPLY =
+  "Hi Tony — This is Scott from American H-D. We are currently servicing the bike and that is " +
+  "why there are no pictures or price posted on the website. We plan on asking $20,995 once its " +
+  "ready for the floor";
+
+const hintDerivationCases: Array<[string, any, string | null]> = [
+  ["quote lead, nothing quoted yet → the badge is right", quoteLead([]), "pricing"],
+  [
+    "quote lead, dealer already quoted it (+17165236994) → the topic is closed",
+    quoteLead([{ direction: "out", body: TONY_QUOTE_REPLY }]),
+    null
+  ],
+  [
+    "the referee already flipped follow-up to manual_quote_delivered",
+    quoteLead([], { mode: "active", reason: "manual_quote_delivered" }),
+    null
+  ],
+  [
+    "inbound customer text mentioning a price is NOT us answering",
+    quoteLead([{ direction: "in", body: "Can you do $18,000 out the door?" }]),
+    "pricing"
+  ],
+  [
+    "a promo BLAST carrying a dollar figure is not an answer to this lead's question",
+    quoteLead([
+      {
+        direction: "out",
+        body: "Save $4,000 on select 2026 models this weekend at American H-D. Reply STOP to opt out."
+      }
+    ]),
+    "pricing"
+  ],
+  [
+    "a quote we recorded but never actually sent leaves the topic open",
+    quoteLead([{ direction: "out", body: TONY_QUOTE_REPLY, delivered: false }]),
+    "pricing"
+  ],
+  // Availability leads are unchanged by this fix, and an unclassified lead never gets a hint.
+  ["availability CTA is untouched", { classification: { cta: "check_availability" } }, "availability"],
+  ["no CTA → no hint", { classification: {} }, null],
+  ["no classification at all → no hint", {}, null]
+];
+for (const [label, conv, expected] of hintDerivationCases) {
+  const got = resolveSalesTopicHint(conv);
+  assert.equal(got, expected, `salesTopicHint: ${label} => ${got}, expected ${expected}`);
+}
+
+// End-to-end, the production chain: a quote-origin lead whose price was answered must leave its
+// generic scheduling task UNBADGED — the exact chip the operator reported.
+const tonyConv = quoteLead([{ direction: "out", body: TONY_QUOTE_REPLY }]);
+const tonySchedulingTask = {
+  reason: "call",
+  action: "Call customer to confirm a time and book the visit.",
+  summary: "Schedule the visit for Tony — a time was discussed but nothing is booked.",
+  salesTopicHint: resolveSalesTopicHint(tonyConv)
+};
+assert.equal(
+  salesCriticalKind(tonySchedulingTask),
+  null,
+  "+17165236994: a scheduling task on a lead we already quoted must not wear a Pricing badge"
+);
+// ...and the same task on a lead we have NOT quoted still gets the badge #257 added.
+assert.equal(
+  salesCriticalKind({ ...tonySchedulingTask, salesTopicHint: resolveSalesTopicHint(quoteLead([])) }),
+  "pricing",
+  "an unanswered quote request must still badge the follow-up task"
+);
+assert.equal(hasDeliveredQuote(quoteLead([])), false, "no outbound quote => not delivered");
+
+console.log("task_reason_badge:eval ok (incl. salesTopicHint fallback + quote-answered expiry)");

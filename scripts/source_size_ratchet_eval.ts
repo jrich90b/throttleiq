@@ -153,7 +153,11 @@ const CEILINGS: Ceiling[] = [
     // REBASE NOTE (ROUTINE_CONTRACT rule 3, the #418 trap): authored against a 71_345 main and
     // proposed 71_341; #505 landed -1 first, so the honest integrated count is 71_340. Taking the
     // pre-rebase number would have silently handed back #505's reduction.
-    max: 71_340,
+    // 71_340 -> 71_333. The task-inbox money-badge hint moved out: the inline CTA ternary became
+    // resolveSalesTopicHint (domain/salesTopicHint.ts), which also expires a pricing hint once we
+    // have actually quoted the lead (+17165236994, operator "Pricing was answered but the pricing
+    // flag still shows in the inbox").
+    max: 71_333,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
