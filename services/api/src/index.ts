@@ -1067,6 +1067,7 @@ import {
 } from "./domain/pendingIncomingInventory.js";
 import { buildCustomerReceivedHistory, buildEffectiveHistory } from "./domain/effectiveContext.js";
 import { buildOpenTurnInquiry, getLastInboundBody, getLastInboundMessage, hasMultiMessageOpenTurn } from "./domain/openCustomerTurn.js";
+import { resolveReportDir } from "./domain/reportPaths.js";
 import { isWorkerDrivenTicks, isWorkerTickTask, type WorkerTickTask } from "./domain/workerTasks.js";
 import {
   buildEscalationDigest,
@@ -1348,8 +1349,7 @@ function shadowCompareTurnUnderstanding(conv: any, text: string, history: { dire
       if (!!detSchedule !== !!parsed.requestedSchedule) disagreements.push("schedule_presence");
       if (!disagreements.length) return;
       const filePath = path.join(
-        process.env.REPORT_ROOT || path.resolve(process.cwd(), "reports"),
-        "turn_understanding_shadow",
+        resolveReportDir("turn_understanding_shadow"),
         `disagreements_${new Date().toISOString().slice(0, 10)}.jsonl`
       );
       const line =

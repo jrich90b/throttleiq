@@ -20,6 +20,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { resolveReportDir } from "./reportPaths.js";
 
 import { normalizePhone } from "./suppressionStore.js";
 
@@ -234,10 +235,7 @@ export function buildFirstTouchShadowRecord(input: FirstTouchShadowRecordInput):
 }
 
 export function firstTouchAutoSendShadowDir(): string {
-  return (
-    process.env.FIRST_TOUCH_AUTOSEND_SHADOW_DIR ||
-    path.resolve(process.cwd(), "reports", "first_touch_autosend")
-  );
+  return resolveReportDir("first_touch_autosend", "FIRST_TOUCH_AUTOSEND_SHADOW_DIR");
 }
 
 /** Append one shadow record as JSONL. Wrapped so it can NEVER throw into the live path. */
