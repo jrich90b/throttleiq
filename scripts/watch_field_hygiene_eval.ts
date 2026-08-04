@@ -17,10 +17,15 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
   sanitizeWatchColorValue,
+  dropUnstockedWatchColor,
   foldModelWordTrimIntoModel,
   applyWatchFieldHygiene,
   formatWatchYearLabel
 } from "../services/api/src/domain/watchFieldHygiene.ts";
+import {
+  unitColorCarriesStated,
+  narrowUnitsByColorFinish
+} from "../services/api/src/domain/inventoryFeed.ts";
 
 // --- Colour: the production junk, and the colours that must survive it -----------------------
 assert.equal(sanitizeWatchColorValue("(Step 2)"), undefined, "the TLP step tag must never be stored as a colour (+17167992882)");
@@ -94,7 +99,19 @@ const idx = fs.readFileSync("services/api/src/index.ts", "utf8");
 assert.match(idx, /const watch = applyWatchFieldHygiene\(watchRaw\);/, "the shared applyInventoryWatchConfirmation choke point must apply hygiene");
 assert.match(idx, /applyInventoryWatchConfirmation\(\s*conv: Conversation,\s*watchRaw: InventoryWatch/, "…on the raw watch it was handed");
 const sg = fs.readFileSync("services/api/src/routes/sendgridInbound.ts", "utf8");
-assert.match(sg, /const hygienicWalkInWatch = applyWatchFieldHygiene\(watch\);/, "the Traffic Log Pro walk-in path (which produced the reported record) must apply hygiene");
+// The Traffic Log Pro walk-in path (which produced the reported record) must apply hygiene. Pinned
+// by ORDERING rather than by the exact call expression: the source pin broke the moment a second
+// repair was chained onto the same value, which is drift the assertion should survive, not punish.
+assert.notEqual(
+  sg.indexOf("const hygienicWalkInWatch"),
+  -1,
+  "the walk-in watch still routes through a hygiene step before it is armed"
+);
+const walkInHygieneAt = sg.indexOf("const hygienicWalkInWatch");
+assert.ok(
+  walkInHygieneAt < sg.indexOf("applyInventoryWatchArm(conv, {", walkInHygieneAt),
+  "hygiene runs before the walk-in watch is armed"
+);
 assert.match(sg, /const hygienicWatch = applyWatchFieldHygiene\(watch\);/, "the semantic/inventory-entity path writes directly too and must apply hygiene");
 
 // --- Year label: a one-year "range" is one year (2026-07-28 replay sweep) ---------------------
@@ -147,4 +164,88 @@ assert.doesNotMatch(
 // The internal watch_fire_miss REPORT is deliberately out of scope: it renders half-open bounds
 // ("2019-") on purpose for triage and is never read by a customer.
 
-console.log("PASS watch field hygiene eval — TLP step tags never land in colour; a model word folds into the model label instead of dead-ending the trim slot; a one-year range prints as one year.");
+// --- A colour NOTHING in stock carries must not silence the model match (+17168609581) -------
+// The mirror of #494's price-lane guard (narrowUnitsByColorFinish: "a colour we do not stock
+// degrades to the model's honest range rather than to silence"). The availability/watch lane never
+// got the equivalent, so a watch for a BLUE Road Glide 3 was armed against the three we actually
+// had — and the matcher hard-rejects on colour, so it could never fire.
+// The real feed rows on 2026-08-04, as a local fixture (never the live dealer feed — a universal
+// eval may not assert a dealer fact).
+const ROAD_GLIDE_3_UNITS = [
+  { color: "Iron Horse Metallic" },
+  { color: "Dark Billiard Gray" },
+  { color: "Vivid Black" }
+];
+// One definition of colour equality, shared with the price lane rather than re-invented here.
+const carries = (unitColor: string, wantedColor: string) =>
+  unitColorCarriesStated(unitColor, { color: wantedColor });
+
+assert.equal(
+  dropUnstockedWatchColor({ model: "Road Glide 3", color: "blue" }, ROAD_GLIDE_3_UNITS, carries).color,
+  undefined,
+  "the +17168609581 watch degrades to model-only, which can fire, instead of exact-colour, which cannot"
+);
+assert.equal(
+  dropUnstockedWatchColor({ model: "Road Glide 3", color: "blue" }, ROAD_GLIDE_3_UNITS, carries).model,
+  "Road Glide 3",
+  "…and the model constraint still bounds it — the guard is colour-only"
+);
+// SUBTRACTIVE ONLY: a colour we DO stock is never touched. Widening one would hand the customer a
+// bike in the wrong paint, which is a worse failure than the one being fixed.
+for (const stocked of ["Vivid Black", "vivid black", "black", "Dark Billiard Gray", "iron horse metallic"]) {
+  assert.equal(
+    dropUnstockedWatchColor({ model: "Road Glide 3", color: stocked }, ROAD_GLIDE_3_UNITS, carries).color,
+    stocked,
+    `a colour we stock is preserved exactly as written: ${stocked}`
+  );
+}
+// FAIL DIRECTION: an empty or failed feed read is NOT evidence of absence. Stripping a real
+// customer constraint because we could not see the inventory is the fail-unsafe direction.
+assert.equal(
+  dropUnstockedWatchColor({ model: "Road Glide 3", color: "blue" }, [], carries).color,
+  "blue",
+  "an unread feed preserves the colour — 'I could not look' is not 'we have none'"
+);
+assert.equal(
+  dropUnstockedWatchColor({ model: "Road Glide 3", color: "blue" }, [{ color: "" }, { color: null }], carries).color,
+  undefined,
+  "units with no colour recorded cannot vouch for a colour"
+);
+// A watch with no colour is returned untouched — nothing to decide.
+assert.equal(
+  dropUnstockedWatchColor({ model: "Road Glide 3", color: undefined }, ROAD_GLIDE_3_UNITS, carries).color,
+  undefined,
+  "no stated colour => nothing to drop"
+);
+// The extraction that let both lanes share one rule must stay behaviour-identical for the price
+// lane: a colour matching no unit still returns the UNNARROWED set, never an empty one.
+assert.equal(
+  narrowUnitsByColorFinish([...ROAD_GLIDE_3_UNITS], { color: "blue" }).length,
+  3,
+  "#494's fail direction is intact: an unstocked colour never narrows the price set to nothing"
+);
+assert.equal(
+  narrowUnitsByColorFinish([...ROAD_GLIDE_3_UNITS], { color: "Vivid Black" }).length,
+  1,
+  "…and a stocked colour still pins the one bike"
+);
+
+// WIRING: the walk-in watch arm must run the guard, and must run it AFTER the field hygiene that
+// strips junk shapes — otherwise "(Step 2)" reaches the colour comparison as a real colour.
+const hygieneAt = sg.indexOf("applyWatchFieldHygiene(watch)");
+const dropAt = sg.indexOf("dropUnstockedWatchColor(");
+const armAt = sg.indexOf("applyInventoryWatchArm(conv, {", dropAt);
+const matchesAt = sg.indexOf("modelLabelMatches = matches");
+for (const [label, at] of [
+  ["applyWatchFieldHygiene(watch)", hygieneAt],
+  ["dropUnstockedWatchColor", dropAt],
+  ["applyInventoryWatchArm", armAt],
+  ["modelLabelMatches", matchesAt]
+] as [string, number][]) {
+  assert.notEqual(at, -1, `the walk-in watch arm must still contain ${label}`);
+}
+assert.ok(matchesAt < dropAt, "the stock lookup resolves before the guard that reads it");
+assert.ok(dropAt < armAt, "the colour is settled before the watch is armed, not after");
+assert.ok(hygieneAt <= dropAt, "junk shapes are stripped before a colour is compared against the feed");
+
+console.log("PASS watch field hygiene eval — TLP step tags never land in colour; a model word folds into the model label instead of dead-ending the trim slot; a one-year range prints as one year; a colour no matched unit carries degrades to a model-only watch instead of one that can never fire.");

@@ -32,7 +32,9 @@ import {
   coerceWalkInReturnVisit,
   coerceWalkInOutcomeState,
   extractWatchDirectiveSegment,
-  hasWatchIntentPhrase
+  hasWatchIntentPhrase,
+  resolveWalkInNoteColor,
+  WALK_IN_OUTCOME_EXAMPLES
 } from "../services/api/src/domain/walkInInventoryWant.ts";
 
 // The exact production failure topic, and each internal-note tell in isolation → rejected.
@@ -743,3 +745,128 @@ assert.match(
 );
 
 console.log("PASS walk-in internal-note follow-up topic guard eval (+ slot-only spec recap, slot-built follow-up subject, committed return day, TLP finance-context guard, judge provenance)");
+
+// --- A ride's NAME is not the bike's paint colour (+17168609581, 2026-08-04) ---------------
+// Rick Williamson Sr.'s note said he "was on for the back the blue ride"; the keyword colour list
+// saw "blue", `lead.vehicle.color` became blue, the match against our three 2026 Road Glide 3s
+// (Iron Horse Metallic, Dark Billiard Gray, Vivid Black) failed, and the lane told him we'd "keep
+// an eye out" for a bike we had three of. His pricing question was never answered, and a watch for
+// a blue Road Glide 3 was armed that could never fire. Same note class, same day, same event:
+// +17165241170 and +17164327329 (LARRY_TLP_NOTE above) both came out blue too.
+const RICK_SR_TLP_NOTE =
+  "Rick was on for the back the blue ride and was asking about pricing on Road Glide 3. " +
+  "Needs follow up (Step 2)";
+const RICK_JR_TLP_NOTE =
+  "Rick Jr. was in for the back the blue ride and showed interest in the 2021 Road Glide Special " +
+  "we have on the floor with the 131ci engine. Ran some numbers on his trade in. Needs follow up (Step 2)";
+
+// THE PRECEDENCE IS THE FIX. The old call site read `keyword ?? parser`, so a correct parser answer
+// could never win. A CONFIDENT EMPTY parser answer — "there is no bike colour in this note" — is a
+// real answer and must beat the keyword, or nothing changes for Rick.
+assert.equal(
+  resolveWalkInNoteColor({ parserColor: "", parserConfidence: 0.95, keywordColor: "blue" }),
+  undefined,
+  "a confident 'no bike colour here' beats the keyword list — the +17168609581 fix"
+);
+// ANTI-OVER-SUPPRESSION: a colour a staff note genuinely states must survive. Blanking every
+// walk-in colour would be the lazy fix and would regress Brent Marshall's Dark Billiard Gray.
+assert.equal(
+  resolveWalkInNoteColor({ parserColor: "Dark Billiard Gray", parserConfidence: 0.95, keywordColor: "gray" }),
+  "Dark Billiard Gray",
+  "a colour the note really states is kept, and beats the coarser keyword hit"
+);
+// FAIL DIRECTION: the keyword arm survives only where the parser did not answer.
+assert.equal(
+  resolveWalkInNoteColor({ parserColor: "", parserConfidence: 0.4, keywordColor: "vivid black" }),
+  "vivid black",
+  "below the floor the keyword fallback still runs — this can only ever REMOVE a colour, never invent one"
+);
+assert.equal(
+  resolveWalkInNoteColor({ parserColor: "", parserConfidence: null, keywordColor: "red" }),
+  "red",
+  "parser absent (LLM failed) => today's behaviour, unchanged"
+);
+assert.equal(
+  resolveWalkInNoteColor({ parserColor: "", parserConfidence: 0.95, keywordColor: null }),
+  undefined,
+  "nothing stated anywhere => no colour"
+);
+assert.equal(
+  resolveWalkInNoteColor({ parserColor: "  Teal Thunder  ", parserConfidence: 0.9, keywordColor: "blue" }),
+  "Teal Thunder",
+  "the parser's answer is trimmed, not re-derived"
+);
+// The floor is configurable, and exactly-at-floor counts as answered.
+assert.equal(
+  resolveWalkInNoteColor({ parserColor: "", parserConfidence: 0.8, keywordColor: "blue" }),
+  undefined,
+  "at the floor the parser has answered"
+);
+assert.equal(
+  resolveWalkInNoteColor({ parserColor: "", parserConfidence: 0.85, keywordColor: "blue", confidenceMin: 0.9 }),
+  "blue",
+  "a raised floor puts the keyword fallback back in charge"
+);
+
+// THE GOLD LABELS. Both Back-the-Blue notes ride in the few-shot corpus, and both must be labelled
+// with NO colour — case-insensitively, because Larry's note capitalises "Back the Blue" and Rick's
+// lowercases it. Nobody may "fix" this with a literal-case match.
+const backTheBlueExamples = WALK_IN_OUTCOME_EXAMPLES.filter(ex => /back the blue/i.test(ex));
+assert.ok(
+  backTheBlueExamples.length >= 2,
+  "both Back-the-Blue production notes stay pinned as few-shots (lowercase and capitalised)"
+);
+for (const ex of backTheBlueExamples) {
+  assert.match(ex, /"desired_color":""/, "a charity ride's name is never labelled as paint");
+}
+// ...and the corpus still teaches the POSITIVE case, or the model learns "walk-in notes have no
+// colour", which is the over-suppression failure.
+assert.ok(
+  WALK_IN_OUTCOME_EXAMPLES.some(ex => /"desired_color":"Dark Billiard Gray"/.test(ex)),
+  "a genuinely stated colour is still taught as a colour"
+);
+// Every few-shot answers the slot — a corpus that half-answers a required field teaches the model
+// to omit it, and the schema is strict.
+for (const ex of WALK_IN_OUTCOME_EXAMPLES) {
+  assert.match(ex, /"desired_color":/, "every walk-in few-shot answers the colour slot");
+  assert.match(ex, /"desired_color_confidence":/, "…and carries its own confidence");
+}
+
+// THE PROMPT MUST TEACH THE CLASS, NOT THE INSTANCE. A blocklist of event names is precisely the
+// move this eval's regex warning forbids.
+const rickPrompt = buildWalkInOutcomePrompt({ text: RICK_SR_TLP_NOTE, historyLines: [] });
+for (const token of ["desired_color", "desired_color_confidence"]) {
+  assert.ok(rickPrompt.includes(token), `the prompt teaches ${token}`);
+}
+assert.ok(rickPrompt.includes(RICK_SR_TLP_NOTE), "the reported production turn rides as a few-shot");
+assert.match(rickPrompt, /Blue Knights/i, "the rule is taught as a CLASS with more than one instance");
+assert.match(rickPrompt, /CHARITY/i, "event/ride/chapter/charity names are named as the category");
+assert.match(rickPrompt, /paint colour|PAINT COLOUR/, "the slot is scoped to the bike's paint, not any colour word");
+
+// PROVENANCE: a Traffic Log Pro "Inquiry" is our own CRM log, so it may not mint the lead's colour
+// by keyword match. Pinned as ORDERING (each index guarded against -1 first, per the note above).
+const tlpHintAt = sendgrid.indexOf("const isTrafficLogProPayloadHint");
+const colorMintAt = sendgrid.indexOf("const inquiryColorHint");
+const parserColorAt = sendgrid.indexOf("resolveWalkInNoteColor(");
+for (const [label, at] of [
+  ["isTrafficLogProPayloadHint", tlpHintAt],
+  ["inquiryColorHint", colorMintAt],
+  ["resolveWalkInNoteColor", parserColorAt]
+] as [string, number][]) {
+  assert.notEqual(at, -1, `the walk-in colour lane must still contain ${label}`);
+}
+assert.ok(
+  tlpHintAt < colorMintAt,
+  "the TLP provenance hint is known BEFORE the keyword colour mint, so it can gate it"
+);
+assert.ok(
+  colorMintAt < parserColorAt,
+  "the keyword mint is the early/intake step; the parser-first resolve happens later, with the note parsed"
+);
+assert.doesNotMatch(
+  sendgrid.slice(Math.max(0, colorMintAt - 200), colorMintAt),
+  /if \(!lead\.vehicleColor\) \{\s*$/,
+  "the colour mint must carry a provenance condition beyond 'no colour yet'"
+);
+
+console.log("PASS walk-in internal-note follow-up topic guard eval (+ slot-only spec recap, committed return day, TLP finance-context guard, judge provenance, ride-name-is-not-paint colour slot)");

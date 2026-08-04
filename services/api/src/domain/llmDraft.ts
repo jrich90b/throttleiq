@@ -3174,6 +3174,14 @@ export type WalkInOutcomeParse = {
   returnDayText?: string | null;
   /** Confidence in the return-visit classification only, independent of `confidence`. */
   returnVisitConfidence?: number;
+  /**
+   * The paint colour the note wants on the BIKE, exactly as written; empty/absent when the note
+   * states none. An event or ride NAME carrying a colour word is not a colour (walkInInventoryWant.ts,
+   * Rick Williamson Sr. +17168609581).
+   */
+  desiredColor?: string | null;
+  /** Confidence in the colour extraction only, independent of `confidence`. */
+  desiredColorConfidence?: number;
   confidence?: number;
 };
 
@@ -13046,6 +13054,10 @@ export async function parseWalkInOutcomeWithLLM(args: {
     returnVisit: coerceWalkInReturnVisit(parsed.return_visit),
     returnDayText: cleanOptionalString(parsed.return_day_text),
     returnVisitConfidence: clamp01(parsed.return_visit_confidence),
+    // The paint colour the note wants on the BIKE — "" when the note states none. Fails closed:
+    // an absent confidence leaves the caller on the keyword fallback (resolveWalkInNoteColor).
+    desiredColor: cleanOptionalString(parsed.desired_color),
+    desiredColorConfidence: clamp01(parsed.desired_color_confidence),
     confidence
   };
 }
@@ -13408,6 +13420,8 @@ export async function parseInventoryEntitiesWithLLM(args: {
     "- Use current message as source of truth over prior lead vehicle. Prior lead/history only helps interpret alternates/test-ride context.",
     "- Street Glide 3 Limited is a 2026+ model. Do not return Street Glide 3 Limited with a 2025-or-earlier year.",
     "- Do not treat locations as colors (e.g. Silver Creek is not silver).",
+    "- Do not treat an event, ride, chapter or charity NAME as a color (e.g. 'the Back the Blue",
+    "  ride' and 'the Blue Knights' are not blue bikes) — that is something they attended.",
     "- A phone number, a date, a price range, or a timeframe range is NEVER a stock_id. A dealer stock number always begins with a LETTER (T10-26, S9-25, U570-24). '716-713-8288' is a phone number; '3-4 weeks', '10-15 thousand' and '2026-04' are not stock numbers. When the customer is handing over contact details rather than asking about a unit, target_type=none and is_availability_question=false.",
     "- Do not treat trade-in vehicle year/model as the shopping target unless the customer explicitly says they want another one.",
     "- confidence is 0..1.",

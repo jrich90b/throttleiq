@@ -212,6 +212,48 @@ export function hasWatchIntentPhrase(text?: string | null): boolean {
   );
 }
 
+/**
+ * Which colour, if any, a walk-in staff note wants on the BIKE — parser first, keyword second.
+ *
+ * Rick Williamson Sr. (+17168609581, 2026-08-04, Traffic Log Pro ref 11728) is why this exists.
+ * The note read "Rick was on for the back the blue ride and was asking about pricing on Road Glide
+ * 3", the keyword colour list saw the word "blue", and `lead.vehicle.color` became "blue". We stock
+ * three 2026 Road Glide 3s (Iron Horse Metallic, Dark Billiard Gray, Vivid Black) and the colour
+ * match rejected all three, so the availability lane concluded "not in stock", drafted "I'll keep
+ * an eye out for Road Glide 3 and let you know if one comes in", and armed a watch for a blue Road
+ * Glide 3 that can never fire. His pricing question was never answered. The same note class did the
+ * same thing to +17165241170 and +17164327329 — three leads, one charity ride's NAME.
+ *
+ * THE PRECEDENCE IS THE FIX. The old call site read
+ * `extractColorFromText(text) ?? (accepted ? parser.color : undefined)` — the keyword list FIRST,
+ * so a correct parser answer could never win. That is the inline `regex || parser` inversion
+ * CLAUDE.md rule 1 forbids. Here the parser wins whenever it answered above the floor, and a
+ * confident EMPTY answer is a real answer: "there is no bike colour in this note" must beat the
+ * keyword, or nothing changes for Rick.
+ *
+ * FAIL DIRECTION: the keyword arm survives only as the fallback for when the parser did not run or
+ * was unsure, so this can only ever REMOVE a colour the customer never asked for. Losing a colour
+ * costs specificity, never correctness — an absent colour degrades to the model's honest range
+ * (`narrowUnitsByColorFinish`, inventoryFeed.ts) and to a model-only watch that can actually fire.
+ * Inventing one is what silences three in-stock bikes. Pinned by
+ * `walkin_internal_note_topic_guard:eval`.
+ */
+export function resolveWalkInNoteColor(input: {
+  parserColor?: string | null;
+  parserConfidence?: number | null;
+  keywordColor?: string | null;
+  confidenceMin?: number;
+}): string | undefined {
+  const floorRaw = Number(input.confidenceMin);
+  const floor = Number.isFinite(floorRaw) ? floorRaw : 0.8;
+  const confidence = Number(input.parserConfidence);
+  // A confident "" is an ANSWER (no colour here), not an absence — that is the whole point.
+  if (Number.isFinite(confidence) && confidence >= floor) {
+    return String(input.parserColor ?? "").trim() || undefined;
+  }
+  return String(input.keywordColor ?? "").trim() || undefined;
+}
+
 export const WALK_IN_OUTCOME_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   type: "object",
   additionalProperties: false,
@@ -227,6 +269,8 @@ export const WALK_IN_OUTCOME_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     "return_visit",
     "return_day_text",
     "return_visit_confidence",
+    "desired_color",
+    "desired_color_confidence",
     "confidence"
   ],
   properties: {
@@ -266,6 +310,8 @@ export const WALK_IN_OUTCOME_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     },
     return_day_text: { type: "string" },
     return_visit_confidence: { type: "number" },
+    desired_color: { type: "string" },
+    desired_color_confidence: { type: "number" },
     confidence: { type: "number" }
   }
 };
@@ -278,83 +324,89 @@ export const WALK_IN_OUTCOME_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
 export const WALK_IN_OUTCOME_EXAMPLES: string[] = [
   `EXAMPLE A
 comment: "left $1,000 deposit on motorcycle. coming in 4/6 at 4:00pm to finalize deal. (step 6)"
-output: {"state":"deposit_left","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.95,"return_visit":"committed_day_and_time","return_day_text":"4/6 at 4:00pm","return_visit_confidence":0.9,"confidence":0.98}`,
+output: {"state":"deposit_left","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.95,"return_visit":"committed_day_and_time","return_day_text":"4/6 at 4:00pm","return_visit_confidence":0.9,"desired_color":"","desired_color_confidence":0.9,"confidence":0.98}`,
   `EXAMPLE B
 comment: "thinking it over, will let you know next week"
-output: {"state":"decision_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"next week","unmet_inventory_want":"none","want_is_satisfiable_from_note":false,"want_confidence":0.9,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.95}`,
+output: {"state":"decision_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"next week","unmet_inventory_want":"none","want_is_satisfiable_from_note":false,"want_confidence":0.9,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"desired_color":"","desired_color_confidence":0.9,"confidence":0.95}`,
   `EXAMPLE C
 comment: "wants a test ride next week when weather is better"
- output: {"state":"timing_defer_window","explicit_state":true,"test_ride_requested":true,"weather_sensitive":true,"follow_up_window_text":"next week","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.88,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.9}`,
+ output: {"state":"timing_defer_window","explicit_state":true,"test_ride_requested":true,"weather_sensitive":true,"follow_up_window_text":"next week","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.88,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"desired_color":"","desired_color_confidence":0.9,"confidence":0.9}`,
   `EXAMPLE D
 comment: "mark this lead on hold until next Friday"
-output: {"state":"hold_requested","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"next Friday","unmet_inventory_want":"none","want_is_satisfiable_from_note":false,"want_confidence":0.9,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.94}`,
+output: {"state":"hold_requested","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"next Friday","unmet_inventory_want":"none","want_is_satisfiable_from_note":false,"want_confidence":0.9,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"desired_color":"","desired_color_confidence":0.9,"confidence":0.94}`,
   `EXAMPLE E
 comment: "clear hold and resume follow up"
-output: {"state":"hold_cleared","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":false,"want_confidence":0.9,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.94}`,
+output: {"state":"hold_cleared","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":false,"want_confidence":0.9,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"desired_color":"","desired_color_confidence":0.9,"confidence":0.94}`,
   `EXAMPLE F
 comment: "coming in tomorrow to finalize paperwork"
-output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"tomorrow","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.9,"return_visit":"committed_day","return_day_text":"tomorrow","return_visit_confidence":0.9,"confidence":0.93}`,
+output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"tomorrow","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.9,"return_visit":"committed_day","return_day_text":"tomorrow","return_visit_confidence":0.9,"desired_color":"","desired_color_confidence":0.9,"confidence":0.93}`,
   `EXAMPLE G
 comment: "Sean is looking for a 2026 Dark Billiard Gray Street Glide Limited, we need to order one for him. would like to get a commitment and put an order in for him."
-output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"order","want_is_satisfiable_from_note":false,"want_confidence":0.93,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.9}`,
+output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"order","want_is_satisfiable_from_note":false,"want_confidence":0.93,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"desired_color":"Dark Billiard Gray","desired_color_confidence":0.95,"confidence":0.9}`,
   `EXAMPLE H
 comment: "going to credit union this week, waiting on approval"
-output: {"state":"outside_financing_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"this week","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.88,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.93}`,
+output: {"state":"outside_financing_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"this week","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.88,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"desired_color":"","desired_color_confidence":0.9,"confidence":0.93}`,
   `EXAMPLE I
 comment: "saving up for down payment, should be ready in a few weeks"
-output: {"state":"down_payment_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"few weeks","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.88,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.92}`,
+output: {"state":"down_payment_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"few weeks","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.88,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"desired_color":"","desired_color_confidence":0.9,"confidence":0.92}`,
   `EXAMPLE J
 comment: "need to sell my bike first before moving forward"
-output: {"state":"trade_equity_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":false,"want_confidence":0.88,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.93}`,
+output: {"state":"trade_equity_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":false,"want_confidence":0.88,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"desired_color":"","desired_color_confidence":0.9,"confidence":0.93}`,
   `EXAMPLE K
 comment: "need to talk to my wife first"
-output: {"state":"household_approval_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":false,"want_confidence":0.88,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.93}`,
+output: {"state":"household_approval_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":false,"want_confidence":0.88,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"desired_color":"","desired_color_confidence":0.9,"confidence":0.93}`,
   `EXAMPLE L
 comment: "picked out accessories and wants to go over final numbers this week"
-output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"this week","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.88,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.9}`,
+output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"this week","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.88,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"desired_color":"","desired_color_confidence":0.9,"confidence":0.9}`,
   `EXAMPLE M
 comment: "looking for a 2026 Street Glide Limited in Dark Billiard Gray, please watch and let me know when one comes in"
-output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"open_search","want_is_satisfiable_from_note":false,"want_confidence":0.96,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.78}`,
+output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"open_search","want_is_satisfiable_from_note":false,"want_confidence":0.96,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"desired_color":"Dark Billiard Gray","desired_color_confidence":0.95,"confidence":0.78}`,
   `EXAMPLE N
 comment: "Gary was a walk in and is buying 2026 Street Glide Limited. Trading in 2016 Ultra Limited and 2024 Pan Am Special. Had to discount bike to close deal. Plans on closing 4/24 (Step 6)"
-output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"4/24","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.95,"return_visit":"committed_day","return_day_text":"4/24","return_visit_confidence":0.9,"confidence":0.96}`,
+output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"4/24","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.95,"return_visit":"committed_day","return_day_text":"4/24","return_visit_confidence":0.9,"desired_color":"","desired_color_confidence":0.9,"confidence":0.96}`,
   `EXAMPLE O
 comment: "Thank for coming in and tell him it was nice working with him. I will be in touch about delivery and parts status. (Step 8)"
-output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.9,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.95}`,
+output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.9,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"desired_color":"","desired_color_confidence":0.9,"confidence":0.95}`,
   `EXAMPLE P
 comment: "Stopped in, really liked the dark billiard and gray 2026 Street Glide. Would also like to watch for a 2024-2025 pre-owned street glide. Reach follow up on 5/23/26. (Step 2)"
-output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"5/23/26","unmet_inventory_want":"open_search","want_is_satisfiable_from_note":false,"want_confidence":0.94,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.88}`,
+output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"5/23/26","unmet_inventory_want":"open_search","want_is_satisfiable_from_note":false,"want_confidence":0.94,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"desired_color":"Dark Billiard Gray","desired_color_confidence":0.85,"confidence":0.88}`,
   `EXAMPLE Q
 comment: "Would like to take some time to go over finances. Going on a trip end of the month. Definitely interested in the bike."
-output: {"state":"decision_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.85,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.9}`,
+output: {"state":"decision_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.85,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"desired_color":"","desired_color_confidence":0.9,"confidence":0.9}`,
   `EXAMPLE R
 comment: "Was in for the Back the Blue ride and was asking about pre-owned trikes. Showed him and his wife Kim the 2019 we have in the back (waiting on lien release). Is looking for 2017-2020 Tri Glide in the $25,000 range (Step 2)"
-output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"open_search","want_is_satisfiable_from_note":false,"want_confidence":0.92,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.6}`,
+output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"open_search","want_is_satisfiable_from_note":false,"want_confidence":0.92,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"desired_color":"","desired_color_confidence":0.95,"confidence":0.6}`,
   `EXAMPLE S
 comment: "Wants to test ride 2026 Street Glide 3. Has 2019 Street Glide special for trade. (Step 2)"
-output: {"state":"none","explicit_state":false,"test_ride_requested":true,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.9,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.6}`,
+output: {"state":"none","explicit_state":false,"test_ride_requested":true,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.9,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"desired_color":"","desired_color_confidence":0.9,"confidence":0.6}`,
   `EXAMPLE T
 comment: "Wants to see the 2026 Street Glide in Teal Thunder / Vivid Black with chrome trim. Should be delivered 7/22 (Step 6)"
-output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"incoming_allocated","want_is_satisfiable_from_note":true,"want_confidence":0.93,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.6}`,
+output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"incoming_allocated","want_is_satisfiable_from_note":true,"want_confidence":0.93,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"desired_color":"Teal Thunder","desired_color_confidence":0.85,"confidence":0.6}`,
   `EXAMPLE U
 comment: "Interested in the 2023 120th Anniversary Road Glide Special. Wants us to call him when we get it through service (Step 2)"
-output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"specific_unit","want_is_satisfiable_from_note":true,"want_confidence":0.92,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.6}`,
+output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"specific_unit","want_is_satisfiable_from_note":true,"want_confidence":0.92,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"desired_color":"","desired_color_confidence":0.9,"confidence":0.6}`,
   `EXAMPLE V
 comment: "Looking for trike models. Was going to wait until spring of 2027 but saw the 2019 we had in back. Wants to take a test ride on new and pre-owned (Step 2)"
-output: {"state":"none","explicit_state":false,"test_ride_requested":true,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"open_search","want_is_satisfiable_from_note":false,"want_confidence":0.8,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"confidence":0.6}`,
+output: {"state":"none","explicit_state":false,"test_ride_requested":true,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"open_search","want_is_satisfiable_from_note":false,"want_confidence":0.8,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"desired_color":"","desired_color_confidence":0.9,"confidence":0.6}`,
   // W-Y teach the return-visit lanes off real production notes. W is the Ed Szulist turn this slot
   // was built for; X is the dateless version of the same intent; Y is the trap — a date that is
   // OURS. (P "Reach follow up on 5/23/26" and T "Should be delivered 7/22" are the other two
   // our-date shapes, already in this corpus and now annotated none.)
   `EXAMPLE W
 comment: "COMING BACK NXT WEEK TUESDAY AUGUST 4TH TO TEST RIDE A FEW DIFFERENT SPORTSTERS (Step 5)"
-output: {"state":"none","explicit_state":false,"test_ride_requested":true,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.7,"return_visit":"committed_day","return_day_text":"Tuesday August 4th","return_visit_confidence":0.95,"confidence":0.6}`,
+output: {"state":"none","explicit_state":false,"test_ride_requested":true,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.7,"return_visit":"committed_day","return_day_text":"Tuesday August 4th","return_visit_confidence":0.95,"desired_color":"","desired_color_confidence":0.9,"confidence":0.6}`,
   `EXAMPLE X
 comment: "Showed him the pre-owned wall. Says he will stop in to check them out (Step 2)"
-output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.7,"return_visit":"tentative","return_day_text":"","return_visit_confidence":0.9,"confidence":0.6}`,
+output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.7,"return_visit":"tentative","return_day_text":"","return_visit_confidence":0.9,"desired_color":"","desired_color_confidence":0.9,"confidence":0.6}`,
+  // Z is the reported production turn (Rick Williamson Sr. +17168609581, TLP ref 11728): the ride's
+  // NAME carries a colour word and the bike has none. Kept last so the negative is the freshest
+  // thing the model reads before the note it must classify.
   `EXAMPLE Y
 comment: "Ordered his 2026 Road Glide, projected ship date is 7/29 (Step 2)"
-output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"order","want_is_satisfiable_from_note":false,"want_confidence":0.9,"return_visit":"none","return_day_text":"","return_visit_confidence":0.95,"confidence":0.6}`
+output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"order","want_is_satisfiable_from_note":false,"want_confidence":0.9,"return_visit":"none","return_day_text":"","return_visit_confidence":0.95,"desired_color":"","desired_color_confidence":0.9,"confidence":0.6}`,
+  `EXAMPLE Z
+comment: "Rick was on for the back the blue ride and was asking about pricing on Road Glide 3. Needs follow up (Step 2)"
+output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","unmet_inventory_want":"none","want_is_satisfiable_from_note":true,"want_confidence":0.85,"return_visit":"none","return_day_text":"","return_visit_confidence":0.9,"desired_color":"","desired_color_confidence":0.95,"confidence":0.6}`
 ];
 
 /**
@@ -447,6 +499,25 @@ export function buildWalkInOutcomePrompt(args: {
     "- A day they are coming in on belongs in return_day_text, never in follow_up_window_text.",
     "- If you are unsure whether the day is theirs or ours, answer none. Overreading it means asking",
     "  a customer to confirm a visit they never promised.",
+    "",
+    // A colour word in a staff note is usually not paint. Rick Williamson Sr. +17168609581: "was on
+    // for the back the blue ride" made the lead blue, the colour match against three in-stock Road
+    // Glide 3s failed, and we told him we would "keep an eye out" for a bike we had three of.
+    "SEPARATELY AGAIN, extract the PAINT COLOUR the customer wants on the BIKE, if the note states",
+    "one. This is the colour of the motorcycle, never anything else a colour word can name.",
+    "- desired_color: the colour or finish exactly as the note wrote it ('Dark Billiard Gray',",
+    "  'Vivid Black', 'Teal Thunder'); empty string when the note states no bike colour.",
+    "- An EVENT, RIDE, CHAPTER, CHARITY or GROUP NAME that contains a colour word is NOT a paint",
+    "  colour: 'the Back the Blue ride', 'Blue Knights', 'Redline ride', 'Black Sheep HOG chapter'.",
+    "  Those name something the customer ATTENDED or belongs to. Answer empty string.",
+    "- A colour naming a place, a person, a trade-in the customer is leaving, or anything other than",
+    "  the bike they want is also empty string.",
+    "- desired_color_confidence is 0..1 for this extraction only, independent of `confidence`. Be",
+    "  CONFIDENT when you are sure the note states no bike colour — that is a real answer, and it is",
+    "  what stops an event name becoming paint.",
+    "- When you genuinely cannot tell whether a colour word describes the bike, answer empty string",
+    "  with LOW confidence. A colour we invent narrows our inventory to nothing and arms a watch for",
+    "  a bike that will never arrive.",
     "",
     ...WALK_IN_OUTCOME_EXAMPLES,
     "",
