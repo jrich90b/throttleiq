@@ -31,7 +31,12 @@ import path from "node:path";
 
 // Measured 2026-08-01 across scripts/*_eval.ts. RATCHET DOWN ONLY.
 // 317: baseline at introduction (86 eval files carry at least one).
-const BASELINE = 317;
+// 317 -> 316. The gold-corpus scorer's first draft pinned the runner's SOURCE (three greps for the
+// eval-split filter, the read-only guard, and the report path). The ratchet caught it, which is
+// exactly its job: those break on any refactor and a sloppy re-pin passes while guarding nothing.
+// Replaced by `selectScoreableEvalItems` — a pure selector the eval CALLS with fixtures, so the
+// same rule is pinned by behaviour and the runner cannot drift away from it silently.
+const BASELINE = 316;
 
 const SIGNATURE = /assert\.(?:match|ok).*\\\(/;
 
