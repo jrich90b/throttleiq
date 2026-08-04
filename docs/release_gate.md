@@ -64,30 +64,74 @@ the scorer on the box. Default window 48h.
 
 Both are pinned by `merge_freeze:eval`.
 
-## The first number: 45%
+## The number: 29.1%
 
-First real run, 2026-08-04T17:30Z — **45% (9 of 20)**.
+Measured 2026-08-04T19:10Z on the 117-item eval hold-out — **29.1% (34 of 117)**.
 
-On 20 held-out real customer turns, the agent's reply accomplished what the salesperson's reply
-accomplished 9 times.
+On 117 held-out real customer turns, the agent's reply accomplished what the salesperson's reply
+accomplished 34 times.
 
-It is a genuine reading, not a harness artifact:
+### The first reading said 45%, and that was the sample talking
+
+An earlier run on a 20-item hold-out scored 45% (9/20). Both readings are real; they are also
+statistically **consistent** — 29.1% sits inside the first run's 26%–66% interval. The 45% was the
+lucky end of a thin sample, which is exactly why a floor was never set on it.
+
+| run | hold-out | score | 95% interval |
+|---|---|---|---|
+| 2026-08-04 17:30 | 20 | 45.0% | 26% – 66% (40 pts) |
+| 2026-08-04 19:10 | 117 | 29.1% | 22% – 38% (16 pts) |
+
+### It is a real reading, not a harness artifact
+
+Both runs carry the same health checks:
 
 - **0** items where the agent produced no reply, so thread history really was reconstructed
-- **18 of 20** judge verdicts unanimous across 3 votes (10 unanimous-wrong, 8 unanimous-right)
+  (message bodies live in `m.body`, not `m.text` — a scorer reading the wrong field would compose
+  blind and tank the number for no reason)
+- **100 of 117** judge verdicts unanimous across 3 votes (74 unanimous-wrong, 26 unanimous-right).
+  Only 17 were split.
 
-But **do not treat 45% as the agent's grade.** The corpus holds 81 harvested examples, of which 20
-are in the eval hold-out. At n=20 the 95% confidence interval is roughly **23%–68%** — wide enough
-that a 10-point move next week would mean nothing.
+### One honest caveat on what it measures
 
-### So the floor starts as a catastrophe floor
+The corpus is built from replies a named staff member sent **without editing** — confirmed-good
+human answers, not the agent's known failures. That is the right benchmark.
 
-`GOLD_SCORE_FLOOR=30` catches a collapse (the agent falling over, a prompt regression gutting
-replies) without blocking on sampling noise. It is **not** a quality target.
+But these are turns a human chose to handle personally, which skews toward *harder* conversations
+than the ones the agent handles unattended. So 29% is probably a slightly pessimistic read of
+overall performance. It is not "the agent gets 71% of all conversations wrong."
 
-The real work is **growing the corpus**. Get the eval hold-out to ~100 and the interval tightens to
-about ±10, at which point the floor can become a genuine ratchet that only moves up. Until then the
-gate is honest about what it proved: regressions, plus a floor against collapse.
+## The floor: 20%
+
+`GOLD_SCORE_FLOOR=20`.
+
+The floor is a **smoke alarm, not a target**. It catches the day the agent falls over — a prompt
+regression, a broken composer, replies coming out empty. It does not make the agent better.
+
+At n=117 the trade-off is finally a good one:
+
+| floor | blocks a healthy (29%) agent | misses an agent that HALVED to 15% |
+|---|---|---|
+| 15% | 0.02% of runs | 49% |
+| **20%** | **1.4% of runs** | **7%** |
+| 25% | 18% of runs | 0.2% |
+| 30% | blocks *everything* | — |
+
+20% almost never fires by accident and catches a halving better than nine times in ten. That
+combination was impossible at n=20, where every setting either cried wolf or missed things — which
+was the whole argument for growing the corpus.
+
+**Do not set the floor to the current score.** A floor at 29% would block roughly a third of
+deploys on an agent that is working fine.
+
+### Raising it
+
+Raise the floor when the score genuinely moves, not when a single run looks good. With a 16-point
+interval, a run has to clear the *previous interval* before it means anything — so a reading of 40%
+is real progress, a reading of 33% is probably noise.
+
+The 74 unanimous-wrong items in the report are the improvement backlog: those are turns where all
+three judges agreed the agent missed what the salesperson did.
 
 ## What each routine has to do
 
