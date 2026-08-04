@@ -348,6 +348,67 @@ ok(DEFAULT_CANARY_THRESHOLDS.runawayMinPerHour > 0, "and an absolute runaway flo
   eq(ripe.pendingReady, true, "...but IS flagged ready so something comes back and judges it");
   eq(ripe.minutesRemaining, 0, "...with no time left on the clock");
 
+  // --- RIPENESS ON A PROGRESSIVE CANARY IS THE NEXT SLICE, NOT THE BASELINE LOOKBACK -------------
+  //
+  // Found live 2026-08-04: `status` reported 19,077 minutes ("13 days") left for a canary that
+  // `judge` was already measuring at 2 of 9 slices. `windowMs` on a progressive canary is the 336h
+  // BASELINE lookback; reading it as the deadline tells the loop "nothing to judge for two weeks"
+  // while the watch sits waiting to be asked — which recreates the exact state the canary's memory
+  // rework existed to fix (no deploy had ever actually been judged), and strands the first-touch
+  // flip behind a date the mechanism does not need.
+  const progressive = (over: Record<string, unknown> = {}) =>
+    pending({ windowMs: 336 * HOUR, progress: { intervalMs: 8 * HOUR, count: 9 }, measurements: [], ...over });
+
+  const slice1Due = decideCanaryGate({
+    pending: progressive({ takenAtMs: NOW - 9 * HOUR }),
+    lastVerdictStatus: null,
+    nowMs: NOW
+  });
+  eq(slice1Due.pendingReady, true, "a progressive canary past its first 8h slice is RIPE, not 13 days out");
+  eq(slice1Due.minutesRemaining, 0, "...with no time left before that slice can be taken");
+  ok(slice1Due.reason.includes("slice 1"), "...and the reason names WHICH slice is due");
+
+  const midSlice = decideCanaryGate({
+    pending: progressive({ takenAtMs: NOW - 4 * HOUR }),
+    lastVerdictStatus: null,
+    nowMs: NOW
+  });
+  eq(midSlice.pendingReady, false, "inside the first slice it is not ripe yet");
+  eq(midSlice.minutesRemaining, 4 * 60, "...and the countdown is to the SLICE end, not to 336h");
+
+  const twoTaken = decideCanaryGate({
+    pending: progressive({ takenAtMs: NOW - 25 * HOUR, measurements: [{}, {}] }),
+    lastVerdictStatus: null,
+    nowMs: NOW
+  });
+  eq(twoTaken.pendingReady, true, "with 2 slices taken and 25h elapsed, slice 3 has elapsed and is due");
+  const twoTakenEarly = decideCanaryGate({
+    pending: progressive({ takenAtMs: NOW - 17 * HOUR, measurements: [{}, {}] }),
+    lastVerdictStatus: null,
+    nowMs: NOW
+  });
+  eq(twoTakenEarly.pendingReady, false, "...but at 17h slice 3 is still running, so there is nothing to take");
+  // A watch that fell BEHIND catches up rather than waiting: only 1 slice taken after 25h means
+  // slice 2 elapsed long ago and judge should be called now.
+  eq(
+    decideCanaryGate({
+      pending: progressive({ takenAtMs: NOW - 25 * HOUR, measurements: [{}] }),
+      lastVerdictStatus: null,
+      nowMs: NOW
+    }).pendingReady,
+    true,
+    "a watch that fell behind reads RIPE so judge catches it up — never 'wait for the baseline'"
+  );
+
+  // A LEGACY one-shot canary (no `progress`) keeps the old window math — the rework must not
+  // strand a canary armed before progressive measurement shipped.
+  eq(
+    decideCanaryGate({ pending: pending({ takenAtMs: NOW - 10 * HOUR }), lastVerdictStatus: null, nowMs: NOW })
+      .pendingReady,
+    false,
+    "a legacy one-shot canary still ripens on windowMs, not on a slice schedule"
+  );
+
   // --- THE ONE BLOCKING STATE --------------------------------------------------------------------
   eq(
     decideCanaryGate({ pending: null, lastVerdictStatus: "regressed", nowMs: NOW }).mayDeployBehaviour,

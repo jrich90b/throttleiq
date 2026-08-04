@@ -402,10 +402,18 @@ export function buildRevertPlan(verdict: CanaryVerdict, deployedSha: string): st
 export type CanaryPending = {
   /** When the baseline was captured (the deploy moment). */
   takenAtMs: number;
-  /** How long the watch window runs from `takenAtMs`. */
+  /**
+   * How long the watch window runs from `takenAtMs` — BUT for a PROGRESSIVE canary this is only the
+   * baseline LOOKBACK (336h here), not when the watch concludes. Read `progress` before using it as
+   * a deadline; that confusion is exactly what `nextSliceDueMs` below exists to prevent.
+   */
   windowMs: number;
   /** The commit that went out. Needed to build the revert. */
   deployedSha: string;
+  /** Present => measured as a series of short slices under a run-length rule. */
+  progress?: { intervalMs: number; count: number } | null;
+  /** Slices already taken. Only the COUNT matters here. */
+  measurements?: unknown[] | null;
 } | null;
 
 export type CanaryGateDecision = {
@@ -464,14 +472,37 @@ export function decideCanaryGate(input: {
   let minutesRemaining = 0;
   let watching = "nothing is pending";
   if (pending) {
-    const endMs = Number(pending.takenAtMs) + Number(pending.windowMs);
+    // RIPENESS FOR A PROGRESSIVE CANARY IS THE NEXT SLICE, NOT THE BASELINE LOOKBACK.
+    //
+    // Found 2026-08-04. `status` reported "19,077 min left in its window" — 13 days — for a canary
+    // that `judge` was already measuring at 2 of 9 slices and that can promote to HEALTHY after 3
+    // consecutive clean ones (~24h). `windowMs` on a progressive canary is the 336h BASELINE
+    // lookback; treating it as the deadline tells a caller "nothing to do for two weeks" while the
+    // watch is quietly waiting to be asked.
+    //
+    // Why it matters more than a cosmetic number: `judge` is what RECORDS a verdict, and the whole
+    // point of the #434 rework was that no deploy had ever actually been judged. A ripeness reading
+    // that says "come back in 13 days" recreates that state — and the first-touch auto-send flip,
+    // the biggest funnel lever we have, is gated on a recorded HEALTHY verdict.
+    //
+    // FAIL DIRECTION: ripe-too-early only causes an extra `judge` run, which is idempotent and
+    // records nothing until the watch reaches a terminal verdict. Ripe-too-late loses the verdict
+    // entirely. So round toward asking.
+    const takenAtMs = Number(pending.takenAtMs);
+    const intervalMs = Number(pending.progress?.intervalMs);
+    const slicesTaken = Array.isArray(pending.measurements) ? pending.measurements.length : 0;
+    const progressive = Number.isFinite(intervalMs) && intervalMs > 0;
+    const endMs = progressive
+      ? takenAtMs + (slicesTaken + 1) * intervalMs
+      : takenAtMs + Number(pending.windowMs);
     const remainingMs = endMs - Number(input.nowMs);
     pendingReady = remainingMs <= 0;
     minutesRemaining = remainingMs > 0 ? Math.ceil(remainingMs / 60_000) : 0;
     const sha = pending.deployedSha.slice(0, 8) || "(unrecorded)";
+    const what = progressive ? `slice ${slicesTaken + 1}` : "its window";
     watching = pendingReady
-      ? `a canary on ${sha} is ready to judge`
-      : `a canary is open on ${sha} — ${minutesRemaining} min left in its window`;
+      ? `a canary on ${sha} is ready to judge${progressive ? ` (slice ${slicesTaken + 1} is due)` : ""}`
+      : `a canary is open on ${sha} — ${minutesRemaining} min left in ${what}`;
   }
 
   // The ONE blocking condition: a measured regression is the only state where shipping more
