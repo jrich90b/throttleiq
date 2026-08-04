@@ -1092,6 +1092,7 @@ import {
   lastStaffPingAt,
   resolveStaffPingOwnerRef
 } from "./domain/staffPing.js";
+import { isFinanceOutcomeContext, shouldPromptBusinessManagerFinanceOutcome } from "./domain/financeOutcomeGates.js";
 import {
   buildGateBlockerDigestMessage,
   collectGateBlockers,
@@ -19293,18 +19294,6 @@ async function resolveFinanceOutcomeNotifyTarget(conv: any): Promise<{
   return { user: target, name, phone };
 }
 
-function isFinanceOutcomeContextForConversation(conv: any): boolean {
-  return (
-    conv?.classification?.bucket === "finance_prequal" ||
-    conv?.classification?.cta === "hdfs_coa" ||
-    conv?.classification?.cta === "prequalify" ||
-    /credit_app|credit_app_cosigner|credit_app_needs_info|financing_declined|credit_app_approved/.test(
-      String(conv?.followUp?.reason ?? "").toLowerCase()
-    ) ||
-    String(conv?.appointment?.appointmentType ?? "").toLowerCase() === "finance_discussion"
-  );
-}
-
 function ensureFinanceOutcomeToken(conv: any): string {
   const notifyState = ((conv as any).financeOutcomeNotify = (conv as any).financeOutcomeNotify ?? {});
   if (String(notifyState.outcomeToken ?? "").trim()) return String(notifyState.outcomeToken).trim();
@@ -19479,7 +19468,8 @@ async function maybePromptBusinessManagerFinanceOutcomeFallback(
   conv: any,
   opts: { sourceMessageId?: string; note?: string }
 ): Promise<void> {
-  if (!isFinanceOutcomeContextForConversation(conv)) return;
+  // A prequal ORIGIN alone is not a finance outcome to chase (Joe 8/4) — financeOutcomeGates.ts.
+  if (!shouldPromptBusinessManagerFinanceOutcome(conv).prompt) return;
   if (String(conv?.financeOutcome?.status ?? "").trim()) return;
   const notifyState = ((conv as any).financeOutcomeNotify = (conv as any).financeOutcomeNotify ?? {});
   const sourceId = String(opts.sourceMessageId ?? "").trim();
@@ -42823,7 +42813,7 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
       const outcomeValue = todoOutcome.trim().toLowerCase();
       const isFinanceApprovalTodo =
         String(existingTask?.reason ?? task.reason ?? "").trim().toLowerCase() === "approval" ||
-        isFinanceOutcomeContextForConversation(conv) ||
+        isFinanceOutcomeContext(conv) ||
         /\b(?:credit|prequal|pre[-\s]?qual|finance|financing|approval|hdfs|coa)\b/i.test(summary);
       const financeStatus =
         outcomeValue === "not_approved" ||

@@ -3557,6 +3557,77 @@ export function decideFinanceDeclinedCadence(
   };
 }
 
+/**
+ * May we PROACTIVELY text the business manager asking for a finance outcome? (Joe ruling
+ * 2026-08-04: "a pre qual should not create a finance outcome.")
+ *
+ * Christopher Szczesny +17169400722 arrived 8/2 from "Marketplace - Prequal", which stamps the
+ * conversation `bucket: finance_prequal` / `cta: prequalify` FOREVER. Two days later the whole
+ * thread was inventory — "can u dsend pics", "looking for a used road glide with some goodies" —
+ * and the state agreed (`dialogState: inventory_answered`). A staff-initiated call then hit his
+ * voicemail, and the no-contact handler texted Stone "Finance outcome needed: … Reply OUTCOME
+ * <token> APPROVED | DECLINED | NEEDS_INFO | PENDING" plus an open task. There was no credit app,
+ * no approval pending, no finance appointment — nothing whose outcome a manager could report.
+ *
+ * The old gate read HOW THE LEAD ARRIVED as if it were WHAT THE DEAL IS DOING NOW: a prequal
+ * origin label never expires, so every prequal-sourced lead nags the manager the first time a
+ * call goes to voicemail. This referee requires a real finance ARTEFACT instead:
+ *   - `cta: hdfs_coa` — a SUBMITTED HDFS credit application (note `hdfs_coa_online` also carries
+ *     bucket `finance_prequal`, so the bucket alone can never be the discriminator);
+ *   - a live credit-app / financing-declined follow-up state;
+ *   - a booked `finance_discussion` appointment.
+ * A soft prequal form on its own is NOT one.
+ *
+ * Fail-direction: this gates an unprompted SMS to staff plus an open task, so the safe direction
+ * is to stay quiet about a deal that does not exist. Nothing here blocks RECORDING an outcome —
+ * the outcome token/link still exists, the appointment-outcome lane has its own (already
+ * artefact-only) gate, and staff explicitly picking "approved"/"declined" on a task still writes
+ * the finance outcome through `isFinanceOutcomeContextForConversation`.
+ */
+export type BusinessManagerFinanceOutcomePromptInput = {
+  /** classification.cta — how the lead came in ("prequalify", "hdfs_coa", …). */
+  leadCta?: string | null;
+  /** classification.bucket — kept for the reason string; never sufficient on its own. */
+  leadBucket?: string | null;
+  followUpReason?: string | null;
+  appointmentType?: string | null;
+};
+
+export type BusinessManagerFinanceOutcomePromptDecision = {
+  /** May the caller send the business-manager finance-outcome prompt? */
+  prompt: boolean;
+  reason: string;
+};
+
+const FINANCE_OUTCOME_LIVE_FOLLOW_UP_REASONS = new Set([
+  "credit_app",
+  "credit_app_cosigner",
+  "credit_app_needs_info",
+  "credit_app_approved",
+  "financing_declined"
+]);
+
+export function decideBusinessManagerFinanceOutcomePrompt(
+  input: BusinessManagerFinanceOutcomePromptInput
+): BusinessManagerFinanceOutcomePromptDecision {
+  const cta = String(input.leadCta ?? "").trim().toLowerCase();
+  const bucket = String(input.leadBucket ?? "").trim().toLowerCase();
+  const followUpReason = String(input.followUpReason ?? "").trim().toLowerCase();
+  const appointmentType = String(input.appointmentType ?? "").trim().toLowerCase();
+
+  const signals: string[] = [];
+  if (cta === "hdfs_coa") signals.push("credit_app_online");
+  if (FINANCE_OUTCOME_LIVE_FOLLOW_UP_REASONS.has(followUpReason)) signals.push("follow_up_reason");
+  if (appointmentType === "finance_discussion") signals.push("finance_appointment");
+
+  if (signals.length) return { prompt: true, reason: `finance_artifact:${signals.join("+")}` };
+  // The two labels that used to be enough on their own, named so the skip is legible in a trace.
+  if (bucket === "finance_prequal" || cta === "prequalify") {
+    return { prompt: false, reason: "prequal_origin_only" };
+  }
+  return { prompt: false, reason: "no_finance_context" };
+}
+
 // How long the proactive cadence goes QUIET after we just reached out — one referee for what were
 // four independent copies of the same block.
 //

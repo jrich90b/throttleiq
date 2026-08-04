@@ -21,6 +21,7 @@ export {
   decideDealerLeadSurveyTurn,
   decideFinancePricingTurn,
   decideFinanceDeclinedCadence,
+  decideBusinessManagerFinanceOutcomePrompt,
   decideHeldDraftRelease,
   isRealReplyProvider,
   decideFinanceProcessQuestionTurn,

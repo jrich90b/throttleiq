@@ -137,6 +137,19 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     });
   }, ["decideFinanceDeclinedCadence"]);
 
+  // Added 2026-08-04 (Joe: "a pre qual should not create a finance outcome"). Fully projectable —
+  // every input is stored conversation state, so a prequal-origin lead that starts nagging the
+  // business manager again shows up as a decision DIFF, not just a missing SMS nobody notices.
+  add("businessManagerFinanceOutcomePrompt", conv => {
+    if (typeof reducer.decideBusinessManagerFinanceOutcomePrompt !== "function") return undefined;
+    return reducer.decideBusinessManagerFinanceOutcomePrompt({
+      leadCta: conv?.classification?.cta ?? null,
+      leadBucket: conv?.classification?.bucket ?? null,
+      followUpReason: conv?.followUp?.reason ?? null,
+      appointmentType: conv?.appointment?.appointmentType ?? null
+    });
+  }, ["decideBusinessManagerFinanceOutcomePrompt"]);
+
   // Added 2026-08-03 with the seller-photo frame fix (Tom +17164454081). Sampled as: given this
   // conversation's stored seller/trade signals, whose bike would we assume a photo shows? Purely a
   // projection of stored state — no turn text, no vision — so it is genuinely sampleable.
