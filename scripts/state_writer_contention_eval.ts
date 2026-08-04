@@ -725,8 +725,16 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 // `notifyState.status`, one of them bypassing `applyFinanceOutcomeStatusFromSignal` outright — was
 // invisible. Shipping 5a without 5b would have dropped the field toward zero and hidden that.
 // Same standard as cut 4: the cut had to go both ways or it would have been dishonest.
+// 90 -> 81. The inventory-watch DISARM un-stacking (2026-08-04) — the INVERSE of #500's arm
+// referee, and the same cluster tell: the three watch fields' unrefereed writers sat on adjacent
+// lines inside four functions. Four lanes now ask `decideInventoryWatchDisarm` and write through
+// `applyInventoryWatchDisarm`: the customer's stop request, our own held-unit heal, and the two
+// worker repair endpoints. `inventoryWatches` 5 -> 2, `inventoryWatch` 4 -> 1, `inventoryWatchPending`
+// 4 -> 2. The FOURTH lane (`vin_normalize`) was invisible to the queue until the third was refereed
+// — refereeing one write un-collapses its neighbours, the adjacency artifact this program has now
+// hit five times. MEASURED on the post-change tree.
 // RATCHET DOWN ONLY.
-const UNREFEREED_WRITER_BASELINE = 90;
+const UNREFEREED_WRITER_BASELINE = 81;
 
 {
   const sourceFiles: SourceFile[] = [];

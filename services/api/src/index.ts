@@ -516,6 +516,7 @@ import {
   applyInventoryAvailabilityReopen,
   applyInventoryHoldRecord,
   applyInventoryWatchArm,
+  applyInventoryWatchDisarm,
   applyCloseoutReversal,
   applyAppointmentConfirmRecord,
   clearAppointmentStaffPromptState
@@ -14470,9 +14471,7 @@ async function applyStaleHeldUnitWatchHeal(conv: any): Promise<boolean> {
   const remaining = watches.filter(
     w => String(w?.note ?? "").trim() !== HELD_GUARD_WATCH_NOTE
   );
-  conv.inventoryWatches = remaining.length ? remaining : undefined;
-  conv.inventoryWatch = remaining.length ? remaining[0] : undefined;
-  if (!remaining.length) conv.inventoryWatchPending = undefined;
+  applyInventoryWatchDisarm(conv, { lane: "held_guard_heal", remaining });
 
   if (plan.restoreActiveMode) {
     setFollowUpMode(conv, "active", "held_unit_available_heal");
@@ -19731,21 +19730,18 @@ function markOutcomeRelatedTodosDone(conv: any, opts?: { includeFinance?: boolea
   return count;
 }
 
+const WATCH_DIALOG_STATES = ["inventory_watch_active", "inventory_watch_prompted", "inventory_watch_matched"];
+
 async function clearInventoryWatchState(conv: any, reason = "inventory_watch_clear"): Promise<void> {
-  const nowIso = new Date().toISOString();
-  conv.inventoryWatch = undefined;
-  conv.inventoryWatches = undefined;
-  conv.inventoryWatchPending = undefined;
-  setFollowUpMode(conv, "paused_indefinite", reason);
-  stopFollowUpCadence(conv, reason);
-  if (
-    getDialogState(conv) === "inventory_watch_active" ||
-    getDialogState(conv) === "inventory_watch_prompted" ||
-    getDialogState(conv) === "inventory_watch_matched"
-  ) {
-    setDialogState(conv, "customer_stepping_back");
-  }
-  conv.updatedAt = nowIso;
+  applyInventoryWatchDisarm(conv, {
+    lane: "customer_stop",
+    remaining: [],
+    reason,
+    stepDialogBack: c => {
+      if (WATCH_DIALOG_STATES.includes(String(getDialogState(c)))) setDialogState(c, "customer_stepping_back");
+    }
+  });
+  conv.updatedAt = new Date().toISOString();
 }
 
 function buildInventoryWatchStopReply(conv: any, inboundText: string): string {
@@ -41535,13 +41531,14 @@ app.post("/internal/worker/watch-prune/:id", async (req, res) => {
   const before = Array.isArray(conv.inventoryWatches) ? conv.inventoryWatches : [];
   const { kept, removed } = pruneInventoryWatchesByModel(before, removeModels);
   if (!dryRun && removed > 0) {
-    conv.inventoryWatches = kept;
-    // Keep the singular mirror consistent: if it pointed at a pruned model, repoint to a kept one (or clear).
+    // The mirror is repointed ONLY when the mirror itself was pruned — see decideInventoryWatchDisarm.
     const normModel = (s: unknown) => String((s as any)?.model ?? "").trim().toLowerCase();
     const removeSet = new Set(removeModels.map((m: string) => String(m ?? "").trim().toLowerCase()).filter(Boolean));
-    if (conv.inventoryWatch && removeSet.has(normModel(conv.inventoryWatch))) {
-      conv.inventoryWatch = kept[0] ?? undefined;
-    }
+    applyInventoryWatchDisarm(conv, {
+      lane: "model_prune",
+      remaining: kept,
+      mirrorWasPruned: !!conv.inventoryWatch && removeSet.has(normModel(conv.inventoryWatch))
+    });
     conv.updatedAt = new Date().toISOString();
     saveConversation(conv);
     await flushConversationStore();
@@ -41589,10 +41586,12 @@ app.post("/internal/worker/watch-normalize-vin", async (req, res) => {
     changed.push({ convId: conv.id, changedModels, removedDuplicates, models: next.map((w: any) => w.model) });
     convsTouched += 1;
     if (!dryRun) {
-      conv.inventoryWatches = next as any;
-      // Repoint the singular mirror to a kept watch (its model may have been cleaned/deduped away).
       const singleModel = stripLeadingVinCodes((conv.inventoryWatch as any)?.model);
-      conv.inventoryWatch = (next as any[]).find(w => String(w.model ?? "") === singleModel) ?? next[0] ?? undefined;
+      applyInventoryWatchDisarm(conv, {
+        lane: "vin_normalize",
+        remaining: next as any,
+        mirrorPick: (next as any[]).find(w => String(w.model ?? "") === singleModel)
+      });
       conv.updatedAt = new Date().toISOString();
       saveConversation(conv);
     }

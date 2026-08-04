@@ -595,6 +595,28 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     }, ["decideInventoryWatchArm"]);
   }
 
+  // Added 2026-08-04 with the inventory-watch DISARM un-stacking (the inverse of the arm referee
+  // above). Sampled once PER LANE for the same reason: the four lanes disagree about the shape of
+  // an emptied list, about the pending ask, and about the singular mirror, and one sample would
+  // hide all three. PROBE: the lane is held fixed per sample and `remainingCount` is pinned to 0 —
+  // the boundary both "when empty" rules turn on — so the referee consults nothing but its own
+  // arbitration.
+  for (const lane of ["customer_stop", "held_guard_heal", "model_prune", "vin_normalize"] as const) {
+    add(`inventoryWatchDisarm:${lane}`, () => {
+      if (typeof reducer.decideInventoryWatchDisarm !== "function") return undefined;
+      const decision = reducer.decideInventoryWatchDisarm({ lane, remainingCount: 0 }); // PROBE
+      return {
+        emptyListShape: decision.emptyListShape,
+        mirrorRule: decision.mirrorRule,
+        clearPending: decision.clearPending,
+        followUpMode: decision.followUpMode,
+        stopCadence: decision.stopCadence,
+        stepDialogBack: decision.stepDialogBack,
+        divergence: decision.divergence
+      };
+    }, ["decideInventoryWatchDisarm"]);
+  }
+
   // Added 2026-08-02 with the appointment-CONFIRM un-stacking. Sampled once PER LANE, because the
   // whole point of this referee is that the slot-match lane answers `acknowledged` and the
   // reschedule latch differently from the two booked lanes — a single sample would hide exactly
