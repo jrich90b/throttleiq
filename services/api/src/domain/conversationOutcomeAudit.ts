@@ -53,6 +53,11 @@ export type OutcomeAnomaly = {
   // The loop reads this to pick the right fix — and to know the finding is not reply-draft
   // reproducible (reproduceConfirm.ts). Absent on every other dimension.
   correctedSendWasProactive?: boolean;
+  // cadence_quality_suppressed only: did the enforce gate actually HOLD this proactive touch back
+  // before the send/draft path? True = the safety net worked and no customer saw it (a cadence
+  // template/trigger nit, not a customer-facing miss). False/absent = nothing blocked it — treat it as
+  // the real thing. Sourced from cadenceQualityShadow.gateHeld, which is only ever set true on proof.
+  cadenceTouchWasHeld?: boolean;
 };
 
 /**
@@ -144,7 +149,7 @@ type AuditableConv = {
   draftHeld?: { at?: string | null; reason?: string | null; heldKind?: string | null; frame?: string | null } | null;
   contextFidelityShadow?: { at?: string | null; frame?: string | null; severity?: string | null; reason?: string | null; draftPreview?: string | null } | null;
   humanCorrection?: { at?: string | null; category?: string | null; reason?: string | null; steering?: string | null; messageId?: string | null } | null;
-  cadenceQualityShadow?: { at?: string | null; overall?: string | null; reason?: string | null; cadenceKind?: string | null } | null;
+  cadenceQualityShadow?: { at?: string | null; overall?: string | null; reason?: string | null; cadenceKind?: string | null; gateHeld?: boolean | null; gateReason?: string | null } | null;
   messages?: Array<{ direction?: string | null; provider?: string | null; at?: string | null; body?: string | null; sid?: string | null; draftStatus?: string | null; feedback?: { rating?: string | null; at?: string | null } | null }> | null;
   questions?: Array<{ text?: string | null; status?: string | null; createdAt?: string | null }> | null;
   lead?: { leadRef?: string | null } | null;
@@ -346,12 +351,21 @@ export function auditConversationOutcome(conv: AuditableConv, opts: { now?: Date
   if (cqs && Number.isFinite(cqsAtMs) && ["suppress", "hold"].includes(String(cqs.overall ?? "").toLowerCase())) {
     const ageDays = (now.getTime() - cqsAtMs) / (1000 * 60 * 60 * 24);
     if (ageDays >= 0 && ageDays <= 21) {
+      // Did the enforce gate actually hold this touch back? A HELD touch is the safety net WORKING —
+      // nobody received anything, so it is a low-priority cadence-template nit, not a customer-facing
+      // miss. A touch nothing blocked (verdict under the enforce floor, a `hold` the suppress-only flip
+      // ignores, or enforce off) went on to the send/draft path and IS the defect. Both used to surface
+      // as identical P2 rows — 31 of the 80 orders on 2026-08-04 — so every routine re-derived this by
+      // hand, and one got it wrong. FAIL DIRECTION: only a proven `gateHeld === true` de-prioritises;
+      // absent (every pre-2026-08-04 record) or false keeps today's exact P2 treatment.
+      const held = cqs.gateHeld === true;
       out.push({
         ...base,
         dimension: "cadence_quality_suppressed",
-        severity: "P2",
+        severity: held ? "P3" : "P2",
         healed: false,
-        detail: `proactive cadence message judged ${cqs.overall} (${cqs.cadenceKind ?? "?"})${cqs.reason ? ` — ${String(cqs.reason).slice(0, 120)}` : ""}`,
+        cadenceTouchWasHeld: held,
+        detail: `${held ? "HELD BEFORE SEND by the cadence-quality gate" : `NOT HELD (went to the send/draft path${cqs.gateReason ? `, gate: ${cqs.gateReason}` : ""})`} — proactive cadence message judged ${cqs.overall} (${cqs.cadenceKind ?? "?"})${cqs.reason ? ` — ${String(cqs.reason).slice(0, 120)}` : ""}`,
         // The judged send's own timestamp IS the triggering event, so stamp it (mirrors 5d above and
         // the 👎 block below). Without it these rows carried NO event time — and they are the single
         // largest block in the work order (55 of 189 on 2026-07-30) — so THREE of the staleness passes

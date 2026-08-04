@@ -73,6 +73,33 @@ assert.match(src, /if \(isCadenceQualityEnforceEnabled\(\)\) \{[\s\S]{0,400}enfD
 assert.match(src, /\[followup\]\[cadence-quality-enforce\] suppressed low-value proactive touch/, "a suppressed touch is logged");
 assert.match(src, /enfDecision\?\.action === "suppress"[\s\S]{0,200}advanceFollowUpCadence\(conv, cfg\.timezone\)[\s\S]{0,40}continue;/, "on suppress the loop advances the cadence and skips the send");
 assert.match(src, /if \(!isCadenceQualityEnforceEnabled\(\)\)\s*\n?\s*void runCadenceQualityJudgeShadow/, "the shadow fire-and-forget is skipped under enforce (no double-judge)");
-assert.match(src, /runCadenceQualityJudgeShadow[\s\S]{0,120}Promise<CadenceQualityGateDecision \| null>/, "the judge returns the gate decision so the caller can enforce");
+// Window widened 120 -> 200: the signature grew an `enforcing?: boolean` opt (see the call-site pins below).
+assert.match(src, /runCadenceQualityJudgeShadow[\s\S]{0,200}Promise<CadenceQualityGateDecision \| null>/, "the judge returns the gate decision so the caller can enforce");
+
+// --- Each call site declares whether IT will honour a suppress (feeds cadenceQualityShadow.gateHeld) ---
+// The persisted record must say whether the touch was actually held back, and only the CALLER knows:
+// the awaited enforce call skips the send, the fire-and-forget shadow call never does. Both are inside
+// this one cadence tick (which covers sms AND email via useEmail) — the inbound reply paths
+// (/webhooks/twilio, /conversations/:id/regenerate) do not run this judge at all, so there is no third
+// lane to keep in sync. If one is ever added it must choose an `enforcing` value deliberately, which is
+// what these pins force. A wrong value here silently mislabels real customer-facing misses as "held".
+{
+  const marker = "runCadenceQualityJudgeShadow(";
+  const sites = [...src.matchAll(/runCadenceQualityJudgeShadow\((?:[^;]|\n){0,400}?\)/g)]
+    .map(m => m[0])
+    .filter(s => !s.startsWith(`${marker}\n  conv: any`));
+  assert.equal(sites.length, 2, `expected exactly 2 cadence-judge call sites, found ${sites.length}`);
+  const awaited = sites.filter(s => /enforcing: true/.test(s));
+  const shadowed = sites.filter(s => /enforcing: false/.test(s));
+  assert.equal(awaited.length, 1, "exactly one call site declares it enforces (the awaited enforce gate)");
+  assert.equal(shadowed.length, 1, "exactly one call site declares it does NOT enforce (the fire-and-forget shadow)");
+  assert.match(src, /const enfDecision = await runCadenceQualityJudgeShadow[\s\S]{0,200}enforcing: true/, "the AWAITED enforce call is the one that claims to enforce");
+  assert.match(src, /void runCadenceQualityJudgeShadow[\s\S]{0,200}enforcing: false/, "the fire-and-forget shadow call never claims to enforce");
+  // The regenerate-path cadence composer is knowingly UN-judged; wiring it later must revisit this eval.
+  assert.ok(
+    !/buildCadenceRegeneratedDraft[\s\S]{0,600}runCadenceQualityJudgeShadow/.test(src),
+    "the regenerate cadence composer does not run the judge — if that changes, it must pass `enforcing` deliberately"
+  );
+}
 
 console.log("PASS cadence-quality enforce eval (gate floor + suppress-only + flag defaults + loop wiring)");

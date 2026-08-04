@@ -1207,6 +1207,13 @@ export type Conversation = {
     channel?: "sms" | "email";
     cadenceKind?: string | null;
     messagePreview?: string;
+    // What the enforce gate DID with this verdict. `gateHeld` true = the touch was held back before the
+    // send/draft path (safety net worked, nobody saw it). Optional because records written before
+    // 2026-08-04 carry none — absent reads as NOT held, the noisier/safer direction. Built once, at the
+    // single write site, by buildCadenceQualityShadowRecord (draftQualityGate.ts) — see its fail direction.
+    gateAction?: string | null;
+    gateReason?: string | null;
+    gateHeld?: boolean;
   } | null;
   contactPreference?: "call_only";
   voiceContext?: VoiceContext;
