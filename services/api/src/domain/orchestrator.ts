@@ -46,6 +46,7 @@ import {
   decideEventPromoTurn,
   decidePriceAnswerAnchor,
   decidePriceObjectionTurn,
+  decideScheduleInviteBudget,
   decideStockNumberInterestTurn
 } from "./routeStateReducer.js";
 import { buildLongTermTimelineMessage } from "./longTermMessage.js";
@@ -55,6 +56,11 @@ import {
   isInternationalShippingInquiry,
   shouldDeclineInternationalShipping
 } from "./internationalShippingPolicy.js";
+import {
+  buildPaymentRangeDisclaimerLine,
+  resolveCalculatorAprBand,
+  resolveFinanceRatePolicy
+} from "./financeRatePolicy.js";
 import { getAllModels, isModelInRecentYears } from "./modelsByYear.js";
 import { isWebFallbackEnabled, searchGoogleCse } from "./webFallback.js";
 import type { FinanceDocsState, LeadProfile, TradePayoffState } from "./conversationStore.js";
@@ -811,6 +817,12 @@ export function buildMonthlyPaymentLine(opts: {
   taxRate: number;
   downPayment?: number;
   downPaymentAssumed?: boolean;
+  /**
+   * APR band to amortize at. Supplied from the dealer's own rate floor
+   * (`resolveCalculatorAprBand`); omit to keep the legacy hardcoded assumption, which is what a
+   * dealer with no configured floor still gets.
+   */
+  aprBand?: { minApr: number; maxApr: number } | null;
 }): string {
   const nf = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
   const feeMin = opts.isUsed ? 200 : 1200;
@@ -822,8 +834,11 @@ export function buildMonthlyPaymentLine(opts: {
     totalMin = Math.max(0, totalMin - opts.downPayment);
     totalMax = Math.max(0, totalMax - opts.downPayment);
   }
-  const aprMin = opts.isUsed ? 0.08 : 0.06;
-  const aprMax = opts.isUsed ? 0.09 : 0.08;
+  // Joe, 2026-08-04: the low end is the dealer's REAL floor when one is configured, so the bottom
+  // of a quoted range is a rate American actually offers. No floor configured (or a stale one) =>
+  // the legacy assumption, unchanged.
+  const aprMin = opts.aprBand?.minApr ?? (opts.isUsed ? 0.08 : 0.06);
+  const aprMax = opts.aprBand?.maxApr ?? (opts.isUsed ? 0.09 : 0.08);
   const low = calcMonthlyPayment(totalMin, aprMin, opts.termMonths);
   const high = calcMonthlyPayment(totalMax, aprMax, opts.termMonths);
   // Round the band OUTWARD (low floors, high ceils to $10) so the rendered range always
@@ -850,6 +865,29 @@ export function buildMonthlyPaymentLine(opts: {
     `you’re around ${payLabel}/mo at ${opts.termMonths} months ` +
     `before taxes and fees, based on your APR.`
   );
+}
+
+
+/**
+ * Next-step options for a finance answer. Joe, 2026-08-04: "the agent should offer a time to
+ * schedule not just stop in."
+ *
+ * The permission to ask comes from decideScheduleInviteBudget (routeStateReducer, PR #493) — the ONE
+ * referee for how often we ask a lead to come in. We READ it and never write the counter: a booking
+ * link inside a finance answer the customer asked for is not a fresh proactive invite. Once the
+ * budget is spent, or scheduling is muted, we fall back to the softer "stop in" wording rather than
+ * pestering someone who has already ignored three invitations.
+ */
+function financeNextStepOptions(
+  profile: Awaited<ReturnType<typeof getDealerProfile>> | null,
+  ctx?: { followUp?: any }
+): { mayOfferTime: boolean; bookingUrl?: string | null } {
+  const budget = decideScheduleInviteBudget({ inviteCount: ctx?.followUp?.scheduleInviteCount });
+  const muted = ctx?.followUp?.scheduleMuted === true;
+  return {
+    mayOfferTime: !budget.spent && !muted,
+    bookingUrl: (profile as any)?.bookingUrl ?? null
+  };
 }
 
 function buildFinanceAppLine(profile: Awaited<ReturnType<typeof getDealerProfile>> | null): string {
@@ -3527,6 +3565,8 @@ export async function orchestrateInbound(
         const downPayment = downInfo?.amount;
         const downPaymentAssumed = downInfo?.assumedThousands ?? false;
 
+        const financeRatePolicy = resolveFinanceRatePolicy(dealerProfile);
+        const calculatorAprBand = resolveCalculatorAprBand(financeRatePolicy, isUsed, Date.now());
         if (paymentRange) {
           pricingOrPaymentsLine = buildMonthlyPaymentLine({
             priceMin: paymentRange.min,
@@ -3535,8 +3575,17 @@ export async function orchestrateInbound(
             termMonths: preferredTerm,
             taxRate,
             downPayment,
-            downPaymentAssumed
+            downPaymentAssumed,
+            aprBand: calculatorAprBand
           });
+          // A payment range is DERIVED from a rate, so it carries the same disclosure obligation as
+          // quoting one — even though it prints no percentage.
+          if (calculatorAprBand) {
+            pricingOrPaymentsLine = `${pricingOrPaymentsLine} ${buildPaymentRangeDisclaimerLine(
+              (dealerProfile as any)?.creditAppUrl,
+              financeNextStepOptions(dealerProfile, ctx)
+            )}`;
+          }
           // Financial empathy: if the customer led with a monthly target, acknowledge it
           // before the ballpark (which serves as the out-the-door reference). Generation-only.
           if (targetMonthly != null) {
@@ -3955,6 +4004,11 @@ export async function orchestrateInbound(
         });
       }
       if (paymentQuestion && paymentRange) {
+        const paymentsAprBand = resolveCalculatorAprBand(
+          resolveFinanceRatePolicy(dealerProfile),
+          isUsed,
+          Date.now()
+        );
         let draft = buildMonthlyPaymentLine({
           priceMin: paymentRange.min,
           priceMax: paymentRange.max,
@@ -3962,8 +4016,12 @@ export async function orchestrateInbound(
           termMonths: preferredTerm,
           taxRate,
           downPayment,
-          downPaymentAssumed
+          downPaymentAssumed,
+          aprBand: paymentsAprBand
         });
+        if (paymentsAprBand) {
+          draft = `${draft} ${buildPaymentRangeDisclaimerLine((dealerProfile as any)?.creditAppUrl, financeNextStepOptions(dealerProfile, ctx))}`;
+        }
         // Financial empathy: acknowledge a stated monthly target before the ballpark. Generation-only.
         if (targetMonthly != null) {
           draft = buildMonthlyTargetAck(targetMonthly) + draft;
