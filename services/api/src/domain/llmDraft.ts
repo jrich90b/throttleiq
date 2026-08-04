@@ -2313,6 +2313,13 @@ export type AppointmentTimingParse = {
 export type CustomerAckAction =
   | "confirm_proposed_appointment"
   | "accept_tentative_appointment"
+  // The customer said YES to OUR OWN open ask for a day/time ("What day and time works best?")
+  // without naming one: "Sounds great!", "Sounds good", "That would be great", "Yes".
+  // Distinct from `confirm_proposed_appointment` (needs us to have named a concrete time) and
+  // from `no_response_needed` (a sign-off closing the thread). Measured 2026-08-03/08-04: 18
+  // engaged leads sat in the booking funnel's `accepted_no_time` bucket — the single largest
+  // recoverable gap between "offered a time" (136) and "booked" (41).
+  | "accept_scheduling_ask"
   | "ask_for_available_times"
   | "appointment_status_question"
   | "staff_availability_question"
@@ -3525,6 +3532,7 @@ const CUSTOMER_ACK_ACTION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
       enum: [
         "confirm_proposed_appointment",
         "accept_tentative_appointment",
+        "accept_scheduling_ask",
         "ask_for_available_times",
         "appointment_status_question",
         "staff_availability_question",
@@ -5414,6 +5422,17 @@ export async function parseCustomerAckActionWithLLM(args: {
     'input: "Customer: Sounds perfect" history: "out: I have Sat, May 9, 2:00 PM does that work?" output: {"action":"confirm_proposed_appointment","explicit_action":true,"should_reply":true,"should_book":true,"requested":{"day":"sat may 9","time_text":"2:00 PM","time_window":"exact"},"reference":"last_outbound","normalized_text":"sat may 9 2:00 PM","confidence":0.96}',
     'input: "Customer: alright, sounds good man. thank you." history: "out: Hey Rafael, sorry, that would work ill schedule you in between 11-12 tomorrow" output: {"action":"confirm_proposed_appointment","explicit_action":true,"should_reply":false,"should_book":true,"requested":{"day":"tomorrow","time_text":"11-12","time_window":"range"},"reference":"last_outbound","normalized_text":"tomorrow 11-12","confidence":0.94}',
     'input: "Customer: Ok." history: "out: Tuesday between 9:30 and 10:00 can work." output: {"action":"accept_tentative_appointment","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"tuesday","time_text":"9:30-10:00","time_window":"range"},"reference":"last_outbound","normalized_text":"tuesday 9:30-10:00","confidence":0.92}',
+    // ACCEPTING OUR OWN OPEN ASK — the `accepted_no_time` funnel bucket (18 leads, 30d to 8/4).
+    // Every one of these was previously read as a sign-off and answered with silence or a
+    // stand-down line. The contrast pairs below (same words, non-scheduling outbound) are what
+    // keep this from over-firing; they are load-bearing, not decoration.
+    'input: "Customer: Sounds great!" history: "out: I can get you set up with a time to come see it — what day and time works best for you?" output: {"action":"accept_scheduling_ask","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"last_outbound","normalized_text":"customer accepts coming in, no day or time named","confidence":0.94}',
+    'input: "Customer: Sounds good" history: "out: Just text me what day works and I\'ll get you on the schedule." output: {"action":"accept_scheduling_ask","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"last_outbound","normalized_text":"customer accepts coming in, no day or time named","confidence":0.93}',
+    'input: "Customer: That would be great" history: "out: Want me to set up a time for you to come take a look at it?" output: {"action":"accept_scheduling_ask","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"last_outbound","normalized_text":"customer accepts coming in, no day or time named","confidence":0.93}',
+    'input: "Customer: Yes" history: "out: We have the 250 Years of Freedom party Sat, July 18, 12-5PM. Want me to save you a spot?" output: {"action":"accept_scheduling_ask","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"july 18","time_text":"","time_window":"unknown"},"reference":"last_outbound","normalized_text":"customer accepts july 18, no time named","confidence":0.92}',
+    // CONTRAST PAIRS: identical words, non-scheduling outbound → still a sign-off.
+    'input: "Customer: Sounds good" history: "out: I\'ll keep you posted as soon as it lands." output: {"action":"no_response_needed","explicit_action":false,"should_reply":false,"should_book":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.95}',
+    'input: "Customer: Sounds great!" history: "out: No problem at all — I\'ll get those photos over to you shortly." output: {"action":"no_response_needed","explicit_action":false,"should_reply":false,"should_book":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.94}',
     'input: "Customer: Good morning saturday would work best. let me know what time works for you." output: {"action":"ask_for_available_times","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"saturday","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"saturday","confidence":0.95}',
     'input: "Customer: tomorrow around 11/12 would work best for me" output: {"action":"ask_for_available_times","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"tomorrow","time_text":"around 11/12","time_window":"range"},"reference":"none","normalized_text":"tomorrow around 11/12","confidence":0.94}',
     'input: "Customer: Monday, 15 June around 10am" history: "out: I can line up the test ride. What day and time works best?" output: {"action":"ask_for_available_times","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"june 15","time_text":"around 10am","time_window":"exact"},"reference":"none","normalized_text":"monday june 15 around 10:00 AM","confidence":0.95}',
@@ -5473,6 +5492,8 @@ export async function parseCustomerAckActionWithLLM(args: {
     "- should_book=true only when the customer confirms a concrete slot/time already offered or staff explicitly said they will schedule it.",
     "- If the last dealer message only says 'can work' or 'if that works', set accept_tentative_appointment and should_book=false.",
     "- If the customer asks what time works, do not ask them for a time again; set ask_for_available_times.",
+    "- A BARE AFFIRMATIVE (\"Sounds great!\", \"Sounds good\", \"Sounds perfect\", \"That would be great\", \"Yes\", \"Perfect\", \"Ok\") carries NO meaning of its own — it is entirely determined by what the DEALER's previous message said. Read that message first, then pick in this order: (1) the dealer named a CONCRETE time or slot (\"I have Sat, May 9, 2:00 PM — does that work?\", \"Tuesday between 9:30 and 10:00\") => the customer is confirming THAT time: confirm_proposed_appointment (or accept_tentative_appointment when the dealer only said 'can work'/'if that works'), and carry the day + time into requested. (2) the dealer asked an OPEN scheduling question or offered to set something up WITHOUT naming a time (\"what day and time works best?\", \"text me what day works\", \"want me to set up a time?\", \"want me to save you a spot?\") => accept_scheduling_ask, should_reply=true, should_book=false, reference last_outbound; carry requested.day ONLY if the dealer's message named a day. (3) the dealer's message was NOT about scheduling at all (\"I'll keep you posted\", \"I'll get those photos over\", \"glad that works\") => no_response_needed.",
+    "- accept_scheduling_ask NEVER applies when the dealer already named a concrete time — that is always case (1). Choosing accept_scheduling_ask there would throw away a booking the customer just agreed to.",
     "- If the customer asks whether an existing appointment is today/still on/confirmed, set appointment_status_question, not ask_for_available_times.",
     "- appointment_status_question is ONLY about whether/when the appointment stands. A question about what to BRING or how to PREPARE for it (\"should I bring the bike and cash?\", \"do I need my title/license?\") is a substantive question — set none so it gets a real answer, even though it mentions the appointment.",
     "- A question about whether a NAMED person / \"you\" will be at the store on a day (\"Will Stone be there?\", \"is Mike in Saturday?\") is staff_availability_question, NOT appointment_status_question — the customer is asking about the STAFF MEMBER's presence, not their own booking. Carry the day into requested.day and the person into staff_name.",
@@ -5524,6 +5545,7 @@ export async function parseCustomerAckActionWithLLM(args: {
   const action: CustomerAckActionParse["action"] =
     rawAction === "confirm_proposed_appointment" ||
     rawAction === "accept_tentative_appointment" ||
+    rawAction === "accept_scheduling_ask" ||
     rawAction === "ask_for_available_times" ||
     rawAction === "appointment_status_question" ||
     rawAction === "staff_availability_question" ||

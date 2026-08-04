@@ -45,7 +45,7 @@
       },
       {
         "direction": "out",
-        "body": "No worries—we open up at 9am on Saturday, what time were you thinking on coming in?"
+        "body": "No worries\u2014we open up at 9am on Saturday, what time were you thinking on coming in?"
       }
     ],
     "expected": {
@@ -66,7 +66,11 @@
       }
     ],
     "expected": {
-      "action_any_of": ["provide_arrival_window", "purchase_delivery_update", "none"],
+      "action_any_of": [
+        "provide_arrival_window",
+        "purchase_delivery_update",
+        "none"
+      ],
       "should_reply": true,
       "should_book": false
     }
@@ -83,7 +87,7 @@
     "history": [
       {
         "direction": "out",
-        "body": "Perfect — you’re all set for Today, 11:30 AM with Dalton Magill. See you then."
+        "body": "Perfect \u2014 you\u2019re all set for Today, 11:30 AM with Dalton Magill. See you then."
       }
     ],
     "expected": {
@@ -104,7 +108,7 @@
     "history": [
       {
         "direction": "out",
-        "body": "You’re booked for today at 2:00 PM."
+        "body": "You\u2019re booked for today at 2:00 PM."
       }
     ],
     "expected": {
@@ -264,7 +268,7 @@
     "history": [
       {
         "direction": "out",
-        "body": "You’re welcome — happy to help, talk soon!"
+        "body": "You\u2019re welcome \u2014 happy to help, talk soon!"
       }
     ],
     "expected": {
@@ -279,7 +283,7 @@
     "history": [
       {
         "direction": "out",
-        "body": "Sounds good — thanks for the update."
+        "body": "Sounds good \u2014 thanks for the update."
       }
     ],
     "expected": {
@@ -294,7 +298,7 @@
     "history": [
       {
         "direction": "out",
-        "body": "I’ll keep you posted."
+        "body": "I\u2019ll keep you posted."
       }
     ],
     "expected": {
@@ -305,11 +309,11 @@
   },
   {
     "id": "document_proof_ack_not_photo_flow_1",
-    "text": "Like I said. I'm 💯 legit",
+    "text": "Like I said. I'm \ud83d\udcaf legit",
     "history": [
       {
         "direction": "out",
-        "body": "Thanks, got it — I received the image. I’ll review it and let you know if anything else is needed."
+        "body": "Thanks, got it \u2014 I received the image. I\u2019ll review it and let you know if anything else is needed."
       }
     ],
     "expected": {
@@ -323,11 +327,11 @@
   },
   {
     "id": "future_day_event_visit_commitment_not_arrival_window_1",
-    "text": "Ok I will be there for the taste of country pre party on Saturday 👍",
+    "text": "Ok I will be there for the taste of country pre party on Saturday \ud83d\udc4d",
     "history": [
       {
         "direction": "out",
-        "body": "We've got a couple Road Glides ready to ride — want to swing in and take one out?"
+        "body": "We've got a couple Road Glides ready to ride \u2014 want to swing in and take one out?"
       }
     ],
     "expected": {
@@ -373,11 +377,142 @@
       }
     ],
     "expected": {
-      "action_any_of": ["ask_for_available_times", "none"],
+      "action_any_of": [
+        "ask_for_available_times",
+        "none"
+      ],
       "should_reply": true,
       "should_book": false,
       "day_contains": "tomorrow",
       "time_contains": "after 3"
+    }
+  },
+  {
+    "id": "accept_scheduling_ask_maurice_sounds_great",
+    "text": "Sounds great!",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Happy to line that up for you, Maurice. What day and time works best? We'll even throw in a free HD hat."
+      }
+    ],
+    "expected": {
+      "action": "accept_scheduling_ask",
+      "should_reply": true,
+      "should_book": false
+    }
+  },
+  {
+    "id": "accept_scheduling_ask_clifton_sounds_good",
+    "text": "Sounds good",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Just text me what day works for you and I'll get you on the schedule."
+      }
+    ],
+    "expected": {
+      "action": "accept_scheduling_ask",
+      "should_reply": true,
+      "should_book": false
+    }
+  },
+  {
+    "id": "accept_scheduling_ask_michael_that_would_be_great",
+    "text": "That would be great",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Want me to set up a time for you to come take a look at it?"
+      }
+    ],
+    "expected": {
+      "action": "accept_scheduling_ask",
+      "should_reply": true,
+      "should_book": false
+    }
+  },
+  {
+    "id": "accept_scheduling_ask_zebediah_sounds_perfect",
+    "text": "Sounds perfect",
+    "history": [
+      {
+        "direction": "out",
+        "body": "I can line up a time for you this weekend. What works best for you?"
+      }
+    ],
+    "expected": {
+      "action": "accept_scheduling_ask",
+      "should_reply": true,
+      "should_book": false
+    }
+  },
+  {
+    "id": "accept_scheduling_ask_harry_yes_named_day",
+    "text": "Yes",
+    "history": [
+      {
+        "direction": "out",
+        "body": "We have the 250 Years of Freedom party Sat, July 18, 12-5PM. Want me to save you a spot?"
+      }
+    ],
+    "expected": {
+      "action": "accept_scheduling_ask",
+      "should_reply": true,
+      "should_book": false,
+      "day_contains": "18"
+    }
+  },
+  {
+    "id": "accept_scheduling_ask_contrast_keep_you_posted",
+    "text": "Sounds good",
+    "history": [
+      {
+        "direction": "out",
+        "body": "I'll keep you posted as soon as it lands."
+      }
+    ],
+    "expected": {
+      "action_any_of": [
+        "no_response_needed",
+        "neutral_ack"
+      ],
+      "should_reply": false,
+      "should_book": false
+    }
+  },
+  {
+    "id": "accept_scheduling_ask_contrast_photos_coming",
+    "text": "Sounds great!",
+    "history": [
+      {
+        "direction": "out",
+        "body": "No problem at all - I'll get those photos over to you shortly."
+      }
+    ],
+    "expected": {
+      "action_any_of": [
+        "no_response_needed",
+        "neutral_ack"
+      ],
+      "should_reply": false,
+      "should_book": false
+    }
+  },
+  {
+    "id": "accept_scheduling_ask_contrast_concrete_time_still_books",
+    "text": "Sounds perfect",
+    "history": [
+      {
+        "direction": "out",
+        "body": "I have Sat, May 9, 2:00 PM - does that work?"
+      }
+    ],
+    "expected": {
+      "action": "confirm_proposed_appointment",
+      "should_reply": true,
+      "should_book": true,
+      "day_contains": "may"
     }
   }
 ]
