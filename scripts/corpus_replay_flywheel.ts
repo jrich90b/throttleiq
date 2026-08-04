@@ -98,7 +98,37 @@ export type TurnScore = {
   judge?: IntentVerdict | null;
   body: string;
   draft: string | null;
+  /** When the replayed CUSTOMER turn happened (turnTimeOf); absent when it can't be resolved. */
+  turnAt?: string;
 };
+
+/**
+ * WHEN THE REPLAYED TURN ACTUALLY HAPPENED — not when the sweep ran.
+ *
+ * Every replay finding used to be stamped `occurredAt: atIso` (the sweep's own clock), so a turn
+ * from May carried an August timestamp. That made replay findings structurally unable to SETTLE:
+ * the disposition ledger's fail-safe path resurfaces a disposed key whose event postdates the fix
+ * boundary, and a nightly-stamped event always postdates every boundary. On 2026-08-04 two disposed
+ * findings came back as `regression-of-disposed` on that basis alone — +17164738220 (real turn
+ * 2026-05-19) and +17164182619 (real turn 2026-07-09), both stamped 2026-08-04T07:53:34.625Z, the
+ * same millisecond, because that was the run. Both genuinely PREDATE their 2026-07-30 boundary.
+ *
+ * FAIL DIRECTION: unknown returns undefined and the caller keeps the sweep time — i.e. "recent",
+ * which keeps the finding visible. A turn time can only ever make a finding look OLDER, and a real
+ * post-fix regression still carries a post-fix turn time, so it still resurfaces.
+ */
+export function turnTimeOf(row: Pick<ReplayRow, "messageAt" | "messageId">): string | undefined {
+  const at = Date.parse(String(row.messageAt ?? ""));
+  if (Number.isFinite(at)) return new Date(at).toISOString();
+  // The store's message ids carry the send epoch as their last segment (msg_<rand>_<epochMs>);
+  // it agrees with messageAt to within milliseconds, so it is a faithful second source.
+  const epoch = String(row.messageId ?? "").match(/_(\d{10,})$/);
+  if (epoch) {
+    const ms = Number(epoch[1]);
+    if (Number.isFinite(ms) && ms > 0) return new Date(ms).toISOString();
+  }
+  return undefined;
+}
 
 export function turnKeyOf(row: Pick<ReplayRow, "conversationId" | "messageId" | "messageIndex" | "body">): string {
   const anchor =
@@ -490,7 +520,8 @@ export function scoreTurn(row: ReplayRow, judge: IntentVerdict | null | undefine
     reviewReasons,
     judge: judge ?? null,
     body: String(row.body ?? "").replace(/\s+/g, " ").slice(0, 200),
-    draft: row.draft ? String(row.draft).replace(/\s+/g, " ").slice(0, 200) : null
+    draft: row.draft ? String(row.draft).replace(/\s+/g, " ").slice(0, 200) : null,
+    ...(turnTimeOf(row) ? { turnAt: turnTimeOf(row) } : {})
   };
 }
 
@@ -706,7 +737,11 @@ export function buildFindings(
       dimension,
       severity: s.critical || isRegression ? "P1" : "P2",
       healed: false,
-      occurredAt: atIso,
+      // The TURN's own time when we can resolve it, the sweep's clock only as a fallback. See
+      // turnTimeOf: stamping the run made every replay finding permanently "new", so a disposed
+      // key resurfaced as `regression-of-disposed` after every nightly and could never settle.
+      // Unknown keeps atIso — recent, therefore still visible (the noisier, safer direction).
+      occurredAt: s.turnAt ?? atIso,
       category: "reply",
       detail: `[replay ${s.turnKey}] customer: "${s.body}" → draft: "${s.draft ?? "(none)"}" — ${why}`.slice(0, 480),
       ...(String(gradedAtCommit ?? "").trim() ? { gradedAtCommit: String(gradedAtCommit).trim() } : {})
@@ -1060,6 +1095,39 @@ function selfTest() {
   // turn keys are stable and anchored
   assert(turnKeyOf(mk({})) === "+15550001111::SM1", "turn key anchors on messageId");
   assert(turnKeyOf(mk({ messageId: undefined, messageIndex: 4 })) === "+15550001111::idx4", "falls back to index");
+
+  // ── A replay finding is stamped with the TURN's time, never the sweep's (2026-08-04) ──────
+  // Production turns that proved it: both were disposed, both came back as `regression-of-disposed`
+  // purely because the nightly re-stamped them with its own clock (2026-08-04T07:53:34.625Z, the
+  // SAME millisecond for two different leads), and both really predate their 2026-07-30 boundary.
+  assert(
+    turnTimeOf({ messageAt: "2026-05-19T14:29:26.246Z", messageId: "msg_9dab7231c66c7_1779200966246" }) ===
+      "2026-05-19T14:29:26.246Z",
+    "messageAt is the turn time when present (+17164738220's real turn)"
+  );
+  assert(
+    turnTimeOf({ messageId: "msg_49ab66cab6d22_1783616788874" }) === "2026-07-09T17:06:28.874Z",
+    "the message id's trailing epoch is the fallback turn time (+17164182619's real turn)"
+  );
+  assert(turnTimeOf({ messageId: "SM1" }) === undefined, "an id carrying no epoch resolves to unknown");
+  assert(turnTimeOf({}) === undefined, "no messageAt and no id resolves to unknown");
+  {
+    const RUN = "2026-08-04T07:53:34.625Z";
+    const old = scoreTurn(
+      mk({ messageId: "msg_9dab7231c66c7_1779200966246", messageAt: "2026-05-19T14:29:26.246Z", draft: null, verdict: "no_response" }),
+      null
+    );
+    assert(
+      buildFindings([old], [], RUN)[0]?.occurredAt === "2026-05-19T14:29:26.246Z",
+      "a May turn replayed in August is stamped MAY — otherwise it can never age out or stay disposed"
+    );
+    // Fail direction: unresolvable turn time keeps the sweep clock, so the finding still reads recent.
+    const unknown = scoreTurn(mk({ messageId: "SM1", draft: null, verdict: "no_response" }), null);
+    assert(
+      buildFindings([unknown], [], RUN)[0]?.occurredAt === RUN,
+      "an unresolvable turn time falls back to the sweep clock — recent, so the finding stays visible"
+    );
+  }
 
   // judge-worthiness
   assert(isJudgeWorthy(mk({})), "actionable draft row is judge-worthy");
