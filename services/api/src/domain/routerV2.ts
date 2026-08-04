@@ -73,6 +73,7 @@ export {
   evaluateNoResponseFallback,
   nextActionFromState,
   reduceStaleStateForInbound,
+  resolveInventoryWatchPendingClear,
   resolveNoResponsePolicyDecision,
   resolveRoutingParserDecision,
   shouldTreatInboundAsTestRideBikeSelection

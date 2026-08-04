@@ -2493,6 +2493,89 @@ function isDepartmentHandoffReason(reason: string): boolean {
   );
 }
 
+export type InventoryWatchPendingClearInput = {
+  followUpMode?: string | null;
+  followUpReason?: string | null;
+  dialogState?: string | null;
+  hasInventoryWatchPending?: boolean;
+  inventoryWatchPendingAgeHours?: number | null;
+  hasWatchIntent?: boolean;
+  hasFinanceIntent?: boolean;
+  hasSchedulingIntent?: boolean;
+  hasDepartmentIntent?: boolean;
+  /**
+   * The conversation-state parser explicitly reported that the customer has moved off the
+   * pending watch (`ConversationStateParse.clearInventoryWatchPending`). It is a reason to
+   * clear, never a licence to skip the keep-guards below.
+   */
+  parserRequestedClear?: boolean;
+};
+
+export type InventoryWatchPendingClearDecision = {
+  clearInventoryWatchPending: boolean;
+  /** dialogState `inventory_watch_prompted` should fall back to `none`. */
+  clearInventoryWatchPrompt: boolean;
+  reasons: string[];
+};
+
+/**
+ * THE ONE REFEREE for "may this inbound drop the pending inventory-watch prompt?".
+ *
+ * Two places used to answer this independently and disagreed (un-stacking slice, 2026-08-04):
+ * `reduceStaleWorkflowStateForInbound` asked the guarded rule below, while
+ * `applyConversationStateReducer` cleared on a bare `departmentIntent !== "none"` with no
+ * guards at all. That second rule dropped the watch even when the lead was parked in
+ * `holding_inventory`, even when the follow-up reason WAS the inventory watch, and even when
+ * the same turn showed watch intent — i.e. it failed toward silently forgetting a customer's
+ * "tell me when one lands". Per AGENTS.md fail-direction the guarded rule wins: prefer
+ * failing toward KEEPING the watch, because re-asking is recoverable and a dropped watch is
+ * a customer who never hears from us again.
+ */
+export function resolveInventoryWatchPendingClear(
+  input: InventoryWatchPendingClearInput
+): InventoryWatchPendingClearDecision {
+  const mode = normalizeLower(input.followUpMode);
+  const reason = normalizeLower(input.followUpReason);
+  const dialogState = normalizeLower(input.dialogState);
+  const hasInventoryWatchPending = !!input.hasInventoryWatchPending;
+  const hasWatchIntent = !!input.hasWatchIntent;
+  const hasFinanceIntent = !!input.hasFinanceIntent;
+  const hasSchedulingIntent = !!input.hasSchedulingIntent;
+  const hasDepartmentIntent = !!input.hasDepartmentIntent;
+  const pendingAgeHoursRaw =
+    typeof input.inventoryWatchPendingAgeHours === "number"
+      ? input.inventoryWatchPendingAgeHours
+      : NaN;
+  const pendingAgeHours = Number.isFinite(pendingAgeHoursRaw) ? pendingAgeHoursRaw : null;
+
+  const reasons: string[] = [];
+  let clearInventoryWatchPending = false;
+
+  if (hasInventoryWatchPending && !shouldKeepInventoryWatchPending(mode, reason) && !hasWatchIntent) {
+    if (mode === "manual_handoff") {
+      clearInventoryWatchPending = true;
+      reasons.push("clear_watch_pending_manual_handoff");
+    } else if (hasFinanceIntent || hasSchedulingIntent || hasDepartmentIntent) {
+      clearInventoryWatchPending = true;
+      reasons.push("clear_watch_pending_context_shift");
+    } else if (input.parserRequestedClear) {
+      clearInventoryWatchPending = true;
+      reasons.push("clear_watch_pending_parser_signal");
+    } else if (pendingAgeHours != null && pendingAgeHours >= 24) {
+      clearInventoryWatchPending = true;
+      reasons.push("clear_watch_pending_expired");
+    }
+  }
+
+  const clearInventoryWatchPrompt =
+    dialogState === "inventory_watch_prompted" &&
+    !hasWatchIntent &&
+    (clearInventoryWatchPending || hasFinanceIntent || hasSchedulingIntent || hasDepartmentIntent);
+  if (clearInventoryWatchPrompt) reasons.push("clear_inventory_watch_prompted_after_shift");
+
+  return { clearInventoryWatchPending, clearInventoryWatchPrompt, reasons };
+}
+
 export function reduceStaleStateForInbound(input: StaleStateCleanupInput): StaleStateCleanupDecision {
   const mode = normalizeLower(input.followUpMode);
   const reason = normalizeLower(input.followUpReason);
@@ -2525,27 +2608,21 @@ export function reduceStaleStateForInbound(input: StaleStateCleanupInput): Stale
     reasons.push(`clear_sticky_dialog_state:${dialogState}`);
   }
 
-  if (hasInventoryWatchPending && !shouldKeepInventoryWatchPending(mode, reason) && !hasWatchIntent) {
-    if (mode === "manual_handoff") {
-      clearInventoryWatchPending = true;
-      reasons.push("clear_watch_pending_manual_handoff");
-    } else if (hasFinanceIntent || hasSchedulingIntent || hasDepartmentIntent) {
-      clearInventoryWatchPending = true;
-      reasons.push("clear_watch_pending_context_shift");
-    } else if (pendingAgeHours != null && pendingAgeHours >= 24) {
-      clearInventoryWatchPending = true;
-      reasons.push("clear_watch_pending_expired");
-    }
-  }
-
-  if (
-    dialogState === "inventory_watch_prompted" &&
-    !hasWatchIntent &&
-    (clearInventoryWatchPending || hasFinanceIntent || hasSchedulingIntent || hasDepartmentIntent)
-  ) {
-    setDialogStateToNone = true;
-    reasons.push("clear_inventory_watch_prompted_after_shift");
-  }
+  // The pending-watch question has ONE referee; this used to inline the rule.
+  const watchPending = resolveInventoryWatchPendingClear({
+    followUpMode: mode,
+    followUpReason: reason,
+    dialogState,
+    hasInventoryWatchPending,
+    inventoryWatchPendingAgeHours: pendingAgeHours,
+    hasWatchIntent,
+    hasFinanceIntent,
+    hasSchedulingIntent,
+    hasDepartmentIntent
+  });
+  clearInventoryWatchPending = watchPending.clearInventoryWatchPending;
+  if (watchPending.clearInventoryWatchPrompt) setDialogStateToNone = true;
+  reasons.push(...watchPending.reasons);
 
   if (
     mode === "manual_handoff" &&

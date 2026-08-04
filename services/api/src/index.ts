@@ -523,6 +523,9 @@ import {
   applyAppointmentPromptRecord,
   applyInventoryWatchExactness,
   applyInventoryWatchListNormalization,
+  applyInventoryWatchPendingClearForStateParse,
+  applyInventoryWatchPendingClearForIntentHints,
+  inventoryWatchPendingAgeHours,
   applyCloseoutReversal,
   applyAppointmentConfirmRecord,
   clearAppointmentStaffPromptState
@@ -21789,11 +21792,9 @@ function applyConversationStateReducer(
     state.stateIntent === "used_low_mileage_watch" &&
     state.explicitRequest &&
     state.manualHandoffReason === "used_low_mileage_watch";
-  if (state.clearInventoryWatchPending || state.departmentIntent !== "none") {
-    conv.inventoryWatchPending = undefined;
-    if (getDialogState(conv) === "inventory_watch_prompted") {
-      setDialogState(conv, "none");
-    }
+  // One writer for the pending watch — see inventory_watch_pending_clear:eval.
+  if (applyInventoryWatchPendingClearForStateParse(conv, state, getDialogState(conv)).clearPrompt) {
+    setDialogState(conv, "none");
   }
   if (state.clearPricingNeedModel && getDialogState(conv) === "pricing_need_model") {
     setDialogState(conv, "none");
@@ -26084,13 +26085,7 @@ function reduceStaleWorkflowStateForInbound(
   if (!conv || typeof conv !== "object") return { changed: false, reasons: [] };
   const mode = String(conv.followUp?.mode ?? "").toLowerCase();
   const reason = String(conv.followUp?.reason ?? "").toLowerCase();
-  const pendingAskedAtMs = new Date(String(conv.inventoryWatchPending?.askedAt ?? "")).getTime();
-  const inboundAtMs = new Date(String(inboundAtIso ?? "")).getTime();
-  const nowMs = Number.isFinite(inboundAtMs) ? inboundAtMs : Date.now();
-  const pendingAgeHours =
-    Number.isFinite(pendingAskedAtMs) && pendingAskedAtMs > 0
-      ? Math.max(0, (nowMs - pendingAskedAtMs) / 36e5)
-      : null;
+  const pendingAgeHours = inventoryWatchPendingAgeHours(conv, inboundAtIso);
   const hasSchedulingIntent = intentHints?.hasSchedulingIntent === true;
   const hasWatchIntent = intentHints?.hasWatchIntent === true;
   const hasFinanceIntent = intentHints?.hasFinanceIntent === true;
@@ -26108,11 +26103,13 @@ function reduceStaleWorkflowStateForInbound(
     hasAvailabilityIntent,
     hasDepartmentIntent
   });
-  let changed = false;
-  if (decision.clearInventoryWatchPending && conv.inventoryWatchPending) {
-    conv.inventoryWatchPending = undefined;
-    changed = true;
-  }
+  // Same single writer as the conversation-state path above.
+  let changed = applyInventoryWatchPendingClearForIntentHints(
+    conv,
+    getDialogState(conv),
+    intentHints,
+    inboundAtIso
+  ).cleared;
   if (decision.setDialogStateToNone && getDialogState(conv) !== "none") {
     setDialogState(conv, "none");
     changed = true;
