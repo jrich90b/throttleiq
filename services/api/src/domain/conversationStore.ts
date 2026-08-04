@@ -37,6 +37,8 @@ import {
   resolveInventoryWatchExactness,
   resolveInventoryWatchListNormalization,
   type InventoryWatchListNormalizationDecision,
+  resolveInventoryWatchPendingClear,
+  type InventoryWatchPendingClearInput,
   decideAppointmentPromptRecord,
   type AppointmentPromptLane,
   type AppointmentPromptRecordDecision,
@@ -8144,6 +8146,101 @@ export function applyInventoryWatchExactness(
  *
  * Returns the watches the caller should read this turn — empty means "skip this lead".
  */
+/** How long the pending inventory-watch prompt has been waiting, in hours (null if unknown). */
+export function inventoryWatchPendingAgeHours(conv: any, atIso?: string): number | null {
+  const askedAtMs = new Date(String(conv?.inventoryWatchPending?.askedAt ?? "")).getTime();
+  const atMs = new Date(String(atIso ?? "")).getTime();
+  const nowMs = Number.isFinite(atMs) ? atMs : Date.now();
+  return Number.isFinite(askedAtMs) && askedAtMs > 0 ? Math.max(0, (nowMs - askedAtMs) / 36e5) : null;
+}
+
+/**
+ * THE ONLY place that drops `conv.inventoryWatchPending`. Asks
+ * `resolveInventoryWatchPendingClear` (routeStateReducer) and performs the write, so the two
+ * inbound paths that used to decide for themselves cannot disagree again — see
+ * `inventory_watch_pending_clear:eval` for the ruling and the rule table.
+ *
+ * The dialog-state fallback is RETURNED rather than written: `dialogState` lives behind
+ * index.ts-local helpers, and it is a different field with its own writers.
+ */
+export function applyInventoryWatchPendingClear(
+  conv: any,
+  input: Omit<InventoryWatchPendingClearInput, "hasInventoryWatchPending" | "inventoryWatchPendingAgeHours"> & {
+    atIso?: string;
+  }
+): { cleared: boolean; clearPrompt: boolean; reasons: string[] } {
+  const decision = resolveInventoryWatchPendingClear({
+    followUpMode: input.followUpMode,
+    followUpReason: input.followUpReason,
+    dialogState: input.dialogState,
+    hasInventoryWatchPending: !!conv?.inventoryWatchPending,
+    inventoryWatchPendingAgeHours: inventoryWatchPendingAgeHours(conv, input.atIso),
+    hasWatchIntent: input.hasWatchIntent,
+    hasFinanceIntent: input.hasFinanceIntent,
+    hasSchedulingIntent: input.hasSchedulingIntent,
+    hasDepartmentIntent: input.hasDepartmentIntent,
+    parserRequestedClear: input.parserRequestedClear
+  });
+  let cleared = false;
+  if (decision.clearInventoryWatchPending && conv?.inventoryWatchPending) {
+    conv.inventoryWatchPending = undefined;
+    cleared = true;
+  }
+  return { cleared, clearPrompt: decision.clearInventoryWatchPrompt, reasons: decision.reasons };
+}
+
+/**
+ * The conversation-state parser's vocabulary, mapped onto the referee's question. This is the
+ * lane that used to clear on a bare `departmentIntent !== "none"`.
+ */
+export function applyInventoryWatchPendingClearForStateParse(
+  conv: any,
+  state: {
+    stateIntent?: string | null;
+    departmentIntent?: string | null;
+    clearInventoryWatchPending?: boolean;
+  },
+  dialogState?: string | null
+): { cleared: boolean; clearPrompt: boolean; reasons: string[] } {
+  return applyInventoryWatchPendingClear(conv, {
+    followUpMode: conv?.followUp?.mode,
+    followUpReason: conv?.followUp?.reason,
+    dialogState,
+    hasWatchIntent:
+      state.stateIntent === "inventory_watch" || state.stateIntent === "used_low_mileage_watch",
+    hasFinanceIntent: state.stateIntent === "finance_docs",
+    hasSchedulingIntent: state.stateIntent === "scheduling",
+    hasDepartmentIntent: !!state.departmentIntent && state.departmentIntent !== "none",
+    parserRequestedClear: !!state.clearInventoryWatchPending
+  });
+}
+
+/** The stale-workflow lane, which already carries per-turn intent hints. */
+export function applyInventoryWatchPendingClearForIntentHints(
+  conv: any,
+  dialogState: string | null | undefined,
+  hints:
+    | {
+        hasWatchIntent?: boolean;
+        hasFinanceIntent?: boolean;
+        hasSchedulingIntent?: boolean;
+        hasDepartmentIntent?: boolean;
+      }
+    | undefined,
+  atIso?: string
+): { cleared: boolean; clearPrompt: boolean; reasons: string[] } {
+  return applyInventoryWatchPendingClear(conv, {
+    followUpMode: conv?.followUp?.mode,
+    followUpReason: conv?.followUp?.reason,
+    dialogState,
+    hasWatchIntent: hints?.hasWatchIntent === true,
+    hasFinanceIntent: hints?.hasFinanceIntent === true,
+    hasSchedulingIntent: hints?.hasSchedulingIntent === true,
+    hasDepartmentIntent: hints?.hasDepartmentIntent === true,
+    atIso
+  });
+}
+
 export function applyInventoryWatchListNormalization(
   conv: Conversation
 ): { watches: InventoryWatch[]; decision: InventoryWatchListNormalizationDecision } {

@@ -180,7 +180,12 @@ const CEILINGS: Ceiling[] = [
     // 71_298 -> 71_271. The watch-RECORD-SHAPE un-stacking: TEN copies of the "how specific is
     // this watch?" ladder and TWO copies of the legacy-singular-vs-list block became calls to
     // applyInventoryWatchExactness / applyInventoryWatchListNormalization.
-    max: 71_271,
+    // 71_271 -> 71_268. The pending-WATCH-CLEAR un-stacking: both inbound lanes that dropped
+    // `inventoryWatchPending` now call applyInventoryWatchPendingClear*, and the per-lane input
+    // mapping (parser vocabulary vs intent hints) went out to conversationStore with them, so each
+    // call site is two lines. The ceiling caught the first attempt at +16 — the mapping was still
+    // sitting in index.ts — which is exactly its job.
+    max: 71_268,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

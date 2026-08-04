@@ -759,6 +759,38 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     }, ["resolveInventoryWatchListNormalization"]);
   }
 
+  // Added 2026-08-04 with the pending-inventory-watch-clear un-stacking. Sampled at the states
+  // that decide the question: the two KEEP-guards that the second writer used to ignore
+  // (`holding_inventory` mode, a follow-up reason that IS the watch), a same-turn watch intent,
+  // the department context shift that both writers agreed on, and the parser's explicit clear.
+  // PROBE: every input is pinned per sample; the referee reads no stored state of its own.
+  for (const state of [
+    { name: "department_shift_plain", mode: "active", reason: "none", watch: false, dept: true, parser: false },
+    { name: "department_shift_holding_inventory", mode: "holding_inventory", reason: "none", watch: false, dept: true, parser: false },
+    { name: "department_shift_watch_reason", mode: "active", reason: "inventory_watch_followup", watch: false, dept: true, parser: false },
+    { name: "department_shift_same_turn_watch_intent", mode: "active", reason: "none", watch: true, dept: true, parser: false },
+    { name: "parser_clear_signal", mode: "active", reason: "none", watch: false, dept: false, parser: true },
+    { name: "parser_clear_signal_watch_reason", mode: "active", reason: "inventory_watch_followup", watch: false, dept: false, parser: true }
+  ] as const) {
+    add(`inventoryWatchPendingClear:${state.name}`, () => {
+      if (typeof reducer.resolveInventoryWatchPendingClear !== "function") return undefined;
+      const decision = reducer.resolveInventoryWatchPendingClear({
+        followUpMode: state.mode,
+        followUpReason: state.reason,
+        dialogState: "inventory_watch_prompted",
+        hasInventoryWatchPending: true,
+        inventoryWatchPendingAgeHours: 1,
+        hasWatchIntent: state.watch,
+        hasDepartmentIntent: state.dept,
+        parserRequestedClear: state.parser
+      }); // PROBE
+      return {
+        clearInventoryWatchPending: decision.clearInventoryWatchPending,
+        clearInventoryWatchPrompt: decision.clearInventoryWatchPrompt
+      };
+    }, ["resolveInventoryWatchPendingClear"]);
+  }
+
   // Added 2026-08-02 with the appointment-CONFIRM un-stacking. Sampled once PER LANE, because the
   // whole point of this referee is that the slot-match lane answers `acknowledged` and the
   // reschedule latch differently from the two booked lanes — a single sample would hide exactly

@@ -756,7 +756,15 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 // (`pref.watch.make = leadVehicle.make`, a fill-a-blank backfill). Seventh sighting of that
 // artifact; the neighbour is scoped as the next slice. MEASURED on the post-change tree.
 // RATCHET DOWN ONLY.
-const UNREFEREED_WRITER_BASELINE = 72;
+// 72 -> 70. The pending-WATCH-CLEAR un-stacking (2026-08-04): `inventoryWatchPending` 2 -> 0, which
+// clears the LAST Tier-2 field on the triage queue. The two writers genuinely DISAGREED — the
+// conversation-state path cleared on a bare `departmentIntent !== "none"` with none of the
+// keep-guards the stale-state path applied, so a lead parked in `holding_inventory`, or one asking
+// about the watch in the same breath, lost it. Ruled toward KEEPING (AGENTS.md fail-direction);
+// both sites now write through `applyInventoryWatchPendingClear`, which asks
+// `resolveInventoryWatchPendingClear`. MEASURED on the post-change tree.
+// RATCHET DOWN ONLY.
+const UNREFEREED_WRITER_BASELINE = 70;
 
 {
   const sourceFiles: SourceFile[] = [];
