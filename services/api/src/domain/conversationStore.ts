@@ -336,6 +336,10 @@ export type FollowUpCadence = {
   stepIndex: number;
   lastSentAt?: string;
   lastSentStep?: number;
+  // How many cadence touches ACTUALLY produced a message. `stepIndex` is a rung on the
+  // schedule and advances even when a gate stays quiet, so it is not a count of outreach —
+  // see deliveredCadenceTouches / DISENGAGED_TAPER_AFTER_TOUCHES.
+  deliveredTouches?: number;
   stopReason?: string;
   kind?: "standard" | "engaged" | "long_term" | "post_sale";
   deferredMessage?: string;
@@ -5827,30 +5831,88 @@ export function buildDisengagedCadenceCloseout(firstName?: string): string {
   return `I'll pause my check-ins here so I'm not crowding your phone, ${name}. Text me anytime you're ready and I'll jump right back in to help.`;
 }
 
+/**
+ * Pure. How many cadence touches have ACTUALLY produced a message for this lead.
+ *
+ * The taper threshold is a count of OUTREACH ("after this many touches with zero customer
+ * inbound" — Joe set it at 9), but `stepIndex`/`lastSentStep` are positions on the schedule and
+ * advance even when a gate stays quiet: the cadence-quality gate, the value gate, and the
+ * past-dated-event guard all call advanceFollowUpCadence WITHOUT sending anything. Measured on
+ * the live store 2026-08-04: of 37 leads ended with stopReason "disengaged_taper", 13 had fewer
+ * than 9 outbound messages of ANY kind (three had 2), and only 2 of the 37 ever received the
+ * close-out — the rest were dropped mid-ladder and simply went silent. Counting rungs as touches
+ * is what did that, so the count now lives in its own field.
+ *
+ * Legacy records (written before this field existed) fall back to `lastSentStep + 1` — exactly
+ * the number the taper used to read — so in-flight cadences keep their current position and this
+ * change can never RE-open a ladder into extra messaging.
+ */
+export function deliveredCadenceTouches(cadence: FollowUpCadence | undefined | null): number {
+  if (!cadence) return 0;
+  const tracked = Number(cadence.deliveredTouches);
+  if (Number.isFinite(tracked) && tracked >= 0) return Math.floor(tracked);
+  const legacy = Number(cadence.lastSentStep);
+  return Number.isFinite(legacy) && legacy >= 0 ? Math.floor(legacy) + 1 : 0;
+}
+
 // True when the touch about to be sent should be the disengagement close-out:
 // a never-engaged sales lead (not post-sale/long-term) at or past the taper
-// threshold.
-export function shouldSendDisengagedCloseout(conv: Conversation, sendingStep: number): boolean {
+// threshold. `deliveredTouchesBeforeThisOne` counts touches that actually went out — a rung the
+// cadence skipped in silence is not outreach and must not spend the lead's patience budget.
+export function shouldSendDisengagedCloseout(
+  conv: Conversation,
+  deliveredTouchesBeforeThisOne: number
+): boolean {
   const cadence = conv.followUpCadence;
   if (!cadence) return false;
   if (cadence.kind === "post_sale" || cadence.kind === "long_term") return false;
   if (customerEngagedWithCadence(conv)) return false;
-  return Number(sendingStep) >= DISENGAGED_TAPER_AFTER_TOUCHES;
+  return Number(deliveredTouchesBeforeThisOne) >= DISENGAGED_TAPER_AFTER_TOUCHES;
 }
 
-export function advanceFollowUpCadence(conv: Conversation, timeZone: string) {
+/**
+ * Move the cadence to its next rung.
+ *
+ * `delivered` says whether this rung actually produced a message. It defaults to TRUE so every
+ * send path keeps its existing behaviour untouched; the four gates that advance the schedule
+ * while staying completely silent (cadence-quality suppress, the value gate and its repeat
+ * backstop, the past-dated-event guard) pass `{ delivered: false }`. A silent rung still burns —
+ * we tried it and had nothing worth saying — but it must not stamp `lastSentAt`/`lastSentStep`
+ * as though a customer heard from us, and it must not spend a touch against the taper.
+ *
+ * `endSequence` is the one exception, and it is not a contradiction: when the rung being held IS
+ * the close-out, the decision to stop chasing was already taken on the DELIVERED count and only
+ * the goodbye got withheld. Ending is right there; going back to chasing is not.
+ */
+export function advanceFollowUpCadence(
+  conv: Conversation,
+  timeZone: string,
+  opts?: { delivered?: boolean; endSequence?: boolean }
+) {
   if (!conv.followUpCadence || conv.followUpCadence.status !== "active") return;
+  const delivered = opts?.delivered !== false;
   const nextStep = conv.followUpCadence.stepIndex + 1;
-  conv.followUpCadence.lastSentAt = nowIso();
-  conv.followUpCadence.lastSentStep = conv.followUpCadence.stepIndex;
+  // The count BEFORE this touch — the same number shouldSendDisengagedCloseout was asked, so the
+  // rung that sends the close-out is exactly the rung that ends the ladder (as it was when both
+  // read the pre-increment stepIndex). Comparing the post-increment count would end the sequence
+  // one touch early, i.e. without ever sending the close-out.
+  const deliveredBefore = deliveredCadenceTouches(conv.followUpCadence);
+  if (delivered) {
+    conv.followUpCadence.lastSentAt = nowIso();
+    conv.followUpCadence.lastSentStep = conv.followUpCadence.stepIndex;
+    conv.followUpCadence.deliveredTouches = deliveredBefore + 1;
+  }
   conv.followUpCadence.stepIndex = nextStep;
   // Disengagement taper: once the close-out touch has gone out to a lead that
   // never replied, end the cadence instead of running the rest of the schedule.
+  // Only a DELIVERED touch can trip this — the close-out rides out on the send path, so ending
+  // the ladder from a silent gate retired the lead without ever saying goodbye to them.
   if (
+    (delivered || opts?.endSequence === true) &&
     conv.followUpCadence.kind !== "post_sale" &&
     conv.followUpCadence.kind !== "long_term" &&
     !customerEngagedWithCadence(conv) &&
-    Number(conv.followUpCadence.lastSentStep ?? 0) >= DISENGAGED_TAPER_AFTER_TOUCHES
+    deliveredBefore >= DISENGAGED_TAPER_AFTER_TOUCHES
   ) {
     conv.followUpCadence.status = "completed";
     conv.followUpCadence.stopReason = "disengaged_taper";
