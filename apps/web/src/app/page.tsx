@@ -18,6 +18,9 @@ import {
 } from "./lib/morningDigest";
 import { resizeImageForUpload, humanizeUploadError } from "./lib/imageResize";
 
+/** Mirrors STAFF_PING_NOTE_MAX_CHARS (services/api/src/domain/staffPing.ts); the API caps too. */
+const PING_NOTE_MAX_CHARS = 220;
+
 type SpeechRecognitionLike = {
   lang: string;
   continuous: boolean;
@@ -3561,6 +3564,10 @@ export default function Home() {
   const [modeError, setModeError] = useState<string | null>(null);
   const [pingSaving, setPingSaving] = useState(false);
   const [pingNotice, setPingNotice] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
+  // Ping composer: the manager's reason for poking the rep (Joe, 2026-08-04). Optional — sending
+  // it blank is exactly the old one-click behaviour.
+  const [pingNoteOpen, setPingNoteOpen] = useState(false);
+  const [pingNote, setPingNote] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<"dealer" | "scheduler" | "users" | "notifications">("dealer");
   const [desktopNotifyEnabled, setDesktopNotifyEnabled] = useState(false);
@@ -12241,7 +12248,8 @@ export default function Home() {
       const resp = await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/ping-owner`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: "{}"
+        // The note reaches the REP only — it is never fed back into the agent's drafts (Joe 8/4).
+        body: JSON.stringify({ note: pingNote.trim() })
       });
       const payload = await resp.json().catch(() => null);
       if (!resp.ok || payload?.ok === false) {
@@ -12250,7 +12258,9 @@ export default function Home() {
       }
       const who = String(payload?.targetName ?? "the assigned rep");
       if (payload?.sent) {
-        setPingNotice({ tone: "ok", text: `Texted ${who}.` });
+        setPingNotice({ tone: "ok", text: pingNote.trim() ? `Texted ${who} with your note.` : `Texted ${who}.` });
+        setPingNote("");
+        setPingNoteOpen(false);
       } else if (payload?.kind === "cooldown") {
         const mins = Number(payload?.minutesRemaining ?? 0);
         const wait = mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`;
@@ -21468,9 +21478,9 @@ export default function Home() {
                 {(authUser?.role === "manager" || authUser?.permissions?.canViewAllTasks) ? (
                   <button
                     className="px-2 py-1 border rounded text-sm shrink-0 hover:bg-gray-50 disabled:opacity-60"
-                    onClick={() => void pingLeadOwner()}
+                    onClick={() => setPingNoteOpen(prev => !prev)}
                     disabled={pingSaving}
-                    title="Text the rep who owns this thread that they have a task waiting"
+                    title="Text the rep who owns this thread — add a note saying why"
                   >
                     {pingSaving ? "Pinging…" : "Ping"}
                   </button>
@@ -21488,6 +21498,43 @@ export default function Home() {
               </div>
             </div>
             {modeError ? <div className="text-xs text-red-600 mt-1">{modeError}</div> : null}
+            {pingNoteOpen ? (
+              <div className="mt-2 border rounded p-2 bg-gray-50">
+                <label className="block text-xs font-medium text-gray-700" htmlFor="ping-note">
+                  What should they know? (optional)
+                </label>
+                <textarea
+                  id="ping-note"
+                  className="mt-1 w-full border rounded px-2 py-1 text-sm text-gray-900 bg-white"
+                  rows={2}
+                  maxLength={PING_NOTE_MAX_CHARS}
+                  value={pingNote}
+                  placeholder="e.g. He asked for photos this morning and is still waiting."
+                  onChange={e => setPingNote(e.target.value.slice(0, PING_NOTE_MAX_CHARS))}
+                />
+                <div className="flex items-center gap-2 mt-1">
+                  <button
+                    className="px-2 py-1 border rounded text-sm bg-white hover:bg-gray-100 disabled:opacity-60"
+                    onClick={() => void pingLeadOwner()}
+                    disabled={pingSaving}
+                  >
+                    {pingSaving ? "Sending…" : "Send ping"}
+                  </button>
+                  <button
+                    className="px-2 py-1 border rounded text-sm bg-white hover:bg-gray-100"
+                    onClick={() => {
+                      setPingNoteOpen(false);
+                      setPingNote("");
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <span className="text-xs text-gray-600">
+                    {pingNote.length}/{PING_NOTE_MAX_CHARS} — goes to the rep only, not the customer
+                  </span>
+                </div>
+              </div>
+            ) : null}
             {pingNotice ? (
               <div
                 className={`text-xs mt-1 ${pingNotice.tone === "ok" ? "text-emerald-700" : "text-amber-700"}`}
