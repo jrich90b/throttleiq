@@ -19,7 +19,10 @@ const {
   evaluateStaffPingCooldown,
   lastStaffPingAt,
   resolveStaffPingOwnerRef,
-  STAFF_PING_HISTORY_LIMIT
+  STAFF_PING_HISTORY_LIMIT,
+  STAFF_PING_NOTE_MAX_CHARS,
+  normalizeStaffPingNote,
+  buildStaffPingRecord
 } = await import("../services/api/src/domain/staffPing.ts");
 
 const nowMs = Date.parse("2026-07-27T18:00:00.000Z");
@@ -252,7 +255,7 @@ assert.match(
 assert.match(apiSource, /STAFF_PING_ENABLED/, "kill switch exists");
 assert.match(apiSource, /STAFF_PING_COOLDOWN_MIN/, "cooldown is configurable");
 assert.match(apiSource, /sendInternalSms\(decision\.targetPhone, decision\.message\)/, "internal staff SMS only");
-assert.match(apiSource, /appendStaffPingRecord\(conv\.staffPings/, "every ping is recorded on the conversation");
+assert.match(apiSource, /appendStaffPingRecord\(\s*conv\.staffPings/, "every ping is recorded on the conversation");
 
 const proxy = await fs.readFile(
   path.resolve("apps/web/src/app/api/conversations/[id]/ping-owner/route.ts"),
@@ -268,4 +271,88 @@ assert.match(
   "button is manager-gated in the UI too"
 );
 
-console.log("PASS staff ping eval");
+// ------------------------------------------------- manager NOTE (Joe, 2026-08-04)
+// Christopher Szczesny +17169400722: no open task on the thread, so the ping collapsed to
+// "LeadRider: Joe asked you to take a look at Christopher Szczesny." Stone was poked with no
+// reason attached. The note is that missing reason — and it is PERSON-ONLY.
+{
+  const noteArgs = { managerName: "Joe", customerName: "Christopher Szczesny", tasks: [], link: "https://x/y" };
+
+  // Reproduces the production message BEFORE the note existed.
+  const bare = buildStaffPingMessage(noteArgs);
+  assert.equal(
+    bare,
+    "LeadRider: Joe asked you to take a look at Christopher Szczesny.\nOpen: https://x/y",
+    "no note ⇒ byte-identical to the old message (an empty note changes nothing)"
+  );
+  assert.equal(buildStaffPingMessage({ ...noteArgs, note: "   " }), bare, "a whitespace-only note is treated as absent");
+
+  const withNote = buildStaffPingMessage({ ...noteArgs, note: "He asked for photos this morning and is still waiting." });
+  assert.match(withNote, /Note: He asked for photos this morning and is still waiting\./, "the manager's words reach the rep");
+  assert.ok(
+    withNote.indexOf("Note:") < withNote.indexOf("Open:"),
+    "the note sits ABOVE the link — a phone preview truncates from the end, and the reason is what the rep needs"
+  );
+
+  // A pasted paragraph cannot blow up the SMS.
+  const long = "x".repeat(STAFF_PING_NOTE_MAX_CHARS + 200);
+  assert.equal(normalizeStaffPingNote(long).length, STAFF_PING_NOTE_MAX_CHARS, "the note is capped");
+  assert.equal(normalizeStaffPingNote("  two   spaces\n\nand lines "), "two spaces and lines", "whitespace is collapsed");
+  assert.equal(normalizeStaffPingNote(null), "", "null collapses to empty");
+  assert.equal(normalizeStaffPingNote(undefined), "", "undefined collapses to empty");
+
+  // The decision carries the normalized note, and the audit record stores what was actually sent.
+  const decided = decideStaffPing({
+    enabled: true,
+    nowMs,
+    cooldownMinutes: DEFAULT_STAFF_PING_COOLDOWN_MINUTES,
+    ownerRef: { id: "stone", name: "Stone", source: "lead_owner" },
+    target: { id: "stone", name: "Stone", phone: "+17167481110" },
+    lastPingedAt: null,
+    managerName: "Joe",
+    customerName: "Christopher Szczesny",
+    tasks: [],
+    link: "https://x/y",
+    note: "  He asked for photos this morning.  "
+  });
+  assert.equal(decided.kind, "send");
+  if (decided.kind === "send") {
+    assert.equal(decided.note, "He asked for photos this morning.", "the decision exposes the normalized note");
+    assert.match(decided.message, /Note: He asked for photos this morning\./, "…and it is in the SMS body");
+    const record = buildStaffPingRecord({ nowIso: "2026-08-04T15:21:22.589Z", actorId: "joe", managerName: "Joe", decision: decided, delivered: true });
+    assert.equal(record.note, "He asked for photos this morning.", "the audit trail records the reason that was sent");
+    assert.equal(record.toUserName, "Stone");
+    const blank = decideStaffPing({
+      enabled: true, nowMs, cooldownMinutes: DEFAULT_STAFF_PING_COOLDOWN_MINUTES,
+      ownerRef: { id: "stone", name: "Stone", source: "lead_owner" },
+      target: { id: "stone", name: "Stone", phone: "+17167481110" },
+      lastPingedAt: null, managerName: "Joe", customerName: "Christopher Szczesny", tasks: [], link: "https://x/y"
+    });
+    if (blank.kind === "send") {
+      assert.equal(
+        buildStaffPingRecord({ nowIso: "2026-08-04T15:21:22.589Z", actorId: "joe", managerName: "Joe", decision: blank, delivered: true }).note,
+        undefined,
+        "no note ⇒ nothing stored, so old records stay shaped exactly as before"
+      );
+    }
+  }
+}
+
+// PERSON-ONLY BOUNDARY (Joe's ruling 2026-08-04, chosen over agent-steering). The note must reach
+// the rep and the audit trail and NOTHING else — a manager's aside must never silently change what
+// the agent says to a customer. If someone later wants steering, that is a separate gated decision
+// and this assertion is the thing they have to consciously change.
+{
+  const pingHandlerAt = apiSource.indexOf('app.post("/conversations/:id/ping-owner"');
+  const pingHandler = apiSource.slice(pingHandlerAt, apiSource.indexOf("app.post(", pingHandlerAt + 10));
+  assert.match(pingHandler, /normalizeStaffPingNote\(req\.body\?\.note\)/, "the endpoint reads and normalizes the note");
+  assert.doesNotMatch(pingHandler, /addAgentContextNote/, "the ping note is NEVER written to agent context");
+  assert.doesNotMatch(pingHandler, /addTodo\(/, "the ping note does not silently mint a task either");
+  assert.doesNotMatch(pingHandler, /publishDraft|queueDraft|regenerate/i, "the ping never touches the customer draft path");
+}
+
+const pingPage = page.slice(page.indexOf("pingLeadOwner"));
+assert.match(pingPage, /JSON\.stringify\(\{ note: pingNote\.trim\(\) \}\)/, "the console sends the note with the ping");
+assert.match(page, /PING_NOTE_MAX_CHARS = 220/, "the console mirrors the API cap so the box can't accept more than we keep");
+
+console.log("PASS staff ping eval — target/cooldown/refusals + manager note (person-only: SMS + audit trail, never agent steering)");

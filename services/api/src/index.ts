@@ -1090,7 +1090,9 @@ import {
   decideStaffPing,
   DEFAULT_STAFF_PING_COOLDOWN_MINUTES,
   lastStaffPingAt,
-  resolveStaffPingOwnerRef
+  resolveStaffPingOwnerRef,
+  normalizeStaffPingNote,
+  buildStaffPingRecord
 } from "./domain/staffPing.js";
 import { isFinanceOutcomeContext, shouldPromptBusinessManagerFinanceOutcome } from "./domain/financeOutcomeGates.js";
 import {
@@ -41163,7 +41165,9 @@ app.post("/conversations/:id/ping-owner", requirePermission("canViewAllTasks"), 
     managerName,
     customerName,
     tasks,
-    link: buildStaffInboxConversationLink(conv, dealerProfile)
+    link: buildStaffInboxConversationLink(conv, dealerProfile),
+    // Manager's reason, staff-facing ONLY — never written to agent context (Joe 8/4).
+    note: normalizeStaffPingNote(req.body?.note)
   });
 
   if (decision.kind !== "send") {
@@ -41172,15 +41176,10 @@ app.post("/conversations/:id/ping-owner", requirePermission("canViewAllTasks"), 
   }
 
   const sent = await sendInternalSms(decision.targetPhone, decision.message);
-  conv.staffPings = appendStaffPingRecord(conv.staffPings, {
-    at: new Date().toISOString(),
-    byUserId: String(actor?.id ?? "").trim() || undefined,
-    byUserName: managerName,
-    toUserId: decision.targetId || undefined,
-    toUserName: decision.targetName,
-    taskIds: decision.taskIds,
-    delivered: sent
-  });
+  conv.staffPings = appendStaffPingRecord(
+    conv.staffPings,
+    buildStaffPingRecord({ nowIso: new Date().toISOString(), actorId: actor?.id, managerName, decision, delivered: sent })
+  );
   conv.updatedAt = new Date().toISOString();
   saveConversation(conv);
   recordRouteOutcome("manual", sent ? "staff_ping_sent" : "staff_ping_send_failed", {
