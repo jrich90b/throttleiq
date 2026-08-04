@@ -1,3 +1,5 @@
+import { getInventoryFeed, hasInventoryForModelYear } from "./inventoryFeed.js";
+
 function normalizeGuardText(value: string | null | undefined): string {
   return String(value ?? "")
     .toLowerCase()
@@ -102,4 +104,61 @@ export function filterCadenceUnavailableItemsByRequestedYear<T extends { year?: 
 ): T[] {
   if (!opts.yearSearchBroadened) return items;
   return items.filter(item => inventoryItemMatchesRequestedYear(item, requestedYear));
+}
+
+/**
+ * The lead's bike of interest is GONE from the lot — the LABEL-ONLY half of the value gate's
+ * held/sold read.
+ *
+ * Steven Osipovitch (+15854653751, operator-reported 2026-07-25 "Cadence follow up mentioned a bike
+ * we no longer have in stock"): a later-step cadence touch pitched "that 2016 Freewheeler would
+ * qualify for the used bike financing we have at rates starting 7.29% APR" on a bike the store no
+ * longer had. The existing read (leadUnitUnavailableForValueGate, index.ts) can only tell a unit is
+ * gone when the LEAD carries a stockId/VIN to look up in the hold/sold ledgers; his Trade Accelerator
+ * ADF carried only "2016 / Trike Freewheeler", so the guard returned false and the offer fired.
+ * Same defect class as the Jason Roorda held-unit ruling (2026-07-28), one rung down in identifier
+ * precision.
+ *
+ * Deterministic side-effect / copy-selection gate — AGENTS.md permits deterministic here: this reads
+ * OUR OWN inventory feed, never customer intent. It reuses the SAME in-stock definition the sibling
+ * watch-offer guard above already uses (hasInventoryForModelYear, yearDelta 1), so the two reads of
+ * "is this model on the lot" cannot drift apart.
+ *
+ * FAIL DIRECTION: an empty feed (no URL, fetch failure, timeout — getInventoryFeed returns [] or a
+ * stale/empty cache) is NOT evidence the bike is gone, so `feedHealthy` must be true before this can
+ * suppress anything. When it does fire, the touch stays quiet — the value gate's own designed
+ * anti-spam outcome — and the availability / held-inventory overrides still own the turn, because
+ * they are evaluated BEFORE leadUnitUnavailable in evaluateProactiveCadenceValueGate.
+ */
+export function decideLeadModelGoneFromFeed(input: {
+  hasSpecificModel: boolean;
+  feedHealthy: boolean;
+  modelInStock: boolean;
+}): boolean {
+  return !!input.hasSpecificModel && !!input.feedHealthy && !input.modelInStock;
+}
+
+/** Placeholder model labels an ADF leaves behind — never specific enough to call a unit "gone". */
+const UNKNOWN_CADENCE_MODEL_RE =
+  /^(?:n\/?a|na|none|unknown|other|tbd|new_model_interest|motorcycle|bike|harley[- ]davidson)$/i;
+
+/**
+ * Read half of the decision above: resolve the lead's OWN stated vehicle against the live feed.
+ * Any failure returns false, i.e. keep today's behavior (send).
+ */
+export async function leadModelGoneFromInventoryFeed(conv: any): Promise<boolean> {
+  try {
+    const vehicle = conv?.lead?.vehicle ?? {};
+    const model = String(vehicle?.model ?? "").trim();
+    const year = String(vehicle?.year ?? "").trim();
+    if (!model || UNKNOWN_CADENCE_MODEL_RE.test(model)) return false;
+    const feed = await getInventoryFeed();
+    return decideLeadModelGoneFromFeed({
+      hasSpecificModel: true,
+      feedHealthy: feed.length > 0,
+      modelInStock: await hasInventoryForModelYear({ model, year: year || null, yearDelta: 1 })
+    });
+  } catch {
+    return false;
+  }
 }
