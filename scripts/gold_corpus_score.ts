@@ -34,6 +34,7 @@ import {
   type GoldItemVerdict
 } from "../services/api/src/domain/goldCorpusScore.js";
 import { generateDraftWithLLM, requestStructuredJson } from "../services/api/src/domain/llmDraft.js";
+import { findInventoryPrice } from "../services/api/src/domain/inventoryFeed.js";
 import { resolveReportDir } from "../services/api/src/domain/reportPaths.js";
 
 const SAMPLES = Number(process.env.GOLD_SCORE_SAMPLES ?? 3);
@@ -120,13 +121,38 @@ for (const [i, ex] of items.entries()) {
 
   let agentReply = "";
   try {
+    // Give the composer what PRODUCTION gives it, as far as this offline replay can. The first run
+    // handed it only the turn + history, so it was graded against a human who could see the unit's
+    // real price — one failure was the agent "not citing" a $15,700 trade figure it was never shown.
+    // A handicapped agent scores low for the harness's reasons, not its own.
+    const conv = convById.get(String(ex.convId ?? "")) ?? null;
+    const vehicle = (conv?.lead as any)?.vehicle ?? {};
+    let inventoryListPrice: number | null = null;
+    let inventoryMileage: number | null = null;
+    if (vehicle?.stockId || vehicle?.vin) {
+      try {
+        const item = (await findInventoryPrice({ stockId: vehicle?.stockId ?? null, vin: vehicle?.vin ?? null }))?.item ?? null;
+        if (item) {
+          inventoryListPrice = typeof item.price === "number" && item.price > 0 ? item.price : null;
+          inventoryMileage = typeof item.mileage === "number" && item.mileage > 0 ? item.mileage : null;
+        }
+      } catch {
+        /* a feed hiccup means no facts, exactly as the live path degrades */
+      }
+    }
     agentReply = String(
       (await generateDraftWithLLM({
         channel: "sms",
         leadKey: String(ex.convId ?? ""),
-        lead: (convById.get(String(ex.convId ?? ""))?.lead ?? null) as any,
+        lead: (conv?.lead ?? null) as any,
+        leadSource: (conv?.lead as any)?.source ?? null,
+        bucket: (conv as any)?.classification?.bucket ?? null,
+        cta: (conv as any)?.classification?.cta ?? null,
         inquiry: inbound,
-        history: historyBefore(ex.convId, ex.at)
+        history: historyBefore(ex.convId, ex.at),
+        stockId: vehicle?.stockId ?? null,
+        inventoryListPrice,
+        inventoryMileage
       } as any)) ?? ""
     ).trim();
   } catch (err: any) {

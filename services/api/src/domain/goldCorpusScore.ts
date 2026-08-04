@@ -68,6 +68,30 @@ export type GoldItemVerdict = {
 const VOICE_TRANSCRIPT_SHAPE = /^Agent:\s|If you know your party's extension|press one\b/i;
 
 /**
+ * A COURTESY TURN carries no answerable content — "Ur welcome", "ok thanks", "sounds good".
+ * Whatever the salesperson happened to say next ("Dave I'm here I'll call you") is a free choice,
+ * not a required answer, so grading a reply against it measures the human's improvisation rather
+ * than the agent's correctness. Read by hand 2026-08-04: this produced a FALSE failure — the agent
+ * replied "Gotcha, thanks Dave. Give me a shout if you need anything else." and was marked wrong
+ * for not spontaneously promising a phone call.
+ *
+ * Deliberately a tight literal list, not a sentiment guess: over-matching would silently shrink the
+ * hold-out and inflate the score, which is the direction this metric must never fail in.
+ */
+const COURTESY_ONLY = new Set([
+  "ur welcome", "your welcome", "you're welcome", "youre welcome",
+  "thanks", "thank you", "thanks!", "thank you!", "thx", "ty",
+  "ok", "okay", "ok!", "k", "kk", "sounds good", "sounds good!",
+  "got it", "gotcha", "will do", "no problem", "np", "yw",
+  "great", "perfect", "awesome", "cool", "nice", "same to you"
+]);
+
+function isCourtesyOnly(text: string): boolean {
+  const norm = text.toLowerCase().replace(/[^a-z' ]+/g, " ").replace(/\s+/g, " ").trim();
+  return !!norm && COURTESY_ONLY.has(norm);
+}
+
+/**
  * Scoreable only with BOTH sides present and a real customer turn to answer. A blank or trivial
  * inbound ("👍") has no answerable content, so grading a reply to it measures nothing.
  */
@@ -77,6 +101,7 @@ export function isScoreableGoldExample(ex: GoldExample | null | undefined): bool
   if (!inbound || !reply) return false;
   if (inbound.length < 8) return false;
   if (VOICE_TRANSCRIPT_SHAPE.test(inbound)) return false;
+  if (isCourtesyOnly(inbound)) return false;
   return true;
 }
 
@@ -166,6 +191,34 @@ export function isGoldScoreStale(generatedAt: string | null | undefined, nowMs: 
 }
 
 /** The judge prompt. Exported so the runner and any offline arm ask the IDENTICAL question. */
+/**
+ * The judge prompt. Exported so the runner and any offline arm ask the IDENTICAL question.
+ *
+ * REJECTED EXPERIMENT, 2026-08-04 — do not re-run it without reading this. Hand review of the first
+ * scored run found failures where the SALESPERSON changed the subject or used information the agent
+ * was never given, so the obvious idea was to loosen the bar: tell the judge the human is a
+ * reference, not a ceiling, and ask "would the customer be WORSE OFF?" instead of "do they match?".
+ *
+ * Tried twice and measured both times against four hand-graded cases — two that should flip, two
+ * genuine failures that must stay failed:
+ *   attempt 1 (an added "not the ceiling" paragraph): changed NOTHING. Both target cases still
+ *     failed 3-0; the judge kept anchoring on the human's content.
+ *   attempt 2 (rebuilt around "worse off?" as the only question): 2 of 4. It correctly flipped the
+ *     metal-rack case — but it also flipped a CONTROL, marking the weak web-lead first touch
+ *     ("Are you set on a 2025 Street Glide?" against Stone's "stop in today, I'll be here until
+ *     3pm, lots of street glides in various colors") as fine. That is a real weakness we need this
+ *     metric to keep catching.
+ *
+ * The experiment taught the actual lesson: "is the reply DEFECTIVE?" and "is it as good as our best
+ * people?" are two different bars, and "worse off" collapses them — it cannot separate *adequate but
+ * weaker* from *as good*. This prompt keeps the STRICTER equivalence bar on purpose. It under-scores,
+ * and the failures need reading rather than trusting; a lenient judge that misses a weak first touch
+ * would be worse, because catching those is the whole point.
+ *
+ * (One case I had hand-labelled "unfair" was mine to correct, not the judge's: on the competing
+ * $16,625 offer the agent never engaged with the customer's number at all, just deflected to finance.
+ * The judge was right and I was wrong.)
+ */
 export function buildGoldEquivalencePrompt(args: { inbound: string; humanReply: string; agentReply: string }): string {
   return [
     "You are grading a dealership sales agent's reply against the reply a REAL SALESPERSON sent to",
