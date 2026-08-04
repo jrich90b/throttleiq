@@ -157,7 +157,12 @@ const CEILINGS: Ceiling[] = [
     // resolveSalesTopicHint (domain/salesTopicHint.ts), which also expires a pricing hint once we
     // have actually quoted the lead (+17165236994, operator "Pricing was answered but the pricing
     // flag still shows in the inbox").
-    max: 71_333,
+    // 71_333 -> 71_331. The OPEN-CUSTOMER-TURN fix funded its own wiring: `getLastInboundBody` /
+    // `getLastInboundMessage` moved out to domain/openCustomerTurn.ts, next to the open-turn
+    // builder they contrast with (the single newest message vs every message still unanswered).
+    // Three lines of new wiring at the live/regen/re-draft draft paths, nine lines out — taken at
+    // the REAL count, not the ceiling, so the slice funds itself with two to spare.
+    max: 71_331,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
