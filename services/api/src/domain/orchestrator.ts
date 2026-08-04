@@ -4524,7 +4524,20 @@ export async function orchestrateInbound(
           });
           listPrice = priceLookup?.price ?? null;
           if (yearForRange && modelForRange) {
-            priceRange = await findPriceRange({ year: yearForRange, model: modelForRange });
+            // Structured colour/finish only (see narrowUnitsByColorFinish): the ADF/lead vehicle and
+            // the armed watch, never raw inbound text — "I don't want any chrome" is the parser's
+            // question, not this filter's. A colour we don't stock degrades to the model's range.
+            const watchForColor = (ctx as any)?.inventoryWatch ?? null;
+            const colorForRange =
+              (ctx?.lead?.vehicle as any)?.color ?? watchForColor?.color ?? null;
+            const finishForRange =
+              (ctx?.lead?.vehicle as any)?.trim ?? watchForColor?.trim ?? null;
+            priceRange = await findPriceRange({
+              year: yearForRange,
+              model: modelForRange,
+              color: colorForRange,
+              finish: finishForRange
+            });
           }
           if (!stockForPrice && !vinForPrice && priceRange?.count && priceRange.count > 1) {
             listPrice = null;

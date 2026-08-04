@@ -354,7 +354,11 @@ export function modelMatches(candidateRaw: string | undefined, targetRaw: string
 // apart), so a base-model watch ("Road Glide") must NOT be satisfied by them.
 // (The directional `candidate.includes(target)` above otherwise lets "road glide
 // limited" satisfy a "road glide" watch.) Generalizes the existing CVO guard.
-const DISTINCT_MODEL_TOKENS = new Set(["limited", "special", "st", "cvo", "ultra", "classic"]);
+// "3" is the TRIKE marker ("Road Glide 3", "Street Glide 3 Limited") — a three-wheeler is not a
+// trim of the two-wheeler that shares its name, and it prices ~$6k above it. Measured against the
+// live americanharley feed (2026-08-03): a standalone "3" token appears on exactly those two model
+// names and nowhere else, so this token cannot collide with a displacement ("883", "1200", "400").
+const DISTINCT_MODEL_TOKENS = new Set(["limited", "special", "st", "cvo", "ultra", "classic", "3"]);
 
 /**
  * True when the in-stock UNIT carries a distinct-model token the WATCH does not —
@@ -370,6 +374,77 @@ export function unitIsDistinctModelFromWatch(unitModelRaw: string | undefined, w
   if (!unitTokens.length) return false;
   const watchTokens = new Set(normalizeModel(watchModelRaw).split(" ").filter(t => DISTINCT_MODEL_TOKENS.has(t)));
   return unitTokens.some(t => !watchTokens.has(t));
+}
+
+/**
+ * Is this in-stock UNIT inside the scope of a PRICE answer about `askedModel`?
+ *
+ * Operator-reported 2026-08-03 (Joe): "the agent gave a range on a road glide that included a CVO
+ * Road Glide ST." Reproduced against the live feed the same day —
+ * `findPriceRange({ year: "2026", model: "Road Glide" })` returned **$25,999–$44,999**, because
+ * `modelMatches` is deliberately DIRECTIONAL (`candidate.includes(target)`) so that a base-model ask
+ * still finds units whose feed name carries extra words. That is right for "do we have one?" and
+ * wrong for "what does it cost?": it swept in the CVO Road Glide ST ($44,999), the Road Glide
+ * Limited and the Road Glide 3 trike, and quoted their spread as if it were one model's trim range.
+ *
+ * The watch engine already refuses exactly this conflation (Joe ruling 2026-06-30, Joseph Mackmin's
+ * "Road Glide" watch firing on a Road Glide Limited). This reuses that SAME primitive rather than
+ * inventing a second notion of "is it really that model", so the price answer and the watch fire can
+ * never drift apart.
+ *
+ * Deterministic structured extraction over OUR OWN feed (AGENTS.md permits deterministic here) —
+ * it reads inventory records, never customer intent; which model the customer MEANT is still the
+ * parser's job upstream. FAIL DIRECTION: strictly subtractive. Removing a sibling can only narrow a
+ * quoted range toward the model actually asked about, or drop the price line entirely when nothing
+ * matches — it can never invent a price or widen a range.
+ */
+export function unitInScopeForModelPriceAnswer(
+  unitModelRaw: string | undefined,
+  askedModelRaw: string | undefined
+): boolean {
+  if (!askedModelRaw) return false;
+  if (!modelMatches(unitModelRaw, askedModelRaw)) return false;
+  return !unitIsDistinctModelFromWatch(unitModelRaw, askedModelRaw);
+}
+
+/**
+ * Narrow a set of in-scope units to the COLOUR / FINISH the customer actually named (Joe, 2026-08-03:
+ * "what about if there is a color and a finish or just a color, can it narrow that down?").
+ *
+ * The feed packs colour AND finish into one `color` string, and the finish is real money: on the
+ * live 2026 Road Glides, "Dark Billiard Gray Chrome Trim" is $25,999 and "Dark Billiard Gray Black
+ * Trim" is $29,399 — same colour, $3,400 apart. So a colour alone usually halves the spread and a
+ * colour + finish usually pins ONE bike, which turns a range into an exact price.
+ *
+ * INPUTS ARE STRUCTURED ONLY — the ADF/lead vehicle colour, a watch's colour/trim, or the colour the
+ * parser already resolved. Deliberately NOT the raw inbound text: "I do not want any chrome" is a
+ * comprehension question (that exact sentence is live on +17169941544 today), and token-matching it
+ * would narrow TO chrome. Reading customer intent stays the parser's job upstream; this function
+ * only matches structured values against our own feed records (AGENTS.md structured-extraction lane).
+ *
+ * FAIL DIRECTION: never answers with nothing. A stated colour/finish that matches no unit returns
+ * the unnarrowed set, so a colour we do not stock degrades to the model's honest range rather than
+ * to silence or an empty price line. Purely subtractive otherwise — it can only tighten a range
+ * toward the bike asked about.
+ */
+export function narrowUnitsByColorFinish<T extends { color?: string }>(
+  units: T[],
+  stated: { color?: string | null; finish?: string | null }
+): T[] {
+  if (!Array.isArray(units) || units.length <= 1) return units;
+  const tokens = (value: string | null | undefined) =>
+    String(value ?? "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .split(" ")
+      .filter(Boolean);
+  const wanted = [...tokens(stated.color), ...tokens(stated.finish)];
+  if (!wanted.length) return units;
+  const narrowed = units.filter(u => {
+    const have = new Set(tokens(u?.color));
+    return wanted.every(w => have.has(w));
+  });
+  return narrowed.length ? narrowed : units;
 }
 
 /**
@@ -558,7 +633,10 @@ export async function findInventoryPrice(opts: {
     const year = opts.year?.trim();
     const model = opts.model?.trim() ?? null;
     if (year && model) {
-      const item = haystack.find(i => i.year === year && modelMatches(i.model, model));
+      // Sibling-model scope (see unitInScopeForModelPriceAnswer): without it the FIRST feed unit
+      // whose name merely contains the asked model wins, so "what's the 2026 Road Glide?" could
+      // answer with the CVO Road Glide ST's $44,999 as though it were the listed price.
+      const item = haystack.find(i => i.year === year && unitInScopeForModelPriceAnswer(i.model, model));
       if (item) return { price: priceForItem(item as any), item };
     }
     return null;
@@ -573,15 +651,23 @@ export async function findInventoryPrice(opts: {
 export async function findPriceRange(opts: {
   year?: string | null;
   model?: string | null;
+  /** Structured colour the customer/ADF stated (lead vehicle colour, watch colour) — optional. */
+  color?: string | null;
+  /** Structured finish the customer/ADF stated ("black trim" / "chrome trim") — optional. */
+  finish?: string | null;
 }): Promise<{ min: number; max: number; count: number } | null> {
   const items = await getInventoryFeed();
   if (!items.length) return null;
   const year = opts.year?.trim();
   const model = opts.model?.trim() ?? null;
   if (!year || !model) return null;
-  const matches = items.filter(
-    i => i.year === year && modelMatches(i.model, model) && (priceForItem(i as any) ?? 0) > 0
+  // Sibling-model scope (see unitInScopeForModelPriceAnswer): a base-model price question must not
+  // pull the CVO / Limited / Special / trike siblings into the quoted spread (+Joe, 2026-08-03).
+  const inScope = items.filter(
+    i => i.year === year && unitInScopeForModelPriceAnswer(i.model, model) && (priceForItem(i as any) ?? 0) > 0
   );
+  // …and when the customer named a colour / finish, quote THAT bike rather than the model's spread.
+  const matches = narrowUnitsByColorFinish(inScope, { color: opts.color, finish: opts.finish });
   const prices = matches
     .map(m => priceForItem(m as any))
     .filter((price): price is number => typeof price === "number" && Number.isFinite(price) && price > 0)
