@@ -14,6 +14,7 @@ import OpenAI, { toFile } from "openai";
 import { google } from "googleapis";
 import sharp from "sharp";
 import { orchestrateInbound, evaluateTestRideInventoryGate, buildBlockedTestRideInventoryDraft } from "./domain/orchestrator.js";
+import { resolveWatchOptOutOutcome } from "./domain/watchOptOutTurn.js";
 import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildWatchAvailableReply, buildCholoWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, resolveIntroducedOwnerFirstName, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, hasCustomerReceivedOutbound, hasRecentDeliveredHumanOutbound } from "./domain/agentVoice.js";
 import {
   postSaleVehicleIsNew,
@@ -963,6 +964,8 @@ import {
   applyAppointmentAttribution,
   applySoldCloseout,
   applyLeadCloseout,
+  armPendingCloseout,
+  applyPendingCloseoutOnSend,
   resolveNoShowFollowUpDueAt,
   pauseFollowUpCadence,
   stopFollowUpCadence,
@@ -3192,25 +3195,9 @@ function watchOptOutConfidenceMin(): number {
   return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.7;
 }
 
-// Cheap pre-filter so the watch-opt-out parser only runs on disinterest/opt-out-ish phrasings. A gate,
-// NOT comprehension: a hint miss falls through to existing behavior; the parser owns the decision.
-const WATCH_OPT_OUT_HINT_RE =
-  /\b(not interested|no longer|take me off|stop (the )?alert|stop notif|stop (let|text)|unsubscrib|all set|already (bought|got|purchased)|found (one|something)|no thanks|not looking|don'?t need|cancel (the )?(watch|alert)|opt[-\s]?out)\b/i;
-function watchOptOutHint(text: string): boolean {
-  const t = String(text ?? "").trim();
-  if (!t) return false;
-  return WATCH_OPT_OUT_HINT_RE.test(t);
-}
-
-function buildWatchOptOutAck(): string {
-  return "No problem — I'll take you off the alerts for that one. Just text me anytime if you want back on.";
-}
-
-// Shared by BOTH /webhooks/twilio and /conversations/:id/regenerate (route-parity law). PAUSES the
-// customer's inventory watch (so the watch-fire engine stops notifying) + stops the related cadence,
-// and returns a brief ack — ONLY when the conv has an ACTIVE watch AND a confident, explicit watch
-// opt-out is detected; otherwise null so existing handling runs. Lighter than a full disposition
-// closeout (keeps them as a lead, just off the alerts).
+// Shared by BOTH /webhooks/twilio and /conversations/:id/regenerate (route-parity law). The read and
+// the reply live in domain/watchOptOutTurn.ts — including why the old keyword pre-filter is gone
+// (Mark Kocsis +17168609533). Here we only apply the side effects the outcome asks for.
 async function resolveWatchOptOutReply(
   conv: Conversation | null | undefined,
   inboundText: string,
@@ -3218,26 +3205,32 @@ async function resolveWatchOptOutReply(
 ): Promise<string | null> {
   const text = String(inboundText ?? "").trim();
   if (!text || !conv) return null;
-  if (!hasActiveInventoryWatch(conv)) return null; // nothing to remove
-  if (!watchOptOutHint(text)) return null; // pre-filter; miss => existing behavior
+  if (!hasActiveInventoryWatch(conv)) return null; // nothing to remove — a STATE gate, not a word gate
   const parse = await safeLlmParse("watch_opt_out_parser", () =>
     parseWatchOptOutWithLLM({ text, history: buildHistory(conv, 8) })
   );
   if (process.env.LLM_WATCH_OPT_OUT_PARSER_DEBUG === "1" && parse) {
     console.log("[llm-watch-opt-out-parse]", { convId: conv.id, ...parse });
   }
-  const decision = decideWatchOptOutTurn({
+  const outcome = resolveWatchOptOutOutcome({
     hasActiveWatch: true,
-    parserAccepted: !!parse,
-    intent: parse?.intent ?? null,
-    confidence: parse?.confidence ?? 0,
+    parse,
     confidenceMin: watchOptOutConfidenceMin()
   });
-  if (decision.kind !== "pause_watch") return null;
-  const paused = markInventoryWatchOptOut(conv, "watch_opt_out");
-  stopFollowUpCadence(conv, "watch_opt_out");
-  recordRouteOutcome(scope, "inventory_watch_opt_out", { convId: conv.id, leadKey: conv.leadKey, paused });
-  return buildWatchOptOutAck();
+  if (outcome.kind === "none") return null;
+  // The watch comes off NOW, not on send: alerts running for someone who just bought is the exact
+  // spam this path exists to stop, and it is reversible if they text back. The CLOSE is what waits
+  // for a real send (Joe, 2026-08-04) — armed here, fired by the send route.
+  const paused = markInventoryWatchOptOut(conv, outcome.reason);
+  stopFollowUpCadence(conv, outcome.reason);
+  if (outcome.closeAfterSend) armPendingCloseout(conv, outcome.reason);
+  recordRouteOutcome(scope, `inventory_watch_${outcome.reason}`, {
+    convId: conv.id,
+    leadKey: conv.leadKey,
+    paused,
+    closeArmed: outcome.closeAfterSend
+  });
+  return outcome.reply;
 }
 
 // Post-sale ownership loss: confidence floor (default 0.7 — a wrongful stop drops courtesy/warranty
@@ -52538,6 +52531,22 @@ app.post("/conversations/:id/send", async (req, res) => {
         setConversationMode(conv.id, "human");
       }
       markAppointmentAcknowledged(conv);
+    }
+    // A closeout armed by the acquisition turn fires HERE and only here — on a real, DELIVERED
+    // outbound (Joe, 2026-08-04: "after we send draft and it goes through it should close the
+    // lead"). `delivered: false` means the text never reached them, so the lead stays open and the
+    // arm stays put for the retry. The referee still refuses if the customer has written since.
+    if (args.delivered) {
+      const closeoutDecision = applyPendingCloseoutOnSend(conv, { nowIso: new Date().toISOString() });
+      if (closeoutDecision.kind === "close_lead") {
+        recordRouteOutcome("manual", "pending_closeout_fired_on_send", {
+          convId: conv.id,
+          leadKey: conv.leadKey,
+          channel: "sms",
+          closedReason: conv.closedReason ?? null,
+          why: closeoutDecision.why
+        });
+      }
     }
   };
   const finalizeManualSendDraftState = (opts?: { clearEmailDraft?: boolean; preserveSmsDrafts?: boolean }) => {
