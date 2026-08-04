@@ -796,16 +796,28 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
   // watch-parked shape, because the whole point of the referee is that ONLY the generic outbound
   // lane parks — a single sample would hide exactly that. PROBE: `hasOpenFollowUpTask:false` is
   // held fixed so the sample reads the park arbitration rather than the duplicate check.
+  // EXTENDED 2026-08-04 with Joe's two "unless" clauses: the parked shape is now sampled three
+  // ways (clean park, an additional lead, other open work), because those are the arms that decide
+  // whether a PARKED lead still keeps its task — sampling only the clean park would hide both
+  // carve-outs, which is the same blindness the per-lane split exists to prevent.
+  const VOICEMAIL_PARK_PROBES = [
+    { key: "plain", parked: false, contact: false, otherWork: false },
+    { key: "watch_parked", parked: true, contact: false, otherWork: false },
+    { key: "watch_parked_additional_lead", parked: true, contact: true, otherWork: false },
+    { key: "watch_parked_other_work", parked: true, contact: false, otherWork: true }
+  ] as const;
   for (const lane of ["inbound_voicemail", "outbound_finance_handoff", "outbound_generic"] as const) {
-    for (const parked of [false, true]) {
-      add(`voicemailFollowUpTask:${lane}:${parked ? "watch_parked" : "plain"}`, () => {
+    for (const probe of VOICEMAIL_PARK_PROBES) {
+      add(`voicemailFollowUpTask:${lane}:${probe.key}`, () => {
         if (typeof reducer.decideVoicemailFollowUpTask !== "function") return undefined;
         const decision = reducer.decideVoicemailFollowUpTask({
           lane,
           hasOpenFollowUpTask: false, // PROBE
-          activeInventoryWatchCount: parked ? 1 : 0, // PROBE
-          followUpMode: parked ? "holding_inventory" : "active", // PROBE
-          followUpReason: parked ? "inventory_watch" : "engaged" // PROBE
+          activeInventoryWatchCount: probe.parked ? 1 : 0, // PROBE
+          followUpMode: probe.parked ? "holding_inventory" : "active", // PROBE
+          followUpReason: probe.parked ? "inventory_watch" : "engaged", // PROBE
+          customerContactSinceWatchArmed: probe.contact, // PROBE
+          openWorkBeyondWatch: probe.otherWork // PROBE
         });
         return { create: decision.create, reason: decision.reason };
       }, ["decideVoicemailFollowUpTask"]);

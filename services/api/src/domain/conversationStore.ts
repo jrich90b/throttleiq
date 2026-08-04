@@ -5790,15 +5790,33 @@ export function applyVoicemailFollowUpTask(
     ...(Array.isArray(conv.inventoryWatches) ? conv.inventoryWatches : []),
     ...(conv.inventoryWatch ? [conv.inventoryWatch] : [])
   ];
-  const activeInventoryWatchCount = mergedWatches.filter(
-    w => w && w.model && w.status !== "paused"
-  ).length;
+  const liveWatches = mergedWatches.filter(w => w && w.model && w.status !== "paused");
+  const activeInventoryWatchCount = liveWatches.length;
+  // Joe's two "unless" clauses (2026-08-04). Both are built to fail toward KEEPING the task: an
+  // unreadable watch or message timestamp reads as customer contact rather than silence.
+  const armedMs = liveWatches.reduce((newest, w) => {
+    const t = Date.parse(String(w.createdAt ?? ""));
+    return Number.isFinite(t) && t > newest ? t : newest;
+  }, Number.NEGATIVE_INFINITY);
+  const customerContactSinceWatchArmed = !Number.isFinite(armedMs)
+    ? activeInventoryWatchCount > 0
+    : (conv.messages ?? []).some((m: any) => {
+        if (m?.direction !== "in") return false;
+        const t = Date.parse(String(m?.at ?? ""));
+        return !Number.isFinite(t) || t > armedMs;
+      });
+  const openWorkBeyondWatch =
+    listOpenTodos().some(
+      t => t.convId === conv.id && t.status === "open" && t.reason !== "call" && t.taskClass !== "followup"
+    ) || Boolean(conv.appointment?.bookedEventId);
   const decision = decideVoicemailFollowUpTask({
     lane: input.lane,
     hasOpenFollowUpTask,
     activeInventoryWatchCount,
     followUpMode: conv.followUp?.mode,
-    followUpReason: conv.followUp?.reason
+    followUpReason: conv.followUp?.reason,
+    customerContactSinceWatchArmed,
+    openWorkBeyondWatch
   });
   if (!decision.create) return decision;
   addTodo(

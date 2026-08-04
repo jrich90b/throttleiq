@@ -132,7 +132,10 @@ const PARKED_ON_WATCH = {
   hasOpenFollowUpTask: false,
   activeInventoryWatchCount: 1,
   followUpMode: "holding_inventory",
-  followUpReason: "inventory_watch"
+  followUpReason: "inventory_watch",
+  // A CLEAN park — the watch is the whole story. Joe's two "unless" clauses are exercised below.
+  customerContactSinceWatchArmed: false,
+  openWorkBeyondWatch: false
 } as const;
 
 check("+15416478489 (the report): a watch-parked lead gets NO 2nd-attempt task", () => {
@@ -178,6 +181,93 @@ check("the finance-handoff lane is never parked — its task IS the restarted ca
   assert.equal(d.create, true);
 });
 
+// --- Joe's two "unless" clauses (ruling 2026-08-04) -------------------------
+// "Suppress when there is a callback voicemail on a watch unless it is an additional lead or the
+// customer shows interest in something else." Measured on the live store the day of the ruling:
+// 47 conversations are parked on a live watch and 11 of them (23%) hit one of these carve-outs, so
+// without them a voicemail would leave the watch as the lead's only remaining touch.
+check("+17164819192 shape: parked, but the customer spoke since the watch was armed", () => {
+  // "it's a bit high mileage for me. I am considering something new as of recent" — an additional
+  // lead in Joe's words, and the clearest possible case that the watch is not the whole story.
+  const d = decideVoicemailFollowUpTask({
+    lane: "outbound_generic",
+    ...PARKED_ON_WATCH,
+    customerContactSinceWatchArmed: true
+  });
+  assert.equal(d.create, true);
+  assert.equal(d.reason, "additional_lead");
+});
+
+check("+12399612259 shape: an unanswered question after the watch keeps the task", () => {
+  // "I cant not currently and remind me again what address is this at?" — burying this leaves a
+  // question nobody answers.
+  const d = decideVoicemailFollowUpTask({
+    lane: "outbound_generic",
+    ...PARKED_ON_WATCH,
+    customerContactSinceWatchArmed: true
+  });
+  assert.equal(d.create, true);
+});
+
+check("+13105956498 shape: parked, but another open task is work the watch does not own", () => {
+  // Carries an open "check current availability" promise. Silence on it is a broken promise.
+  const d = decideVoicemailFollowUpTask({
+    lane: "outbound_generic",
+    ...PARKED_ON_WATCH,
+    openWorkBeyondWatch: true
+  });
+  assert.equal(d.create, true);
+  assert.equal(d.reason, "interest_beyond_watch");
+});
+
+check("+17164822435 shape: parked with an appointment on the books keeps the task", () => {
+  // Three of the 11 measured leads are in this shape — a booked appointment the watch does not own.
+  const d = decideVoicemailFollowUpTask({
+    lane: "outbound_generic",
+    ...PARKED_ON_WATCH,
+    openWorkBeyondWatch: true
+  });
+  assert.equal(d.create, true);
+});
+
+check("an additional lead is named ahead of other open work when both are true", () => {
+  const d = decideVoicemailFollowUpTask({
+    lane: "outbound_generic",
+    ...PARKED_ON_WATCH,
+    customerContactSinceWatchArmed: true,
+    openWorkBeyondWatch: true
+  });
+  assert.equal(d.create, true);
+  assert.equal(d.reason, "additional_lead", "the recorded reason names what actually saved the task");
+});
+
+check("suppression needs EVERY clause — any one of the four flips it back to a task", () => {
+  // The whole decision table, so no future edit can quietly widen the park.
+  for (const watches of [0, 1]) {
+    for (const mode of ["active", "holding_inventory"]) {
+      for (const contact of [false, true]) {
+        for (const otherWork of [false, true]) {
+          const d = decideVoicemailFollowUpTask({
+            lane: "outbound_generic",
+            hasOpenFollowUpTask: false,
+            activeInventoryWatchCount: watches,
+            followUpMode: mode,
+            followUpReason: mode === "holding_inventory" ? "inventory_watch" : "engaged",
+            customerContactSinceWatchArmed: contact,
+            openWorkBeyondWatch: otherWork
+          });
+          const shouldSuppress = watches > 0 && mode === "holding_inventory" && !contact && !otherWork;
+          assert.equal(
+            d.create,
+            !shouldSuppress,
+            `watches=${watches} mode=${mode} contact=${contact} otherWork=${otherWork}`
+          );
+        }
+      }
+    }
+  }
+});
+
 check("an existing open task still wins over everything (unchanged behaviour)", () => {
   for (const lane of ["inbound_voicemail", "outbound_finance_handoff", "outbound_generic"] as const) {
     const d = decideVoicemailFollowUpTask({
@@ -185,7 +275,9 @@ check("an existing open task still wins over everything (unchanged behaviour)", 
       hasOpenFollowUpTask: true,
       activeInventoryWatchCount: 0,
       followUpMode: "active",
-      followUpReason: "engaged"
+      followUpReason: "engaged",
+      customerContactSinceWatchArmed: false,
+      openWorkBeyondWatch: false
     });
     assert.equal(d.create, false, lane);
     assert.equal(d.reason, "existing_open_task", lane);
