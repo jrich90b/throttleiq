@@ -518,6 +518,7 @@ import {
   applyInventoryHoldRecord,
   applyInventoryWatchArm,
   applyInventoryWatchDisarm,
+  applyFinanceOutcomeNotifyState,
   applyCloseoutReversal,
   applyAppointmentConfirmRecord,
   clearAppointmentStaffPromptState
@@ -19297,10 +19298,12 @@ async function resolveFinanceOutcomeNotifyTarget(conv: any): Promise<{
 }
 
 function ensureFinanceOutcomeToken(conv: any): string {
-  const notifyState = ((conv as any).financeOutcomeNotify = (conv as any).financeOutcomeNotify ?? {});
-  if (String(notifyState.outcomeToken ?? "").trim()) return String(notifyState.outcomeToken).trim();
-  notifyState.outcomeToken = crypto.randomBytes(12).toString("hex");
-  return notifyState.outcomeToken;
+  const { state } = applyFinanceOutcomeNotifyState(conv, {
+    lane: "token_mint",
+    nowIso: nowIso(),
+    mintedToken: crypto.randomBytes(12).toString("hex")
+  });
+  return String(state.outcomeToken ?? "").trim();
 }
 
 /**
@@ -19461,9 +19464,7 @@ async function applyFinanceOutcomeStatusFromSignal(
     await notifyBusinessManagerFinanceOutcome(conv, "approved", reasonText || undefined);
   }
 
-  const notifyState = ((conv as any).financeOutcomeNotify = (conv as any).financeOutcomeNotify ?? {});
-  notifyState.updatedAt = nowIsoValue;
-  notifyState.status = status;
+  applyFinanceOutcomeNotifyState(conv, { lane: "outcome_signal", nowIso: nowIsoValue, outcomeStatus: status });
 }
 
 async function maybePromptBusinessManagerFinanceOutcomeFallback(
@@ -19473,7 +19474,7 @@ async function maybePromptBusinessManagerFinanceOutcomeFallback(
   // A prequal ORIGIN alone is not a finance outcome to chase (Joe 8/4) — financeOutcomeGates.ts.
   if (!shouldPromptBusinessManagerFinanceOutcome(conv).prompt) return;
   if (String(conv?.financeOutcome?.status ?? "").trim()) return;
-  const notifyState = ((conv as any).financeOutcomeNotify = (conv as any).financeOutcomeNotify ?? {});
+  const notifyState = (conv as any).financeOutcomeNotify ?? {}; // read-only: the write goes through the applier
   const sourceId = String(opts.sourceMessageId ?? "").trim();
   if (sourceId && String(notifyState.lastPromptSourceMessageId ?? "").trim() === sourceId) return;
   const cooldownMinRaw = Number(process.env.FINANCE_OUTCOME_PROMPT_COOLDOWN_MIN ?? 120);
@@ -19521,11 +19522,13 @@ async function maybePromptBusinessManagerFinanceOutcomeFallback(
       : `Business manager outcome prompt failed for ${name}: send_failed.`
   );
   if (sent) {
-    notifyState.outcomePromptSentAt = nowIso();
-    notifyState.lastPromptSourceMessageId = sourceId || undefined;
-    notifyState.userId = String(user?.id ?? "").trim() || notifyState.userId;
-    notifyState.phone = phone;
-    notifyState.updatedAt = nowIso();
+    applyFinanceOutcomeNotifyState(conv, {
+      lane: "prompt_sent",
+      nowIso: nowIso(),
+      promptSourceMessageId: sourceId,
+      promptUserId: String(user?.id ?? "").trim(),
+      promptPhone: phone
+    });
   }
 }
 
@@ -19534,7 +19537,7 @@ async function notifyBusinessManagerFinanceOutcome(
   status: "approved" | "declined" | "needs_more_info",
   note?: string
 ): Promise<void> {
-  const notifyState = ((conv as any).financeOutcomeNotify = (conv as any).financeOutcomeNotify ?? {});
+  const notifyState = (conv as any).financeOutcomeNotify ?? {}; // read-only: the write goes through the applier
   if (status === "declined" && String(notifyState.declinedSentAt ?? "").trim()) return;
   if (status === "approved" && String(notifyState.approvedSentAt ?? "").trim()) return;
   if (status === "needs_more_info" && String(notifyState.needsInfoSentAt ?? "").trim()) return;
@@ -19596,9 +19599,11 @@ async function notifyBusinessManagerFinanceOutcome(
     markTodoDone(conv.id, noteTodo.id);
   }
   if (sent) {
-    if (status === "declined") notifyState.declinedSentAt = new Date().toISOString();
-    else if (status === "approved") notifyState.approvedSentAt = new Date().toISOString();
-    else notifyState.needsInfoSentAt = new Date().toISOString();
+    applyFinanceOutcomeNotifyState(conv, {
+      lane: "notify_sent",
+      nowIso: new Date().toISOString(),
+      sentStatus: status
+    });
   }
 }
 
@@ -21123,9 +21128,7 @@ async function maybeHandleStaffOutcomeSms(event: InboundMessageEvent): Promise<{
         reasonText,
         sourceMessageId
       );
-      const notifyState = ((conv as any).financeOutcomeNotify = (conv as any).financeOutcomeNotify ?? {});
-      notifyState.updatedAt = nowIso();
-      notifyState.outcomePromptResolvedAt = nowIso();
+      applyFinanceOutcomeNotifyState(conv, { lane: "staff_sms_resolved", nowIso: nowIso() });
       markOutcomeRelatedTodosDone(conv, { includeFinance: true });
       saveConversation(conv);
       await flushConversationStore();
@@ -21145,9 +21148,7 @@ async function maybeHandleStaffOutcomeSms(event: InboundMessageEvent): Promise<{
         cleanedText || body
       )
     ) {
-      const notifyState = ((conv as any).financeOutcomeNotify = (conv as any).financeOutcomeNotify ?? {});
-      notifyState.updatedAt = nowIso();
-      notifyState.outcomePendingAt = nowIso();
+      applyFinanceOutcomeNotifyState(conv, { lane: "staff_sms_pending", nowIso: nowIso() });
       addTodo(
         conv,
         "note",
@@ -39494,12 +39495,8 @@ app.post("/public/appointment/outcome", upload.none(), async (req, res) => {
   const financeOutcomeRaw = String(req.body?.financeOutcome ?? "").trim().toLowerCase();
   if (isFinanceOutcomeTokenForConversation(conv, token) && financeOutcomeRaw) {
     const nowIso = new Date().toISOString();
-    const notifyState = ((conv as any).financeOutcomeNotify = (conv as any).financeOutcomeNotify ?? {});
     if (financeOutcomeRaw === "pending") {
-      notifyState.status = "pending";
-      notifyState.pendingAt = nowIso;
-      notifyState.outcomePromptRespondedAt = nowIso;
-      notifyState.updatedAt = nowIso;
+      applyFinanceOutcomeNotifyState(conv, { lane: "public_link_pending", nowIso });
       addTodo(
         conv,
         "note",
@@ -39529,8 +39526,7 @@ app.post("/public/appointment/outcome", upload.none(), async (req, res) => {
       note || undefined,
       `public_finance_outcome:${token}`
     );
-    notifyState.outcomePromptRespondedAt = nowIso;
-    notifyState.updatedAt = nowIso;
+    applyFinanceOutcomeNotifyState(conv, { lane: "public_link_resolved", nowIso });
     markOutcomeRelatedTodosDone(conv, { includeFinance: true });
     saveConversation(conv);
     await flushConversationStore();

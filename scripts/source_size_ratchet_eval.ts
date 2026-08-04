@@ -169,7 +169,11 @@ const CEILINGS: Ceiling[] = [
     // an un-refereed fourth copy is what the next hand-rolled fifth one would have been modelled on.
     // REBASE NOTE (ROUTINE_CONTRACT rule 3, the #418 trap): authored against a 71_333 main and
     // proposed 71_332; #511 landed -2 first, so this is re-derived on the INTEGRATED tree.
-    max: 71_330,
+    // 71_330 -> 71_315. The finance-outcome-NOTIFY un-stacking: the seven places that hand-wrote
+    // the business-manager notification record became calls to applyFinanceOutcomeNotifyState.
+    // -4 from the wiring itself, and -11 more because main had already fallen below the ceiling —
+    // taken at the REAL count on the integrated tree, never at either branch's.
+    max: 71_315,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
