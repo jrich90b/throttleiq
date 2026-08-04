@@ -627,7 +627,25 @@ export type CanaryMeasurement = {
   /** A runaway: terminal on sight, no run-length rule applies. */
   fatal?: boolean;
   reason: string;
+  /** Which judging rule produced this verdict. Missing = v1. See CANARY_JUDGE_RULE_VERSION. */
+  ruleVersion?: number;
 };
+
+/**
+ * THE VERSION OF THE RULE THAT JUDGES A SLICE. Bump it whenever a change alters what a counter
+ * MEANS, so that verdicts recorded under the old meaning stop being scored.
+ *
+ * Why this exists, concretely. A slice covering 08-03 10:11Z-18:11Z was judged `fail` at
+ * 08-04 04:32Z with "drafting collapsed 2.33 -> 0 — the agent went quiet", off 16 customer sends
+ * and 0 drafts. PR #504 landed at 08-04 08:39Z — four hours LATER — precisely because an approved
+ * draft that gets sent was not being counted as a draft. So a BUSY slice read as a silent agent.
+ * The verdict was a phantom, but it still held one of the two tolerated failures AND had reset the
+ * consecutive-pass streak, so one more phantom would have flipped the canary to REGRESSED and
+ * `judge --act` would have reverted a healthy deploy on evidence we already knew was wrong.
+ *
+ * v1 -> v2 (PR #504): `draftsProduced` now counts a send that began life as an approved draft.
+ */
+export const CANARY_JUDGE_RULE_VERSION = 2;
 
 export type CanaryProgressConfig = {
   /** How long each measured slice is. */
@@ -795,13 +813,32 @@ export type CanaryProgressDecision = {
  * overnight stretch must not undo three clean daytime slices — treating silence as evidence is
  * exactly the false-green this module exists to avoid, and treating it as a failure would revert
  * good deploys every night.
+ *
+ * A VERDICT FROM A SUPERSEDED RULE IS NEUTRAL TOO, and for the same reason: it is not evidence in
+ * EITHER direction, so it is downgraded to inconclusive here rather than scored. Deliberately
+ * SYMMETRIC — a stale `pass` is neutralised as well as a stale `fail`, and the pass half is the one
+ * that matters most, because a stale pass promoting to HEALTHY is what would unlock a behaviour
+ * deploy on a measurement nothing stands behind. A `fatal` runaway is exempt: it is a raw send-rate
+ * count that no counting-rule change can invalidate, and it stays terminal on sight — the downgrade
+ * carries `fatal` through untouched, and the runaway check below reads that flag rather than the
+ * status, so a stale runaway still regresses. That is why there is no `!m.fatal` guard in the map:
+ * it would be a second copy of an invariant already enforced, and one no test could ever break.
  */
 export function decideCanaryProgress(input: {
   measurements: CanaryMeasurement[];
   config?: CanaryProgressConfig;
 }): CanaryProgressDecision {
   const config = input.config ?? DEFAULT_CANARY_PROGRESS;
-  const measurements = Array.isArray(input.measurements) ? input.measurements : [];
+  const recorded = Array.isArray(input.measurements) ? input.measurements : [];
+  const measurements = recorded.map(m =>
+    m.status !== "inconclusive" && (m.ruleVersion ?? 1) < CANARY_JUDGE_RULE_VERSION
+      ? {
+          ...m,
+          status: "inconclusive" as CanaryMeasurementStatus,
+          reason: `${m.reason} [not scored: judged under rule v${m.ruleVersion ?? 1}, now v${CANARY_JUDGE_RULE_VERSION}]`
+        }
+      : m
+  );
 
   const passes = measurements.filter(m => m.status === "pass").length;
   const failures = measurements.filter(m => m.status === "fail").length;
