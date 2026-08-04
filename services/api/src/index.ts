@@ -14,6 +14,7 @@ import OpenAI, { toFile } from "openai";
 import { google } from "googleapis";
 import sharp from "sharp";
 import { orchestrateInbound, evaluateTestRideInventoryGate, buildBlockedTestRideInventoryDraft } from "./domain/orchestrator.js";
+import { resolveWatchOptOutOutcome } from "./domain/watchOptOutTurn.js";
 import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildWatchAvailableReply, buildCholoWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, resolveIntroducedOwnerFirstName, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, hasCustomerReceivedOutbound, hasRecentDeliveredHumanOutbound } from "./domain/agentVoice.js";
 import {
   postSaleVehicleIsNew,
@@ -519,6 +520,9 @@ import {
   applyInventoryWatchArm,
   applyInventoryWatchDisarm,
   applyFinanceOutcomeNotifyState,
+  applyAppointmentPromptRecord,
+  applyInventoryWatchExactness,
+  applyInventoryWatchListNormalization,
   applyCloseoutReversal,
   applyAppointmentConfirmRecord,
   clearAppointmentStaffPromptState
@@ -960,6 +964,8 @@ import {
   applyAppointmentAttribution,
   applySoldCloseout,
   applyLeadCloseout,
+  armPendingCloseout,
+  applyPendingCloseoutOnSend,
   resolveNoShowFollowUpDueAt,
   pauseFollowUpCadence,
   stopFollowUpCadence,
@@ -3189,25 +3195,9 @@ function watchOptOutConfidenceMin(): number {
   return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.7;
 }
 
-// Cheap pre-filter so the watch-opt-out parser only runs on disinterest/opt-out-ish phrasings. A gate,
-// NOT comprehension: a hint miss falls through to existing behavior; the parser owns the decision.
-const WATCH_OPT_OUT_HINT_RE =
-  /\b(not interested|no longer|take me off|stop (the )?alert|stop notif|stop (let|text)|unsubscrib|all set|already (bought|got|purchased)|found (one|something)|no thanks|not looking|don'?t need|cancel (the )?(watch|alert)|opt[-\s]?out)\b/i;
-function watchOptOutHint(text: string): boolean {
-  const t = String(text ?? "").trim();
-  if (!t) return false;
-  return WATCH_OPT_OUT_HINT_RE.test(t);
-}
-
-function buildWatchOptOutAck(): string {
-  return "No problem — I'll take you off the alerts for that one. Just text me anytime if you want back on.";
-}
-
-// Shared by BOTH /webhooks/twilio and /conversations/:id/regenerate (route-parity law). PAUSES the
-// customer's inventory watch (so the watch-fire engine stops notifying) + stops the related cadence,
-// and returns a brief ack — ONLY when the conv has an ACTIVE watch AND a confident, explicit watch
-// opt-out is detected; otherwise null so existing handling runs. Lighter than a full disposition
-// closeout (keeps them as a lead, just off the alerts).
+// Shared by BOTH /webhooks/twilio and /conversations/:id/regenerate (route-parity law). The read and
+// the reply live in domain/watchOptOutTurn.ts — including why the old keyword pre-filter is gone
+// (Mark Kocsis +17168609533). Here we only apply the side effects the outcome asks for.
 async function resolveWatchOptOutReply(
   conv: Conversation | null | undefined,
   inboundText: string,
@@ -3215,26 +3205,32 @@ async function resolveWatchOptOutReply(
 ): Promise<string | null> {
   const text = String(inboundText ?? "").trim();
   if (!text || !conv) return null;
-  if (!hasActiveInventoryWatch(conv)) return null; // nothing to remove
-  if (!watchOptOutHint(text)) return null; // pre-filter; miss => existing behavior
+  if (!hasActiveInventoryWatch(conv)) return null; // nothing to remove — a STATE gate, not a word gate
   const parse = await safeLlmParse("watch_opt_out_parser", () =>
     parseWatchOptOutWithLLM({ text, history: buildHistory(conv, 8) })
   );
   if (process.env.LLM_WATCH_OPT_OUT_PARSER_DEBUG === "1" && parse) {
     console.log("[llm-watch-opt-out-parse]", { convId: conv.id, ...parse });
   }
-  const decision = decideWatchOptOutTurn({
+  const outcome = resolveWatchOptOutOutcome({
     hasActiveWatch: true,
-    parserAccepted: !!parse,
-    intent: parse?.intent ?? null,
-    confidence: parse?.confidence ?? 0,
+    parse,
     confidenceMin: watchOptOutConfidenceMin()
   });
-  if (decision.kind !== "pause_watch") return null;
-  const paused = markInventoryWatchOptOut(conv, "watch_opt_out");
-  stopFollowUpCadence(conv, "watch_opt_out");
-  recordRouteOutcome(scope, "inventory_watch_opt_out", { convId: conv.id, leadKey: conv.leadKey, paused });
-  return buildWatchOptOutAck();
+  if (outcome.kind === "none") return null;
+  // The watch comes off NOW, not on send: alerts running for someone who just bought is the exact
+  // spam this path exists to stop, and it is reversible if they text back. The CLOSE is what waits
+  // for a real send (Joe, 2026-08-04) — armed here, fired by the send route.
+  const paused = markInventoryWatchOptOut(conv, outcome.reason);
+  stopFollowUpCadence(conv, outcome.reason);
+  if (outcome.closeAfterSend) armPendingCloseout(conv, outcome.reason);
+  recordRouteOutcome(scope, `inventory_watch_${outcome.reason}`, {
+    convId: conv.id,
+    leadKey: conv.leadKey,
+    paused,
+    closeArmed: outcome.closeAfterSend
+  });
+  return outcome.reply;
 }
 
 // Post-sale ownership loss: confidence floor (default 0.7 — a wrongful stop drops courtesy/warranty
@@ -7296,16 +7292,8 @@ async function processInventoryWatchlist(targetConvId?: string, opts?: { include
       }
     }
     for (const conv of convs) {
-      const watches =
-        conv.inventoryWatches?.length
-          ? conv.inventoryWatches
-          : conv.inventoryWatch
-            ? [conv.inventoryWatch]
-            : [];
+      const { watches } = applyInventoryWatchListNormalization(conv);
       if (!watches.length) continue;
-      if (!conv.inventoryWatches && conv.inventoryWatch) {
-        conv.inventoryWatches = [conv.inventoryWatch];
-      }
       if (conv.status === "closed") continue;
       // Durable opt-out: a customer who asked us to stop alerting them is off
       // the watch alerts regardless of any later (re-)created active watch.
@@ -7570,16 +7558,8 @@ async function notifyInventoryWatchersForAvailableItem(
     // A held lead (manual_handoff or paused_indefinite "hold off") is off
     // proactive outreach until they re-engage — never fire a watch alert at them.
     if (isProactiveContactPaused(conv)) continue;
-    const watches =
-      conv.inventoryWatches?.length
-        ? conv.inventoryWatches
-        : conv.inventoryWatch
-          ? [conv.inventoryWatch]
-          : [];
+    const { watches } = applyInventoryWatchListNormalization(conv);
     if (!watches.length) continue;
-    if (!conv.inventoryWatches && conv.inventoryWatch) {
-      conv.inventoryWatches = [conv.inventoryWatch];
-    }
     const matchedWatch = watches.find((watch: InventoryWatch) => {
       if (!watch || watch.status === "paused") return false;
       if (
@@ -25758,9 +25738,7 @@ async function deriveContextNoteWatches(
       }
       // exactness is derived AFTER the guards — a dropped year pin turns year_model back into
       // model_only, and the literal above already defaults to model_only.
-      if (watch.yearMin && watch.yearMax) watch.exactness = "model_range";
-      else if (watch.year && (watch.color || watch.trim)) watch.exactness = "exact";
-      else if (watch.year) watch.exactness = "year_model";
+      applyInventoryWatchExactness(watch, { recognisesYearRange: true, trimCountsAsDistinguishing: true });
       watches.push(watch);
     }
   }
@@ -30897,9 +30875,7 @@ function parseInventoryWatchPreference(
     watch.maxPrice = swap;
   }
 
-  if (watch.yearMin && watch.yearMax) watch.exactness = "model_range";
-  else if (watch.year && (watch.color || watch.trim)) watch.exactness = "exact";
-  else if (watch.year) watch.exactness = "year_model";
+  applyInventoryWatchExactness(watch, { recognisesYearRange: true, trimCountsAsDistinguishing: true });
 
   const hasYearInfo = !!watch.year || (!!watch.yearMin && !!watch.yearMax);
   if (!hasYearInfo && !anyYear && pending.year) {
@@ -31050,8 +31026,7 @@ async function buildInventoryWatchFromConfirmedOutboundOffer(
     createdAt: new Date().toISOString(),
     note: "confirmed_staff_watch_offer"
   };
-  if (watch.year && (watch.color || watch.trim)) watch.exactness = "exact";
-  else if (watch.year) watch.exactness = "year_model";
+  applyInventoryWatchExactness(watch, { recognisesYearRange: false, trimCountsAsDistinguishing: true });
   return watch;
 }
 
@@ -31095,8 +31070,7 @@ async function buildInventoryWatchFromAcknowledgementIntent(args: {
     createdAt: new Date().toISOString(),
     note: "confirmed_inventory_watch_acknowledgement"
   };
-  if (watch.year && (watch.color || watch.trim)) watch.exactness = "exact";
-  else if (watch.year) watch.exactness = "year_model";
+  applyInventoryWatchExactness(watch, { recognisesYearRange: false, trimCountsAsDistinguishing: true });
   return watch;
 }
 
@@ -34603,6 +34577,14 @@ async function processAppointmentConfirmations() {
       triggeredAt: new Date().toISOString(),
       scheduledFor: appt.whenIso
     };
+    // All six delivery branches below mark the ask the same way — the mark IS the "only ask once"
+    // rule (the guard above skips any appointment whose confirmation.sentAt is set).
+    const markConfirmationAsked = () =>
+      applyAppointmentPromptRecord(conv, {
+        lane: "confirmation_reminder_sent",
+        nowIso: new Date().toISOString(),
+        triggerMeta
+      });
     console.log("[appt-confirm] reminder trigger", {
       convId: conv.id,
       leadRef: conv?.lead?.leadRef ?? null,
@@ -34620,18 +34602,10 @@ async function processAppointmentConfirmations() {
           windowMs: 10 * 60 * 1000
         })
       ) {
-        appt.confirmation = {
-          sentAt: new Date().toISOString(),
-          status: "pending",
-          ...triggerMeta
-        };
+        markConfirmationAsked();
         continue;
       }
-      appt.confirmation = {
-        sentAt: new Date().toISOString(),
-        status: "pending",
-        ...triggerMeta
-      };
+      markConfirmationAsked();
       appendOutbound(conv, from ?? "salesperson", toNumber, smsMessage, "draft_ai");
     } else if (from && accountSid && authToken && toNumber.startsWith("+")) {
       try {
@@ -34641,20 +34615,12 @@ async function processAppointmentConfirmations() {
             windowMs: 10 * 60 * 1000
           })
         ) {
-          appt.confirmation = {
-            sentAt: new Date().toISOString(),
-            status: "pending",
-            ...triggerMeta
-          };
+          markConfirmationAsked();
           continue;
         }
         const client = twilio(accountSid, authToken);
         const msg = await client.messages.create({ from, to: toNumber, body: smsMessage });
-        appt.confirmation = {
-          sentAt: new Date().toISOString(),
-          status: "pending",
-          ...triggerMeta
-        };
+        markConfirmationAsked();
         appendOutbound(conv, from, toNumber, smsMessage, "twilio", msg.sid);
         queueTlpLogForConversation(conv); // [tlp-autosend-log] appointment-confirm auto-send → CRM log
       } catch (e: any) {
@@ -34668,18 +34634,10 @@ async function processAppointmentConfirmations() {
           windowMs: 10 * 60 * 1000
         })
       ) {
-        appt.confirmation = {
-          sentAt: new Date().toISOString(),
-          status: "pending",
-          ...triggerMeta
-        };
+        markConfirmationAsked();
         continue;
       }
-      appt.confirmation = {
-        sentAt: new Date().toISOString(),
-        status: "pending",
-        ...triggerMeta
-      };
+      markConfirmationAsked();
       appendUndeliveredOutbound(conv, "salesperson", toNumber, smsMessage);
       queueTlpLogForConversation(conv); // [tlp-autosend-log] appointment-confirm fallback auto-send → CRM log
     }
@@ -34936,7 +34894,7 @@ async function processAppointmentQuestions() {
     const whenText = formatSlotLocal(appt.whenIso, cfg.timezone);
     const text = `Did the customer show for the ${whenText} appointment?`;
     addInternalQuestion(conv.id, conv.leadKey, text, "attendance");
-    appt.attendanceQuestionedAt = now.toISOString();
+    applyAppointmentPromptRecord(conv, { lane: "attendance_question_asked", nowIso: now.toISOString() });
   }
 }
 
@@ -41970,8 +41928,7 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
             watch.minPrice = watch.maxPrice;
             watch.maxPrice = swap;
           }
-          if (watch.year && watch.color) watch.exactness = "exact";
-          else if (watch.year) watch.exactness = "year_model";
+          applyInventoryWatchExactness(watch, { recognisesYearRange: false, trimCountsAsDistinguishing: false });
           return watch;
         })
         .filter(Boolean) as InventoryWatch[];
@@ -42437,9 +42394,7 @@ app.post("/conversations/:id/watch", async (req, res) => {
           watch.minPrice = watch.maxPrice;
           watch.maxPrice = swap;
         }
-        if (watch.yearMin && watch.yearMax) watch.exactness = "model_range";
-        else if (watch.year && watch.color) watch.exactness = "exact";
-        else if (watch.year) watch.exactness = "year_model";
+        applyInventoryWatchExactness(watch, { recognisesYearRange: true, trimCountsAsDistinguishing: false });
         return watch;
       })
       .filter(Boolean) as InventoryWatch[];
@@ -52577,6 +52532,22 @@ app.post("/conversations/:id/send", async (req, res) => {
       }
       markAppointmentAcknowledged(conv);
     }
+    // A closeout armed by the acquisition turn fires HERE and only here — on a real, DELIVERED
+    // outbound (Joe, 2026-08-04: "after we send draft and it goes through it should close the
+    // lead"). `delivered: false` means the text never reached them, so the lead stays open and the
+    // arm stays put for the retry. The referee still refuses if the customer has written since.
+    if (args.delivered) {
+      const closeoutDecision = applyPendingCloseoutOnSend(conv, { nowIso: new Date().toISOString() });
+      if (closeoutDecision.kind === "close_lead") {
+        recordRouteOutcome("manual", "pending_closeout_fired_on_send", {
+          convId: conv.id,
+          leadKey: conv.leadKey,
+          channel: "sms",
+          closedReason: conv.closedReason ?? null,
+          why: closeoutDecision.why
+        });
+      }
+    }
   };
   const finalizeManualSendDraftState = (opts?: { clearEmailDraft?: boolean; preserveSmsDrafts?: boolean }) => {
     if (!opts?.preserveSmsDrafts) {
@@ -61655,8 +61626,7 @@ if (authToken && signature) {
               status: "active",
               createdAt: nowIsoValue
             };
-            if (watch.year && (watch.color || watch.trim)) watch.exactness = "exact";
-            else if (watch.year) watch.exactness = "year_model";
+            applyInventoryWatchExactness(watch, { recognisesYearRange: false, trimCountsAsDistinguishing: true });
             pref = { action: "set", watch };
           }
           if (pref.action === "set" && pref.watch) {
@@ -63130,11 +63100,9 @@ if (authToken && signature) {
     const isNo = /\b(n|no|nope|nah|cancel|reschedule)\b/.test(text);
     if (isYes || isNo) {
       let tz = "America/New_York";
-      conv.appointment.confirmation = {
-        ...conv.appointment.confirmation,
-        status: isYes ? "confirmed" : "declined",
-        respondedAt: new Date().toISOString()
-      };
+      applyAppointmentPromptRecord(conv, {
+        lane: "confirmation_answer", nowIso: new Date().toISOString(), answer: isYes ? "yes" : "no"
+      });
       if (isNo) {
         try {
           const cfg = await getSchedulerConfigHot();
@@ -64126,8 +64094,7 @@ if (authToken && signature) {
           status: "active",
           createdAt: new Date().toISOString()
         };
-        if (watch.year && (watch.color || watch.trim)) watch.exactness = "exact";
-        else if (watch.year) watch.exactness = "year_model";
+        applyInventoryWatchExactness(watch, { recognisesYearRange: false, trimCountsAsDistinguishing: true });
         pref = { action: "set", watch };
       }
       if (pref.action === "set" && pref.watch) {
@@ -67438,8 +67405,7 @@ if (authToken && signature) {
           status: "active",
           createdAt: new Date().toISOString()
         };
-        if (watch.year && (watch.color || watch.trim)) watch.exactness = "exact";
-        else if (watch.year) watch.exactness = "year_model";
+        applyInventoryWatchExactness(watch, { recognisesYearRange: false, trimCountsAsDistinguishing: true });
         pref = { action: "set", watch };
       }
       if (pref.action === "clarify") {
@@ -68224,8 +68190,7 @@ if (authToken && signature) {
           status: "active",
           createdAt: new Date().toISOString()
         };
-        if (watch.year && (watch.color || watch.trim)) watch.exactness = "exact";
-        else if (watch.year) watch.exactness = "year_model";
+        applyInventoryWatchExactness(watch, { recognisesYearRange: false, trimCountsAsDistinguishing: true });
         pref = { action: "set", watch };
       }
       if (pref.action === "set" && pref.watch) {

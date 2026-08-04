@@ -96,8 +96,19 @@ restore_if_backup_exists() {
   VOICE_FEEDBACK_SINCE_HOURS="${FAST_LOOP_SINCE_HOURS}" npm run voice_feedback:mine -- --out-dir "$VOICE_FEEDBACK_OUT_DIR"
 
   echo "[feedback-hourly] step=gold_examples_harvest"   # confirmed-correct replies -> approve-first promote candidates (deterministic, free)
+  # WINDOW = 90 DAYS, NOT 7 (Joe, 2026-08-04). This harvest REBUILDS the candidates file every hour,
+  # so the window is not a lookback — it IS the corpus size. At --since-hours=168 the golden corpus
+  # was a rolling WEEK: 89 examples, 20 in the eval hold-out, and at n=20 a 9/20 score means the
+  # agent's true rate is anywhere from 26% to 66%. That is too wide to set a floor on, so the one
+  # number meant to answer "is the agent getting better" could not answer it. 90 days yields 701
+  # candidates / 117 in the hold-out (measured), narrowing the interval to roughly +/-9.
+  # Deterministic and free — no LLM — so the wider scan costs seconds, not money.
+  # The hold-out is STABLE across a growing corpus (splitFor(pairKey)), so widening adds examples
+  # without reshuffling which side existing ones sit on.
+  # If anyone narrows this again, the gold gate catches it: GOLD_SCORE_MIN_SCORED fails the release
+  # CLOSED once the sample goes thin, rather than quietly scoring a handful of turns.
   mkdir -p "$REPORT_ROOT/gold_examples"
-  CONVERSATIONS_DB_PATH="$CONVERSATIONS_DB_PATH" MANUAL_REPLY_EXAMPLES_PATH="$MANUAL_REPLY_EXAMPLES_PATH" REPORT_ROOT="$REPORT_ROOT" npm run gold_examples:audit -- --since-hours=168 --limit=200 > /dev/null 2>&1 || true
+  CONVERSATIONS_DB_PATH="$CONVERSATIONS_DB_PATH" MANUAL_REPLY_EXAMPLES_PATH="$MANUAL_REPLY_EXAMPLES_PATH" REPORT_ROOT="$REPORT_ROOT" npm run gold_examples:audit -- --since-hours="${GOLD_HARVEST_SINCE_HOURS:-2160}" --limit="${GOLD_HARVEST_LIMIT:-5000}" > /dev/null 2>&1 || true
 
   TONE_BACKUP_PATH="$BACKUP_DIR/deterministic_tone_rules.before.json"
   MANUAL_BACKUP_PATH="$BACKUP_DIR/manual_reply_examples.before.json"

@@ -42,6 +42,7 @@ import {
   isTestLeadEmail
 } from "../services/api/src/domain/scoringExclusions.ts";
 import { isPlaceholderModel } from "../services/api/src/domain/modelDeflection.ts";
+import { classifyReplayErrorCause } from "../services/api/src/domain/replayFidelity.ts";
 import { describeWalkInNoteProvenance } from "../services/api/src/domain/walkInFollowUpTopic.ts";
 
 export type ReplayRow = {
@@ -65,6 +66,27 @@ export type ReplayRow = {
 
 // Tracked quality trend target — aligned with the live tone-gate floor (85%). Never blocking.
 export const TREND_PASS_RATE_TARGET = 0.85;
+
+/**
+ * Fraction of ATTEMPTED turns that must have produced a real verdict for the sweep to be able to
+ * clear the gate at all.
+ *
+ * A harness error is no evidence either way, so a handful of them must NOT block the gate — doing
+ * that is the bug this replaces, where a deploy running `npm ci` mid-sweep blocked every merge.
+ * But "no evidence" must never round UP to "clean" either (same anti-flattery rule the readiness
+ * scorecard uses, where NOT_MEASURED blocks the bar): a sweep that lost most of its corpus has not
+ * validated anything, and its PASS would be a lie. So incidental loss is tolerated and reported,
+ * while a sweep below this floor is INCOMPLETE and cannot pass. The 08-04 incident sits at
+ * 671/700 = 95.9%, deliberately just inside — 671 real verdicts ARE evidence.
+ */
+export const COVERAGE_FLOOR = 0.95;
+
+/** Share of attempted turns that yielded a real verdict. 1 when nothing was attempted. */
+export function computeCoverage(measured: number, harnessErrors: number): number {
+  const attempted = measured + harnessErrors;
+  if (attempted <= 0) return 1;
+  return Math.round((measured / attempted) * 1000) / 1000;
+}
 
 export type TurnScore = {
   turnKey: string;
@@ -478,18 +500,29 @@ export type ScoreAdjustment =
   | "excluded_anachronistic"
   | "design_accepted_handoff"
   | "deflection_downgraded"
-  | "nondeterministic_recovered";
+  | "nondeterministic_recovered"
+  | "excluded_harness_error";
 
 /**
  * Apply the design-policy post-classification to a raw score (fidelity v2). Pure + auditable:
  * every adjustment is named on the score so the summary can count them — nothing is silently
- * dropped. Order: test leads are excluded outright; a policy-correct department handoff that the
- * judge flagged becomes a PASS (accepted design); a deflection-with-commitment loses CRITICAL
- * status (quality gap for the answer-don't-deflect program, not a release blocker).
+ * dropped. Order: test leads are excluded outright; a turn the HARNESS never managed to run is
+ * excluded as unmeasured; a policy-correct department handoff that the judge flagged becomes a
+ * PASS (accepted design); a deflection-with-commitment loses CRITICAL status (quality gap for
+ * the answer-don't-deflect program, not a release blocker).
  */
 export function adjustScore(score: TurnScore, row: ReplayRow): TurnScore & { adjustment: ScoreAdjustment; excluded?: boolean } {
   if (isTestLeadRow(row)) {
     return { ...score, adjustment: "excluded_test_lead", excluded: true };
+  }
+  // The temporary API never booted / never loaded the prepared thread, so this turn produced NO
+  // evidence about the agent in either direction. Scoring it would make an ops incident (a deploy
+  // rewriting node_modules mid-sweep) read as a release-blocking CRITICAL and mint a per-conversation
+  // "draft: (none)" finding against a reply the agent was never asked to write — see
+  // classifyReplayErrorCause. Excluded, never silently: counted as summary.harnessErrors, and if
+  // enough turns are lost the whole sweep stops being able to clear the gate (COVERAGE_FLOOR).
+  if (score.verdict === "error" && classifyReplayErrorCause(row.error) === "harness") {
+    return { ...score, critical: false, adjustment: "excluded_harness_error", excluded: true };
   }
   if (!score.pass && isExpectedSilence(row)) {
     return { ...score, pass: true, critical: false, adjustment: "design_accepted_handoff" };
@@ -650,7 +683,7 @@ export type FlywheelFinding = {
 };
 
 export function buildFindings(
-  scores: TurnScore[],
+  scores: Array<TurnScore & { adjustment?: ScoreAdjustment; excluded?: boolean }>,
   regressions: TurnScore[],
   atIso: string,
   gradedAtCommit?: string | null
@@ -659,6 +692,10 @@ export function buildFindings(
   const out: FlywheelFinding[] = [];
   for (const s of scores) {
     if (s.pass) continue;
+    // Belt and braces with main()'s `!s.excluded` filter: a turn the harness never ran has no
+    // conversation-level story to tell, so it must not mint a "draft: (none)" finding blaming the
+    // agent — regardless of which caller assembled this list.
+    if (s.excluded === true || s.adjustment === "excluded_harness_error") continue;
     const isRegression = regressionKeys.has(s.turnKey);
     const dimension: FlywheelFinding["dimension"] =
       s.verdict === "error" ? "corpus_replay_error" : isRegression ? "corpus_replay_regression" : "corpus_replay_judge_fail";
@@ -684,6 +721,10 @@ export type FlywheelSummary = {
   totalTurns: number;
   excludedTestLeads: number;
   excludedAnachronistic: number;
+  /** Turns the harness never managed to run (boot/infra), so they carry no verdict. */
+  harnessErrors: number;
+  /** measured / attempted. Below COVERAGE_FLOOR the sweep cannot clear the gate. */
+  coverage: number;
   designAccepted: number;
   deflectionsDowngraded: number;
   judged: number;
@@ -699,7 +740,8 @@ export type FlywheelSummary = {
   thresholds: {
     gate_criticals_zero: boolean; // BLOCKING
     gate_regressions_zero: boolean; // BLOCKING
-    gate_pass: boolean; // both blocking bars green this sweep
+    gate_coverage_complete: boolean; // BLOCKING — too much of the corpus went unmeasured to judge
+    gate_pass: boolean; // all three blocking bars green this sweep
     trend_pass_rate: number; // tracked vs TREND_PASS_RATE_TARGET, never blocking
     trend_on_target: boolean;
   };
@@ -856,6 +898,7 @@ async function main() {
   });
   const excludedTestLeads = adjustedAll.filter(s => s.adjustment === "excluded_test_lead").length;
   const excludedAnachronistic = adjustedAll.filter(s => s.adjustment === "excluded_anachronistic").length;
+  const harnessErrors = adjustedAll.filter(s => s.adjustment === "excluded_harness_error").length;
   const scores = adjustedAll.filter(s => !s.excluded);
   const designAccepted = scores.filter(s => s.adjustment === "design_accepted_handoff").length;
   const deflectionsDowngraded = scores.filter(s => s.adjustment === "deflection_downgraded").length;
@@ -951,6 +994,8 @@ async function main() {
     totalTurns: scores.length,
     excludedTestLeads,
     excludedAnachronistic,
+    harnessErrors,
+    coverage: computeCoverage(scores.length, harnessErrors),
     designAccepted,
     deflectionsDowngraded,
     judged,
@@ -965,11 +1010,13 @@ async function main() {
     thresholds: (() => {
       const criticalsZero = scores.every(s => !s.critical);
       const regressionsZero = confirmedRegressions.length === 0;
+      const coverageComplete = computeCoverage(scores.length, harnessErrors) >= COVERAGE_FLOOR;
       const rate = scores.length ? (scores.length - failed.length) / scores.length : 1;
       return {
         gate_criticals_zero: criticalsZero,
         gate_regressions_zero: regressionsZero,
-        gate_pass: criticalsZero && regressionsZero,
+        gate_coverage_complete: coverageComplete,
+        gate_pass: criticalsZero && regressionsZero && coverageComplete,
         trend_pass_rate: Math.round(rate * 1000) / 1000,
         trend_on_target: rate >= TREND_PASS_RATE_TARGET
       };
@@ -984,8 +1031,11 @@ async function main() {
   console.log(
     `flywheel: ${summary.totalTurns} turns, ${summary.judged} judged (${summary.judgeSkippedByCap} over cap), ` +
       `pass ${summary.passed}/${summary.totalTurns} (${(summary.passRate * 100).toFixed(1)}%), ` +
-      `criticals ${summary.criticals}, regressions ${summary.regressions} — ` +
-      `GATE:${summary.thresholds.gate_pass ? "PASS" : "fail"} (criticals ${summary.thresholds.gate_criticals_zero ? "ok" : "BLOCK"}, regressions ${summary.thresholds.gate_regressions_zero ? "ok" : "BLOCK"}) ` +
+      `criticals ${summary.criticals}, regressions ${summary.regressions}` +
+      (summary.harnessErrors
+        ? `, UNMEASURED ${summary.harnessErrors} turn(s) lost to harness/boot failures (coverage ${(summary.coverage * 100).toFixed(1)}%)`
+        : "") +
+      ` — GATE:${summary.thresholds.gate_pass ? "PASS" : "fail"} (criticals ${summary.thresholds.gate_criticals_zero ? "ok" : "BLOCK"}, regressions ${summary.thresholds.gate_regressions_zero ? "ok" : "BLOCK"}, coverage ${summary.thresholds.gate_coverage_complete ? "ok" : "BLOCK"}) ` +
       `TREND:${(summary.thresholds.trend_pass_rate * 100).toFixed(1)}% ${summary.thresholds.trend_on_target ? "on-target" : `below ${TREND_PASS_RATE_TARGET * 100}%`}`
   );
 }
@@ -1445,10 +1495,50 @@ function selfTest() {
     "an addressed verdict is never re-classified"
   );
 
+  // ── HARNESS errors are unmeasured, not agent criticals (2026-08-04) ───────────────────
+  // A deploy running `npm ci` mid-sweep killed 29 consecutive boots; they scored as 9 of the
+  // 12 criticals and blocked the gate, and each minted a "draft: (none)" P1 against a reply
+  // the agent was never asked to write.
+  const bootFailRow = mk({
+    draft: null,
+    verdict: "error",
+    reviewReasons: ["shadow replay failed"],
+    error: "temporary API exited early (1): Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'dotenv'"
+  });
+  const bootFailScore = adjustScore(scoreTurn(bootFailRow, null), bootFailRow);
+  assert(bootFailScore.excluded === true, "a harness boot failure is excluded from the scored corpus");
+  assert(bootFailScore.adjustment === "excluded_harness_error", "and it is named, never silently dropped");
+  assert(!bootFailScore.critical, "a harness boot failure must not count as a release-blocking critical");
+  assert(
+    buildFindings([bootFailScore], [], "2026-08-04T07:53:34.625Z").length === 0,
+    "a turn the harness never ran mints NO conversation-level finding — there is nothing to say about that reply"
+  );
+
+  // An error the classifier does NOT recognise stays the agent's: still critical, still a finding.
+  const agentFailRow = mk({
+    draft: null,
+    verdict: "error",
+    reviewReasons: ["shadow replay failed"],
+    error: "timed out waiting for Twilio shadow job"
+  });
+  const agentFailScore = adjustScore(scoreTurn(agentFailRow, null), agentFailRow);
+  assert(agentFailScore.excluded !== true, "an agent-side error stays in the scored corpus");
+  assert(agentFailScore.critical, "an agent-side error keeps its CRITICAL");
+  assert(
+    buildFindings([agentFailScore], [], "2026-08-04T07:53:34.625Z")[0]?.dimension === "corpus_replay_error",
+    "and it still mints its corpus_replay_error work order"
+  );
+
+  // Coverage: incidental loss is tolerated and reported; a gutted sweep cannot pass.
+  assert(computeCoverage(671, 29) === 0.959, "coverage is measured/attempted (the real 08-04 sweep)");
+  assert(computeCoverage(671, 29) >= COVERAGE_FLOOR, "losing 29 of 700 leaves 671 real verdicts — evidence, not a void");
+  assert(computeCoverage(100, 600) < COVERAGE_FLOOR, "a sweep that lost most of its corpus has validated nothing");
+  assert(computeCoverage(0, 0) === 1, "an empty sweep does not divide by zero");
+
   // prompt builder reachable (shared with the nightly audit — same judging semantics)
   assert(buildIntentJudgePrompt({ convId: "x", at: "t", inboundText: "hi", replyText: "hey", replyKind: "draft", context: [] }).length > 50, "judge prompt builder shared");
 
-  console.log("corpus replay flywheel self-test OK (scoring, baseline diff, findings shape, judge gating)");
+  console.log("corpus replay flywheel self-test OK (scoring, baseline diff, findings shape, judge gating, harness-error exclusion + coverage floor)");
 }
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;

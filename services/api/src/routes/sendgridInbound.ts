@@ -158,7 +158,8 @@ import {
   buildWalkInSpecRecapClause,
   buildWalkInReturnVisitTail,
   formatWalkInReturnDayLabel,
-  formatWalkInFamilyLabel
+  formatWalkInFamilyLabel,
+  resolveWalkInFollowUpSubject
 } from "../domain/walkInFollowUpTopic.js";
 // SHADOW judge on this lane's drafts (Joe Step 2, 2026-08-02) — fire-and-forget, never awaited.
 import { runEmailLaneJudgeShadow } from "../domain/emailLaneJudgeShadow.js";
@@ -2351,6 +2352,7 @@ function buildTrafficLogProWalkInTail(args: {
   step: number;
   comment: string;
   modelLabel?: string | null;
+  yearLabel?: string | null;
   hasPricingFollowupIntent?: boolean;
 }): string | null {
   const step = Math.trunc(Number(args.step));
@@ -2358,7 +2360,16 @@ function buildTrafficLogProWalkInTail(args: {
   const source = String(args.comment ?? "").toLowerCase();
   const inferredModelLabel = String(args.modelLabel ?? "").trim() || extractWalkInModelHint(args.comment) || "";
   const label = formatWatchModelForMessage(inferredModelLabel || "bike");
-  const followUpTopic = extractTrafficLogProFollowUpTopic(args.comment);
+  // The prose span the note yields is a SUGGESTION, not the subject. When a model slot resolved,
+  // the bike is what we follow up about — see resolveWalkInFollowUpSubject (Rick Williamson Jr.,
+  // +17165241170: "I'll follow up about the floor with the 131ci engine").
+  const proseFollowUpTopic = extractTrafficLogProFollowUpTopic(args.comment);
+  const followUpTopic = resolveWalkInFollowUpSubject({
+    proseTopic: proseFollowUpTopic,
+    modelLabel: label,
+    yearLabel: args.yearLabel,
+    proseIsTimingOnly: isTimingOnlyFollowUpTopic(proseFollowUpTopic)
+  });
   const hasFinanceCue =
     /\b(finance|f\s*&\s*i|f and i|credit\s*app|approval|approved|paperwork|contract|lender|bank|credit union|docs?)\b/.test(
       source
@@ -7860,6 +7871,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         step: trafficLogProStep,
         comment: walkInCleanedComment,
         modelLabel,
+        // The follow-up subject wants the year the note actually stated. `yearRangeLabel` only
+        // fills in for a RANGE ("2017-2020"); a note naming one year lands in `singleYear`, which
+        // is how Rick Jr.'s "2021" was in hand and still absent from the sentence. Both are parsed
+        // slots — this local exists so neither the spec recap nor the watch labels shift.
+        yearLabel: yearRangeLabel || (singleYear ? String(singleYear) : ""),
         hasPricingFollowupIntent
       });
       if (tlpStepTail) {

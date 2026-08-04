@@ -1603,12 +1603,23 @@ export function decideDealStatusCheckTurn(
 // spamming, so the floor is moderate; the caller may also escalate a clearly-done customer to the
 // disposition closeout, which pauses the watch anyway.)
 // ---------------------------------------------------------------------------
-export type WatchOptOutTurnKind = "pause_watch" | "none";
+// ACQUISITION ARM (Joe, 2026-08-04 — Mark Kocsis +17168609533). A watch alert drew "Thanks for
+// keeping me in mind but I actually just picked up a 2023 street glide anniversary edition." Telling
+// us they BOUGHT A BIKE is not the same as "stop the alerts", and Joe wants it handled differently:
+// congratulate them, say we are here for anything the bike needs, take them off the watch list, and
+// close the lead ONCE THAT REPLY ACTUALLY GOES OUT. Hence a second kind rather than a flag —
+// `pause_watch` deliberately KEEPS a live lead (they may still buy from us), this one does not.
+//
+// FAIL DIRECTION is stricter here than for pause_watch, because closing a live lead is the expensive
+// mistake: it takes the acquisition intent AND the same confidence floor, and the close is DEFERRED
+// — the caller arms it and only a genuinely SENT acknowledgement fires it. A draft staff discard
+// leaves the lead exactly where it was. Everything unsure still falls to `none`.
+export type WatchOptOutTurnKind = "acknowledge_and_close" | "pause_watch" | "none";
 
 export type WatchOptOutTurnInput = {
   hasActiveWatch: boolean;
   parserAccepted: boolean;
-  intent?: string | null; // "watch_opt_out" | "none"
+  intent?: string | null; // "acquired_vehicle" | "watch_opt_out" | "none"
   confidence: number;
   confidenceMin: number;
 };
@@ -1620,11 +1631,64 @@ export type WatchOptOutTurnDecision = {
 export function decideWatchOptOutTurn(input: WatchOptOutTurnInput): WatchOptOutTurnDecision {
   if (!input.hasActiveWatch) return { kind: "none" }; // nothing to remove
   if (!input.parserAccepted) return { kind: "none" };
-  if (input.intent !== "watch_opt_out") return { kind: "none" };
+  const acquired = input.intent === "acquired_vehicle";
+  if (!acquired && input.intent !== "watch_opt_out") return { kind: "none" };
   if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) {
     return { kind: "none" };
   }
-  return { kind: "pause_watch" };
+  return { kind: acquired ? "acknowledge_and_close" : "pause_watch" };
+}
+
+// --- Deferred closeout, fired by an actual SEND (Joe, 2026-08-04) ------------
+// "After we send draft and it goes through it should close the lead."
+//
+// The close cannot happen when the draft is WRITTEN, because in suggest mode a draft is a proposal —
+// staff may edit it, sit on it, or throw it away. So the acquisition turn ARMS a closeout and the
+// send route fires it. Nothing else may write `conv.status` off the back of this: the firing call
+// goes through `applyLeadCloseout`, the one closeout referee (#484).
+//
+// FAIL DIRECTION: refuse. Every uncertain input leaves the lead OPEN, which is recoverable — a lead
+// that should have closed just sits in the inbox, whereas a wrongly closed one silently stops being
+// worked. The interesting refusal is the third: if the customer has said ANYTHING since we armed,
+// they have re-engaged, and whatever they now want outranks a stale "close after send" note.
+export type PendingCloseoutSendKind = "close_lead" | "none";
+
+export type PendingCloseoutSendInput = {
+  /** Is a closeout armed on this conversation at all? */
+  armed: boolean;
+  /** When it was armed (ms). Non-finite = cannot compare = refuse. */
+  armedAtMs: number;
+  /** The newest INBOUND message time (ms), or null when there is none. */
+  lastInboundAtMs: number | null;
+  /** `conv.status === "closed"` — already done, nothing to fire. */
+  alreadyClosed: boolean;
+};
+
+export type PendingCloseoutSendDecision = {
+  kind: PendingCloseoutSendKind;
+  /** Drop the arm even when we refuse to close — a stale arm must not linger and fire later. */
+  clearArm: boolean;
+  why: string;
+};
+
+export function decidePendingCloseoutOnSend(
+  input: PendingCloseoutSendInput
+): PendingCloseoutSendDecision {
+  if (!input.armed) return { kind: "none", clearArm: false, why: "no closeout is armed on this lead" };
+  if (input.alreadyClosed) {
+    return { kind: "none", clearArm: true, why: "the lead is already closed — drop the stale arm" };
+  }
+  if (!Number.isFinite(input.armedAtMs)) {
+    return { kind: "none", clearArm: true, why: "the arm carries no usable timestamp — refuse and drop it" };
+  }
+  if (input.lastInboundAtMs !== null && input.lastInboundAtMs > input.armedAtMs) {
+    return {
+      kind: "none",
+      clearArm: true,
+      why: "the customer has written since we armed — they re-engaged, so the lead stays open"
+    };
+  }
+  return { kind: "close_lead", clearArm: true, why: "the acknowledgement went out — close the lead" };
 }
 
 // --- Post-sale ownership loss (2026-07-08) -----------------------------------
@@ -6800,4 +6864,251 @@ export function decideFinanceOutcomeNotifyState(
         why: "staff_sms_resolved: the manager texted back a real outcome; the outcome itself is written by outcome_signal"
       };
   }
+}
+
+/**
+ * DID WE ALREADY ASK THIS CUSTOMER ABOUT THIS APPOINTMENT, AND WHAT MARKS THAT WE DID?
+ *
+ * Two prompts hang off a booked appointment and each leaves a mark that stops it repeating:
+ * the 24-hour YES/NO confirmation text (`appointment.confirmation`) and the internal
+ * "did the customer show?" question we put to staff afterwards (`attendanceQuestionedAt`).
+ * EIGHT places used to write those marks by hand — six byte-identical copies of the same
+ * five-line "pending" block inside the reminder sender, the customer's YES/NO reply, and the
+ * attendance ask. They now all ask here.
+ *
+ * WHY THE MARK MATTERS MORE THAN IT LOOKS: `processAppointmentConfirmations` skips any
+ * appointment whose `confirmation.sentAt` is set, so the mark IS the "only ask once" rule. A
+ * lane that forgot to stamp it would re-text the same customer every pass.
+ *
+ * DIVERGENCE 1 — THREE OF THE SIX REMINDER COPIES STAMP "SENT" WITHOUT SENDING. Each delivery
+ * mode (draft/suggest, live Twilio, undelivered fallback) first checks `isRecentDuplicateOutbound`
+ * and, on a hit, stamps the record and `continue`s WITHOUT appending an outbound. Preserved,
+ * because a duplicate hit means the same text went out through another path inside 10 minutes —
+ * the customer HAS been asked. Named so nobody later "fixes" it into re-texting.
+ *
+ * DIVERGENCE 2 — THE ANSWER LANE SPREADS THE EXISTING RECORD (`...confirmation`) where the
+ * sender REPLACES it. That is what keeps `sentAt` and the trigger metadata alive next to the
+ * answer, so "asked at X, answered at Y" survives; a replace would erase the ask.
+ *
+ * NOT A DIVERGENCE, pinned as such: the attendance lane stamps a bare clock and no status, because
+ * the question goes to STAFF, not the customer — there is no YES/NO coming back down this channel
+ * to record. Giving it a status shape to match its sibling would invent a state nothing sets.
+ */
+export type AppointmentPromptLane =
+  | "confirmation_reminder_sent"
+  | "confirmation_answer"
+  | "attendance_question_asked";
+
+export type AppointmentPromptRecordInput = {
+  lane: AppointmentPromptLane;
+  /** `confirmation_answer` only: what the customer replied. */
+  answer?: "yes" | "no" | null;
+};
+
+export type AppointmentPromptRecordDecision = {
+  /** What `confirmation.status` becomes; `null` = this lane does not touch the confirmation. */
+  confirmationStatus: "pending" | "confirmed" | "declined" | null;
+  /** Stamp `confirmation.sentAt` — the "only ask once" mark. */
+  stampSentAt: boolean;
+  /** Stamp `confirmation.respondedAt`. */
+  stampRespondedAt: boolean;
+  /** Keep the existing confirmation fields alongside the new ones — divergence 2. */
+  preserveExistingConfirmation: boolean;
+  /** Carry the sender's trigger metadata onto the record. */
+  carryTriggerMeta: boolean;
+  /** Stamp `attendanceQuestionedAt`. */
+  stampAttendanceQuestionedAt: boolean;
+  divergence: string | null;
+  why: string;
+};
+
+/** Pure. */
+export function decideAppointmentPromptRecord(
+  input: AppointmentPromptRecordInput
+): AppointmentPromptRecordDecision {
+  if (input.lane === "confirmation_reminder_sent") {
+    return {
+      confirmationStatus: "pending",
+      stampSentAt: true,
+      stampRespondedAt: false,
+      // The sender REPLACES the record — there is nothing to keep, it only runs when sentAt is blank.
+      preserveExistingConfirmation: false,
+      carryTriggerMeta: true,
+      stampAttendanceQuestionedAt: false,
+      // Divergence 1 — three of the six copies reach this on a suppressed duplicate.
+      divergence: "confirmation_reminder_marks_sent_even_when_a_duplicate_suppressed_the_send",
+      why: "confirmation_reminder_sent: the 24h YES/NO ask is out — mark it pending so it is asked once"
+    };
+  }
+  if (input.lane === "confirmation_answer") {
+    return {
+      confirmationStatus: input.answer === "yes" ? "confirmed" : "declined",
+      stampSentAt: false,
+      stampRespondedAt: true,
+      // Divergence 2 — keep the ask (sentAt + trigger meta) next to the answer.
+      preserveExistingConfirmation: true,
+      carryTriggerMeta: false,
+      stampAttendanceQuestionedAt: false,
+      divergence: null,
+      why: `confirmation_answer: the customer replied ${input.answer === "yes" ? "YES" : "NO"} to the 24h ask`
+    };
+  }
+  return {
+    confirmationStatus: null,
+    stampSentAt: false,
+    stampRespondedAt: false,
+    preserveExistingConfirmation: true,
+    carryTriggerMeta: false,
+    stampAttendanceQuestionedAt: true,
+    divergence: null,
+    why: "attendance_question_asked: staff were asked whether the customer showed — stamp it so we ask once"
+  };
+}
+
+/**
+ * HOW SPECIFIC IS THIS WATCH? — `inventoryWatch.exactness`.
+ *
+ * TEN places in `index.ts` (plus one repair script) each carried their own copy of the same
+ * three-rung ladder: a year RANGE means a model range, a year PLUS a distinguishing detail means
+ * an exact unit, a bare year means year+model, and anything less stays model-only. They now all
+ * ask here.
+ *
+ * MEASURED BEFORE WRITING THIS (and it is the reason the divergences below are preserved rather
+ * than fixed): **`exactness` has ZERO readers.** Nothing in `services/api/src` or `apps/web`
+ * consults it — grep-verified — so it is a descriptive field today, not a matching input.
+ * That makes the two disagreements below free to keep AND free to get wrong later, which is
+ * exactly why they are named on the decision instead of quietly normalised.
+ *
+ * DIVERGENCE 1 — THE MODEL-RANGE RUNG IS MISSING FROM SEVEN OF THE TEN LANES. Only the ADF
+ * multi-watch build, the context-note build and the manual-outbound list recognise
+ * `yearMin`+`yearMax` as "model range"; on the other seven a year range falls through to
+ * model-only. Preserved per lane behind `recognisesYearRange`.
+ *
+ * DIVERGENCE 2 — WHAT COUNTS AS "DISTINGUISHING". Eight lanes accept a COLOUR **or** a TRIM
+ * ("2023 Road Glide CVO" is exact); two — the seller-intake list builders — accept a colour only,
+ * so the same customer's trim-only watch reads year_model there. Preserved behind
+ * `trimCountsAsDistinguishing`.
+ *
+ * FAIL DIRECTION, worth stating because it is not the usual one: an exactness that reads TOO
+ * SPECIFIC would, the day something consumes it, narrow which arrivals we alert a customer about
+ * — i.e. fail toward silence. So when a lane's rule is in doubt the ladder must fall DOWN
+ * (model_only), never up, and every rung below requires strictly more evidence than the one under it.
+ */
+export type InventoryWatchExactness = "exact" | "year_model" | "model_range" | "model_only";
+
+export type InventoryWatchExactnessInput = {
+  /** A single pinned model year. */
+  year?: number | string | null;
+  /** A pinned year RANGE. */
+  yearMin?: number | string | null;
+  yearMax?: number | string | null;
+  color?: string | null;
+  trim?: string | null;
+  /** Divergence 1 — does this lane read a year range as a model range? */
+  recognisesYearRange: boolean;
+  /** Divergence 2 — does a TRIM count as distinguishing, or only a colour? */
+  trimCountsAsDistinguishing: boolean;
+};
+
+export type InventoryWatchExactnessDecision = {
+  /** `null` = this lane's ladder does not fire; the caller's existing value stands. */
+  exactness: InventoryWatchExactness | null;
+  divergence: string | null;
+  why: string;
+};
+
+/** Pure. */
+export function resolveInventoryWatchExactness(
+  input: InventoryWatchExactnessInput
+): InventoryWatchExactnessDecision {
+  const hasRange = !!input.yearMin && !!input.yearMax;
+  const hasYear = !!input.year;
+  const distinguishing = !!input.color || (input.trimCountsAsDistinguishing && !!input.trim);
+  if (input.recognisesYearRange && hasRange) {
+    return {
+      exactness: "model_range",
+      divergence: null,
+      why: "a pinned year RANGE describes a span of model years, not one unit"
+    };
+  }
+  if (hasYear && distinguishing) {
+    return {
+      exactness: "exact",
+      divergence: null,
+      why: "a year plus a colour or trim names one unit closely enough to call it exact"
+    };
+  }
+  if (hasYear) {
+    return {
+      exactness: "year_model",
+      // Divergence 2 is named HERE, where it actually bites: this lane is holding a trim it does
+      // not count, so it lands a rung lower than the eight lanes that do.
+      divergence:
+        !input.trimCountsAsDistinguishing && !!input.trim
+          ? "this lane ignores TRIM, so a trim-only watch reads year_model where eight other lanes read exact"
+          : null,
+      why: "a bare year pins the model year, nothing finer"
+    };
+  }
+  // Every original ladder ENDS here with no `else` — the caller's literal already defaults to
+  // model_only, and a lane with a year range it does not recognise falls through to exactly that.
+  return {
+    exactness: null,
+    divergence:
+      !input.recognisesYearRange && hasRange
+        ? "this lane does not recognise a year RANGE, so the watch stays model_only"
+        : null,
+    why: "nothing pins a year — the caller's model_only default stands"
+  };
+}
+
+/**
+ * THE LEGACY SINGULAR WATCH AND THE LIST — which is the truth, and does reading it repair the record?
+ *
+ * A conversation may carry `inventoryWatch` (the original single watch), `inventoryWatches` (the
+ * list that replaced it), or both. Two alert paths — the watchlist sweep and the
+ * available-item notifier — each hand-wrote the same eight lines: prefer a non-empty list,
+ * otherwise wrap the singular, and if the list was missing entirely, backfill it from the singular.
+ * They now both ask here.
+ *
+ * The backfill is a HEAL, and its guard is deliberately `!conv.inventoryWatches` (missing), NOT
+ * `!conv.inventoryWatches?.length` (missing or empty): an explicitly EMPTY list is a record that
+ * says "this lead has no watches", and re-populating it from a stale singular would resurrect a
+ * watch a disarm lane just took off. See `decideInventoryWatchDisarm`, whose repair lanes store
+ * exactly that empty array.
+ */
+export type InventoryWatchListNormalizationInput = {
+  /** `undefined` = no list field at all; `[]` = an explicitly empty list. */
+  listLength: number | null;
+  hasSingular: boolean;
+};
+
+export type InventoryWatchListNormalizationDecision = {
+  /** Which source the caller should read this turn. */
+  source: "list" | "singular" | "none";
+  /** Write the singular into the list field — only when the list is absent entirely. */
+  backfillListFromSingular: boolean;
+  why: string;
+};
+
+/** Pure. */
+export function resolveInventoryWatchListNormalization(
+  input: InventoryWatchListNormalizationInput
+): InventoryWatchListNormalizationDecision {
+  const listLength = input.listLength;
+  if (listLength !== null && listLength > 0) {
+    return { source: "list", backfillListFromSingular: false, why: "the list has entries — it is the truth" };
+  }
+  if (!input.hasSingular) {
+    return { source: "none", backfillListFromSingular: false, why: "no list entries and no legacy singular" };
+  }
+  return {
+    source: "singular",
+    // Only when the list field is ABSENT. An empty list is a statement, not a gap.
+    backfillListFromSingular: listLength === null,
+    why:
+      listLength === null
+        ? "legacy record: only the singular exists — read it and backfill the list"
+        : "an explicitly EMPTY list stands; read the singular this turn but do not resurrect it into the list"
+  };
 }

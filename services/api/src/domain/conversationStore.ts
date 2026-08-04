@@ -11,6 +11,8 @@ import {
   decideHeldDraftRelease,
   decideSoldCloseout,
   decideLeadCloseout,
+  decidePendingCloseoutOnSend,
+  type PendingCloseoutSendDecision,
   type LeadCloseoutLane,
   type LeadCloseoutDecision,
   decideAppointmentTeardown,
@@ -32,6 +34,12 @@ import {
   decideInventoryWatchDisarm,
   type InventoryWatchDisarmLane,
   type InventoryWatchDisarmDecision,
+  resolveInventoryWatchExactness,
+  resolveInventoryWatchListNormalization,
+  type InventoryWatchListNormalizationDecision,
+  decideAppointmentPromptRecord,
+  type AppointmentPromptLane,
+  type AppointmentPromptRecordDecision,
   decideFinanceOutcomeNotifyState,
   type FinanceOutcomeNotifyLane,
   type FinanceOutcomeNotifyDecision,
@@ -884,6 +892,13 @@ export type Conversation = {
   status?: "open" | "closed";
   closedAt?: string;
   closedReason?: string;
+  /**
+   * A closeout waiting on an actual SEND (Joe, 2026-08-04). Armed when the customer tells us they
+   * bought a bike; fired by the send route once the acknowledgement really goes out, never when the
+   * draft is merely written. One writer (`armPendingCloseout`), one consumer
+   * (`applyPendingCloseoutOnSend`), and the close itself still goes through `applyLeadCloseout`.
+   */
+  pendingCloseout?: { reason: string; armedAt: string };
   sale?: {
     soldAt?: string;
     soldById?: string;
@@ -5594,6 +5609,47 @@ export function applyLeadCloseout(
   return decision;
 }
 
+/**
+ * Arm a closeout that only fires when a reply actually goes out (Joe, 2026-08-04: "After we send
+ * draft and it goes through it should close the lead"). Writes nothing but the note itself — the
+ * lead stays open, in the inbox, and fully workable until the send.
+ */
+export function armPendingCloseout(conv: Conversation, reason: string) {
+  conv.pendingCloseout = { reason, armedAt: nowIso() };
+}
+
+/**
+ * Fire (or refuse) an armed closeout because an outbound just went out. Asks
+ * `decidePendingCloseoutOnSend` whether this send earns the close, and routes the close itself
+ * through `applyLeadCloseout` — the one closeout referee — so this never becomes another writer of
+ * `conv.status`. `applyLeadCloseout` also pauses any surviving active watch, which is belt-and-braces
+ * here since the acquisition turn already paused them.
+ *
+ * Returns the decision so callers can log it; a refusal still clears a stale arm.
+ */
+export function applyPendingCloseoutOnSend(
+  conv: Conversation,
+  input: { nowIso: string }
+): PendingCloseoutSendDecision {
+  const armed = conv.pendingCloseout;
+  const lastInbound = [...(conv.messages ?? [])]
+    .reverse()
+    .find(m => String((m as any)?.direction ?? "") === "in");
+  const lastInboundAtMs = lastInbound ? Date.parse(String((lastInbound as any).at ?? "")) : NaN;
+  const decision = decidePendingCloseoutOnSend({
+    armed: !!armed,
+    armedAtMs: Date.parse(String(armed?.armedAt ?? "")),
+    lastInboundAtMs: Number.isFinite(lastInboundAtMs) ? lastInboundAtMs : null,
+    alreadyClosed: conv.status === "closed"
+  });
+  if (decision.kind === "close_lead") {
+    applyLeadCloseout(conv, { nowIso: input.nowIso, lane: "generic_close", reason: armed?.reason });
+    markOpenTodosDoneForConversation(conv.id);
+  }
+  if (decision.clearArm) conv.pendingCloseout = undefined;
+  return decision;
+}
+
 // The ONE place a bike is put on hold FOR a lead. Both write sites — the appointment-outcome "held"
 // lane and the console's manual-resolution endpoint — ask `decideInventoryHoldRecord` instead of
 // each hand-writing the same fourteen fields plus the same cadence/mode aftermath. See that referee
@@ -8017,4 +8073,93 @@ export function applyFinanceOutcomeNotifyState(
   if (decision.sentLatch) state[decision.sentLatch] = input.nowIso;
   if (decision.touchUpdatedAt) state.updatedAt = input.nowIso;
   return { decision, state };
+}
+
+/**
+ * The single place a "we already asked about this appointment" mark is written — the 24-hour
+ * YES/NO confirmation record and the internal attendance question. Eight lanes across index.ts
+ * used to write these by hand (six of them byte-identical copies inside one function); they now
+ * all ask `decideAppointmentPromptRecord` (routeStateReducer), where both preserved divergences
+ * and the deliberate no-status shape of the attendance mark are documented.
+ */
+export function applyAppointmentPromptRecord(
+  conv: Conversation,
+  input: {
+    lane: AppointmentPromptLane;
+    nowIso: string;
+    answer?: "yes" | "no" | null;
+    /** `confirmation_reminder_sent` only: which trigger fired, and for when. */
+    triggerMeta?: Record<string, unknown>;
+  }
+): AppointmentPromptRecordDecision {
+  const decision = decideAppointmentPromptRecord({ lane: input.lane, answer: input.answer ?? null });
+  // NOTE: bound as a plain `const appt = conv.appointment` on purpose. The contention analyzer
+  // recognises THAT alias form, so these writes still read as writes of `appointment`; a
+  // `(conv as any).appointment` binding makes them invisible and the wiring check vacuous.
+  const appt = conv.appointment;
+  if (!appt) return decision;
+  if (decision.confirmationStatus) {
+    appt.confirmation = {
+      ...(decision.preserveExistingConfirmation ? (appt.confirmation ?? {}) : {}),
+      ...(decision.stampSentAt ? { sentAt: input.nowIso } : {}),
+      status: decision.confirmationStatus,
+      ...(decision.stampRespondedAt ? { respondedAt: input.nowIso } : {}),
+      ...(decision.carryTriggerMeta ? (input.triggerMeta ?? {}) : {})
+    };
+  }
+  if (decision.stampAttendanceQuestionedAt) appt.attendanceQuestionedAt = input.nowIso;
+  return decision;
+}
+
+/**
+ * The single place `inventoryWatch.exactness` is written. Ten copies of the same ladder used to
+ * live in index.ts; they now pass their two per-lane flags here and
+ * `resolveInventoryWatchExactness` (routeStateReducer) owns the rungs and both divergences.
+ *
+ * Writes nothing when the ladder does not fire — every original ended without an `else`, leaving
+ * the caller's `model_only` literal standing.
+ */
+export function applyInventoryWatchExactness(
+  watch: any,
+  opts: { recognisesYearRange: boolean; trimCountsAsDistinguishing: boolean }
+): void {
+  if (!watch) return;
+  const decision = resolveInventoryWatchExactness({
+    year: watch.year,
+    yearMin: watch.yearMin,
+    yearMax: watch.yearMax,
+    color: watch.color,
+    trim: watch.trim,
+    recognisesYearRange: opts.recognisesYearRange,
+    trimCountsAsDistinguishing: opts.trimCountsAsDistinguishing
+  });
+  if (decision.exactness) watch.exactness = decision.exactness;
+}
+
+/**
+ * The single place the legacy singular watch and the watch LIST are reconciled for reading.
+ * Both alert paths used to hand-write the same prefer-list / wrap-singular / backfill block;
+ * they now ask `resolveInventoryWatchListNormalization` (routeStateReducer), which is where the
+ * deliberate "an explicitly EMPTY list is a statement, not a gap" rule is documented.
+ *
+ * Returns the watches the caller should read this turn — empty means "skip this lead".
+ */
+export function applyInventoryWatchListNormalization(
+  conv: Conversation
+): { watches: InventoryWatch[]; decision: InventoryWatchListNormalizationDecision } {
+  const list = conv.inventoryWatches;
+  const decision = resolveInventoryWatchListNormalization({
+    listLength: list === undefined || list === null ? null : list.length,
+    hasSingular: !!conv.inventoryWatch
+  });
+  if (decision.backfillListFromSingular && conv.inventoryWatch) {
+    conv.inventoryWatches = [conv.inventoryWatch];
+  }
+  const watches =
+    decision.source === "list"
+      ? (list ?? [])
+      : decision.source === "singular" && conv.inventoryWatch
+        ? [conv.inventoryWatch]
+        : [];
+  return { watches, decision };
 }

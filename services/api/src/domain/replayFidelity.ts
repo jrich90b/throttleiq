@@ -260,3 +260,69 @@ export function checkReplayFidelity(input: ReplayFidelityInput): ReplayFidelityV
 
   return { ok: true };
 }
+
+/**
+ * Who failed: the HARNESS (the turn never reached the agent) or the AGENT (it ran and
+ * misbehaved)?
+ *
+ * WHY (measured 2026-08-04): the nightly replay boots ONE temporary API per case out of
+ * `services/api/dist`, in the SAME deploy checkout a deploy runs `npm ci` in. The 08-04
+ * sweep started 05:00Z; a deploy landed ~05:06Z, and cases 27-55 — a perfectly contiguous
+ * block of 29 — died booting with `ERR_MODULE_NOT_FOUND` against SIX different packages
+ * (`dotenv`, `@sentry/node`, `@sentry/core`, `googleapis`, `import-in-the-middle`) as
+ * `node_modules` was rewritten under them. Six unrelated packages vanishing and returning
+ * inside one window is an install, not a code defect. The night before: 1 failure in 700.
+ *
+ * The damage was NOT the lost turns, it was what they were scored as. `scoreTurn` folds
+ * `verdict === "error"` into `critical`, so those 29 became **9 of the 12 criticals** in the
+ * sweep — 75% of the release-BLOCKING signal — and `gate_pass` went false. Each also minted a
+ * per-conversation P1 `corpus_replay_error` work order reading `draft: "(none)"`, i.e. a
+ * finding that blames the agent for a reply it was never asked to write. Every routine then
+ * re-triages them. Same phantom family as the hydration race above: a harness fault wearing a
+ * customer-facing verdict's clothes.
+ *
+ * FAIL DIRECTION, deliberately one-way: an UNRECOGNISED error is "agent". Calling a real agent
+ * failure "harness" would excuse it from the gate and delete it from the feed — silently
+ * shrinking the safety net — while calling a harness failure "agent" only reproduces today's
+ * noise. So this widens only on evidence, and the default surfaces.
+ *
+ * Pure, so `ci:eval` can pin it (`replay_fidelity:eval`).
+ */
+export type ReplayErrorCause = "harness" | "agent";
+
+/**
+ * Failures that prove the temporary API never got far enough to answer for the agent.
+ *
+ * ONLY phrases the HARNESS ITSELF throws (`inbound_shadow_replay.ts`), never symptoms. That
+ * restriction is deliberate and load-bearing: `replayOne` builds its `error` field as
+ * `${err.message}` + "\nRecent API logs:\n" + the child's last 20 log lines, so ANY pattern
+ * that could appear in ordinary API output is reachable from a genuine agent failure. A bare
+ * `ERR_MODULE_NOT_FOUND` / `Cannot find module '...'` match would therefore let a real
+ * in-turn failure that merely logged such a line be excused off the release gate and lose its
+ * work order — the one outcome this whole classifier exists to prevent.
+ *
+ * Those symptom patterns are also unnecessary: all 29 boot failures in the 08-04 incident are
+ * matched by the `temporary API exited early` anchor alone (verified against the stored replay
+ * JSON), because `waitForHealth` embeds the child's output INSIDE its own thrown message. So
+ * the anchors carry the real case and the symptoms only add risk.
+ */
+const HARNESS_ERROR_PATTERNS: readonly RegExp[] = [
+  // startApi / waitForHealth / waitForPreparedConversation — the boot never completed. These
+  // carry the underlying node module-resolution text inside them, which is how the
+  // concurrent-`npm ci` signature is caught without matching it free-floating.
+  /temporary API exited early/i,
+  /temporary API did not become healthy/i,
+  /temporary API exited before the prepared thread loaded/i,
+  // The build the harness replays against is absent.
+  /dist\/index\.js is missing/i,
+  // checkReplayFidelity's backstop: it ran, but not against the prepared thread.
+  /replay fidelity:/i,
+  // findFreePort.
+  /no free port assigned/i
+];
+
+export function classifyReplayErrorCause(errorText: string | null | undefined): ReplayErrorCause {
+  const text = String(errorText ?? "");
+  if (!text.trim()) return "agent";
+  return HARNESS_ERROR_PATTERNS.some(re => re.test(text)) ? "harness" : "agent";
+}

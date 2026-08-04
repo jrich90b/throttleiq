@@ -173,7 +173,14 @@ const CEILINGS: Ceiling[] = [
     // the business-manager notification record became calls to applyFinanceOutcomeNotifyState.
     // -4 from the wiring itself, and -11 more because main had already fallen below the ceiling —
     // taken at the REAL count on the integrated tree, never at either branch's.
-    max: 71_315,
+    // 71_315 -> 71_298. The appointment-PROMPT un-stacking: SIX byte-identical copies of the
+    // "mark the 24h confirmation ask as sent" block inside processAppointmentConfirmations (one per
+    // delivery branch) collapsed to one local `markConfirmationAsked()` over the applier, and the
+    // customer's YES/NO record went the same way. Re-derived on the INTEGRATED tree after #524.
+    // 71_298 -> 71_271. The watch-RECORD-SHAPE un-stacking: TEN copies of the "how specific is
+    // this watch?" ladder and TWO copies of the legacy-singular-vs-list block became calls to
+    // applyInventoryWatchExactness / applyInventoryWatchListNormalization.
+    max: 71_271,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

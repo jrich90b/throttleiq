@@ -248,3 +248,57 @@ export function isInternalNoteFollowUpTopic(topic: string | null | undefined): b
   }
   return false;
 }
+
+/**
+ * Say what the walk-in was ABOUT — the bike, not the phrase trailing it.
+ *
+ * Rick Williamson Jr. (+17165241170, 2026-08-04, TLP ref 11729). Scott's note read "Rick Jr. was
+ * in for the back the blue ride and showed interest in the 2021 Road Glide Special we have ON THE
+ * FLOOR with the 131ci engine. Ran some numbers on his trade in. Needs follow up (Step 2)", and
+ * the whole first text back was:
+ *
+ *   "Thanks for stopping in - I'll follow up about the floor with the 131ci engine."
+ *
+ * `extractTrafficLogProFollowUpTopic` finds a topic by taking the first `about|on|with|regarding`
+ * in the note and everything up to the next `.` or `;`. Here the first such word is the "on" in
+ * "we have ON the floor", so the topic became the locative modifier. It is the grammar equivalent
+ * of reading "the car in the garage with the sunroof" and wanting to discuss the garage. Same
+ * failure, same corpus: Brent Marshall's note yields "black motor" and Larry Godzich's yields
+ * "pre-owned trikes" — the modifier and the vague family, never the unit.
+ *
+ * This is the SAME LAW as `buildWalkInSpecRecapClause` beside it, and charter C1.6: a walk-in ack
+ * speaks from the PARSED SLOTS, never from note prose. So when the walk-in path resolved a model,
+ * that model IS the subject and the prose span is discarded — not sanitized, discarded, because
+ * no amount of cleaning makes a staff log's sentence fragment safe to promise a customer.
+ *
+ * FAIL DIRECTION, three ways, all toward today's behavior:
+ *  - empty prose topic in ⇒ empty out. This can never INVENT a follow-up promise on a note that
+ *    never asked for one; it only ever changes the subject of a sentence we were already sending.
+ *  - no model slot ⇒ today's prose topic survives untouched (still behind
+ *    `isInternalNoteFollowUpTopic`), so Larry-class notes don't regress to silence.
+ *  - a timing-only topic ("next week") is a WHEN, not a WHAT — passed through so the caller's
+ *    timing-aware line can keep pairing it with the model itself.
+ *
+ * The caller passes `proseIsTimingOnly` rather than this module importing the predicate: this file
+ * is a dependency-free leaf and stays that way. Pinned by walkin_internal_note_topic_guard:eval.
+ */
+export function resolveWalkInFollowUpSubject(input: {
+  proseTopic?: string | null;
+  modelLabel?: string | null;
+  yearLabel?: string | null;
+  proseIsTimingOnly?: boolean | null;
+}): string {
+  const prose = String(input.proseTopic ?? "").replace(/\s+/g, " ").trim();
+  // No topic extracted → no promise to re-aim. Never manufacture one.
+  if (!prose) return "";
+  if (input.proseIsTimingOnly) return prose;
+  const model = String(input.modelLabel ?? "").replace(/\s+/g, " ").trim();
+  // "bike" is `formatWatchModelForMessage`'s placeholder for "no model resolved", not a model.
+  if (!model || /^bike$/i.test(model)) return prose;
+  const year = String(input.yearLabel ?? "").replace(/\s+/g, " ").trim();
+  // Some model labels already carry the year ("2021 Road Glide Special" — extractWalkInModelHint
+  // joins them). Never say the year twice.
+  const modelCarriesYear = /(?:^|\s)(?:19|20)\d{2}(?:\s|-|$)/.test(model);
+  const spec = year && !modelCarriesYear ? `${year} ${model}` : model;
+  return `the ${spec}`;
+}

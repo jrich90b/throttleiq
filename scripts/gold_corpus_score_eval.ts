@@ -76,6 +76,28 @@ check("scoreable: needs BOTH sides and a real customer turn", () => {
   );
 });
 
+check("COURTESY TURNS are not scoreable — read by hand 2026-08-04, they produced FALSE failures", () => {
+  // "Ur welcome" -> the human happened to add "Dave I'm here I'll call you"; the agent's perfectly
+  // good "Gotcha, thanks Dave" was marked wrong for not spontaneously promising a call. There is no
+  // right answer to a thank-you, so it must not be graded.
+  for (const t of ["Ur welcome", "thanks!", "Ok", "sounds good", "Got it", "will do", "no problem", "Perfect."]) {
+    assert.equal(isScoreableGoldExample({ inbound: t, reply: "I'll call you" }), false, `courtesy turn should not be scored: ${t}`);
+  }
+  // But anything carrying real content still scores, including short questions.
+  for (const t of ["ok what is the price?", "thanks - is it still available?", "Ur welcome, when can I come in?"]) {
+    assert.equal(isScoreableGoldExample({ inbound: t, reply: "Sure — Tuesday works" }), true, `real content must still score: ${t}`);
+  }
+});
+
+check("the judge keeps the STRICT equivalence bar — the loosened variant was measured and rejected", () => {
+  const p = buildGoldEquivalencePrompt({ inbound: "no metal rack please", humanReply: "Do you own it or is there a lien?", agentReply: "Got it, no rack. Want me to hold the build?" });
+  // Rebuilding this around "would the customer be WORSE OFF?" flipped a CONTROL: it rated a weak
+  // web-lead first touch as fine. Catching those is the point, so the strict bar stays and the
+  // score is read as "agreement with what our staff did", not "correctness". See goldCorpusScore.ts.
+  assert.ok(/ACCOMPLISH WHAT THE HUMAN'S REPLY ACCOMPLISHED/.test(p), "equivalence, not a defect check");
+  assert.ok(!/WORSE OFF/.test(p), "the rejected loosened variant must not creep back in unmeasured");
+});
+
 check("the vote is a majority, and a tie or an empty vote is NOT correct", () => {
   assert.equal(tallyVotes([true, true, false]), true);
   assert.equal(tallyVotes([true, false, false]), false);
