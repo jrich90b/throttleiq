@@ -3924,6 +3924,77 @@ export function decideLeadCloseout(input: LeadCloseoutInput): LeadCloseoutDecisi
   };
 }
 
+// How many times may we ask this customer to come in, and what happens once we stop asking?
+//
+// THE FIGHT WAS A DUPLICATED CONSTANT, which is the quietest kind. Two places owned "how many
+// invites is too many", in two different files, with nothing making them agree:
+//   conversationStore.registerScheduleInviteSent   `threshold = 3` — latches `scheduleMuted` once
+//                                                  the count reaches it.
+//   index.ts SCHEDULE_INVITE_THRESHOLD = 3         picks the follow-up message POOL: below it the
+//                                                  fresh-info lines, at or above it the soft exits.
+// They happen to agree at 3 today, so nothing is broken. But they are read on the SAME counter for
+// the SAME question, and moving one without the other would silently split the pairing: the mute
+// would latch at one count while the message pool switched at another, so a customer could be
+// muted and still be getting fresh-info invites (or soft-exit lines while the budget said there was
+// still room). This referee owns the number; both sides ask it.
+//
+// FAIL DIRECTION: this budget only ever makes us ask LESS. Spending it wrong in the "too few"
+// direction just means a softer message; in the "too many" direction it means pestering someone who
+// has ignored three invitations. So an unresolved count resolves toward SPENT (mute), never toward
+// more asking — which is what `?? 0` on a missing count already does, since 0 < threshold only
+// while there is genuinely room.
+export const SCHEDULE_INVITE_THRESHOLD = 3;
+
+export type ScheduleInviteBudgetInput = {
+  /** `followUpCadence.scheduleInviteCount` as it stands BEFORE this turn. */
+  inviteCount?: number | null;
+  /**
+   * Caller override. `registerScheduleInviteSent` accepted one and NOBODY ever passed it — kept so
+   * the store helper's signature is unchanged, and so a per-dealer budget has somewhere to land.
+   */
+  threshold?: number;
+};
+
+export type ScheduleInviteBudgetDecision = {
+  threshold: number;
+  /** The count as it stands now. */
+  inviteCount: number;
+  /** The count after recording one more invite. */
+  nextInviteCount: number;
+  /** The budget is ALREADY spent at the current count — the soft-exit message pool. */
+  spent: boolean;
+  /** Latch `scheduleMuted` when recording this invite. */
+  mute: boolean;
+  why: string;
+};
+
+export function decideScheduleInviteBudget(
+  input: ScheduleInviteBudgetInput
+): ScheduleInviteBudgetDecision {
+  // Must be POSITIVE, not merely finite: `Number("")` and `Number(null)` are both 0, and a
+  // threshold of 0 would mute every lead on its first invite — "never ask" dressed up as a budget.
+  // Caught by this referee's own eval enumerating junk inputs.
+  const rawThreshold = Number(input.threshold);
+  const threshold =
+    Number.isFinite(rawThreshold) && rawThreshold > 0 ? rawThreshold : SCHEDULE_INVITE_THRESHOLD;
+  const inviteCount = Number(input.inviteCount ?? 0) || 0;
+  const nextInviteCount = inviteCount + 1;
+  const spent = inviteCount >= threshold;
+  const mute = nextInviteCount >= threshold;
+  return {
+    threshold,
+    inviteCount,
+    nextInviteCount,
+    spent,
+    mute,
+    why: spent
+      ? `already asked ${inviteCount} time(s) against a budget of ${threshold} — soft exits from here`
+      : mute
+        ? `this invite spends the last of the budget (${nextInviteCount}/${threshold}) — mute after it`
+        : `invite ${nextInviteCount} of ${threshold} — there is still room to ask`
+  };
+}
+
 // Who may put a bike ON HOLD for a lead, and what does that hold record say? One referee for what
 // were two hand-maintained copies of the same fourteen-field block.
 //

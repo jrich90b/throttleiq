@@ -636,8 +636,15 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 //   mode stomp over a human handoff; the null vs dropped `key` on an on-order hold).
 //   Baseline MEASURED on the pre-change commit 46ba0e1d (= 116), not carried from this constant —
 //   see the "a ratchet baseline is a ceiling, not a measurement" lesson on the 122 -> 116 entry.
+// 114 -> 112: the SCHEDULE-INVITE-BUDGET un-stacking (this commit). "How many times may we ask this
+//   customer to come in?" was owned by a DUPLICATED CONSTANT — `threshold = 3` inside
+//   `registerScheduleInviteSent` (which latches `scheduleMuted`) and `SCHEDULE_INVITE_THRESHOLD = 3`
+//   in index.ts (which picks the follow-up message pool). Same counter, same question, two files,
+//   nothing keeping them equal. Both now ask `decideScheduleInviteBudget`, which owns the number.
+//   The second writer, `resetScheduleInviteCounter`, was DELETED outright: zero callers repo-wide,
+//   a dormant bypass of the arbitration (the #461 class). `followUpCadence` 5 -> 3.
 // RATCHET DOWN ONLY.
-const UNREFEREED_WRITER_BASELINE = 114;
+const UNREFEREED_WRITER_BASELINE = 112;
 
 {
   const sourceFiles: SourceFile[] = [];

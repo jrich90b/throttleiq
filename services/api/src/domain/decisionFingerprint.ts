@@ -542,6 +542,26 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     }, ["decideInventoryHoldRecord"]);
   }
 
+  // Added 2026-08-03 with the SCHEDULE-INVITE-BUDGET un-stacking. Not lane-sampled: there is one
+  // question ("have we asked this lead to come in too many times?") and the only input that varies
+  // is the lead's own stored count. PROBE: the threshold is left to the referee's default, so a
+  // change to the budget itself moves this fingerprint — which is the drift the un-stacking exists
+  // to catch.
+  add("scheduleInviteBudget", conv => {
+    if (!conv?.followUpCadence || typeof reducer.decideScheduleInviteBudget !== "function") {
+      return undefined;
+    }
+    const decision = reducer.decideScheduleInviteBudget({
+      inviteCount: conv.followUpCadence?.scheduleInviteCount
+    });
+    return {
+      threshold: decision.threshold,
+      nextInviteCount: decision.nextInviteCount,
+      spent: decision.spent,
+      mute: decision.mute
+    };
+  }, ["decideScheduleInviteBudget"]);
+
   // Added 2026-08-02 with the appointment-CONFIRM un-stacking. Sampled once PER LANE, because the
   // whole point of this referee is that the slot-match lane answers `acknowledged` and the
   // reschedule latch differently from the two booked lanes — a single sample would hide exactly
