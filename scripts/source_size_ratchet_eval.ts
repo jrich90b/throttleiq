@@ -162,7 +162,14 @@ const CEILINGS: Ceiling[] = [
     // builder they contrast with (the single newest message vs every message still unanswered).
     // Three lines of new wiring at the live/regen/re-draft draft paths, nine lines out — taken at
     // the REAL count, not the ceiling, so the slice funds itself with two to spare.
-    max: 71_331,
+    // 71_331 -> 71_330. The inventory-watch DISARM un-stacking: four hand-written copies of the
+    // "what survives when a watch comes off" block became calls to applyInventoryWatchDisarm.
+    // Only -1: the first three lanes gave back 4 lines and the FOURTH (vin_normalize, which the
+    // queue could not see until the third was refereed) cost 2 back plus the import. Worth it —
+    // an un-refereed fourth copy is what the next hand-rolled fifth one would have been modelled on.
+    // REBASE NOTE (ROUTINE_CONTRACT rule 3, the #418 trap): authored against a 71_333 main and
+    // proposed 71_332; #511 landed -2 first, so this is re-derived on the INTEGRATED tree.
+    max: 71_330,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

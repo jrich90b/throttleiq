@@ -29,6 +29,9 @@ import {
   decideInventoryWatchArm,
   type InventoryWatchArmLane,
   type InventoryWatchArmDecision,
+  decideInventoryWatchDisarm,
+  type InventoryWatchDisarmLane,
+  type InventoryWatchDisarmDecision,
   decideScheduleInviteBudget,
   decideCadenceLifecycle,
   decideAppointmentAttribution,
@@ -5647,6 +5650,45 @@ export function applyInventoryWatchArm(
   }
   setFollowUpMode(conv, decision.followUpMode, decision.followUpModeReason);
   stopFollowUpCadence(conv, decision.stopCadenceReason);
+  return decision;
+}
+
+/**
+ * The single place an inventory watch comes OFF a conversation — the inverse of
+ * `applyInventoryWatchArm`. Three lanes used to hand-write the same three fields; they now all ask
+ * `decideInventoryWatchDisarm` (routeStateReducer), which is where both preserved divergences and
+ * the deliberate per-lane aftermath are documented.
+ *
+ * `setDialogState` lives in index.ts (it also stamps `lastIntent`), so the one lane that steps the
+ * dialog back hands it in along with the states it steps back FROM — the store cannot see either.
+ */
+export function applyInventoryWatchDisarm(
+  conv: Conversation,
+  input: {
+    lane: InventoryWatchDisarmLane;
+    /** The watches that survive. */
+    remaining: InventoryWatch[];
+    /** `only_if_pruned` lanes pass this: repoint the mirror just when the mirror itself was pruned. */
+    mirrorWasPruned?: boolean;
+    /** `caller_picks` lanes pass the survivor they matched; undefined falls back to the first. */
+    mirrorPick?: InventoryWatch;
+    reason?: string;
+    stepDialogBack?: (conv: any) => void;
+  }
+): InventoryWatchDisarmDecision {
+  const decision = decideInventoryWatchDisarm({ lane: input.lane, remainingCount: input.remaining.length });
+  const empty = input.remaining.length === 0;
+  conv.inventoryWatches =
+    empty && decision.emptyListShape === "undefined" ? undefined : input.remaining;
+  if (decision.mirrorRule === "first" || (decision.mirrorRule === "only_if_pruned" && input.mirrorWasPruned)) {
+    conv.inventoryWatch = input.remaining[0];
+  } else if (decision.mirrorRule === "caller_picks") {
+    conv.inventoryWatch = input.mirrorPick ?? input.remaining[0];
+  }
+  if (decision.clearPending) conv.inventoryWatchPending = undefined;
+  if (decision.followUpMode) setFollowUpMode(conv, decision.followUpMode, input.reason ?? "inventory_watch_clear");
+  if (decision.stopCadence) stopFollowUpCadence(conv, input.reason ?? "inventory_watch_clear");
+  if (decision.stepDialogBack) input.stepDialogBack?.(conv);
   return decision;
 }
 

@@ -6387,3 +6387,144 @@ export function decideInventoryWatchArm(input: InventoryWatchArmInput): Inventor
           : `${input.lane}: watch armed and the chase stops, but the dialog state is left untouched`
   };
 }
+
+/**
+ * INVENTORY-WATCH DISARM — "a watch is coming OFF this lead: what does the record look like
+ * afterwards?" The exact INVERSE of `decideInventoryWatchArm` above, and a separate referee rather
+ * than a lane on that one because the questions differ in kind: arming asks what to switch ON,
+ * disarming asks what SURVIVES, and the three lanes disagree about survival in ways arming cannot.
+ *
+ * THREE LANES, each of which hand-wrote the same three Tier-2 fields:
+ *   1. `customer_stop`   — `clearInventoryWatchState`. The customer told us to stop. Everything goes.
+ *   2. `held_guard_heal` — `applyStaleHeldUnitWatchHeal`. WE armed a watch on a unit that turned out
+ *      to be in stock; prune only the watches we created ourselves, keep the customer's.
+ *   3. `model_prune`     — the `/internal/worker/watch-prune/:id` repair endpoint. A data fix: drop
+ *      the watches naming these models, keep the rest.
+ *   4. `vin_normalize`   — the `/internal/worker/watch-normalize-vin` repair endpoint. Strips VIN
+ *      trim codes out of watch models and dedupes what collapses together, so it REMOVES watches
+ *      too. The queue could not see this lane until lane 3 was refereed — refereeing 3 un-collapsed
+ *      it, the adjacency artifact this program has now hit five times.
+ *
+ * TWO DIVERGENCES, PRESERVED AND NAMED — measured against the live store 2026-08-04 (802
+ * conversations, 90 carrying a watch array, 89 carrying the singular mirror, 0 mismatched mirrors):
+ *
+ *   D1 — EMPTY ARRAY vs UNDEFINED, when nothing survives. The heal lane collapses to `undefined`;
+ *   the prune lane writes the empty array it computed. **1 lead carries an empty array today.**
+ *   Readers split on it: the `Array.isArray(x) ? x : …` idiom treats `[]` as "no watches", but a
+ *   plain truthiness test reads it as "has watches". The only reader doing the latter today is the
+ *   Langfuse telemetry payload's `hasInventoryWatch` (index.ts) — an observability field, not a
+ *   decision. So D1 is real but currently costs a wrong flag in a trace, nothing customer-facing.
+ *
+ *   D2 — THE PENDING FLAG. `inventoryWatchPending` means "we are waiting to hear WHICH bike".
+ *   customer_stop always clears it; held_guard_heal clears it only when nothing survives;
+ *   model_prune never touches it — so a fully-pruned lead can still be flagged as owing us an
+ *   answer about a watch it no longer has. **3 leads carry the pending flag today and all 3 have
+ *   no watch at all**, which is this shape (it has other doors too). Partly self-healing:
+ *   `reduceStaleWorkflowStateForInbound` clears a stale pending on the next inbound.
+ *
+ *   D3 — THE MIRROR, between the two sibling repair endpoints. `model_prune` repoints the singular
+ *   mirror ONLY when the mirror itself was pruned, leaving a survivor byte-identical;
+ *   `vin_normalize` re-derives it every run from the cleaned model name (falling back to the first
+ *   survivor). Both are defensible for their own job — one is surgical, one is a rewrite — so both
+ *   are preserved behind `mirrorRule` rather than normalized into a single answer.
+ *
+ * NOT A DIVERGENCE — pinned so a later tidy-up does not flatten it. The three lanes leave the lead
+ * in deliberately different places, because they are answers to three different events.
+ * customer_stop pauses the lead indefinitely, stops the chase and steps the dialog back; the heal
+ * does the OPPOSITE (its caller restores active mode and resumes the chase) because it exists to
+ * undo OUR mistake; the repair endpoint touches neither, because a data fix is not a customer
+ * event. Merging their aftermath would be the bug, not the cleanup.
+ *
+ * KNOWN GAP, NOT FIXED HERE (its own PR): no lane un-parks a lead whose last watch just left. A
+ * lead sits in `followUp.mode = "holding_inventory"` / reason `inventory_watch` with zero watches,
+ * frozen for a watch that no longer exists (+15856048591, found 2026-08-04). This referee is the
+ * place that fix will hang off once it exists — every disarm now passes through one door.
+ */
+export type InventoryWatchDisarmLane =
+  | "customer_stop"
+  | "held_guard_heal"
+  | "model_prune"
+  | "vin_normalize";
+
+/**
+ * How the singular `inventoryWatch` mirror is repointed. The two repair endpoints differ here and
+ * it is not cosmetic: `only_if_pruned` leaves a surviving mirror byte-identical, while
+ * `caller_picks` re-derives it every time from the cleaned model name.
+ */
+export type InventoryWatchMirrorRule = "first" | "only_if_pruned" | "caller_picks";
+
+export type InventoryWatchDisarmInput = {
+  lane: InventoryWatchDisarmLane;
+  /** How many watches survive this disarm. */
+  remainingCount: number;
+};
+
+export type InventoryWatchDisarmDecision = {
+  /** What an EMPTY survivor list is written as — divergence 1. */
+  emptyListShape: "empty_array" | "undefined";
+  /** How to repoint the singular mirror. */
+  mirrorRule: InventoryWatchMirrorRule;
+  /** Clear `inventoryWatchPending` — divergence 2. */
+  clearPending: boolean;
+  /** The aftermath. `null` = this lane leaves the lead's mode and chase alone. */
+  followUpMode: "paused_indefinite" | null;
+  stopCadence: boolean;
+  /** Step the dialog back out of a watch state, when it is in one. */
+  stepDialogBack: boolean;
+  divergence: string | null;
+  why: string;
+};
+
+/** Pure. */
+export function decideInventoryWatchDisarm(
+  input: InventoryWatchDisarmInput
+): InventoryWatchDisarmDecision {
+  const remaining = Math.max(0, Number(input.remainingCount) || 0);
+  if (input.lane === "customer_stop") {
+    return {
+      emptyListShape: "undefined",
+      mirrorRule: "first",
+      clearPending: true,
+      followUpMode: "paused_indefinite",
+      stopCadence: true,
+      stepDialogBack: true,
+      divergence: null,
+      why: "customer_stop: the customer asked us to stop watching — every watch goes and the lead parks"
+    };
+  }
+  if (input.lane === "held_guard_heal") {
+    return {
+      emptyListShape: "undefined",
+      mirrorRule: "first",
+      // Divergence 2, the conservative half: only clear "which bike?" when nothing is left to ask about.
+      clearPending: remaining === 0,
+      followUpMode: null,
+      stopCadence: false,
+      stepDialogBack: false,
+      divergence: null,
+      why:
+        remaining === 0
+          ? "held_guard_heal: our own held-unit watch was wrong and nothing survives it — the record clears"
+          : `held_guard_heal: our own held-unit watch was wrong; ${remaining} customer watch(es) survive untouched`
+    };
+  }
+  // Both remaining lanes are DATA REPAIRS on the worker endpoints and share an answer: store the
+  // list you computed, touch nothing about the lead. They differ only on the mirror — that is D3.
+  return {
+    // Divergence 1 — a repair stores the empty list it computed rather than collapsing it.
+    emptyListShape: "empty_array",
+    mirrorRule: input.lane === "model_prune" ? "only_if_pruned" : "caller_picks",
+    // Divergence 2 — a data repair never claims to know whether the customer still owes us an answer.
+    clearPending: false,
+    followUpMode: null,
+    stopCadence: false,
+    stepDialogBack: false,
+    divergence:
+      input.lane === "model_prune"
+        ? remaining === 0
+          ? "model_prune_stores_an_empty_array_and_leaves_the_pending_flag_standing"
+          : "model_prune_leaves_the_pending_flag_standing"
+        : "vin_normalize_rederives_the_mirror_where_its_sibling_repair_leaves_a_survivor_alone",
+    why: `${input.lane}: data repair — ${remaining} watch(es) kept; the lead's mode, chase and pending flag are not this lane's business`
+  };
+}
