@@ -20,7 +20,13 @@ assert.ok(
   "the flywheel shares the intent-handled judge + actionability filter (one judging semantics, offline and live)"
 );
 assert.ok(/maxJudge/.test(flywheel) && /LLM_ENABLED/.test(flywheel), "LLM cost is capped and key-gated");
-assert.ok(/occurredAt: atIso/.test(flywheel), "findings are timestamped for downstream stale-suppression");
+// Findings must be timestamped for downstream stale-suppression — with the TURN's own time, not the
+// sweep's clock. Stamping the run made every replay finding permanently "new", so the disposition
+// ledger's fail-safe path re-surfaced disposed keys as `regression-of-disposed` after every nightly
+// and they could never settle (2026-08-04: +17164738220 and +17164182619, both re-dated to the same
+// millisecond). `?? atIso` is the fail-safe: unknown stays recent, therefore still visible.
+assert.ok(/occurredAt: s\.turnAt \?\? atIso/.test(flywheel), "findings are stamped with the replayed turn's own time");
+assert.ok(/export function turnTimeOf/.test(flywheel), "the turn-time resolver is exported and pinned by the self-test");
 // Dealer Lead App post-ride survey logs are staff-filed, never a customer question: the first
 // earns one by-design thank-you, a repeat correctly stays silent. Body-keyed so it holds even
 // when the replayed router state lacks a dealer_ride reason (reviewed 2026-07-12 with Joe).
