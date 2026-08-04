@@ -197,6 +197,75 @@ export function decideCadenceQualityGate(input: {
   return { action, live: !!input.enabled, reason: input.enabled ? `live_${action}` : `shadow_would_${action}` };
 }
 
+/** The verdict record persisted on the conversation as `cadenceQualityShadow`. */
+export type CadenceQualityShadowRecord = {
+  at: string;
+  overall: string | null;
+  confidence: number | null;
+  reason: string | null;
+  steering: string | null;
+  channel: "sms" | "email";
+  cadenceKind: string | null;
+  messagePreview: string;
+  // What the gate DID about this verdict. See buildCadenceQualityShadowRecord.
+  gateAction: CadenceQualityAction | null;
+  gateReason: string | null;
+  gateHeld: boolean;
+};
+
+/**
+ * Build the `cadenceQualityShadow` record for a judged PROACTIVE cadence touch.
+ *
+ * WHY THIS EXISTS (2026-08-04 loop tick): the record used to store only the raw verdict, so a
+ * `suppress` row could not be told apart from... a `suppress` row. Two very different things wrote
+ * the same bytes:
+ *   - the enforce gate HELD the touch back — the safety net worked and no customer saw anything; and
+ *   - the verdict said suppress but nothing blocked it (confidence under the enforce floor =>
+ *     `action:"pass"/"below_confidence"`, or a `hold` verdict, which the suppress-only first flip
+ *     never enforces) — so the touch went on to the send/draft path.
+ * The detector (conversationOutcomeAudit 5e) therefore surfaced both as identical P2 work orders —
+ * 31 of the 80 rows in the 2026-08-04 feed, the single largest block — and every routine reading the
+ * feed had to re-derive "did this actually reach anyone?" by hand. One already got it wrong.
+ * `decision` knows the answer at the write site; this records it instead of throwing it away.
+ *
+ * `gateHeld` is the ONE truth field, and it is deliberately NOT derived from `decision.live`:
+ * `live` mirrors the DECIDER's `enabled` input, which is `ENFORCE || JUDGE_ENABLED` (index.ts), while
+ * the only site that actually skips a send checks `isCadenceQualityEnforceEnabled()` alone. With
+ * JUDGE_ENABLED=1 + ENFORCE=0, `live` is true and the touch still goes out — using it here would mark
+ * delivered touches as held, the exact inversion of this record's purpose. The caller passes
+ * `enforcing` = "will I honour action==='suppress' by skipping the send?", and only that counts.
+ *
+ * FAIL DIRECTION: toward "not held" (false). A null decision, a caller that omits `enforcing`, and any
+ * non-suppress action all yield false, which the detector treats exactly as it treats today's records
+ * — P2, notified, presented as a possible customer-facing miss. Legacy records written before this
+ * change have no `gateHeld` at all and read the same way. We only ever claim "held" when both halves
+ * are proven, so retiring this fails toward MORE noise, never toward hiding a real defect.
+ */
+export function buildCadenceQualityShadowRecord(input: {
+  verdict: (CadenceQualityVerdict & { reason?: unknown; steering?: unknown }) | null;
+  decision: CadenceQualityGateDecision | null;
+  enforcing: boolean;
+  channel: "sms" | "email";
+  cadenceKind: string | null;
+  message: string;
+  at?: string;
+}): CadenceQualityShadowRecord {
+  const verdict = input.verdict;
+  return {
+    at: input.at ?? new Date().toISOString(),
+    overall: verdict?.overall ?? null,
+    confidence: typeof verdict?.confidence === "number" ? verdict.confidence : null,
+    reason: String(verdict?.reason ?? "").slice(0, 240),
+    steering: String(verdict?.steering ?? "").slice(0, 240) || null,
+    channel: input.channel,
+    cadenceKind: input.cadenceKind ?? null,
+    messagePreview: String(input.message ?? "").slice(0, 240),
+    gateAction: input.decision?.action ?? null,
+    gateReason: input.decision?.reason ?? null,
+    gateHeld: input.enforcing === true && input.decision?.action === "suppress"
+  };
+}
+
 /**
  * Reads CADENCE_QUALITY_JUDGE_ENABLED. Default OFF. When ON it is a LIVE switch, equivalent to
  * CADENCE_QUALITY_ENFORCE (the two are OR'd at the decider's call site) — before 8/3 this flag

@@ -380,6 +380,7 @@ import {
   isNoResponseJudgeEnabled,
   noResponseJudgeShadowEnabled,
   decideCadenceQualityGate,
+  buildCadenceQualityShadowRecord,
   isCadenceQualityJudgeEnabled,
   cadenceQualityJudgeShadowEnabled,
   isCadenceQualityEnforceEnabled,
@@ -5295,7 +5296,7 @@ async function runCadenceQualityJudgeShadow(
   conv: any,
   message: string,
   channel: "sms" | "email",
-  opts?: { messageClass?: CadenceQualityMessageClass }
+  opts?: { messageClass?: CadenceQualityMessageClass; enforcing?: boolean }
 ): Promise<CadenceQualityGateDecision | null> {
   try {
     if (!conv?.id) return null;
@@ -5358,21 +5359,14 @@ async function runCadenceQualityJudgeShadow(
         }
       });
     }
-    // Fold the cadence-quality judge into the self-healing feed (like the context-fidelity shadow): persist
-    // the verdict so the read-only outcome-audit sweep can surface a bad unprompted send as a comprehension
-    // gap. Detection only — STEP 1 stays shadow (the draft is NOT altered here). EVERY judged touch is
-    // written, not just suppress/hold, so this field holds the LATEST judgement and a later passing touch
-    // retires a stale suppress. Rationale + fail direction: conversation_outcome_audit:eval, same names.
-    (conv as any).cadenceQualityShadow = {
-      at: new Date().toISOString(),
-      overall: verdict.overall,
-      confidence: verdict.confidence ?? null,
-      reason: String(verdict.reason ?? "").slice(0, 240),
-      steering: String(verdict.steering ?? "").slice(0, 240) || null,
-      channel,
-      cadenceKind: cadenceKind ?? null,
-      messagePreview: text.slice(0, 240)
-    };
+    // Fold the cadence-quality judge into the self-healing feed: persist the verdict AND what the gate did
+    // about it, so the outcome-audit sweep can tell a touch we HELD BACK from one that went out anyway.
+    // Detection only — the draft is NOT altered here. The write is UNCONDITIONAL (every judged touch, not
+    // just suppress/hold) so the field holds the LATEST judgement and a later passing touch retires a stale
+    // suppress. Field semantics + fail direction live on buildCadenceQualityShadowRecord.
+    (conv as any).cadenceQualityShadow = buildCadenceQualityShadowRecord({
+      verdict, decision, enforcing: opts?.enforcing === true, channel, cadenceKind: cadenceKind ?? null, message: text
+    });
     saveConversation(conv);
     // The CALLER enforces: when CADENCE_QUALITY_ENFORCE is on and decision.action === "suppress", the
     // cadence loop skips this touch + advances. When off, this stays observe-only (the caller ignores
@@ -34418,7 +34412,8 @@ async function processDueFollowUpsUnlocked() {
       const enfChannel: "sms" | "email" = useEmail ? "email" : "sms";
       const enfMsg = useEmail && emailMessage ? emailMessage : smsMessage;
       const enfDecision = await runCadenceQualityJudgeShadow(conv, enfMsg, enfChannel, {
-        messageClass: disengagedCloseoutActive ? "disengaged_closeout" : "value_add"
+        messageClass: disengagedCloseoutActive ? "disengaged_closeout" : "value_add",
+        enforcing: true
       });
       if (enfDecision?.action === "suppress") {
         console.log("[followup][cadence-quality-enforce] suppressed low-value proactive touch", {
@@ -34450,7 +34445,8 @@ async function processDueFollowUpsUnlocked() {
       // when ENFORCE is on — the awaited enforce gate above already judged + persisted this touch.
       if (!isCadenceQualityEnforceEnabled())
         void runCadenceQualityJudgeShadow(conv, draftMessage, useEmail ? "email" : "sms", {
-          messageClass: disengagedCloseoutActive ? "disengaged_closeout" : "value_add"
+          messageClass: disengagedCloseoutActive ? "disengaged_closeout" : "value_add",
+          enforcing: false
         });
       maybeAddCallTodoForFollowUp();
       advanceFollowUpCadence(conv, cfg.timezone);

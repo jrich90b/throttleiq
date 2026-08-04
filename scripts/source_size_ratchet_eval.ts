@@ -147,7 +147,13 @@ const CEILINGS: Ceiling[] = [
     // the manual booking-parser path's hand-written status/confirmedBy/acknowledged trio became one
     // applyAppointmentConfirmRecord call. A small net line win — the value is that four staff
     // stamps of "this appointment is confirmed" now come from one table.
-    max: 71_344,
+    // 71_344 -> 71_340. The cadence-quality shadow record's 10-line object literal became a call to
+    // buildCadenceQualityShadowRecord (draftQualityGate), which also records what the gate DID with
+    // the verdict — so a held touch is no longer indistinguishable from one that went out.
+    // REBASE NOTE (ROUTINE_CONTRACT rule 3, the #418 trap): authored against a 71_345 main and
+    // proposed 71_341; #505 landed -1 first, so the honest integrated count is 71_340. Taking the
+    // pre-rebase number would have silently handed back #505's reduction.
+    max: 71_340,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

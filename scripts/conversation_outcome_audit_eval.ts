@@ -164,6 +164,61 @@ eq(
   "a later PASSING cadence verdict retires the finding (recovery is visible, not stuck)"
 );
 
+// --- 5f-bis. HELD-BACK vs WENT-OUT: the same `suppress` verdict means two opposite things. ---
+// The enforce gate blocks only `action === "suppress"` at/above the confidence floor. A sub-floor
+// verdict, a `hold`, or enforce being off all leave the touch on the send/draft path. Before this
+// split, both wrote an identical P2 row, so 31 of the 80 orders on 2026-08-04 forced every routine to
+// re-derive "did anyone actually receive this?" by hand — and one routine got it wrong.
+{
+  const CQ_AT = "2026-06-25T01:00:00.000Z";
+  const one = (shadow: any) => auditConversationOutcome({ id: "c5k", cadenceQualityShadow: { at: CQ_AT, cadenceKind: "standard", ...shadow } }, { now: NOW })[0];
+
+  const heldRow = one({ overall: "suppress", gateHeld: true, gateReason: "live_suppress" });
+  eq(heldRow.severity, "P3", "a HELD touch is the safety net working => de-prioritised, not a customer-facing miss");
+  eq(heldRow.cadenceTouchWasHeld, true, "a HELD touch is labelled so the classifier/routines never re-derive it");
+  assert.match(heldRow.detail, /HELD BEFORE SEND/, "the detail says plainly that nothing was sent");
+  n++;
+
+  // The 16-row class measured live on 2026-08-04: judged suppress at 0.88, under the 0.90 enforce
+  // floor, so decideCadenceQualityGate returned action "pass"/below_confidence and the touch went out.
+  const subFloor = one({ overall: "suppress", confidence: 0.88, gateHeld: false, gateReason: "below_confidence" });
+  eq(subFloor.severity, "P2", "a sub-floor suppress was NOT blocked => it stays a full-weight finding");
+  eq(subFloor.cadenceTouchWasHeld, false, "a touch nothing blocked is not labelled held");
+  assert.match(subFloor.detail, /NOT HELD/, "the detail says plainly that the touch went out");
+  assert.match(subFloor.detail, /below_confidence/, "the detail carries WHY the gate let it through");
+  n++; n++;
+
+  // A `hold` verdict is never enforced — the first enforce flip is suppress-only by design.
+  eq(one({ overall: "hold", gateHeld: false }).severity, "P2", "a hold verdict is never blocked => full-weight finding");
+
+  // FAIL-SAFE: every record written before 2026-08-04 carries no gate outcome at all. Unknown must read
+  // as NOT held — this change may only ever fail toward more noise, never toward hiding a real miss.
+  const legacy = one({ overall: "suppress" });
+  eq(legacy.severity, "P2", "a legacy record with no gate outcome keeps today's exact treatment");
+  eq(legacy.cadenceTouchWasHeld, false, "unknown is never silently promoted to held");
+  assert.match(legacy.detail, /NOT HELD/, "unknown reads as went-out, the noisier and safer direction");
+  n++;
+  eq(legacy.occurredAt, CQ_AT, "occurredAt still = the judged send time (staleness passes keep working)");
+}
+
+// --- 5f-ter. The builder that decides `gateHeld`, pinned as a truth table. ---
+{
+  const { buildCadenceQualityShadowRecord } = await import("../services/api/src/domain/draftQualityGate.ts");
+  const rec = (decision: any, enforcing: boolean, verdict: any = { overall: "suppress", confidence: 0.95 }) =>
+    buildCadenceQualityShadowRecord({ verdict, decision, enforcing, channel: "sms", cadenceKind: "standard", message: "checking in", at: "2026-06-25T01:00:00.000Z" });
+
+  eq(rec({ action: "suppress", live: true, reason: "live_suppress" }, true).gateHeld, true, "enforcing caller + suppress => the touch was held");
+  // The trap: `decision.live` mirrors ENFORCE||JUDGE_ENABLED at the DECIDER, but the only site that
+  // skips a send checks ENFORCE alone. Deriving gateHeld from `live` would mark delivered touches held.
+  eq(rec({ action: "suppress", live: true, reason: "live_suppress" }, false).gateHeld, false, "a non-enforcing caller sends anyway, whatever decision.live says");
+  eq(rec({ action: "pass", live: false, reason: "below_confidence" }, true, { overall: "suppress", confidence: 0.86 }).gateHeld, false, "sub-floor suppress is not blocked");
+  eq(rec({ action: "pass", live: false, reason: "below_confidence" }, true, { overall: "suppress", confidence: 0.86 }).gateReason, "below_confidence", "the gate's reason is kept so the feed can explain itself");
+  eq(rec({ action: "hold", live: true, reason: "live_hold" }, true).gateHeld, false, "hold is not enforced by the suppress-only flip");
+  eq(rec(null, true).gateHeld, false, "no decision => never claim held (fail direction)");
+  // The write stays unconditional: a GOOD verdict is still recorded, which is what retires a stale suppress.
+  eq(rec({ action: "pass", live: false, reason: "good" }, true, { overall: "good", confidence: 0.99 }).overall, "good", "every judged touch is recorded, not just the bad ones");
+}
+
 // --- 5d. Net 3 open-critic decision: only a CLEAR, MAJOR, high-confidence mishandling escalates. ---
 {
   const base = { convId: "c5f", leadKey: "+1" };
@@ -325,7 +380,7 @@ const storeSrc = fs.readFileSync("services/api/src/domain/conversationStore.ts",
 assert.match(storeSrc, /\(conv as any\)\.contextFidelityShadow = null/, "an operator/passing draft clears the shadow flag (correction sink)");
 // Folded detectors: cadence-quality judge persists EVERY verdict; task-autoclose regression
 // reads the persisted autoCloseCheck.decision.
-assert.match(idx, /\(conv as any\)\.cadenceQualityShadow = \{/, "the cadence-quality judge persists its verdict for the feed");
+assert.match(idx, /\(conv as any\)\.cadenceQualityShadow = buildCadenceQualityShadowRecord/, "the cadence-quality judge persists its verdict for the feed");
 {
   // The write must be UNCONDITIONAL. Persisting only suppress/hold made the field mean "ever judged
   // bad" rather than "how this thread is going now" — nothing retired a stale suppress, so a recovered
@@ -336,7 +391,7 @@ assert.match(idx, /\(conv as any\)\.cadenceQualityShadow = \{/, "the cadence-qua
   // unrelated code (the silently-wrong source pin from `source-size-ratchet-breaks-eval-source-pins`).
   const start = idx.indexOf("async function runCadenceQualityJudgeShadow(");
   assert.ok(start >= 0, "runCadenceQualityJudgeShadow must exist in index.ts");
-  const writeAt = idx.indexOf("(conv as any).cadenceQualityShadow = {", start);
+  const writeAt = idx.indexOf("(conv as any).cadenceQualityShadow = buildCadenceQualityShadowRecord", start);
   assert.ok(writeAt > start, "the verdict write must sit inside runCadenceQualityJudgeShadow");
   const body = idx.slice(start, writeAt);
   assert.ok(
