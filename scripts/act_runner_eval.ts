@@ -109,7 +109,10 @@ assert.match(src, /process\.exit\(3\)/, "a duplicate-skip uses a distinct exit c
   assert.equal(findMergedPrForFindingKey(freshMerged, "::", { nowMs: NOW }), null, "meaningless key never dedups");
   const fs2 = await import("node:fs");
   const runner = fs2.readFileSync("scripts/act_runner.ts", "utf8");
-  assert.ok(/findMergedPrForFindingKey\(listRecentlyMergedLoopPrs\(\)/.test(runner), "act_runner consults merged PRs in check-open-pr AND the build path");
+  assert.ok(
+    (runner.match(/findMergedPrForFindingKey\(ledger\.mergedPrs/g) ?? []).length >= 2,
+    "act_runner consults merged PRs in check-open-pr AND the build path"
+  );
   assert.ok(/process\.exit\(4\)/.test(runner), "merged coverage exits with its own distinct code (4)");
 
   // The reviewed diff must be taken against the REMOTE base. Local `main` goes stale as soon as
@@ -189,4 +192,89 @@ assert.match(src, /process\.exit\(3\)/, "a duplicate-skip uses a distinct exit c
   );
 }
 
-console.log("PASS act runner eval — PR-only (never merges), refuses main, gate-enforced; prep brief carries the parser-first contract; cross-routine PR dedup (marker + skip); NS citation resolves the bounded North-star section and buys no gate relief; list/prep run.");
+// --- "Could not look" must never be reported as "looked and found nothing" (measured 2026-08-03).
+//     The loop runner ran check-open-pr ON THE BOX, where every other STEP-2 command runs and where
+//     `gh` is not installed. The gh reader failed to [], and the runner turned that [] into
+//     `NONE — no open or recently-merged PR covers "+17162605541::human_correction_material"` at
+//     exit 0 — while PR #488 carried exactly that marker (the same key answered EXISTS #488 on the
+//     Mac a minute later). A NONE that a routine cannot distinguish from a real absence is how two
+//     routines build the same fix, which is the thing ROUTINE_CONTRACT.md's dedup-first step exists
+//     to stop. The asymmetry pinned below is the fix: a POSITIVE match is proof from any source, an
+//     ABSENCE is only provable from a live, complete gh read. ---
+{
+  const { readLoopPrLedger } = await import("./loopPrLedger.ts");
+  const key = "+15551234567::human_correction_material";
+
+  // A directory whose `gh` always fails, prepended to PATH: node/npx keep working, gh does not —
+  // exactly the box's shape (gh absent) without needing the box.
+  const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), "act-runner-eval-nogh-"));
+  fs.writeFileSync(path.join(fakeBin, "gh"), "#!/bin/sh\nexit 1\n");
+  fs.chmodSync(path.join(fakeBin, "gh"), 0o755);
+  const emptyRoot = fs.mkdtempSync(path.join(os.tmpdir(), "act-runner-eval-root-"));
+  const realPath = process.env.PATH ?? "";
+  const noGhPath = `${fakeBin}${path.delimiter}${realPath}`;
+
+  process.env.PATH = noGhPath;
+  try {
+    // 1. No gh, no exported ledger — the read must ADMIT it saw nothing, not report an empty world.
+    const blind = readLoopPrLedger({ reportRoot: emptyRoot });
+    assert.equal(blind.source, "unavailable", "no gh + no export => source 'unavailable'");
+    assert.equal(blind.canProveAbsence, false, "a read that could not look can never prove an absence");
+
+    // 2. A fresh exported ledger CARRYING the key still proves coverage — a snapshot can miss a PR,
+    //    never invent one, so a positive match is trustworthy from any source.
+    const fileRoot = fs.mkdtempSync(path.join(os.tmpdir(), "act-runner-eval-ledger-"));
+    fs.mkdirSync(path.join(fileRoot, "anomaly_loop"), { recursive: true });
+    fs.writeFileSync(
+      path.join(fileRoot, "anomaly_loop", "pr_ledger.json"),
+      JSON.stringify({
+        generatedAt: new Date().toISOString(),
+        openPrs: [{ number: 488, title: "Loop fix", body: `fix\n${findingKeyMarker(key)}` }],
+        mergedPrs: []
+      })
+    );
+    const fromFile = readLoopPrLedger({ reportRoot: fileRoot });
+    assert.equal(fromFile.source, "file", "gh-less host falls back to the exported pr_ledger.json");
+    assert.equal(
+      findOpenPrForFindingKey(fromFile.openPrs, key)?.number,
+      488,
+      "a file-sourced ledger still MATCHES a covered key (positive match is proof from any source)"
+    );
+    // ...but its silence is not proof: the export is written daily and freshness-guarded at 3 days,
+    // so it can be perfectly "fresh" and still predate the PR being asked about (the 8/3 box copy
+    // was generated 8/2 14:39, ~29h before PR #488 opened).
+    assert.equal(
+      fromFile.canProveAbsence,
+      false,
+      "a snapshot cannot see PRs opened since it was written => it can match, but never prove absence"
+    );
+
+    // 3. End-to-end: the CLI a routine actually calls must exit 5 / UNKNOWN here — never 0 / NONE.
+    let code = 0;
+    let stdout = "";
+    try {
+      stdout = execFileSync("npx", ["tsx", "scripts/act_runner.ts", "check-open-pr", "--key", key], {
+        encoding: "utf8",
+        env: { ...process.env, PATH: noGhPath, REPORT_ROOT: emptyRoot }
+      });
+    } catch (err: any) {
+      code = typeof err?.status === "number" ? err.status : -1;
+      stdout = String(err?.stdout ?? "");
+    }
+    assert.equal(code, 5, "check-open-pr on a gh-less host exits 5 (cannot verify), not 0 (clear to build)");
+    assert.match(stdout, /UNKNOWN/, "it says UNKNOWN out loud");
+    assert.ok(!/^NONE/m.test(stdout), "it never prints the confident NONE it cannot support");
+    fs.rmSync(fileRoot, { recursive: true, force: true });
+  } finally {
+    process.env.PATH = realPath;
+    fs.rmSync(fakeBin, { recursive: true, force: true });
+    fs.rmSync(emptyRoot, { recursive: true, force: true });
+  }
+
+  // The BUILD path keeps the opposite fail-direction on purpose — an unverifiable ledger must never
+  // block a real fix — but it may not pass silently, or a duplicate PR is filed with no trace of why.
+  assert.ok(/DEDUP UNVERIFIED/.test(src), "the build path warns loudly when coverage could not be verified");
+  assert.ok(/Building anyway/.test(src), "...and still builds (never drop a fix we can't prove is covered)");
+}
+
+console.log("PASS act runner eval — PR-only (never merges), refuses main, gate-enforced; prep brief carries the parser-first contract; cross-routine PR dedup (marker + skip, and an unverifiable ledger reports UNKNOWN instead of a false NONE); NS citation resolves the bounded North-star section and buys no gate relief; list/prep run.");
