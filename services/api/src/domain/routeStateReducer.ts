@@ -6801,3 +6801,102 @@ export function decideFinanceOutcomeNotifyState(
       };
   }
 }
+
+/**
+ * DID WE ALREADY ASK THIS CUSTOMER ABOUT THIS APPOINTMENT, AND WHAT MARKS THAT WE DID?
+ *
+ * Two prompts hang off a booked appointment and each leaves a mark that stops it repeating:
+ * the 24-hour YES/NO confirmation text (`appointment.confirmation`) and the internal
+ * "did the customer show?" question we put to staff afterwards (`attendanceQuestionedAt`).
+ * EIGHT places used to write those marks by hand — six byte-identical copies of the same
+ * five-line "pending" block inside the reminder sender, the customer's YES/NO reply, and the
+ * attendance ask. They now all ask here.
+ *
+ * WHY THE MARK MATTERS MORE THAN IT LOOKS: `processAppointmentConfirmations` skips any
+ * appointment whose `confirmation.sentAt` is set, so the mark IS the "only ask once" rule. A
+ * lane that forgot to stamp it would re-text the same customer every pass.
+ *
+ * DIVERGENCE 1 — THREE OF THE SIX REMINDER COPIES STAMP "SENT" WITHOUT SENDING. Each delivery
+ * mode (draft/suggest, live Twilio, undelivered fallback) first checks `isRecentDuplicateOutbound`
+ * and, on a hit, stamps the record and `continue`s WITHOUT appending an outbound. Preserved,
+ * because a duplicate hit means the same text went out through another path inside 10 minutes —
+ * the customer HAS been asked. Named so nobody later "fixes" it into re-texting.
+ *
+ * DIVERGENCE 2 — THE ANSWER LANE SPREADS THE EXISTING RECORD (`...confirmation`) where the
+ * sender REPLACES it. That is what keeps `sentAt` and the trigger metadata alive next to the
+ * answer, so "asked at X, answered at Y" survives; a replace would erase the ask.
+ *
+ * NOT A DIVERGENCE, pinned as such: the attendance lane stamps a bare clock and no status, because
+ * the question goes to STAFF, not the customer — there is no YES/NO coming back down this channel
+ * to record. Giving it a status shape to match its sibling would invent a state nothing sets.
+ */
+export type AppointmentPromptLane =
+  | "confirmation_reminder_sent"
+  | "confirmation_answer"
+  | "attendance_question_asked";
+
+export type AppointmentPromptRecordInput = {
+  lane: AppointmentPromptLane;
+  /** `confirmation_answer` only: what the customer replied. */
+  answer?: "yes" | "no" | null;
+};
+
+export type AppointmentPromptRecordDecision = {
+  /** What `confirmation.status` becomes; `null` = this lane does not touch the confirmation. */
+  confirmationStatus: "pending" | "confirmed" | "declined" | null;
+  /** Stamp `confirmation.sentAt` — the "only ask once" mark. */
+  stampSentAt: boolean;
+  /** Stamp `confirmation.respondedAt`. */
+  stampRespondedAt: boolean;
+  /** Keep the existing confirmation fields alongside the new ones — divergence 2. */
+  preserveExistingConfirmation: boolean;
+  /** Carry the sender's trigger metadata onto the record. */
+  carryTriggerMeta: boolean;
+  /** Stamp `attendanceQuestionedAt`. */
+  stampAttendanceQuestionedAt: boolean;
+  divergence: string | null;
+  why: string;
+};
+
+/** Pure. */
+export function decideAppointmentPromptRecord(
+  input: AppointmentPromptRecordInput
+): AppointmentPromptRecordDecision {
+  if (input.lane === "confirmation_reminder_sent") {
+    return {
+      confirmationStatus: "pending",
+      stampSentAt: true,
+      stampRespondedAt: false,
+      // The sender REPLACES the record — there is nothing to keep, it only runs when sentAt is blank.
+      preserveExistingConfirmation: false,
+      carryTriggerMeta: true,
+      stampAttendanceQuestionedAt: false,
+      // Divergence 1 — three of the six copies reach this on a suppressed duplicate.
+      divergence: "confirmation_reminder_marks_sent_even_when_a_duplicate_suppressed_the_send",
+      why: "confirmation_reminder_sent: the 24h YES/NO ask is out — mark it pending so it is asked once"
+    };
+  }
+  if (input.lane === "confirmation_answer") {
+    return {
+      confirmationStatus: input.answer === "yes" ? "confirmed" : "declined",
+      stampSentAt: false,
+      stampRespondedAt: true,
+      // Divergence 2 — keep the ask (sentAt + trigger meta) next to the answer.
+      preserveExistingConfirmation: true,
+      carryTriggerMeta: false,
+      stampAttendanceQuestionedAt: false,
+      divergence: null,
+      why: `confirmation_answer: the customer replied ${input.answer === "yes" ? "YES" : "NO"} to the 24h ask`
+    };
+  }
+  return {
+    confirmationStatus: null,
+    stampSentAt: false,
+    stampRespondedAt: false,
+    preserveExistingConfirmation: true,
+    carryTriggerMeta: false,
+    stampAttendanceQuestionedAt: true,
+    divergence: null,
+    why: "attendance_question_asked: staff were asked whether the customer showed — stamp it so we ask once"
+  };
+}
