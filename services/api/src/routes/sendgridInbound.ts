@@ -149,6 +149,7 @@ import {
   isPriceOnlyInquiryText,
   isQuoteRequestSourceLead,
   shouldForceInitialTestRideSourceScheduleCopy,
+  shouldPricingIntentSetQuoteCta,
   shouldRouteRoom58PriceHandoff
 } from "../domain/adfPolicy.js";
 import {
@@ -5511,12 +5512,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     inferredBucket = "general_inquiry";
     inferredCta = "contact_us";
   }
-  if (
-    pricingInquiryIntent &&
-    inferredBucket !== "trade_in_sell" &&
-    inferredBucket !== "service" &&
-    inferredBucket !== "test_ride"
-  ) {
+  if (pricingInquiryIntent && shouldPricingIntentSetQuoteCta(inferredBucket)) {
     inferredCta = "request_a_quote";
   }
   const channel = resolveChannel({

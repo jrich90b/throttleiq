@@ -3,6 +3,7 @@ import {
   isPriceOnlyInquiryText,
   isQuoteRequestSourceLead,
   shouldForceInitialTestRideSourceScheduleCopy,
+  shouldPricingIntentSetQuoteCta,
   shouldRouteRoom58PriceHandoff
 } from "../services/api/src/domain/adfPolicy.ts";
 import {
@@ -294,6 +295,50 @@ const cases: Case[] = [
         if (/\bnoted\b|lined up|see you (then|at)|book an appointment/.test(text)) return false;
       }
       return true;
+    }
+  },
+
+  // WALK-IN PRICING FLAG (Robert Czechowski +17164808010, operator-reported 2026-08-03:
+  // "This shouldn't carry a pricing flag"). A Traffic Log walk-in is routed in_store/contact_us
+  // from the STAFF's own note ("WE RAN THE FINANCING AND WE WILL SCHEDULE A TIME TO FINALIZE THE
+  // DEAL"); the classifier's blanket pricing step then promoted the CTA to request_a_quote, which
+  // is what isQuoteRequestSourceLead reads to force quote copy on a customer already in the store
+  // with financing run. The walk-in bucket now keeps the CTA its own branch chose.
+  {
+    id: "walkin_in_store_bucket_keeps_its_cta_over_pricing_intent",
+    expected: false,
+    run: () => shouldPricingIntentSetQuoteCta("in_store")
+  },
+  {
+    id: "walkin_pricing_flag_not_read_as_quote_request_lead",
+    expected: false,
+    run: () => {
+      // End-to-end shape of the reported bug: walk-in branch picks contact_us, the pricing step is
+      // asked, and the resulting CTA must not make this a "Request a Quote" lead.
+      const inferredCta = shouldPricingIntentSetQuoteCta("in_store") ? "request_a_quote" : "contact_us";
+      return isQuoteRequestSourceLead({ inferredCta, leadSourceLower: "walk in" });
+    }
+  },
+  // The buckets that already decided their own CTA stay excluded …
+  {
+    id: "trade_in_sell_bucket_keeps_its_cta_over_pricing_intent",
+    expected: false,
+    run: () => shouldPricingIntentSetQuoteCta("trade_in_sell")
+  },
+  {
+    id: "service_and_test_ride_buckets_keep_their_cta_over_pricing_intent",
+    expected: false,
+    run: () => shouldPricingIntentSetQuoteCta("service") || shouldPricingIntentSetQuoteCta("test_ride")
+  },
+  // … and an ordinary inventory lead that really does ask about price still becomes a quote lead.
+  {
+    id: "inventory_interest_pricing_intent_still_promotes_to_quote",
+    expected: true,
+    run: () => {
+      if (!shouldPricingIntentSetQuoteCta("inventory_interest")) return false;
+      if (!shouldPricingIntentSetQuoteCta("general_inquiry")) return false;
+      const inferredCta = shouldPricingIntentSetQuoteCta("inventory_interest") ? "request_a_quote" : "contact_us";
+      return isQuoteRequestSourceLead({ inferredCta, leadSourceLower: "room58 - request details" });
     }
   }
 ];
