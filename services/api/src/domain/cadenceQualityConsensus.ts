@@ -213,10 +213,13 @@ export function decideCadenceQualityConsensus<V extends CadenceQualityVerdictLik
   return {
     holdBack,
     verdict,
-    holdVotes: unanimousBelowFloor ? usable.length : holds.length,
+    // `holdVotes` stays the count of verdicts that cleared the ENFORCE floor, even when the
+    // unanimity path held the message back — on that path it is legitimately 0. Restating it as
+    // usable.length would make the record self-inconsistent (a hold with zero qualifying votes,
+    // by the same floor the field is defined against); `unanimousBelowFloor` carries that case.
+    holdVotes: holds.length,
     usableVotes: usable.length,
-    agreement:
-      unanimousBelowFloor || holds.length === 0 || holds.length === usable.length ? "unanimous" : "majority",
+    agreement: holds.length === 0 || holds.length === usable.length ? "unanimous" : "majority",
     floorApplied,
     unanimousBelowFloor
   };

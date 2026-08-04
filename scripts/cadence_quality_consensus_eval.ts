@@ -231,9 +231,14 @@ const uni = decideCadenceQualityConsensus([sub(), sub(), sub()], FLOOR, { unanim
 assert.equal(uni.holdBack, true, "…and are HELD on a settled post-sale thread (+17163741119::2)");
 assert.equal(uni.unanimousBelowFloor, true, "the hold is attributed to the unanimity path");
 assert.equal(uni.agreement, "unanimous");
+// The record stays self-consistent: holdVotes counts verdicts that cleared the ENFORCE floor, and
+// on this path that is legitimately zero. Restating it would describe a hold with qualifying votes
+// it never had — `unanimousBelowFloor` is what distinguishes the two kinds of hold.
+assert.equal(uni.holdVotes, 0, "holdVotes stays the enforce-floor count — the unanimity hold has none");
+assert.equal(uni.usableVotes, 3);
 assert.equal(uni.floorApplied, UFLOOR, "floorApplied reports the floor actually used, for the gate");
 assert.equal(uni.verdict?.confidence, 0.88, "the representative verdict comes from the held side");
-n += 6;
+n += 8;
 
 // A SINGLE dissenting sample still sends: the path turns on agreement, not on a lowered bar.
 assert.equal(
@@ -365,6 +370,16 @@ assert.match(
   /minConfidence: enforce \? consensus\.floorApplied : undefined/,
   "the gate re-checks confidence at the floor the vote actually used, never a stale enforce floor"
 );
-n += 2;
+// PARITY, pinned rather than argued (pre-ship review 2026-08-04, PR #496). The unanimity floor is
+// threaded through exactly ONE consensus call, inside runCadenceQualityJudgeShadow — so there is no
+// second cadence-quality path that could still send the unanimous-0.88 touch. That is true today by
+// construction, but it is only an assertion about the CURRENT file: a future second call site would
+// silently opt out of the floor and the two greps above would still pass. So count them.
+assert.equal(
+  (idxSrc.match(/sampleCadenceQualityConsensus\(/g) ?? []).length,
+  1,
+  "exactly ONE cadence-quality consensus call site — a second path must thread unanimousFloor too, not bypass it"
+);
+n += 3;
 
 console.log(`PASS cadence-quality consensus eval (${n} assertions — vote, fail-direction toward sending, winning-side verdict, early exit, shadow stays 1 call, draft-gate confirm-on-block, post-sale sub-floor unanimity)`);
