@@ -23,6 +23,7 @@ const {
   customerEngagedWithCadence,
   buildDisengagedCadenceCloseout,
   shouldSendDisengagedCloseout,
+  deliveredCadenceTouches,
   advanceFollowUpCadence
 } = await import("../services/api/src/domain/conversationStore.ts");
 
@@ -191,15 +192,115 @@ check("BOTH cadence-judge call sites scope the message class off disengagedClose
   }
 });
 
-check("a suppressed proactive touch still ENDS the taper (never re-queues the lead)", () => {
-  // The enforce branch advances the cadence and skips the send. Whether the
-  // close-out sent or was held, the sequence must terminate identically — a
-  // future change must not turn suppression into "try this lead again later".
+check("a suppressed CLOSE-OUT still ENDS the taper (never re-queues the lead)", () => {
+  // The enforce branch advances the cadence and skips the send. When the held message was the
+  // close-out, the sequence must terminate identically — the decision to stop chasing was already
+  // taken on the delivered count, and only the goodbye was withheld. A future change must not turn
+  // suppressing the sign-off into "try this lead again later".
   const c = silentConv(8) as any;
-  advanceFollowUpCadence(c, "America/New_York");
-  assert.equal(c.followUpCadence.status, "completed", "suppressed touch still completes the cadence");
+  advanceFollowUpCadence(c, "America/New_York", { delivered: false, endSequence: true });
+  assert.equal(c.followUpCadence.status, "completed", "suppressed close-out still completes the cadence");
   assert.equal(c.followUpCadence.stopReason, "disengaged_taper");
   assert.equal(c.followUpCadence.nextDueAt, undefined, "no re-queue — we do not go back to pestering");
+});
+
+// ---------------------------------------------------------------------------
+// TOUCHES ARE MESSAGES WE SENT, NOT RUNGS WE WALKED PAST.
+//
+// The threshold is a count of OUTREACH ("after this many touches with zero customer inbound"),
+// but three gates advance the schedule while saying nothing at all — the cadence-quality gate,
+// the value gate, and the past-dated-event guard. Counting those rungs retired leads we had
+// barely contacted. Measured on the live American Harley store 2026-08-04: of 37 leads ended
+// with stopReason "disengaged_taper", 13 had fewer than 9 outbound messages of ANY kind (three
+// had 2) — and only 2 of the 37 ever received the close-out, because a taper tripped from a
+// silent gate ends the ladder on a path that never sends one. The rest just went quiet forever.
+// ---------------------------------------------------------------------------
+
+check("a silent rung does not stamp lastSentAt/lastSentStep (nothing was sent)", () => {
+  const c = silentConv(3) as any;
+  const beforeStep = c.followUpCadence.lastSentStep;
+  advanceFollowUpCadence(c, "America/New_York", { delivered: false });
+  assert.equal(c.followUpCadence.lastSentStep, beforeStep, "no send happened, so no send is recorded");
+  assert.equal(c.followUpCadence.lastSentAt, undefined, "a held touch must not look like a delivered one");
+  assert.equal(c.followUpCadence.stepIndex, 5, "the rung is still burned — we tried and had nothing to say");
+  assert.ok(c.followUpCadence.nextDueAt, "the lead stays scheduled for the next rung");
+});
+
+check("silent rungs do NOT spend the lead's taper budget", () => {
+  // The +15055043876 shape: two real messages, the rest of the ladder held by the gates. Under the
+  // old rung-counting this lead was retired as "we've reached out plenty".
+  const c = silentConv(1) as any;
+  c.followUpCadence.deliveredTouches = 2;
+  for (let i = 0; i < 10; i += 1) {
+    advanceFollowUpCadence(c, "America/New_York", { delivered: false });
+  }
+  assert.equal(c.followUpCadence.deliveredTouches, 2, "still only two touches ever reached the customer");
+  assert.equal(c.followUpCadence.status, "active", "a lead we barely contacted is not 'disengaged'");
+  assert.notEqual(c.followUpCadence.stopReason, "disengaged_taper");
+  assert.equal(
+    shouldSendDisengagedCloseout(c, deliveredCadenceTouches(c.followUpCadence)),
+    false,
+    "must not tell someone we messaged twice that we're pausing our check-ins"
+  );
+});
+
+check("delivered touches DO accumulate and still taper at the threshold", () => {
+  const c = silentConv(0) as any;
+  c.followUpCadence.deliveredTouches = 0;
+  c.followUpCadence.lastSentStep = undefined;
+  for (let i = 0; i < DISENGAGED_TAPER_AFTER_TOUCHES; i += 1) {
+    assert.equal(c.followUpCadence.status, "active", `still chasing after ${i} delivered touches`);
+    advanceFollowUpCadence(c, "America/New_York");
+  }
+  assert.equal(c.followUpCadence.deliveredTouches, DISENGAGED_TAPER_AFTER_TOUCHES);
+  assert.equal(
+    shouldSendDisengagedCloseout(c, deliveredCadenceTouches(c.followUpCadence)),
+    true,
+    "nine real touches with no reply DOES earn the sign-off"
+  );
+  advanceFollowUpCadence(c, "America/New_York"); // the close-out touch
+  assert.equal(c.followUpCadence.status, "completed");
+  assert.equal(c.followUpCadence.stopReason, "disengaged_taper");
+});
+
+check("legacy records (no deliveredTouches) read exactly the number the taper used to read", () => {
+  // Fail direction: in-flight cadences written before this field must not move position, so this
+  // change can never RE-open a finished ladder into extra messaging.
+  assert.equal(deliveredCadenceTouches({ stepIndex: 9, lastSentStep: 8 } as any), 9);
+  assert.equal(deliveredCadenceTouches({ stepIndex: 1, lastSentStep: 0 } as any), 1);
+  // Never sent anything: not 'stepIndex' touches, zero.
+  assert.equal(deliveredCadenceTouches({ stepIndex: 9 } as any), 0);
+  assert.equal(deliveredCadenceTouches(undefined as any), 0);
+  // The tracked field wins once present, including a legitimate zero.
+  assert.equal(deliveredCadenceTouches({ stepIndex: 9, lastSentStep: 8, deliveredTouches: 2 } as any), 2);
+  assert.equal(deliveredCadenceTouches({ stepIndex: 9, lastSentStep: 8, deliveredTouches: 0 } as any), 0);
+});
+
+check("a cadence that never sent anything gets no close-out from either path", () => {
+  // Old regenerate path read `lastSentStep ?? stepIndex - 1` then added 1 back, so a record deep in
+  // the schedule that had never actually sent could still produce the sign-off.
+  const c = silentConv(0) as any;
+  c.followUpCadence = { status: "active", kind: "engaged", stepIndex: 11, anchorAt: "2026-05-14T00:00:00.000Z" };
+  assert.equal(deliveredCadenceTouches(c.followUpCadence), 0);
+  assert.equal(shouldSendDisengagedCloseout(c, deliveredCadenceTouches(c.followUpCadence)), false);
+});
+
+check("the three SILENT gates advance with delivered:false; the send paths do not", () => {
+  const loop = apiSrc.slice(apiSrc.indexOf("async function processDueFollowUpsUnlocked("));
+  const calls = loop.match(/advanceFollowUpCadence\(conv, cfg\.timezone(?:,\s*\{[^}]*\})?\)/g) ?? [];
+  assert.equal(calls.length, 8, `expected 8 cadence-advance sites in the loop, found ${calls.length}`);
+  const silent = calls.filter((c) => /delivered:\s*false/.test(c));
+  assert.equal(
+    silent.length,
+    4,
+    "exactly four gates advance in silence (quality suppress, value gate, its repeat backstop, past-event guard)"
+  );
+  // The one that holds the close-out must still end the ladder.
+  assert.equal(
+    silent.filter((c) => /endSequence:\s*disengagedCloseoutActive/.test(c)).length,
+    1,
+    "the cadence-quality suppress site passes endSequence so a held close-out still terminates"
+  );
 });
 
 // ---------------------------------------------------------------------------

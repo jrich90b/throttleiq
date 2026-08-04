@@ -498,6 +498,7 @@ import {
   shouldSuppressVoiceSummary,
   buildUnsummarizableCallNote,
   shouldSendDisengagedCloseout,
+  deliveredCadenceTouches,
   DISENGAGED_TAPER_AFTER_TOUCHES,
   registerMissedContactAttempt,
   registerContactReached,
@@ -9366,6 +9367,7 @@ async function resetFollowUpCadenceOnInbound(conv: any, inboundText: string) {
   cadence.nextDueAt = computeFollowUpDueAt(anchor, FOLLOW_UP_DAY_OFFSETS[0], tz);
   cadence.lastSentAt = undefined;
   cadence.lastSentStep = undefined;
+  cadence.deliveredTouches = undefined; // or a restarted chase opens at the taper and ends at once
   cadence.pausedUntil = undefined;
   cadence.pauseReason = undefined;
   cadence.scheduleInviteCount = 0;
@@ -15495,7 +15497,7 @@ async function buildCadenceRegeneratedDraft(
   // Disengagement taper: regenerate the next cadence draft as the graceful
   // close-out once a never-engaged lead has reached the taper step (the live
   // tick does the same, and advanceFollowUpCadence then ends the sequence).
-  if (shouldSendDisengagedCloseout(conv, lastSentStep + 1)) {
+  if (shouldSendDisengagedCloseout(conv, deliveredCadenceTouches(cadence))) {
     return { body: buildDisengagedCadenceCloseout(conv.lead?.firstName) };
   }
 
@@ -34113,10 +34115,7 @@ async function processDueFollowUpsUnlocked() {
     // at the taper step, then advanceFollowUpCadence ends the sequence. Keep the
     // close-out pristine — skip dedupe rotation and context/personalization
     // appends so it reads like a clean sign-off, not another nag.
-    const disengagedCloseoutActive = shouldSendDisengagedCloseout(
-      conv,
-      Number(cadence.stepIndex ?? 0)
-    );
+    const disengagedCloseoutActive = shouldSendDisengagedCloseout(conv, deliveredCadenceTouches(cadence));
     if (disengagedCloseoutActive) {
       message = buildDisengagedCadenceCloseout(firstName);
     }
@@ -34231,7 +34230,7 @@ async function processDueFollowUpsUnlocked() {
           stepIndex: cadence.stepIndex,
           reason: valueGate.reason
         });
-        advanceFollowUpCadence(conv, cfg.timezone);
+        advanceFollowUpCadence(conv, cfg.timezone, { delivered: false });
         continue;
       }
       if (valueGate.action === "replace") {
@@ -34246,7 +34245,7 @@ async function processDueFollowUpsUnlocked() {
             stepIndex: cadence.stepIndex,
             kind: valueGate.kind
           });
-          advanceFollowUpCadence(conv, cfg.timezone);
+          advanceFollowUpCadence(conv, cfg.timezone, { delivered: false });
           continue;
         }
         console.log("[followup][cadence-value-gate] filler replaced with value touch", {
@@ -34281,7 +34280,7 @@ async function processDueFollowUpsUnlocked() {
         convId: conv.id,
         stepIndex: cadence.stepIndex
       });
-      advanceFollowUpCadence(conv, cfg.timezone);
+      advanceFollowUpCadence(conv, cfg.timezone, { delivered: false });
       continue;
     }
     const systemMode = effectiveMode(conv);
@@ -34408,7 +34407,8 @@ async function processDueFollowUpsUnlocked() {
           convId: conv.id,
           channel: enfChannel
         });
-        advanceFollowUpCadence(conv, cfg.timezone);
+        // Nothing went out: no touch spent. A held CLOSE-OUT still ends the ladder (endSequence).
+        advanceFollowUpCadence(conv, cfg.timezone, { delivered: false, endSequence: disengagedCloseoutActive });
         continue;
       }
     }
