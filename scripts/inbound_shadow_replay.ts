@@ -8,6 +8,7 @@ import { isDealerLeadAppConfirmedDemoRideAdfText } from "../services/api/src/dom
 import { hasDeliveredOrPendingDealerRideThankYou } from "../services/api/src/domain/dealerRideThankYouDedup.ts";
 import {
   checkReplayFidelity,
+  classifyReplayErrorCause,
   composeReplayCommentLines,
   hasHydrationCompleted,
   isStoredVehicleConsistentWithBody,
@@ -755,8 +756,54 @@ async function startApi(args: {
   };
   child.stdout.on("data", collect);
   child.stderr.on("data", collect);
-  await waitForHealth(args.port, child, logs);
+  try {
+    await waitForHealth(args.port, child, logs);
+  } catch (err) {
+    // A boot that never became healthy still leaves a live child (the "did not become healthy"
+    // path times out while the process is running). Without this the retry below — and every
+    // failed case before it — leaks a temporary API holding a port and the prepared store.
+    await stopApi(child);
+    throw err;
+  }
   return { child, logs };
+}
+
+/** Bounded retry budget for a boot that failed for a HARNESS reason. */
+const BOOT_RETRY_BACKOFF_MS = [2_000, 8_000] as const;
+
+/**
+ * Boot the temporary API, retrying a HARNESS-caused failure a couple of times.
+ *
+ * WHY: the harness boots one API per case out of the same deploy checkout a deploy runs
+ * `npm ci` in, so a deploy landing mid-sweep makes every boot in that window fail on module
+ * resolution (2026-08-04: 29 consecutive cases). Excluding those turns keeps the gate honest,
+ * but they are still lost coverage; a short retry recovers the ones that straddle the edge of
+ * the install window at a bounded cost (at most ~10s per case, only on the failing path).
+ *
+ * Only HARNESS causes retry — re-running a real agent failure would just re-fail, and the
+ * classifier defaults to "agent", so an unrecognised error costs nothing extra.
+ */
+async function startApiWithRetry(args: {
+  dataDir: string;
+  jobsPath: string;
+  envFileVars: Record<string, string>;
+}): Promise<{ child: ChildProcessWithoutNullStreams; logs: string[]; port: number }> {
+  let lastErr: any = null;
+  for (let attempt = 0; attempt <= BOOT_RETRY_BACKOFF_MS.length; attempt += 1) {
+    // A fresh port each time: the previous attempt's child may still be releasing its own.
+    const port = await findFreePort();
+    try {
+      const started = await startApi({ ...args, port });
+      return { ...started, port };
+    } catch (err: any) {
+      lastErr = err;
+      if (classifyReplayErrorCause(err?.message) !== "harness") throw err;
+      const backoff = BOOT_RETRY_BACKOFF_MS[attempt];
+      if (backoff == null) break;
+      await sleep(backoff);
+    }
+  }
+  throw lastErr;
 }
 
 async function stopApi(child: ChildProcessWithoutNullStreams): Promise<void> {
@@ -1239,13 +1286,12 @@ async function replayOne(
   const systemMode = systemModeForReplayMode(candidate.provider, mode);
   try {
     caseData = await prepareCaseData(args, candidate, rootTempDir, mode);
-    const port = await findFreePort();
-    const started = await startApi({
+    const started = await startApiWithRetry({
       dataDir: caseData.dataDir,
       jobsPath: caseData.jobsPath,
-      envFileVars,
-      port
+      envFileVars
     });
+    const port = started.port;
     child = started.child;
     logs = started.logs;
 
