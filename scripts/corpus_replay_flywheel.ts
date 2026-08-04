@@ -116,18 +116,35 @@ export type TurnScore = {
  * FAIL DIRECTION: unknown returns undefined and the caller keeps the sweep time — i.e. "recent",
  * which keeps the finding visible. A turn time can only ever make a finding look OLDER, and a real
  * post-fix regression still carries a post-fix turn time, so it still resurfaces.
+ *
+ * Every resolved time must also be PLAUSIBLE, because "older" is the one direction that can hide a
+ * real regression: a turn mis-dated to 1970 sits before every disposition boundary, so a genuine
+ * post-fix recurrence would be silently eaten instead of coming back. The two ways that happens are
+ * a seconds-precision epoch read as milliseconds (1779200966 → 1970-01-21) and a trailing number
+ * that was never an epoch at all (a counter, a ref id). A future date is refused for the mirrored
+ * reason — it would postdate every boundary and resurface forever, the exact bug this fixes.
+ * Implausible ⇒ undefined ⇒ the sweep clock ⇒ visible. Uncertainty always costs noise, never silence.
  */
-export function turnTimeOf(row: Pick<ReplayRow, "messageAt" | "messageId">): string | undefined {
-  const at = Date.parse(String(row.messageAt ?? ""));
-  if (Number.isFinite(at)) return new Date(at).toISOString();
+/** No conversation in this corpus predates the product; anything earlier is a decoding artefact. */
+const EARLIEST_PLAUSIBLE_TURN_MS = Date.parse("2020-01-01T00:00:00.000Z");
+/** Clock skew between the store and the sweep host is minutes; a day of slack is generous. */
+const FUTURE_TURN_SLACK_MS = 24 * 60 * 60 * 1000;
+
+export function turnTimeOf(
+  row: Pick<ReplayRow, "messageAt" | "messageId">,
+  nowMs: number = Date.now()
+): string | undefined {
+  const plausible = (ms: number): string | undefined =>
+    Number.isFinite(ms) && ms >= EARLIEST_PLAUSIBLE_TURN_MS && ms <= nowMs + FUTURE_TURN_SLACK_MS
+      ? new Date(ms).toISOString()
+      : undefined;
+
+  const at = plausible(Date.parse(String(row.messageAt ?? "")));
+  if (at) return at;
   // The store's message ids carry the send epoch as their last segment (msg_<rand>_<epochMs>);
   // it agrees with messageAt to within milliseconds, so it is a faithful second source.
   const epoch = String(row.messageId ?? "").match(/_(\d{10,})$/);
-  if (epoch) {
-    const ms = Number(epoch[1]);
-    if (Number.isFinite(ms) && ms > 0) return new Date(ms).toISOString();
-  }
-  return undefined;
+  return epoch ? plausible(Number(epoch[1])) : undefined;
 }
 
 export function turnKeyOf(row: Pick<ReplayRow, "conversationId" | "messageId" | "messageIndex" | "body">): string {
@@ -1111,6 +1128,44 @@ function selfTest() {
   );
   assert(turnTimeOf({ messageId: "SM1" }) === undefined, "an id carrying no epoch resolves to unknown");
   assert(turnTimeOf({}) === undefined, "no messageAt and no id resolves to unknown");
+
+  // PLAUSIBILITY BOUND. "Older" is the one direction that hides a real regression — a turn dated
+  // 1970 sits before every disposition boundary, so a genuine post-fix recurrence would be eaten.
+  const NOW = Date.parse("2026-08-04T22:00:00.000Z");
+  assert(
+    turnTimeOf({ messageId: "msg_abc_1779200966" }, NOW) === undefined,
+    "a SECONDS-precision epoch read as ms lands in 1970 and is refused, not stamped"
+  );
+  assert(
+    turnTimeOf({ messageId: "msg_abc_1234567890" }, NOW) === undefined,
+    "a trailing number that was never an epoch (counter/ref id) is refused"
+  );
+  assert(
+    turnTimeOf({ messageAt: "1970-01-21T00:00:00.000Z" }, NOW) === undefined,
+    "an implausible messageAt is refused too — the bound is on the RESOLVED time, not the source"
+  );
+  assert(
+    turnTimeOf({ messageAt: "2027-01-01T00:00:00.000Z" }, NOW) === undefined,
+    "a FUTURE turn is refused — it would postdate every boundary and resurface forever"
+  );
+  assert(
+    turnTimeOf({ messageAt: "2026-08-04T22:30:00.000Z" }, NOW) === "2026-08-04T22:30:00.000Z",
+    "a turn minutes ahead of the sweep clock is ordinary skew, not a future date"
+  );
+  assert(
+    turnTimeOf({ messageAt: "not a date", messageId: "msg_a83c75bd8109e_1780786144846" }, NOW) ===
+      "2026-06-06T22:49:04.846Z",
+    "an unusable messageAt falls through to the id's epoch rather than giving up"
+  );
+  {
+    // The whole point of the bound: an implausible time must cost NOISE, never silence.
+    const RUN = "2026-08-04T07:53:34.625Z";
+    const bogus = scoreTurn(mk({ messageId: "msg_abc_1779200966", messageAt: undefined, draft: null, verdict: "no_response" }), null);
+    assert(
+      buildFindings([bogus], [], RUN)[0]?.occurredAt === RUN,
+      "an implausible turn time keeps the sweep clock — the finding stays visible instead of aging out"
+    );
+  }
   {
     const RUN = "2026-08-04T07:53:34.625Z";
     const old = scoreTurn(
