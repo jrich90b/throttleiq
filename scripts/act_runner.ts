@@ -42,7 +42,7 @@ import {
   type DispositionRecord
 } from "../services/api/src/domain/dispositionLedger.ts";
 import { isReportGradeStale, refreshSupersededGrades } from "../services/api/src/domain/anomalyClassifier.ts";
-import { listOpenLoopPrs, listRecentlyMergedLoopPrs } from "./loopPrLedger.ts";
+import { readLoopPrLedger } from "./loopPrLedger.ts";
 
 const argv = process.argv.slice(2);
 const sub = argv[0];
@@ -166,12 +166,22 @@ function git(args: string[]): string {
 // moves on instead of filing a second PR for the same finding.
 function skipIfDuplicateOpenPr(findingKey: string | undefined): void {
   if (!findingKey || !isMeaningfulFindingKey(findingKey)) return;
+  const ledger = readLoopPrLedger({ reportRoot });
   const existing =
-    findOpenPrForFindingKey(listOpenLoopPrs(), findingKey) ??
-    findMergedPrForFindingKey(listRecentlyMergedLoopPrs(), findingKey);
+    findOpenPrForFindingKey(ledger.openPrs, findingKey) ??
+    findMergedPrForFindingKey(ledger.mergedPrs, findingKey);
   if (existing) {
     console.log(`DUPLICATE: open PR #${existing.number} already covers "${findingKey}" — skipping (no new PR).`);
     process.exit(3);
+  }
+  // Fail-direction here is unchanged and deliberate: an unverifiable ledger must never BLOCK a
+  // fix. But it must not pass silently either, or a duplicate PR gets filed with no trace of why
+  // the dedup missed it. Warn and continue.
+  if (!ledger.canProveAbsence) {
+    console.warn(
+      `!! DEDUP UNVERIFIED for "${findingKey}" — ${ledger.detail}.\n` +
+        `   Building anyway (never drop a fix we can't prove is covered), but this PR may duplicate another routine's.`
+    );
   }
 }
 
@@ -189,7 +199,9 @@ if (sub === "check-open-pr") {
     console.error("check-open-pr requires --key <convId::dimension>");
     process.exit(2);
   }
-  const existing = findOpenPrForFindingKey(listOpenLoopPrs(), key);
+  // A POSITIVE match is proof from any source — an old snapshot can miss a PR, never invent one.
+  const ledger = readLoopPrLedger({ reportRoot });
+  const existing = findOpenPrForFindingKey(ledger.openPrs, key);
   if (existing) {
     console.log(`EXISTS #${existing.number} — open PR already covers "${key}"`);
     process.exit(3);
@@ -197,10 +209,21 @@ if (sub === "check-open-pr") {
   // A recently-MERGED PR covering the key means the fix already landed and the finding is a
   // stale echo awaiting its report refresh — report as covered (exit 4) so routines stop
   // re-investigating fixes that shipped (the "double work in two routines" class).
-  const merged = findMergedPrForFindingKey(listRecentlyMergedLoopPrs(), key);
+  const merged = findMergedPrForFindingKey(ledger.mergedPrs, key);
   if (merged) {
     console.log(`MERGED #${merged.number} — fix already merged (${merged.mergedAt ?? "recent"}) for "${key}"; stale echo, do not rebuild`);
     process.exit(4);
+  }
+  // An ABSENCE is only provable from a complete, current view. Without one, say so (exit 5) —
+  // NEVER print the confident "NONE" that a caller reads as "clear to build". Measured 2026-08-03:
+  // run on the box (no gh), this said NONE for a key PR #488 was carrying, and the same key said
+  // EXISTS #488 on the Mac. UNKNOWN is never a pass — re-run where gh is authed.
+  if (!ledger.canProveAbsence) {
+    console.log(
+      `UNKNOWN — cannot verify coverage of "${key}": ${ledger.detail}.\n` +
+        `   Re-run this check on a gh-authed host (the routine's Mac tree) before treating the finding as unclaimed.`
+    );
+    process.exit(5);
   }
   console.log(`NONE — no open or recently-merged PR covers "${key}"`);
   process.exit(0);

@@ -81,6 +81,36 @@ checks conversation-store sanity before/after, and health-checks). Then update
 - `/health` 502 after deploy retries → auto-rollback, then halt
 - DETECT `stop: true` → graceful done; report what shipped + remaining P2/P3
 
+## Cross-routine dedup: where you run the check matters (2026-08-03)
+
+Before investigating a finding, every routine asks whether another one already filed it:
+
+```
+npx tsx scripts/act_runner.ts check-open-pr --key "<convId>::<dimension>"
+```
+
+**Run it on a gh-authed host — your Mac tree — NEVER over ssh on the box. The box has no `gh`.**
+DETECT (STEP 2) runs on the box, so the natural habit is to run this there too; it then cannot
+see a single PR. It used to turn that blindness into a confident `NONE — no open or recently-merged
+PR covers "<key>"` at exit 0. Measured that day: the loop runner asked about
+`+17162605541::human_correction_material` on the box and got NONE, while PR #488 carried exactly
+that marker — the same key answered `EXISTS #488` on the Mac a minute later. A routine that trusts
+that NONE rebuilds a fix another routine already filed.
+
+Exit codes: **3** open PR covers it · **4** recently merged, stale echo · **0** `NONE`, genuinely
+unclaimed · **5** `UNKNOWN`, coverage could not be verified. **UNKNOWN is never a pass** — re-run it
+where `gh` is authed before treating a finding as unclaimed.
+
+The asymmetry underneath is deliberate (`scripts/loopPrLedger.ts`, `readLoopPrLedger`): a POSITIVE
+match is proof from any source — an old snapshot can miss a PR, never invent one — so the exported
+`pr_ledger.json` fallback is trusted when it matches. An ABSENCE is only provable from a complete,
+current view, i.e. a live `gh` read: that export is written daily and freshness-guarded at 3 days,
+so it can be perfectly "fresh" and still predate the PR being asked about.
+
+The BUILD path (`open-pr` / `review --ship`) keeps the opposite fail-direction on purpose — an
+unverifiable ledger must never BLOCK a fix — but it now prints a loud `DEDUP UNVERIFIED` warning
+instead of passing silently. Pinned by `act_runner:eval`.
+
 ## Standing authorization
 Joe authorized eval-gated push + deploy without asking (memory:
 `autonomous-execution-authorization`) and, on 2026-06-13, full prod autonomy for
