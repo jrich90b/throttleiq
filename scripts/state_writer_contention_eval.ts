@@ -748,7 +748,15 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 // byte-identical copies inside one function, which `countWriters` collapses to a single writer.
 // `appointment` 4 -> 2. MEASURED on the post-change tree.
 // RATCHET DOWN ONLY.
-const UNREFEREED_WRITER_BASELINE = 74;
+// 74 -> 72. The watch-RECORD-SHAPE un-stacking (2026-08-04): `inventoryWatches` 2 -> 0. Two alert
+// paths hand-wrote the same prefer-list / wrap-singular / backfill block; they now ask
+// `resolveInventoryWatchListNormalization`. Shipped alongside the exactness ladder (10 copies, 3
+// shapes, both disagreements preserved) — which moved the ratchet by 0, because refereeing
+// `inventoryWatch`'s only unrefereed writer UN-COLLAPSED a neighbour ~20 lines above
+// (`pref.watch.make = leadVehicle.make`, a fill-a-blank backfill). Seventh sighting of that
+// artifact; the neighbour is scoped as the next slice. MEASURED on the post-change tree.
+// RATCHET DOWN ONLY.
+const UNREFEREED_WRITER_BASELINE = 72;
 
 {
   const sourceFiles: SourceFile[] = [];

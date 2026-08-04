@@ -6900,3 +6900,151 @@ export function decideAppointmentPromptRecord(
     why: "attendance_question_asked: staff were asked whether the customer showed — stamp it so we ask once"
   };
 }
+
+/**
+ * HOW SPECIFIC IS THIS WATCH? — `inventoryWatch.exactness`.
+ *
+ * TEN places in `index.ts` (plus one repair script) each carried their own copy of the same
+ * three-rung ladder: a year RANGE means a model range, a year PLUS a distinguishing detail means
+ * an exact unit, a bare year means year+model, and anything less stays model-only. They now all
+ * ask here.
+ *
+ * MEASURED BEFORE WRITING THIS (and it is the reason the divergences below are preserved rather
+ * than fixed): **`exactness` has ZERO readers.** Nothing in `services/api/src` or `apps/web`
+ * consults it — grep-verified — so it is a descriptive field today, not a matching input.
+ * That makes the two disagreements below free to keep AND free to get wrong later, which is
+ * exactly why they are named on the decision instead of quietly normalised.
+ *
+ * DIVERGENCE 1 — THE MODEL-RANGE RUNG IS MISSING FROM SEVEN OF THE TEN LANES. Only the ADF
+ * multi-watch build, the context-note build and the manual-outbound list recognise
+ * `yearMin`+`yearMax` as "model range"; on the other seven a year range falls through to
+ * model-only. Preserved per lane behind `recognisesYearRange`.
+ *
+ * DIVERGENCE 2 — WHAT COUNTS AS "DISTINGUISHING". Eight lanes accept a COLOUR **or** a TRIM
+ * ("2023 Road Glide CVO" is exact); two — the seller-intake list builders — accept a colour only,
+ * so the same customer's trim-only watch reads year_model there. Preserved behind
+ * `trimCountsAsDistinguishing`.
+ *
+ * FAIL DIRECTION, worth stating because it is not the usual one: an exactness that reads TOO
+ * SPECIFIC would, the day something consumes it, narrow which arrivals we alert a customer about
+ * — i.e. fail toward silence. So when a lane's rule is in doubt the ladder must fall DOWN
+ * (model_only), never up, and every rung below requires strictly more evidence than the one under it.
+ */
+export type InventoryWatchExactness = "exact" | "year_model" | "model_range" | "model_only";
+
+export type InventoryWatchExactnessInput = {
+  /** A single pinned model year. */
+  year?: number | string | null;
+  /** A pinned year RANGE. */
+  yearMin?: number | string | null;
+  yearMax?: number | string | null;
+  color?: string | null;
+  trim?: string | null;
+  /** Divergence 1 — does this lane read a year range as a model range? */
+  recognisesYearRange: boolean;
+  /** Divergence 2 — does a TRIM count as distinguishing, or only a colour? */
+  trimCountsAsDistinguishing: boolean;
+};
+
+export type InventoryWatchExactnessDecision = {
+  /** `null` = this lane's ladder does not fire; the caller's existing value stands. */
+  exactness: InventoryWatchExactness | null;
+  divergence: string | null;
+  why: string;
+};
+
+/** Pure. */
+export function resolveInventoryWatchExactness(
+  input: InventoryWatchExactnessInput
+): InventoryWatchExactnessDecision {
+  const hasRange = !!input.yearMin && !!input.yearMax;
+  const hasYear = !!input.year;
+  const distinguishing = !!input.color || (input.trimCountsAsDistinguishing && !!input.trim);
+  if (input.recognisesYearRange && hasRange) {
+    return {
+      exactness: "model_range",
+      divergence: null,
+      why: "a pinned year RANGE describes a span of model years, not one unit"
+    };
+  }
+  if (hasYear && distinguishing) {
+    return {
+      exactness: "exact",
+      divergence: null,
+      why: "a year plus a colour or trim names one unit closely enough to call it exact"
+    };
+  }
+  if (hasYear) {
+    return {
+      exactness: "year_model",
+      // Divergence 2 is named HERE, where it actually bites: this lane is holding a trim it does
+      // not count, so it lands a rung lower than the eight lanes that do.
+      divergence:
+        !input.trimCountsAsDistinguishing && !!input.trim
+          ? "this lane ignores TRIM, so a trim-only watch reads year_model where eight other lanes read exact"
+          : null,
+      why: "a bare year pins the model year, nothing finer"
+    };
+  }
+  // Every original ladder ENDS here with no `else` — the caller's literal already defaults to
+  // model_only, and a lane with a year range it does not recognise falls through to exactly that.
+  return {
+    exactness: null,
+    divergence:
+      !input.recognisesYearRange && hasRange
+        ? "this lane does not recognise a year RANGE, so the watch stays model_only"
+        : null,
+    why: "nothing pins a year — the caller's model_only default stands"
+  };
+}
+
+/**
+ * THE LEGACY SINGULAR WATCH AND THE LIST — which is the truth, and does reading it repair the record?
+ *
+ * A conversation may carry `inventoryWatch` (the original single watch), `inventoryWatches` (the
+ * list that replaced it), or both. Two alert paths — the watchlist sweep and the
+ * available-item notifier — each hand-wrote the same eight lines: prefer a non-empty list,
+ * otherwise wrap the singular, and if the list was missing entirely, backfill it from the singular.
+ * They now both ask here.
+ *
+ * The backfill is a HEAL, and its guard is deliberately `!conv.inventoryWatches` (missing), NOT
+ * `!conv.inventoryWatches?.length` (missing or empty): an explicitly EMPTY list is a record that
+ * says "this lead has no watches", and re-populating it from a stale singular would resurrect a
+ * watch a disarm lane just took off. See `decideInventoryWatchDisarm`, whose repair lanes store
+ * exactly that empty array.
+ */
+export type InventoryWatchListNormalizationInput = {
+  /** `undefined` = no list field at all; `[]` = an explicitly empty list. */
+  listLength: number | null;
+  hasSingular: boolean;
+};
+
+export type InventoryWatchListNormalizationDecision = {
+  /** Which source the caller should read this turn. */
+  source: "list" | "singular" | "none";
+  /** Write the singular into the list field — only when the list is absent entirely. */
+  backfillListFromSingular: boolean;
+  why: string;
+};
+
+/** Pure. */
+export function resolveInventoryWatchListNormalization(
+  input: InventoryWatchListNormalizationInput
+): InventoryWatchListNormalizationDecision {
+  const listLength = input.listLength;
+  if (listLength !== null && listLength > 0) {
+    return { source: "list", backfillListFromSingular: false, why: "the list has entries — it is the truth" };
+  }
+  if (!input.hasSingular) {
+    return { source: "none", backfillListFromSingular: false, why: "no list entries and no legacy singular" };
+  }
+  return {
+    source: "singular",
+    // Only when the list field is ABSENT. An empty list is a statement, not a gap.
+    backfillListFromSingular: listLength === null,
+    why:
+      listLength === null
+        ? "legacy record: only the singular exists — read it and backfill the list"
+        : "an explicitly EMPTY list stands; read the singular this turn but do not resurrect it into the list"
+  };
+}
