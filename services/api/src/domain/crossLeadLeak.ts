@@ -6,6 +6,15 @@
  * flags a phone/email in an outbound that is ANOTHER conversation's OWN lead contact (a real customer's
  * number/email), so a stray digit string or the dealer's own number won't fire. Stock numbers are
  * shared inventory, not PII, so they are NOT flagged. Surfaces candidates for the agent-watch loop.
+ *
+ * A DEALER'S OWN CONTACT IS NOT LEAKABLE PII. A rep handing a customer their work email or desk line
+ * is the intended behavior. Lead feeds routinely drop a rep's address into a lead record
+ * (`lead.email = gio@<dealer-domain>`), which made that staff address "belong" to a customer
+ * conversation and flagged every later thread that quoted it. Pass `dealerContacts` (built by
+ * `collectDealerContacts` from the dealer's own staff roster + profile — no hardcoded domain, so it
+ * stays dealer-portable) and those contacts are neither REGISTERED as a customer's nor FLAGGED when
+ * quoted. Deterministic on purpose: this governs what a safety scorer is allowed to see, not how
+ * customer intent is read.
  */
 import type { Conversation } from "./conversationStore.js";
 
@@ -43,23 +52,84 @@ function leadContacts(conv: any): { phones: Set<string>; emails: Set<string> } {
   return { phones, emails };
 }
 
+export type DealerContacts = { phones: Set<string>; emails: Set<string>; emailDomains: Set<string> };
+
+export const EMPTY_DEALER_CONTACTS: DealerContacts = { phones: new Set(), emails: new Set(), emailDomains: new Set() };
+
+function emailDomain(email: string): string {
+  const at = email.lastIndexOf("@");
+  return at === -1 ? "" : email.slice(at + 1).trim().toLowerCase();
+}
+
+/**
+ * Pure. Collects the dealership's OWN contacts from its staff roster (`users.json`) and profile
+ * (`dealer_profile.json`). Dealer-portable: every value comes from that dealer's own records.
+ *
+ * `emailDomains` covers the shared boxes no roster lists (sales@, finance@, service@) — a domain the
+ * dealer already publishes as its own from/reply-to/website is the dealership, never a customer.
+ */
+export function collectDealerContacts(args: { users?: any; dealerProfile?: any }): DealerContacts {
+  const phones = new Set<string>();
+  const emails = new Set<string>();
+  const emailDomains = new Set<string>();
+
+  const rawUsers = args.users;
+  const users: any[] = Array.isArray(rawUsers) ? rawUsers : Array.isArray(rawUsers?.users) ? rawUsers.users : [];
+  for (const u of users) {
+    const p = normalizePhone(u?.phone);
+    if (p) phones.add(p);
+    const e = String(u?.email ?? "").trim().toLowerCase();
+    if (e.includes("@")) {
+      emails.add(e);
+      const d = emailDomain(e);
+      if (d) emailDomains.add(d);
+    }
+  }
+
+  const profile = args.dealerProfile ?? {};
+  for (const key of ["fromEmail", "replyToEmail"]) {
+    const e = String(profile?.[key] ?? "").trim().toLowerCase();
+    if (e.includes("@")) {
+      emails.add(e);
+      const d = emailDomain(e);
+      if (d) emailDomains.add(d);
+    }
+  }
+  const profilePhone = normalizePhone(profile?.phone);
+  if (profilePhone) phones.add(profilePhone);
+  // The dealer's public website host is its own domain — staff mail lives there too.
+  const site = String(profile?.website ?? "").trim().toLowerCase();
+  const host = site.replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0];
+  if (host.includes(".")) emailDomains.add(host);
+
+  return { phones, emails, emailDomains };
+}
+
+const isDealerEmail = (email: string, dealer: DealerContacts): boolean =>
+  dealer.emails.has(email) || dealer.emailDomains.has(emailDomain(email));
+
+const isDealerPhone = (phone: string, dealer: DealerContacts): boolean => dealer.phones.has(phone);
+
 const isOutbound = (m: any) =>
   m?.direction === "out" && (m?.provider === "draft_ai" || m?.provider === "human" || m?.provider === "twilio" || m?.provider === "sendgrid");
 
 /**
  * Pure. Builds an index of which conversation each customer phone/email belongs to, then scans every
- * outbound for a contact that belongs to a DIFFERENT conversation.
+ * outbound for a contact that belongs to a DIFFERENT conversation. Dealer-owned contacts never enter
+ * the index and are never flagged.
  */
-export function findCrossLeadLeaks(args: { conversations: Conversation[] }): CrossLeadLeak[] {
+export function findCrossLeadLeaks(args: { conversations: Conversation[]; dealerContacts?: DealerContacts }): CrossLeadLeak[] {
   const convs = args.conversations ?? [];
+  const dealer = args.dealerContacts ?? EMPTY_DEALER_CONTACTS;
   const phoneOwner = new Map<string, { convId: string; leadKey: string }>();
   const emailOwner = new Map<string, { convId: string; leadKey: string }>();
   for (const conv of convs) {
     const id = String((conv as any).id ?? "");
     const leadKey = String((conv as any).leadKey ?? "");
     const { phones, emails } = leadContacts(conv);
-    for (const p of phones) if (!phoneOwner.has(p)) phoneOwner.set(p, { convId: id, leadKey });
-    for (const e of emails) if (!emailOwner.has(e)) emailOwner.set(e, { convId: id, leadKey });
+    // A rep's address sitting in a lead record does not make it that customer's contact.
+    for (const p of phones) if (!isDealerPhone(p, dealer) && !phoneOwner.has(p)) phoneOwner.set(p, { convId: id, leadKey });
+    for (const e of emails) if (!isDealerEmail(e, dealer) && !emailOwner.has(e)) emailOwner.set(e, { convId: id, leadKey });
   }
 
   const leaks: CrossLeadLeak[] = [];
@@ -72,7 +142,7 @@ export function findCrossLeadLeaks(args: { conversations: Conversation[] }): Cro
       if (!body) continue;
       for (const raw of body.match(PHONE_RE) ?? []) {
         const p = normalizePhone(raw);
-        if (!p || own.phones.has(p)) continue;
+        if (!p || own.phones.has(p) || isDealerPhone(p, dealer)) continue;
         const owner = phoneOwner.get(p);
         if (owner && owner.convId !== id) {
           leaks.push({ convId: id, leadKey: String((conv as any).leadKey ?? ""), kind: "phone", leakedValue: p, ownerConvId: owner.convId, ownerLeadKey: owner.leadKey, at: String(m?.at ?? ""), preview: body.slice(0, 160) });
@@ -80,7 +150,7 @@ export function findCrossLeadLeaks(args: { conversations: Conversation[] }): Cro
       }
       for (const raw of body.match(EMAIL_RE) ?? []) {
         const e = raw.toLowerCase();
-        if (own.emails.has(e)) continue;
+        if (own.emails.has(e) || isDealerEmail(e, dealer)) continue;
         const owner = emailOwner.get(e);
         if (owner && owner.convId !== id) {
           leaks.push({ convId: id, leadKey: String((conv as any).leadKey ?? ""), kind: "email", leakedValue: e, ownerConvId: owner.convId, ownerLeadKey: owner.leadKey, at: String(m?.at ?? ""), preview: body.slice(0, 160) });
