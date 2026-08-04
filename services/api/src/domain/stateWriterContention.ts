@@ -135,13 +135,27 @@ function collectAliasBindings(lines: string[]): { line: number; alias: string; f
   for (const [i, line] of lines.entries()) {
     const trimmed = line.trim();
     if (trimmed.startsWith("//") || trimmed.startsWith("*")) continue;
-    const match = pattern.exec(trimmed);
+    const match = pattern.exec(trimmed) ?? WRAPPED_DEFAULT_BINDING.exec(stripAsAny(trimmed));
     if (match && !IGNORED_FIELDS.has(match[2])) {
       bindings.push({ line: i, alias: match[1], field: match[2] });
     }
   }
   return bindings;
 }
+
+/**
+ * CUT 5b — `const alias = (conv.field = conv.field ?? {})`, the initialise-and-bind idiom.
+ *
+ * The plain pattern above needs the binding to END after the field, so this shape bound nothing at
+ * all: every subsequent `alias.sub = …` was invisible to the queue. It is not a rare spelling —
+ * all eight `financeOutcomeNotify` sites are written exactly this way, and the field's whole
+ * apparent contention was the eight identical ROOT defaults (which cut 5a now correctly excuses)
+ * while the actual disagreement, on the SUB-KEYS, went uncounted. The two halves of cut 5 must ship
+ * together for that reason: 5a alone drops a field to zero and hides a live fight.
+ */
+const WRAPPED_DEFAULT_BINDING = new RegExp(
+  `\\b(?:const|let)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*\\(\\s*(?:${STATE_ROOTS.join("|")})\\??\\.([A-Za-z_][A-Za-z0-9_]*)\\s*=`
+);
 
 /**
  * Top-level function boundaries, used to cluster writes by DECISION POINT rather than by line
@@ -265,8 +279,31 @@ function stripLeadingGuard(text: string): string {
   return guarded ? guarded[1].trim() : text;
 }
 
+/**
+ * CUT 5a — `const alias = (conv.field = conv.field ?? {})` → `conv.field = conv.field ?? {}`.
+ *
+ * Purely a PARSING fix, in the same family as cut 4's same-line `if (…)` guard: `assignedPath`
+ * needs the line to START with the assigned path, and the `const alias = (` prefix defeated that,
+ * so an idempotent default that cut 3 already excuses kept counting whenever someone also wanted
+ * the initialised object in a local. All eight `financeOutcomeNotify` writers are this one idiom.
+ *
+ * It adds NO new excuse: the unwrapped text is handed to the same three rules below, so
+ * `const x = (conv.status = "closed")` — a real decision wearing the same wrapper — still counts.
+ *
+ * Peeling is UNCONDITIONAL, and deliberately so. A first draft gated it on the inner text parsing
+ * as a path assignment, to keep `const x = (a === b)` from being peeled — but that gate is a
+ * provable no-op: when the inner is not an assignment, `assignedPath` below returns null on it and
+ * the function answers false, which is exactly what it answered before the peel. It survived every
+ * attempt to sabotage it, which is the tell. Cut 4 already rejected one piece of machinery for
+ * never running; this is the same call.
+ */
+function stripBindingWrapper(text: string): string {
+  const wrapped = /^(?:const|let|var)\s+[A-Za-z_$][A-Za-z0-9_$]*\s*=\s*\((.+)\)\s*;?$/.exec(text.trim());
+  return wrapped ? wrapped[1].trim() : text;
+}
+
 export function isNonContendingWrite(trimmed: string): boolean {
-  const unguarded = stripLeadingGuard(trimmed);
+  const unguarded = stripBindingWrapper(stripLeadingGuard(trimmed));
   const path = assignedPath(unguarded);
   if (!path) return false;
   const value = assignedValue(unguarded);
