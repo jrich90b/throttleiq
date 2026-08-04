@@ -4826,7 +4826,10 @@ const CONVERSATION_STATE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   }
 };
 
-async function requestStructuredJson(args: {
+// Exported so the gold-corpus scorer asks its equivalence question through the SAME structured-JSON
+// path production uses (retries, fenced-JSON tolerance, capture) — a hand-rolled fetch in the scorer
+// would measure a different client than the one that serves customers.
+export async function requestStructuredJson(args: {
   model: string;
   prompt: string;
   schemaName: string;
