@@ -194,8 +194,17 @@ const CEILINGS: Ceiling[] = [
     // check, and `formatBusinessHoursForReply` moved out to domain/businessHoursGuard.ts to sit
     // with the invariant it formats. index.ts was sitting EXACTLY on the ceiling, so the slice had
     // to pay for itself in full.
-    max: 71_224,
-
+    // 71_224 -> 71_201. The voicemail follow-up TASK un-stacking: the three arms inside the
+    // recording handler's `if (isVoicemail)` block each hand-wrote its own "is there already an
+    // open task" scan and its own addTodo call; they now call applyVoicemailFollowUpTask
+    // (conversationStore), which asks decideVoicemailFollowUpTask (routeStateReducer). Net -23
+    // after the import line, and the referee is where the operator-reported inventory-watch park
+    // (+15416478489) now lives instead of a fourth inline condition.
+    // REBASE NOTE (ROUTINE_CONTRACT rule 3, the #418 trap): authored against a 71_345 main and
+    // proposed 71_322, then 71_310 against a 71_333 main; main has since ratcheted to 71_224, so
+    // both earlier numbers would have handed back every reduction between. Re-derived on the
+    // INTEGRATED tree — the slice is still worth exactly -23.
+    max: 71_201,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

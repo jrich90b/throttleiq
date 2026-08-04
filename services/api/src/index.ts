@@ -526,6 +526,7 @@ import {
   applyInventoryWatchPendingClearForStateParse,
   applyInventoryWatchPendingClearForIntentHints,
   inventoryWatchPendingAgeHours,
+  applyVoicemailFollowUpTask,
   applyCloseoutReversal,
   applyAppointmentConfirmRecord,
   clearAppointmentStaffPromptState
@@ -70799,79 +70800,55 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
           });
         }
         if (isVoicemail) {
+          // All three arms ask ONE referee whether this voicemail mints a staff task —
+          // `decideVoicemailFollowUpTask` (routeStateReducer), written through
+          // `applyVoicemailFollowUpTask`. See that referee for the fail-direction note: the
+          // inventory-watch park is deliberately four-clause because after it fires the watch is
+          // the lead's only remaining touch.
+          const sourceSid = recordingSid || bodyCallSid || callbackCallSid || undefined;
           if (inboundCall) {
-            const existing = listOpenTodos().some(
-              t => t.convId === conv.id && t.status === "open" && t.reason === "call"
-            );
-            if (!existing) {
-              const label = customerRaw
-                ? `Voicemail from ${customerRaw}`
-                : "Voicemail received — call back.";
-              addTodo(conv, "call", label, recordingSid || bodyCallSid || callbackCallSid || undefined);
-            }
+            applyVoicemailFollowUpTask(conv, {
+              lane: "inbound_voicemail",
+              summary: customerRaw ? `Voicemail from ${customerRaw}` : "Voicemail received — call back.",
+              sourceMessageId: sourceSid
+            });
           } else {
+            const cfg = await getSchedulerConfigHot();
+            const timezone = cfg.timezone || "America/New_York";
             if (isManualFinanceHandoff(conv)) {
-              const cfg = await getSchedulerConfigHot();
-              const timezone = cfg.timezone || "America/New_York";
               applyCadenceRevival(conv, {
                 trigger: "finance_no_contact",
                 anchorAtIso: nowIso(),
                 timeZone: timezone
               });
               setFollowUpMode(conv, "active", "finance_no_contact");
-              const existing = listOpenTodos().some(
-                t =>
-                  t.convId === conv.id &&
-                  t.status === "open" &&
-                  (t.taskClass === "followup" || t.reason === "call")
-              );
-              if (!existing) {
-                const schedule = buildDefaultCallbackFallbackSchedule(timezone);
-                addTodo(
-                  conv,
-                  "call",
-                  `Call customer (follow-up) — ${nextContactAttemptLabel(conv)}: no contact on the last call. Keep the lead moving until you reach them.`,
-                  recordingSid || bodyCallSid || callbackCallSid || undefined,
-                  undefined,
-                  schedule,
-                  "followup"
-                );
-              }
+              applyVoicemailFollowUpTask(conv, {
+                lane: "outbound_finance_handoff",
+                summary: `Call customer (follow-up) — ${nextContactAttemptLabel(conv)}: no contact on the last call. Keep the lead moving until you reach them.`,
+                sourceMessageId: sourceSid,
+                schedule: buildDefaultCallbackFallbackSchedule(timezone)
+              });
             } else {
               // Joe-approved 2026-07-02 (Brian Serena class, +17166021492: "marked called and
               // left voicemail... there should probably be a follow up for 2nd attempt"): a
               // voicemail-only outbound call on ANY conversation gets a 2nd-attempt call task
               // (due next morning, same schedule the finance flow uses) so the lead can't fall
               // through the cracks. Only the finance-specific cadence restart stays finance-only.
-              const cfg = await getSchedulerConfigHot();
-              const timezone = cfg.timezone || "America/New_York";
-              const existing = listOpenTodos().some(
-                t =>
-                  t.convId === conv.id &&
-                  t.status === "open" &&
-                  (t.taskClass === "followup" || t.reason === "call")
+              const decision = applyVoicemailFollowUpTask(conv, {
+                lane: "outbound_generic",
+                summary: `Call customer (follow-up) — ${nextContactAttemptLabel(conv)}: left a voicemail, no contact on the last call.`,
+                sourceMessageId: sourceSid,
+                schedule: buildDefaultCallbackFallbackSchedule(timezone)
+              });
+              recordRouteOutcome(
+                "manual",
+                decision.reason === "created"
+                  ? "voicemail_second_attempt_task_created"
+                  : decision.reason === "parked_on_inventory_watch"
+                    ? "voicemail_second_attempt_task_suppressed_inventory_watch"
+                    : "voicemail_call_todo_suppressed_outbound",
+                { convId: conv.id, leadKey: conv.leadKey }
               );
-              if (!existing) {
-                const schedule = buildDefaultCallbackFallbackSchedule(timezone);
-                addTodo(
-                  conv,
-                  "call",
-                  `Call customer (follow-up) — ${nextContactAttemptLabel(conv)}: left a voicemail, no contact on the last call.`,
-                  recordingSid || bodyCallSid || callbackCallSid || undefined,
-                  undefined,
-                  schedule,
-                  "followup"
-                );
-                recordRouteOutcome("manual", "voicemail_second_attempt_task_created", {
-                  convId: conv.id,
-                  leadKey: conv.leadKey
-                });
-              } else {
-                recordRouteOutcome("manual", "voicemail_call_todo_suppressed_outbound", {
-                  convId: conv.id,
-                  leadKey: conv.leadKey
-                });
-              }
             }
           }
           pauseFollowUpCadence(

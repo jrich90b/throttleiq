@@ -791,6 +791,27 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     }, ["resolveInventoryWatchPendingClear"]);
   }
 
+  // Added 2026-08-04 with the voicemail follow-up-task un-stacking (operator report +15416478489:
+  // "there is a watch on this. it should not have a task"). Sampled once PER LANE and once for the
+  // watch-parked shape, because the whole point of the referee is that ONLY the generic outbound
+  // lane parks — a single sample would hide exactly that. PROBE: `hasOpenFollowUpTask:false` is
+  // held fixed so the sample reads the park arbitration rather than the duplicate check.
+  for (const lane of ["inbound_voicemail", "outbound_finance_handoff", "outbound_generic"] as const) {
+    for (const parked of [false, true]) {
+      add(`voicemailFollowUpTask:${lane}:${parked ? "watch_parked" : "plain"}`, () => {
+        if (typeof reducer.decideVoicemailFollowUpTask !== "function") return undefined;
+        const decision = reducer.decideVoicemailFollowUpTask({
+          lane,
+          hasOpenFollowUpTask: false, // PROBE
+          activeInventoryWatchCount: parked ? 1 : 0, // PROBE
+          followUpMode: parked ? "holding_inventory" : "active", // PROBE
+          followUpReason: parked ? "inventory_watch" : "engaged" // PROBE
+        });
+        return { create: decision.create, reason: decision.reason };
+      }, ["decideVoicemailFollowUpTask"]);
+    }
+  }
+
   // Added 2026-08-02 with the appointment-CONFIRM un-stacking. Sampled once PER LANE, because the
   // whole point of this referee is that the slot-match lane answers `acknowledged` and the
   // reschedule latch differently from the two booked lanes — a single sample would hide exactly
