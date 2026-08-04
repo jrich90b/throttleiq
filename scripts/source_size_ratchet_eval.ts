@@ -142,7 +142,12 @@ const CEILINGS: Ceiling[] = [
     // pending ask + the dialog state + holding_inventory + stop the chase). Seven of the ten were in
     // this file; they now call applyInventoryWatchArm (conversationStore), which asks
     // decideInventoryWatchArm (routeStateReducer). Net -15 after the import line.
-    max: 71_345,
+    // 71_345 -> 71_344. The appointment confirm-record slice, second pass: the manual-outbound
+    // path stopped asking the referee on the CUSTOMER lane and then overwriting both answers, and
+    // the manual booking-parser path's hand-written status/confirmedBy/acknowledged trio became one
+    // applyAppointmentConfirmRecord call. A small net line win — the value is that four staff
+    // stamps of "this appointment is confirmed" now come from one table.
+    max: 71_344,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

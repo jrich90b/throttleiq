@@ -53271,16 +53271,16 @@ app.post("/conversations/:id/send", async (req, res) => {
     }
 
     let didSetAppointment = false;
+    // Matching the REP'S OWN outbound, not a customer's — hence its own referee lane (divergence 3).
     const matchedSuggested = confirmAppointmentIfMatchesSuggested(
       conv,
       text,
-      opts?.sourceMessageId ? String(opts.sourceMessageId) : undefined
+      opts?.sourceMessageId ? String(opts.sourceMessageId) : undefined,
+      { lane: "salesperson_manual_booking" }
     );
     if (matchedSuggested) {
       conv.appointment = conv.appointment ?? { status: "none", updatedAt: nowIso() };
-      conv.appointment.confirmedBy = "salesperson";
       conv.appointment.updatedAt = nowIso();
-      conv.appointment.acknowledged = true;
       setAppointmentBookedBy(conv, {
         actor: "human",
         channel: opts?.channel === "email" ? "email" : opts?.channel === "sms" ? "sms" : "manual",
@@ -53353,14 +53353,13 @@ app.post("/conversations/:id/send", async (req, res) => {
         conv.appointment.bookedCalendarId = null;
         conv.appointment.matchedSlot = undefined;
       }
-      conv.appointment.status = "confirmed";
+      // Same lane as the slot-match branch above: the rep's own send settled the time.
+      applyAppointmentConfirmRecord(conv, "salesperson_manual_booking");
       conv.appointment.whenIso = whenUtc;
       conv.appointment.whenText = whenText;
-      conv.appointment.confirmedBy = "salesperson";
       conv.appointment.updatedAt = nowIso();
       conv.appointment.sourceMessageId =
         opts?.sourceMessageId ? String(opts.sourceMessageId) : conv.appointment.sourceMessageId;
-      conv.appointment.acknowledged = true;
       setAppointmentBookedBy(conv, {
         actor: "human",
         channel: opts?.channel === "email" ? "email" : opts?.channel === "sms" ? "sms" : "manual",

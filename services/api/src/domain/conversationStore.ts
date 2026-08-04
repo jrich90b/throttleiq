@@ -4341,8 +4341,12 @@ function slotTimeMatches(slot: any, timeOnly: { hour12: number; minute: number }
 export function confirmAppointmentIfMatchesSuggested(
   conv: Conversation,
   inboundText: string,
-  sourceMessageId?: string
+  sourceMessageId?: string,
+  // Whose text is being matched. Defaults to the customer's, because four of the five callers are
+  // inbound lanes; the manual-outbound caller is matching the REP'S OWN send and says so.
+  opts?: { lane?: Extract<AppointmentConfirmLane, "customer_slot_match" | "salesperson_manual_booking"> }
 ) {
+  const slotMatchLane = opts?.lane ?? "customer_slot_match";
   const slots = conv.scheduler?.lastSuggestedSlots ?? [];
   if (!slots.length) {
     console.log("[appt-match] inbound:", inboundText);
@@ -4362,7 +4366,7 @@ export function confirmAppointmentIfMatchesSuggested(
       const single = relaxed[0];
       console.log("[appt-match] matched (relaxed):", single.startLocal ?? single.start);
       const decision = decideAppointmentConfirmRecord({
-        lane: "customer_slot_match",
+        lane: slotMatchLane,
         reschedulePending: conv.appointment?.reschedulePending
       });
       if (!decision.confirm) return false;
@@ -4370,7 +4374,7 @@ export function confirmAppointmentIfMatchesSuggested(
       conv.appointment.status = decision.status;
       conv.appointment.whenText = String(single.startLocal ?? single.start ?? "").trim();
       conv.appointment.whenIso = single.start;
-      conv.appointment.confirmedBy = decision.confirmedBy;
+      if (decision.confirmedBy) conv.appointment.confirmedBy = decision.confirmedBy;
       conv.appointment.updatedAt = nowIso();
       conv.appointment.acknowledged = decision.acknowledged;
       if (decision.clearReschedulePending) conv.appointment.reschedulePending = false;
@@ -4388,7 +4392,7 @@ export function confirmAppointmentIfMatchesSuggested(
         const single = byTime[0];
         console.log("[appt-match] matched (time-only):", single.startLocal ?? single.start);
         const decision = decideAppointmentConfirmRecord({
-          lane: "customer_slot_match",
+          lane: slotMatchLane,
           reschedulePending: conv.appointment?.reschedulePending
         });
         if (!decision.confirm) return false;
@@ -4396,7 +4400,7 @@ export function confirmAppointmentIfMatchesSuggested(
         conv.appointment.status = decision.status;
         conv.appointment.whenText = String(single.startLocal ?? single.start ?? "").trim();
         conv.appointment.whenIso = single.start;
-        conv.appointment.confirmedBy = decision.confirmedBy;
+        if (decision.confirmedBy) conv.appointment.confirmedBy = decision.confirmedBy;
         conv.appointment.updatedAt = nowIso();
         conv.appointment.acknowledged = decision.acknowledged;
         if (decision.clearReschedulePending) conv.appointment.reschedulePending = false;
@@ -4416,7 +4420,7 @@ export function confirmAppointmentIfMatchesSuggested(
   console.log("[appt-match] matched:", match.startLocal ?? match.start);
 
   const decision = decideAppointmentConfirmRecord({
-    lane: "customer_slot_match",
+    lane: slotMatchLane,
     reschedulePending: conv.appointment?.reschedulePending
   });
   if (!decision.confirm) return false;
@@ -4424,7 +4428,7 @@ export function confirmAppointmentIfMatchesSuggested(
   conv.appointment.status = decision.status;
   conv.appointment.whenText = String(match.startLocal ?? match.start ?? "").trim();
   conv.appointment.whenIso = match.start;
-  conv.appointment.confirmedBy = decision.confirmedBy;
+  if (decision.confirmedBy) conv.appointment.confirmedBy = decision.confirmedBy;
   conv.appointment.updatedAt = nowIso();
   conv.appointment.acknowledged = decision.acknowledged;
   if (decision.clearReschedulePending) conv.appointment.reschedulePending = false;
@@ -6566,22 +6570,27 @@ export function applyAppointmentConfirmRecord(
 ): AppointmentConfirmRecordDecision {
   const decision = decideAppointmentConfirmRecord({
     lane,
-    reschedulePending: conv.appointment?.reschedulePending
+    reschedulePending: conv.appointment?.reschedulePending,
+    currentStatus: conv.appointment?.status ?? null,
+    currentAcknowledged: conv.appointment?.acknowledged ?? null
   });
   if (!decision.confirm) return decision;
   conv.appointment = conv.appointment ?? { status: "none", updatedAt: nowIso() };
   conv.appointment.status = decision.status;
-  conv.appointment.confirmedBy = decision.confirmedBy;
+  // A null credit means this lane has no view on WHO confirmed — leave whatever is already on file.
+  if (decision.confirmedBy) conv.appointment.confirmedBy = decision.confirmedBy;
   conv.appointment.acknowledged = decision.acknowledged;
   if (decision.clearReschedulePending) conv.appointment.reschedulePending = false;
   return decision;
 }
 
+// Fired after every manual send. Asks the same referee as every other confirm-record writer
+// (lane `salesperson_manual_send`), which is what stops "a manual send may put the customer's word
+// on file" from drifting away from the rest of the table.
 export function markAppointmentAcknowledged(conv: Conversation) {
   if (!conv.appointment) return;
 
-  if (conv.appointment.status === "confirmed" && conv.appointment.acknowledged !== true) {
-    conv.appointment.acknowledged = true;
+  if (applyAppointmentConfirmRecord(conv, "salesperson_manual_send").confirm) {
     conv.appointment.updatedAt = nowIso();
     scheduleSave();
   }

@@ -5134,10 +5134,35 @@ export function decideCadenceReplacement(input: CadenceReplacementInput): Cadenc
 // PURE + CLOCK-FREE: the caller passes the stored latch state in; dates/slots stay caller-side.
 // ===================================================================================================
 
+// ---------------------------------------------------------------------------------------------
+// SECOND SLICE (2026-08-04) — the two STAFF writers that were patching the referee's answer up
+// afterwards. Same question ("what does the confirmed record contain"), two more askers:
+//
+//   DIVERGENCE 3 — the manual-outbound slot match (index.ts, reconcileManualOutboundState) called
+//     this referee on the `customer_slot_match` lane and then, three lines later, overwrote both of
+//     its answers: `confirmedBy` "customer" -> "salesperson" and `acknowledged` false -> true. The
+//     lane name was simply wrong for that caller — the text being matched is the REP'S OWN outbound,
+//     not the customer's. RULED: the manual path's answer stands, as its own lane. Crediting the
+//     customer for words a salesperson typed is false on its face, and a human pressed send on a
+//     message naming that slot, so the automatic "Reply YES to confirm" re-ask is exactly the
+//     robotic double-text Joe ruled against on 2026-07-20. Note this is the OPPOSITE call to
+//     divergence 1, and deliberately: divergence 1 is about a CUSTOMER half-committing with nobody
+//     watching the thread; here a member of staff is on it. The latch is still left alone — no
+//     calendar event was written on this path either.
+//
+//   DIVERGENCE 4 — none. `markAppointmentAcknowledged` (fired after every manual send) already
+//     agreed with the referee: it only ever stamps `acknowledged` on a record that is ALREADY
+//     `confirmed`, which is the same "a human is handling this thread" reasoning. It asks now
+//     rather than deciding for itself, and it is the one lane that leaves `confirmedBy` untouched
+//     — it says nothing about who confirmed, only that staff are on the thread.
+// ---------------------------------------------------------------------------------------------
+
 export type AppointmentConfirmLane =
   | "customer_slot_match" // customer's text matched a suggested slot — record only, no calendar yet
   | "customer_confirm_booking" // customer's ack booked the calendar event
-  | "voice_summary_booking"; // rep's call summary booked the calendar event
+  | "voice_summary_booking" // rep's call summary booked the calendar event
+  | "salesperson_manual_booking" // the REP’S own outbound settled the time — no calendar event
+  | "salesperson_manual_send"; // any manual send, on a record already confirmed
 
 /** The lanes whose confirm carries a REAL calendar event. See divergences 1 and 2 above. */
 const APPOINTMENT_CONFIRM_BOOKED_LANES = new Set<string>([
@@ -5149,13 +5174,18 @@ export type AppointmentConfirmRecordInput = {
   lane: AppointmentConfirmLane | string;
   /** The stored `appointment.reschedulePending` latch, exactly as it is right now. */
   reschedulePending?: boolean | null;
+  /** The stored `appointment.status`, for lanes that may only stamp an already-confirmed record. */
+  currentStatus?: string | null;
+  /** The stored `appointment.acknowledged`, so a lane can decline to re-stamp what is already set. */
+  currentAcknowledged?: boolean | null;
 };
 
 export type AppointmentConfirmRecordDecision = {
   /** Stamp the record. False means the caller must not write anything. */
   confirm: boolean;
   status: "confirmed";
-  confirmedBy: "customer";
+  /** Who gets the credit. `null` means LEAVE THE EXISTING CREDIT ALONE — this lane has no view. */
+  confirmedBy: "customer" | "salesperson" | null;
   /** Customer's word on file — suppresses the 24h YES/NO reminder. Booked lanes only. */
   acknowledged: boolean;
   /** Clear the reschedule latch alongside the confirm. Booked lanes only (divergence 2). */
@@ -5170,8 +5200,47 @@ export function decideAppointmentConfirmRecord(
 ): AppointmentConfirmRecordDecision {
   const lane = String(input.lane ?? "").trim();
   const booked = APPOINTMENT_CONFIRM_BOOKED_LANES.has(lane);
-  const recognized = booked || lane === "customer_slot_match";
   const latched = input.reschedulePending === true;
+
+  // Divergence 3: a salesperson's own outbound matched a slot we suggested. No calendar event, so
+  // the latch is left standing exactly as the customer slot-match lane leaves it — but a human is
+  // demonstrably on this thread, so the credit is theirs and the robotic re-ask stays off.
+  if (lane === "salesperson_manual_booking") {
+    return {
+      confirm: true,
+      status: "confirmed",
+      confirmedBy: "salesperson",
+      acknowledged: true,
+      clearReschedulePending: false,
+      divergence: latched ? "slot_match_confirm_leaves_the_reschedule_latch_standing" : null,
+      why:
+        "salesperson_manual_booking: a rep's own send settled the time — their confirm, no calendar " +
+        "event, and the automatic YES/NO re-ask stays off while staff are on the thread"
+    };
+  }
+
+  // Divergence 4 (agreement): a manual send only tells us staff are handling this thread. It may
+  // put the customer's word on file for a record that is ALREADY confirmed, and it says nothing
+  // about who confirmed it, so the existing credit is left untouched.
+  if (lane === "salesperson_manual_send") {
+    const alreadyConfirmed = String(input.currentStatus ?? "") === "confirmed";
+    const alreadyAcknowledged = input.currentAcknowledged === true;
+    return {
+      confirm: alreadyConfirmed && !alreadyAcknowledged,
+      status: "confirmed",
+      confirmedBy: null,
+      acknowledged: true,
+      clearReschedulePending: false,
+      divergence: null,
+      why: !alreadyConfirmed
+        ? "salesperson_manual_send: nothing is confirmed yet — a manual send must not stamp one into existence"
+        : alreadyAcknowledged
+          ? "salesperson_manual_send: already acknowledged — nothing to restamp"
+          : "salesperson_manual_send: staff are on this confirmed thread, so the automatic re-ask stands down"
+    };
+  }
+
+  const recognized = booked || lane === "customer_slot_match";
 
   return {
     confirm: recognized,
