@@ -792,6 +792,7 @@ import {
   resolveRoutingParserDecision,
   shouldTreatInboundAsTestRideBikeSelection
 } from "./domain/routerV2.js";
+import { formatBusinessHoursForReply, mayStateTokenAsWorkable, statableTimeReply } from "./domain/businessHoursGuard.js";
 import {
   resolveAcceptedVisitTimeOffer,
   shouldOfferTimesAfterAcceptance
@@ -23146,42 +23147,6 @@ function formatRememberedScheduleTimeForReply(text: string | null | undefined): 
   return token ? formatTime12h(token) : compact;
 }
 
-function formatBusinessHoursForReply(
-  hours?: Record<string, any> | null,
-  country?: string | null
-): string | null {
-  if (!hours) return null;
-  const dayOrder = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
-  const entries = dayOrder
-    .map(day => ({ day, open: hours?.[day]?.open, close: hours?.[day]?.close }))
-    .filter(d => d.open && d.close);
-  if (!entries.length) return null;
-
-  const use12h = !country || ["us", "usa", "ca", "can", "canada"].includes(country.toLowerCase());
-
-  const groups: Array<{ start: number; end: number; open: string; close: string }> = [];
-  for (let i = 0; i < entries.length; i++) {
-    const { open, close } = entries[i];
-    const prev = groups[groups.length - 1];
-    if (prev && prev.open === open && prev.close === close && prev.end === i - 1) {
-      prev.end = i;
-    } else {
-      groups.push({ start: i, end: i, open, close });
-    }
-  }
-
-  const label = (idx: number) =>
-    entries[idx].day.slice(0, 3).replace(/^\w/, c => c.toUpperCase());
-  return groups
-    .map(g => {
-      const dayLabel = g.start === g.end ? label(g.start) : `${label(g.start)}–${label(g.end)}`;
-      const open = use12h ? formatTime12h(g.open) : g.open;
-      const close = use12h ? formatTime12h(g.close) : g.close;
-      return `${dayLabel} ${open}–${close}`;
-    })
-    .join(", ");
-}
-
 function extractDayRequest(text: string): string | null {
   const t = text.toLowerCase();
   const map: Record<string, string> = {
@@ -30365,7 +30330,10 @@ async function buildTradeFollowupReply(args: {
     }
   }
 
-  if (requestedDayKey && requestedTimeToken) {
+  // Never offer to LOCK IN a time the store is shut for ("Saturday 8:00 PM should work. Want me to
+  // lock that in?" when Saturday closes at 3). Falls through to the slot-offer paths below.
+  if (requestedDayKey && requestedTimeToken &&
+      mayStateTokenAsWorkable(requestedTimeToken, cfg.businessHours, requestedDayKey)) {
     setRequestedTime(args.conv, {
       day: requestedDayLabel,
       timeText: schedulingText
@@ -59164,7 +59132,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       if (requestedTimeToken) {
         const requestedTimeLabel = formatTime12h(requestedTimeToken);
         setRequestedTime(conv, { timeText: event.body });
-        const reply = `Got it — ${requestedTimeLabel} can work. Which day were you thinking?`;
+        // No day named yet, so this asks whether the time could land on ANY open day.
+        const hrs = (await getSchedulerConfigHot()).businessHours;
+        const reply = statableTimeReply(requestedTimeToken, hrs, null, `Got it — ${requestedTimeLabel} can work. Which day were you thinking?`);
         return respondWithSmsRegeneratedDraft(reply);
       }
       const broadScheduleWindowLabel = getBroadScheduleWindowLabel(event.body);

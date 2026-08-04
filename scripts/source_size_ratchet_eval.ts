@@ -190,7 +190,11 @@ const CEILINGS: Ceiling[] = [
     // window-clause / slot-reply helpers moved out to domain/scheduleSlotSearch.ts, next to the
     // next-available search they are siblings of. The ceiling caught the first cut at +83 — all of
     // it still sitting in index.ts — which is exactly its job.
-    max: 71_254,
+    // 71_271 -> 71_241. The OFF-HOURS time guard funded itself: two reply sites gained an hours
+    // check, and `formatBusinessHoursForReply` moved out to domain/businessHoursGuard.ts to sit
+    // with the invariant it formats. index.ts was sitting EXACTLY on the ceiling, so the slice had
+    // to pay for itself in full.
+    max: 71_224,
 
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
