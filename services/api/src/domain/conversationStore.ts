@@ -5342,10 +5342,11 @@ export function applyAppointmentTeardown(
   return decision;
 }
 
-// The ONE place that records a booking made by an HTTP endpoint — the booking widget, the public
-// booking link, and the staff console each hand-maintained the same eleven-line field list, and the
-// lists had drifted. They now ask `decideAppointmentBookingRecord`; see that referee in
-// routeStateReducer.ts for the two divergences it preserves and the fail direction.
+// The ONE place that records a booking behind a real calendar write — the booking widget, the public
+// booking link, the staff console, the manual-outbound send that books a texted time, and the staff
+// calendar edit each hand-maintained their own copy of the same field list, and the lists had
+// drifted. They now ask `decideAppointmentBookingRecord`; see that referee in routeStateReducer.ts
+// for the four divergences it preserves and the fail direction.
 //
 // Deliberately does NOT set `bookedBy`, stop cadences, open/close todos or write the Google event:
 // those are separate questions each call site already answers its own way (setAppointmentBookedBy /
@@ -5354,8 +5355,9 @@ export function applyAppointmentBookingRecord(
   conv: Conversation,
   input: {
     lane: AppointmentBookingLane | string;
-    whenText: string;
-    whenIso: string;
+    /** Absent only on a metadata-only calendar edit, where staff moved no hour. */
+    whenText?: string | null;
+    whenIso?: string | null;
     bookedEventId?: string | null;
     bookedEventLink?: string | null;
     bookedSalespersonId?: string | null;
@@ -5365,20 +5367,25 @@ export function applyAppointmentBookingRecord(
   const decision = decideAppointmentBookingRecord({
     lane: input.lane,
     reschedulePending: conv?.appointment?.reschedulePending ?? null,
-    hasMatchedSlot: !!input.matchedSlot
+    hasMatchedSlot: !!input.matchedSlot,
+    hasBookedTime: !!String(input.whenIso ?? "").trim()
   });
   if (!conv || !decision.record) return decision;
   conv.appointment = conv.appointment ?? { status: "none", updatedAt: nowIso() };
   const appt = conv.appointment;
-  appt.status = decision.status;
-  appt.whenText = input.whenText;
-  appt.whenIso = input.whenIso;
-  appt.confirmedBy = decision.confirmedBy;
+  if (decision.stampBookedTime) {
+    appt.status = decision.status;
+    appt.whenText = input.whenText as string;
+    appt.whenIso = input.whenIso as string;
+  }
+  if (decision.stampConfirmedBy) appt.confirmedBy = decision.confirmedBy;
   appt.updatedAt = nowIso();
-  appt.acknowledged = decision.acknowledged;
-  appt.bookedEventId = input.bookedEventId ?? null;
-  appt.bookedEventLink = input.bookedEventLink ?? null;
-  appt.bookedSalespersonId = input.bookedSalespersonId ?? null;
+  if (decision.stampAcknowledged) appt.acknowledged = decision.acknowledged;
+  if (decision.stampBookedEvent) {
+    appt.bookedEventId = input.bookedEventId ?? null;
+    appt.bookedEventLink = input.bookedEventLink ?? null;
+    appt.bookedSalespersonId = input.bookedSalespersonId ?? null;
+  }
   if (decision.recordMatchedSlot && input.matchedSlot) appt.matchedSlot = input.matchedSlot;
   if (decision.clearReschedulePending) appt.reschedulePending = false;
   return decision;

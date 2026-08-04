@@ -643,8 +643,20 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 //   nothing keeping them equal. Both now ask `decideScheduleInviteBudget`, which owns the number.
 //   The second writer, `resetScheduleInviteCounter`, was DELETED outright: zero callers repo-wide,
 //   a dormant bypass of the arbitration (the #461 class). `followUpCadence` 5 -> 3.
+// 112 -> 111: the two remaining CALENDAR-WRITE lanes joined `decideAppointmentBookingRecord` (this
+//   commit). Two places still stamped `appointment.status = "confirmed"` off their own copy of the
+//   field list: the manual-outbound send that books a time staff just texted, and the staff calendar
+//   edit (PATCH /calendar/events). Both now ask the referee. Two divergences preserved and named —
+//   neither lane stamps `confirmedBy` (both hand attribution in via `setAppointmentBookedBy`, and
+//   `confirmedBy` feeds the KPI appointment-setter label, so stamping it would move a reported
+//   number), and the edit lane never refreshes `acknowledged` (staff dragging an event is not the
+//   customer agreeing to the new hour). `appointment` 6 -> 5, NOT 6 -> 4: the manual-outbound
+//   function still holds ANOTHER unrefereed appointment write (the staff-inferred confirm at
+//   index.ts ~53370), so that cluster's leader moved rather than disappearing — the #455/#462
+//   collapse artifact again, MEASURED on the pre-change tree rather than assumed. That leader is
+//   the next slice.
 // RATCHET DOWN ONLY.
-const UNREFEREED_WRITER_BASELINE = 112;
+const UNREFEREED_WRITER_BASELINE = 111;
 
 {
   const sourceFiles: SourceFile[] = [];

@@ -1,18 +1,21 @@
 /**
- * appointment_booking_record:eval — ONE referee for "a booking endpoint just created the calendar
- * event; what does the appointment record become?"
+ * appointment_booking_record:eval — ONE referee for "a calendar write just put a real event on this
+ * lead's books; what does the appointment record become?"
  *
- * WHAT WAS FIGHTING. Three HTTP endpoints book a real Google event and then write the record, each
- * running its own hand-maintained copy of the same eleven-line field list:
+ * WHAT WAS FIGHTING. Five places write a real Google event and then write the record, each running
+ * its own hand-maintained copy of the same field list:
  *
  *   POST /scheduler/book                 the booking widget — the customer picked one of our slots
  *   POST /public/booking/book            the public booking link we text a lead
  *   POST /conversations/:id/appointment  the console — a salesperson books the lead in by hand
+ *   (manual outbound send)               staff texted a time; we book the event behind the message
+ *   PATCH /calendar/events/:cal/:event   staff EDITED the event straight on the calendar
  *
  * The lists had drifted apart. This is the SIBLING question to appointment_confirm_record:eval,
- * which owns the three CONVERSATION-TURN lanes that stamp `confirmed`; these three are endpoints.
+ * which owns the CONVERSATION-TURN lanes that stamp `confirmed`; these five hold a calendar event.
+ * The last two joined 2026-08-04 — see divergences 3 and 4.
  *
- * THE TWO DIVERGENCES the un-stacking found — one now FIXED, one still preserved:
+ * THE FOUR DIVERGENCES the un-stacking found — one FIXED, three preserved:
  *
  *   1. The `reschedulePending` LATCH — **FIXED 2026-08-02, all three lanes now clear it.** The
  *      staff lane always did; the two customer lanes left it standing. That latch is what routes a
@@ -29,6 +32,21 @@
  *
  *   2. `matchedSlot` — STILL PRESERVED. The staff lane records which salesperson/calendar window
  *      was taken; the two customer lanes do not. A breadcrumb, never asserted to a customer.
+ *
+ *   3. Does the lane STAMP `confirmedBy` at all? — PRESERVED. The two joining lanes do not: both
+ *      call `setAppointmentBookedBy` themselves, and `confirmedBy` is only the FALLBACK that
+ *      `decideAppointmentAttribution` reads when nobody handed in an actor. It also feeds the KPI
+ *      appointment-SETTER label (salesperson vs ai_sms), so stamping it would move a reported
+ *      number — not a centralization's call to make.
+ *
+ *   4. Does the lane put the customer's word on file (`acknowledged`)? — PRESERVED. Every lane that
+ *      CREATES an event does; `staff_calendar_edit` does not, because staff dragging an event to a
+ *      new hour is not the customer agreeing to the new hour. Traced to its only consumer before
+ *      preserving: `shouldSuppressAppointmentConfirmationReminder` (transitionSafety.ts). Leaving
+ *      it alone is the fail-SAFE half — an unacknowledged appointment still gets its 24h reminder.
+ *      The OTHER half is a real gap and is deliberately NOT fixed here: a customer who acknowledged
+ *      the OLD time stays acknowledged after staff move it, so she is never re-asked about the new
+ *      one. That is a behavior fix and belongs in its own PR, not inside a cleanup.
  *
  * FAIL DIRECTION. Refusing to stamp is the SAFE answer: an unrecorded booking costs a re-ask, while
  * a wrong "confirmed" tells a customer they are on the calendar when nothing holds the slot. So an
@@ -68,7 +86,13 @@ const eq = (actual: unknown, expected: unknown, message: string) => {
 
 const CUSTOMER_LANES = ["scheduler_widget_booking", "public_link_booking"] as const;
 const STAFF_LANE = "staff_console_booking";
+const MANUAL_OUTBOUND_LANE = "manual_outbound_schedule_booking";
+const EDIT_LANE = "staff_calendar_edit";
+/** The three ENDPOINT lanes the referee started with — the ones whose answers must not move. */
 const ALL_LANES = [...CUSTOMER_LANES, STAFF_LANE] as const;
+/** Every lane that CREATES a calendar event. The edit lane patches one someone else made. */
+const CREATING_LANES = [...ALL_LANES, MANUAL_OUTBOUND_LANE] as const;
+const EVERY_LANE = [...CREATING_LANES, EDIT_LANE] as const;
 
 const SLOT = {
   salespersonId: "sp_1",
@@ -106,16 +130,27 @@ const bookingInput = (lane: string, withSlot = false) => ({
 });
 
 // ---------------------------------------------------------------------------------------------
-// 1. THE SHARED ANSWER — everything the three lanes agree on stays agreed.
+// 1. THE SHARED ANSWER — everything the lanes agree on stays agreed.
 // ---------------------------------------------------------------------------------------------
-for (const lane of ALL_LANES) {
-  const d = decideAppointmentBookingRecord({ lane, reschedulePending: false });
+for (const lane of EVERY_LANE) {
+  const d = decideAppointmentBookingRecord({ lane, reschedulePending: false, hasBookedTime: true });
   ok(d.record === true, `${lane}: a recognized booking lane must record`);
   eq(d.status, "confirmed", `${lane}: a booked calendar event is confirmed`);
+}
+for (const lane of CREATING_LANES) {
+  const d = decideAppointmentBookingRecord({ lane, reschedulePending: false });
   ok(
-    d.acknowledged === true,
-    `${lane}: all three lanes hold a real event the customer or rep chose, so the 24h YES/NO ` +
-      "reminder stays suppressed"
+    d.acknowledged === true && d.stampAcknowledged === true,
+    `${lane}: a lane that CREATES a real event holds a time the customer or rep chose, so the 24h ` +
+      "YES/NO reminder stays suppressed"
+  );
+  ok(
+    d.stampBookedTime === true,
+    `${lane}: a creating lane always carries a time, so it always stamps one`
+  );
+  ok(
+    d.stampBookedEvent === true,
+    `${lane}: a creating lane owns the booked-event ids — a missing one clears, never lingers`
   );
 }
 
@@ -144,7 +179,7 @@ eq(untouched.appointment, before, "a refused lane must leave the stored record b
 // ---------------------------------------------------------------------------------------------
 // 3. DIVERGENCE 1, NOW FIXED — every lane that holds a real calendar event clears the latch.
 // ---------------------------------------------------------------------------------------------
-for (const lane of ALL_LANES) {
+for (const lane of EVERY_LANE) {
   for (const latch of [true, false, null, undefined]) {
     ok(
       decideAppointmentBookingRecord({ lane, reschedulePending: latch as any })
@@ -288,10 +323,130 @@ for (const lane of CUSTOMER_LANES) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// 6b. THE TWO LANES THAT JOINED 2026-08-04 — the manual-outbound send that books a texted time,
+//     and the staff calendar edit. Both wrote their own copy of this field list before.
+// ---------------------------------------------------------------------------------------------
+
+// DIVERGENCE 3, PRESERVED — neither of the two stamps `confirmedBy`. Both call
+// `setAppointmentBookedBy` themselves, and `confirmedBy` is what the KPI appointment-SETTER label
+// falls back to; stamping it here would move a reported number, which a centralization may not do.
+for (const lane of [MANUAL_OUTBOUND_LANE, EDIT_LANE] as const) {
+  ok(
+    decideAppointmentBookingRecord({ lane, hasBookedTime: true }).stampConfirmedBy === false,
+    `${lane}: PRESERVED — leaves confirmedBy to its own attribution writer`
+  );
+}
+for (const lane of ALL_LANES) {
+  ok(
+    decideAppointmentBookingRecord({ lane }).stampConfirmedBy === true,
+    `${lane}: the three endpoint lanes still stamp confirmedBy — unchanged`
+  );
+}
+// The manual-outbound lane must not silently overwrite a confirmedBy already on the record.
+{
+  const conv = latchedLead();
+  conv.appointment.confirmedBy = "customer";
+  applyAppointmentBookingRecord(conv, bookingInput(MANUAL_OUTBOUND_LANE, true) as any);
+  eq(
+    conv.appointment.confirmedBy,
+    "customer",
+    "manual-outbound booking leaves the stored confirmedBy exactly as it found it"
+  );
+  eq(conv.appointment.status, "confirmed", "...and the lead is still stamped on the calendar");
+  eq(conv.appointment.acknowledged, true, "...and staff booked a chosen time, so her word is on file");
+  eq(conv.appointment.matchedSlot, SLOT, "...and the slot it took is recorded, like the staff lane");
+  eq(conv.appointment.reschedulePending, false, "...and it no longer owes a rebook");
+  eq(conv.appointment.bookedEventId, "evt_abc123", "...and the event it created is on the record");
+}
+
+// DIVERGENCE 4, PRESERVED — staff dragging an event to a new hour is NOT the customer agreeing to
+// the new hour, so the edit lane never touches `acknowledged`. This is the half that fails SAFE:
+// an unacknowledged appointment still gets its 24h reminder.
+ok(
+  decideAppointmentBookingRecord({ lane: EDIT_LANE, hasBookedTime: true }).stampAcknowledged === false,
+  "staff_calendar_edit: PRESERVED — a staff move does not put the customer's word on file"
+);
+eq(
+  decideAppointmentBookingRecord({ lane: EDIT_LANE, hasBookedTime: true }).divergence,
+  "staff_calendar_edit_does_not_refresh_the_customers_acknowledgement_of_the_new_time",
+  "the gap that can cost a customer a visit is NAMED on every edit, not buried"
+);
+{
+  const conv = latchedLead();
+  conv.appointment.acknowledged = false;
+  applyAppointmentBookingRecord(conv, {
+    lane: EDIT_LANE,
+    whenIso: SLOT.start,
+    whenText: SLOT.startLocal
+  } as any);
+  eq(
+    conv.appointment.acknowledged,
+    false,
+    "a staff calendar move leaves an UNacknowledged appointment unacknowledged, so it still gets " +
+      "its 24h YES/NO reminder"
+  );
+  eq(conv.appointment.status, "confirmed", "the moved event is still a confirmed appointment");
+  eq(conv.appointment.whenIso, SLOT.start, "the new hour is on the record");
+  eq(conv.appointment.reschedulePending, false, "and the reschedule latch is cleared");
+}
+
+// The edit lane OWNS its booked-event ids: it patches what Google returned, so the referee must not
+// clear them. A staff retitle that returns no id must never wipe the event off the record — that
+// would strand the appointment with no way back to the calendar entry.
+{
+  const conv = latchedLead();
+  conv.appointment.bookedEventId = "evt_LIVE";
+  conv.appointment.bookedEventLink = "https://calendar.google.com/evt_LIVE";
+  conv.appointment.bookedSalespersonId = "sp_LIVE";
+  applyAppointmentBookingRecord(conv, {
+    lane: EDIT_LANE,
+    whenIso: SLOT.start,
+    whenText: SLOT.startLocal
+  } as any);
+  eq(conv.appointment.bookedEventId, "evt_LIVE", "the edit lane never clears the live event id");
+  eq(
+    conv.appointment.bookedEventLink,
+    "https://calendar.google.com/evt_LIVE",
+    "...nor the live event link"
+  );
+  eq(conv.appointment.bookedSalespersonId, "sp_LIVE", "...nor who the event sits with");
+}
+
+// A METADATA-ONLY edit (staff recoloured or retitled; no hour moved) must not restamp the record.
+// Fail direction: an appointment nobody rebooked must not come out of a colour change looking newly
+// confirmed for a time that never changed.
+{
+  const d = decideAppointmentBookingRecord({ lane: EDIT_LANE, hasBookedTime: false });
+  ok(d.record === true, "a metadata-only edit is still a recognized lane");
+  ok(d.stampBookedTime === false, "...but it stamps no time and no status");
+  ok(d.clearReschedulePending === true, "...while still clearing the latch, exactly as before");
+}
+{
+  const conv = latchedLead();
+  conv.appointment.status = "requested";
+  conv.appointment.whenText = "Thursday at 10:00 AM";
+  applyAppointmentBookingRecord(conv, { lane: EDIT_LANE } as any);
+  eq(conv.appointment.status, "requested", "a colour change does not promote a request to confirmed");
+  eq(conv.appointment.whenText, "Thursday at 10:00 AM", "...and does not touch the requested time");
+  eq(conv.appointment.reschedulePending, false, "...but the latch still clears, as it always did");
+}
+// hasBookedTime is the EDIT lane's input alone — it must never move a creating lane's answer, or
+// this cleanup would have quietly changed three live endpoints.
+for (const lane of CREATING_LANES) {
+  for (const hasBookedTime of [true, false, undefined]) {
+    ok(
+      decideAppointmentBookingRecord({ lane, hasBookedTime: hasBookedTime as any }).stampBookedTime ===
+        true,
+      `${lane}: always stamps the time regardless of hasBookedTime=${String(hasBookedTime)}`
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
 // 7. PURITY — the referee must be a function of its inputs alone, or the equivalence harness that
 //    lets this ship without a human reading the diff is measuring nothing.
 // ---------------------------------------------------------------------------------------------
-for (const lane of ALL_LANES) {
+for (const lane of EVERY_LANE) {
   for (const latch of [true, false]) {
     const a = decideAppointmentBookingRecord({ lane, reschedulePending: latch });
     const b = decideAppointmentBookingRecord({ lane, reschedulePending: latch });
@@ -313,6 +468,15 @@ for (const lane of ALL_LANES) {
       registry.some((entry: any) => entry.name === `appointmentBookingRecord:${lane}`),
       `the registry samples the ${lane} lane by name`
     );
+  }
+  for (const lane of [MANUAL_OUTBOUND_LANE, EDIT_LANE] as const) {
+    for (const suffix of ["timed", "untimed"] as const) {
+      ok(
+        registry.some((entry: any) => entry.name === `appointmentBookingRecord:${lane}:${suffix}`),
+        `the registry samples the ${lane} lane (${suffix}) by name — an un-stacking nobody ` +
+          'fingerprints ships with no evidence behind its "IDENTICAL" verdict'
+      );
+    }
   }
   const covered = registry.some((entry: any) =>
     (entry.covers ?? []).includes("decideAppointmentBookingRecord")
