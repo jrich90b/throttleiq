@@ -97,6 +97,22 @@ function originalClose(cad: Cad): Wrote {
   return { status: "stopped", clearNextDue: true, clearPause: false, clearStopReason: false };
 }
 
+/**
+ * THE ONE DELIBERATE DEPARTURE from the originals (2026-08-04, Charles Desalvo +17168614216).
+ *
+ * `originalClose` above is kept verbatim as the historical record. This is the single input shape
+ * where the referee now REFUSES what the original wrote, on purpose: closing a lead BECAUSE IT
+ * SOLD must not stop the post-sale owner sequence, which is the very thing the close hands off to.
+ * Joe filed "No sold cadence" on a customer who bought a Street Glide on 2026-08-03; the walk-in
+ * sold branch asked `stop` (correctly spared, divergence 1) and then `close`, which killed it.
+ *
+ * Scope is deliberately tight so the table keeps its teeth: post_sale only, sold reasons only.
+ */
+const SOLD_CLOSE_REASONS = new Set(["sold", "sold_walkin_note"]);
+function closeSparesPostSale(cad: Cad, reason: string): boolean {
+  return cad?.kind === "post_sale" && SOLD_CLOSE_REASONS.has(reason);
+}
+
 const STATUSES = [undefined, "", "active", "stopped", "paused"] as const;
 const KINDS = [undefined, "engaged", "long_term", "post_sale"] as const;
 const REASONS = [
@@ -104,6 +120,7 @@ const REASONS = [
   "purchase_delivery",
   "closed",
   "sold",
+  "sold_walkin_note",
   "not_interested",
   "opt_out",
   ""
@@ -123,7 +140,10 @@ for (const verb of ALL_VERBS) {
                 ? originalPause(cad)
                 : verb === "resume"
                   ? originalResume(cad)
-                  : originalClose(cad);
+                  : // The one intended departure — see closeSparesPostSale above.
+                    closeSparesPostSale(cad, reason)
+                    ? null
+                    : originalClose(cad);
           const actual = decideCadenceLifecycle({
             verb,
             hasRecord,
@@ -196,6 +216,74 @@ for (const kind of ["post_sale", "long_term"] as const) {
     decideCadenceLifecycle({ verb: "stop", hasRecord: true, status: "active", kind, reason: "opt_out" }).apply,
     `stop must still end a ${kind} chase for an ordinary reason like opt_out`
   );
+}
+
+// ---------------------------------------------------------------------------------------------
+// 3b. A SOLD CLOSE SPARES THE POST-SALE CHASE (Charles Desalvo +17168614216, Joe 2026-08-03).
+//
+//     The customer bought a Street Glide and got NO owner follow-up at all. The walk-in sold
+//     branch (sendgridInbound.ts) does two things twelve lines apart: `stop` with "manual_handoff",
+//     which this referee correctly spares, and then `close` with "sold_walkin_note", which used to
+//     kill the very chase the sale had just armed. Replayed here as a sequence, because neither
+//     call is wrong on its own — only the pair is.
+// ---------------------------------------------------------------------------------------------
+for (const soldReason of ["sold", "sold_walkin_note"] as const) {
+  const d = decideCadenceLifecycle({
+    verb: "close",
+    hasRecord: true,
+    status: "active",
+    kind: "post_sale",
+    reason: soldReason
+  });
+  ok(!d.apply, `close("${soldReason}") must SPARE the post-sale chase — that is the owner sequence`);
+  ok(
+    d.divergence === "a_sold_close_spares_the_post_sale_chase_it_hands_off_to",
+    `the spared sold close must name its divergence — got ${String(d.divergence)}`
+  );
+
+  // Narrow on purpose, both ways.
+  ok(
+    decideCadenceLifecycle({ verb: "close", hasRecord: true, status: "active", kind: "long_term", reason: soldReason })
+      .apply,
+    `close("${soldReason}") must still end a LONG_TERM chase — only the post-sale lane is spared`
+  );
+  ok(
+    decideCadenceLifecycle({ verb: "close", hasRecord: true, status: "active", kind: "engaged", reason: soldReason })
+      .apply,
+    `close("${soldReason}") must still end an ordinary chase`
+  );
+}
+for (const lostReason of ["opt_out", "not_interested", "wrong_number", "manual_archive"] as const) {
+  ok(
+    decideCadenceLifecycle({ verb: "close", hasRecord: true, status: "active", kind: "post_sale", reason: lostReason })
+      .apply,
+    `close("${lostReason}") must still end a post-sale chase — the lead did not close because it sold`
+  );
+}
+{
+  // The live sequence, end to end through the real store helpers, exactly as the walk-in branch
+  // runs it. BEFORE the fix this ended "stopped"/"sold_walkin_note" — Charles's stored record.
+  const walkInSold: any = {
+    id: "c-walkin-sold",
+    messages: [],
+    followUpCadence: {
+      status: "active",
+      kind: "post_sale",
+      anchorAt: "2026-08-03T11:21:47.479Z",
+      nextDueAt: "2026-10-02T14:30:00.000Z",
+      stepIndex: 0
+    }
+  };
+  stopFollowUpCadence(walkInSold, "manual_handoff");
+  closeConversation(walkInSold, "sold_walkin_note");
+  ok(
+    walkInSold.followUpCadence.status === "active" &&
+      walkInSold.followUpCadence.nextDueAt === "2026-10-02T14:30:00.000Z" &&
+      walkInSold.followUpCadence.stopReason === undefined,
+    "a walk-in SOLD note must leave the owner sequence running — got " +
+      JSON.stringify(walkInSold.followUpCadence)
+  );
+  ok(walkInSold.status === "closed", "the lead itself must still close");
 }
 
 // ---------------------------------------------------------------------------------------------
