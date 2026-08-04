@@ -256,7 +256,7 @@ if (mode === "baseline") {
   fs.writeFileSync(out, JSON.stringify(payload, null, 2));
   console.log(
     `canary baseline over the ${hours}h before the deploy -> ${out}\n` +
-      `  sends=${counters.outboundToCustomer} drafts=${counters.draftsProduced} ` +
+      `  in=${counters.inboundFromCustomer} sends=${counters.outboundToCustomer} drafts=${counters.draftsProduced} ` +
       `closed=${counters.conversationsClosed} held=${counters.draftsHeld} ` +
       `convs=${counters.activeConversations} · typical busy hour=${payload.typicalPeakOutboundPerHour}/h`
   );
@@ -323,8 +323,9 @@ function advanceCanary(baseline: BaselineFile): { verdict: CanaryVerdict | null;
   for (const m of measurements) {
     const when = new Date(m.sliceStartMs).toISOString().slice(5, 16).replace("T", " ");
     console.log(
-      `  ${String(m.status).padEnd(12)} ${when}  sends=${m.counters.outboundToCustomer} ` +
-        `drafts=${m.counters.draftsProduced} convs=${m.counters.activeConversations}  — ${m.reason}`
+      `  ${String(m.status).padEnd(12)} ${when}  in=${m.counters.inboundFromCustomer} ` +
+        `sends=${m.counters.outboundToCustomer} drafts=${m.counters.draftsProduced} ` +
+        `convs=${m.counters.activeConversations}  — ${m.reason}`
     );
   }
   console.log(`  => ${progress.status.toUpperCase()}: ${progress.reason}\n`);
@@ -379,7 +380,7 @@ function judgeBaseline(baseline: BaselineFile): CanaryVerdict | null {
   const verdict = decideCanaryVerdict(baseline.counters, current, DEFAULT_CANARY_THRESHOLDS, runaway);
 
   const row = (label: string, c: CanaryCounters) =>
-    `  ${label.padEnd(7)} sends=${c.outboundToCustomer} drafts=${c.draftsProduced} ` +
+    `  ${label.padEnd(7)} in=${c.inboundFromCustomer} sends=${c.outboundToCustomer} drafts=${c.draftsProduced} ` +
     `closed=${c.conversationsClosed} held=${c.draftsHeld} convs=${c.activeConversations}`;
   console.log(
     `canary check — ${baseline.windowMs / 3_600_000}h window, sha ${baseline.deployedSha.slice(0, 8) || "(unrecorded)"}` +
@@ -458,7 +459,7 @@ if (mode === "arm") {
   const sliceH = progress.intervalMs / 3_600_000;
   console.log(
     `canary ARMED on ${payload.deployedSha.slice(0, 8) || "(unrecorded)"} -> ${pendingPath()}\n` +
-      `  baseline ${baselineHours}h: sends=${c.outboundToCustomer} drafts=${c.draftsProduced} ` +
+      `  baseline ${baselineHours}h: in=${c.inboundFromCustomer} sends=${c.outboundToCustomer} drafts=${c.draftsProduced} ` +
       `closed=${c.conversationsClosed} held=${c.draftsHeld} convs=${c.activeConversations} ` +
       `· typical busy hour=${payload.typicalPeakOutboundPerHour}/h\n` +
       `  watch: ${sliceH}h slices x${progress.count} (max ${sliceH * progress.count}h) · ` +
