@@ -204,7 +204,15 @@ const CEILINGS: Ceiling[] = [
     // proposed 71_322, then 71_310 against a 71_333 main; main has since ratcheted to 71_224, so
     // both earlier numbers would have handed back every reduction between. Re-derived on the
     // INTEGRATED tree — the slice is still worth exactly -23.
-    max: 71_201,
+    // 71_201 -> 71_199. The post-sale warmth prefix paid for its own import: the inline
+    // positivity regex + ternary became hasCustomerPositiveExperience (domain/leadInGuards.ts),
+    // next to the two fabricated-frame guards it belongs with.
+    // REBASE NOTE (ROUTINE_CONTRACT rule 3, the #418 trap): authored against a 71_333 main and
+    // proposed 71_329, then 71_222 against a 71_224 main, and #503 landed -23 under it after that.
+    // Any of those earlier numbers would have silently handed back someone else's reduction — this
+    // branch has now been re-derived on the INTEGRATED tree three times, and the slice is worth
+    // exactly -2 every time.
+    max: 71_199,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

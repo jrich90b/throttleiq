@@ -14,6 +14,7 @@ import {
   LEAD_IN_MAX_INBOUND_AGE_MS,
   customerSpokenText,
   hasCustomerGratitude,
+  hasCustomerPositiveExperience,
   isFabricatedGratitudeLeadIn,
   resolveLeadInSourceText
 } from "../services/api/src/domain/leadInGuards.ts";
@@ -147,4 +148,56 @@ assert.ok(
   "normalizeGotItLeadIn must apply the fabricated-gratitude guard to the picked lead-in"
 );
 
-console.log("PASS blended-lead-in gratitude guard eval (helper + wiring + deterministic lead-in source)");
+// 5. POST-SALE WARMTH (2026-08-04) — the third fabricated-frame site, found by the corpus replay.
+// The production turn, pinned verbatim (conv +17164182619, msg_49ab66cab6d22_1783616788874). It
+// reproduced 3/3 byte-identical on the deployed build as
+// "Love hearing that — glad the ride home went great. Thanks — I'll check on the key ...".
+const JEFF_TURN =
+  "Hey Scott, it's Jeff. I'm gonna swing in on Saturday because I have that lien release. Did you call the old owner about the second key?";
+assert.equal(
+  hasCustomerPositiveExperience(JEFF_TURN),
+  false,
+  "the Jeff miss: a lien-release + spare-key logistics turn reports no positive experience -> no warmth frame"
+);
+
+// The defect was that the test ALSO read recent thread context, which carries our own outbound
+// copy. Our standard post-sale outbound must never earn the frame on the customer's behalf.
+for (const ourOwnCopy of [
+  "Thanks again for coming to see us for your bike. If you need anything, just let me know.",
+  "Great — you're all set for Saturday at 2.",
+  "Love hearing that — glad the ride home went great."
+]) {
+  assert.equal(
+    hasCustomerPositiveExperience(ourOwnCopy),
+    true,
+    `sanity: our own copy is positive text (${JSON.stringify(ourOwnCopy.slice(0, 24))}) — which is exactly why it must never be fed in as the customer's turn`
+  );
+}
+
+// A genuinely delighted customer still earns the warmth frame.
+for (const delighted of ["Bike is amazing, thank you!", "she rides great", "Love it so far", "priceless, all smiles"]) {
+  assert.equal(hasCustomerPositiveExperience(delighted), true, `real delight keeps the frame: ${JSON.stringify(delighted)}`);
+}
+// Word-bounded, like its gratitude sibling — no substring footguns.
+for (const neutral of ["what's the warranty?", "greatly delayed?", "I need the title paperwork", "dropping off the backseat"]) {
+  assert.equal(hasCustomerPositiveExperience(neutral), false, `neutral logistics is not delight: ${JSON.stringify(neutral)}`);
+}
+// Two-speaker voice transcripts: only the customer's lines can earn it.
+assert.equal(
+  hasCustomerPositiveExperience("Customer: Just the key.\nAgent: Great, thanks so much!", "voice_transcript"),
+  false,
+  "an agent-spoken 'great/thanks' in a transcript must not earn the warmth frame"
+);
+
+// WIRING — index.ts must consult the guard, and must no longer assert the ride home.
+const indexSrc = fs.readFileSync(path.resolve("services/api/src/index.ts"), "utf8");
+assert.ok(
+  /hasCustomerPositiveExperience\(args\.text\)/.test(indexSrc),
+  "buildPurchaseDeliveryLogisticsReply must gate the warmth prefix on the customer's OWN turn"
+);
+assert.ok(
+  !/ride home went great/.test(indexSrc),
+  "the warmth prefix must not assert a ride home the customer never mentioned"
+);
+
+console.log("PASS blended-lead-in gratitude guard eval (helper + wiring + deterministic lead-in source + post-sale warmth)");

@@ -97,6 +97,45 @@ export function resolveLeadInSourceText(input: {
   return spoken;
 }
 
+// ---------------------------------------------------------------------------
+// POST-SALE WARMTH guard (2026-08-04). A third site fabricating a frame, found by the corpus
+// replay on Jeff (+17164322105 shape, conv +17164182619): he wrote "Hey Scott, it's Jeff. I'm
+// gonna swing in on Saturday because I have that lien release. Did you call the old owner about
+// the second key?" and the post-sale item-pickup reply opened
+// "Love hearing that — glad the ride home went great."
+//
+// Two stacked defects, the same shapes this module already documents:
+//   1. SPEAKER-BLIND. The positivity test ran against the customer's turn CONCATENATED WITH
+//      recent conversation context — and that context includes OUR OWN outbound copy, which for
+//      a post-sale thread is very often "Thanks again for coming to see us for your bike." So we
+//      congratulated the customer on the strength of our own words. Same class as the
+//      voice-transcript miss above (#389) and the walk-in note judged as customer speech (#368).
+//   2. ASSERTED AN EVENT NOBODY MENTIONED. Even for a genuinely delighted customer, "glad the
+//      ride home went great" claims they took delivery and rode home. Jeff had not — he was
+//      coming IN with a lien release. Positive sentiment licenses warmth, never a fact.
+//
+// FAIL DIRECTION: this is an invariant guard on provenance, not comprehension, so deterministic
+// is correct (AGENTS.md migrate-vs-keep). It fails SAFE exactly like its neighbours — when the
+// guard declines, only the warmth fragment is dropped and the business sentence still ships in
+// full. The dangerous direction is the other one: inventing an experience the customer never
+// reported. Pinned by blended_lead_in_guard:eval.
+const CUSTOMER_POSITIVE_EXPERIENCE =
+  /\b(thank\s*(?:you|ya|u)|thanks|amazing|smiles?|priceless|great|awesome|love|loved)\b/i;
+
+/**
+ * True when the CUSTOMER's own words this turn report a positive experience. Deliberately takes
+ * only the customer's message — never the surrounding thread — because our own outbound copy is
+ * relentlessly positive and would otherwise earn the frame on its own. `provider` is optional and
+ * routes through customerSpokenText, so a two-speaker voice transcript can only ever match on its
+ * Customer: lines.
+ */
+export function hasCustomerPositiveExperience(
+  customerText: string | null | undefined,
+  provider?: string | null
+): boolean {
+  return CUSTOMER_POSITIVE_EXPERIENCE.test(customerSpokenText(String(customerText ?? ""), provider));
+}
+
 // The other half of the same class: a reply opening "Totally fair question / Great question"
 // when the customer did not actually ask a question (a form, a statement). We detect the
 // customer-IS-a-question GENEROUSLY (any "?" or interrogative phrasing) so the audit only
