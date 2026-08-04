@@ -719,4 +719,106 @@ ok(DEFAULT_CANARY_THRESHOLDS.runawayMinPerHour > 0, "and an absolute runaway flo
   );
 }
 
+// ---------------------------------------------------------------------------
+// SENDS ARE JUDGED PER INBOUND MESSAGE (2026-08-04).
+//
+// THE INCIDENT, measured off the box: the canary on `0ff64eaf` scored a slice
+// `outboundToCustomer 7.88 -> 59 (x7.49, limit x2)` and FAILED it. That window was 11:00-18:00 UTC
+// on a Tuesday — a business morning — and it carried 38 INBOUND messages across 18 conversations.
+// 59 sends against 38 inbound is 1.55 per customer message, against a baseline of ~1.34. The
+// customers were talking and we answered them; nothing ran away.
+//
+// WHY IT MATTERED MORE THAN ONE BAD SLICE: promotion needs 3 CONSECUTIVE clean slices, so a check
+// that fails every busy weekday morning means the canary can never promote at all — which is
+// exactly what happened between 8/3 and 8/4, leaving real deploys unwatched because the previous
+// watch would not close out.
+// ---------------------------------------------------------------------------
+{
+  // Re-derived from the live 48h baseline the fresh canary armed with: in=80 sends=107 over 48h,
+  // i.e. per 8h slice ~13.3 inbound and ~17.8 sends. Scaled to this fixture's shape.
+  // Sends kept at BASE's 26 so the baseline clears `minBaselineOutbound` (20) — below it the
+  // verdict is UNKNOWN and every case here would be vacuous.
+  const busyBase: CanaryCounters = { ...BASE, outboundToCustomer: 26, inboundFromCustomer: 19 };
+
+  // THE REGRESSION THIS FIXES: the real busy morning, at the real numbers.
+  const busyMorning = { ...busyBase, outboundToCustomer: 59, inboundFromCustomer: 38 };
+  eq(
+    decideCanaryVerdict(busyBase, busyMorning).status,
+    "healthy",
+    "a busy morning where INBOUND rose with sends is healthy — this is the 8/4 false failure"
+  );
+
+  // ...and the raw count really would have failed, so the case is not vacuous.
+  ok(
+    59 / 26 > DEFAULT_CANARY_THRESHOLDS.maxIncreaseRatio,
+    "the same slice DOES breach on raw counts — the fixture must keep proving what changed"
+  );
+
+  // STILL CAUGHT — talking AT people. Same sends, inbound flat: the rate doubles.
+  {
+    const v = decideCanaryVerdict(busyBase, { ...busyBase, outboundToCustomer: 59 });
+    eq(v.status, "regressed", "more sends with NO more inbound is still a regression");
+    ok(
+      /per inbound/.test(v.breaches[0]?.detail ?? ""),
+      "and the breach explains itself in per-inbound terms"
+    );
+  }
+
+  // STILL CAUGHT — double-texting every lead: inbound doubles, sends quadruple.
+  eq(
+    decideCanaryVerdict(busyBase, { ...busyBase, outboundToCustomer: 76, inboundFromCustomer: 26 })
+      .status,
+    "regressed",
+    "twice the replies per customer message is the failure worth reverting for"
+  );
+
+  // Just inside the bound stays healthy — the limit is unchanged, only what it measures.
+  eq(
+    decideCanaryVerdict(busyBase, { ...busyBase, outboundToCustomer: 51, inboundFromCustomer: 26 })
+      .status,
+    "healthy",
+    "under 2x the per-inbound rate is healthy"
+  );
+
+  // SENDING INTO SILENCE — no inbound at all means no rate, so it falls back to the RAW comparison,
+  // which is the strict one. This must never become a way to escape the guard.
+  eq(
+    decideCanaryVerdict(busyBase, { ...busyBase, outboundToCustomer: 59, inboundFromCustomer: 0 })
+      .status,
+    "regressed",
+    "sends with ZERO inbound must still regress — the fallback is the strict path"
+  );
+
+  // A baseline with no inbound recorded (the pre-8/3 schema) also falls back to raw counts.
+  eq(
+    decideCanaryVerdict(
+      { ...busyBase, inboundFromCustomer: 0 },
+      { ...busyBase, outboundToCustomer: 59, inboundFromCustomer: 38 }
+    ).status,
+    "regressed",
+    "an old baseline with no inbound counter keeps the raw comparison, never a free pass"
+  );
+
+  // The fast tripwire is untouched: a flood is a regression whatever the inbound volume.
+  {
+    const r = detectRunaway(60, 3_600_000, 4);
+    const v = decideCanaryVerdict(
+      busyBase,
+      { ...busyBase, outboundToCustomer: 60, inboundFromCustomer: 45 },
+      DEFAULT_CANARY_THRESHOLDS,
+      r
+    );
+    eq(v.status, "regressed", "a runaway still regresses even when inbound is high");
+    eq(v.breaches[0].kind, "runaway", "and the runaway is still reported first");
+  }
+
+  // The OTHER guarded counters are untouched by this — only sends are inbound-normalised.
+  eq(
+    decideCanaryVerdict(busyBase, { ...busyBase, conversationsClosed: 12, inboundFromCustomer: 60 })
+      .status,
+    "regressed",
+    "wrongful closes are NOT excused by a busy day — normalisation applies to sends only"
+  );
+}
+
 console.log(`PASS canary auto-revert — abstains rather than false-greens (${checks} checks)`);
