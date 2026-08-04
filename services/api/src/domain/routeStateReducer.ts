@@ -285,6 +285,9 @@ export type SchedulingTurnKind =
   | "decline_time"
   | "propose_booking"
   | "offer_slots_in_bound"
+  // The customer said YES to OUR OWN open ask for a day/time without naming one. Answer with
+  // CONCRETE times off the calendar instead of re-asking the same open question.
+  | "offer_times_after_acceptance"
   | "visit_commitment"
   | "scheduling_conflict_continue"
   | "none";
@@ -411,6 +414,22 @@ export function decideSchedulingTurn(input: SchedulingTurnInput): SchedulingTurn
         break;
       case "accept_tentative_appointment":
         return { kind: "accept_tentative", visitCommitment };
+      case "accept_scheduling_ask":
+        // The customer said YES to our own open "what day/time works?" without naming one.
+        // Measured 2026-08-04: 18 engaged leads sat in the booking funnel's `accepted_no_time`
+        // bucket — they agreed to come in and no time was ever pinned, the largest single gap
+        // between "offered a time" (136) and "booked" (41) over 30 days.
+        //
+        // GATED on live schedule context as well as the parse. The parser is already told to fire
+        // this only when OUR last message asked, but a scheduling route must not rest on the
+        // parser's reading of our own text alone: with no schedule context this falls through to
+        // today's behavior. Recognition miss => today's behavior (silence). Over-fire => we offer
+        // two concrete times to someone who was signing off — recoverable, and never a booking,
+        // because this arm cannot book (the customer named no time to book).
+        if (input.scheduleOfferContext || input.scheduleDialogState) {
+          return { kind: "offer_times_after_acceptance", visitCommitment };
+        }
+        break;
       case "ask_for_available_times":
         return { kind: "ask_available_times", visitCommitment };
       case "appointment_status_question":

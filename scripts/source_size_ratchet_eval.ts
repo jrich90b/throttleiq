@@ -185,7 +185,13 @@ const CEILINGS: Ceiling[] = [
     // mapping (parser vocabulary vs intent hints) went out to conversationStore with them, so each
     // call site is two lines. The ceiling caught the first attempt at +16 — the mapping was still
     // sitting in index.ts — which is exactly its job.
-    max: 71_268,
+    // 71_271 -> 71_257. The "Sounds great!" acceptance arm FUNDED ITSELF and then some: the arm,
+    // its two call sites and the lane adapter are new, but the day-scoped slot search and the
+    // window-clause / slot-reply helpers moved out to domain/scheduleSlotSearch.ts, next to the
+    // next-available search they are siblings of. The ceiling caught the first cut at +83 — all of
+    // it still sitting in index.ts — which is exactly its job.
+    max: 71_254,
+
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

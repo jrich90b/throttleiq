@@ -793,6 +793,15 @@ import {
   shouldTreatInboundAsTestRideBikeSelection
 } from "./domain/routerV2.js";
 import {
+  resolveAcceptedVisitTimeOffer,
+  shouldOfferTimesAfterAcceptance
+} from "./domain/schedulingAcceptance.js";
+import {
+  buildRequestedDaySlotReply,
+  extractRequestedScheduleWindowClauses,
+  findScheduleSlotsForRequestedDay as findScheduleSlotsForDayWithConfig
+} from "./domain/scheduleSlotSearch.js";
+import {
   canInviteScheduleAfterBusinessHours,
   classifyInboundPreParserTurn,
   decorateBusinessHoursReply,
@@ -22763,50 +22772,18 @@ function buildRequestedWindowSlotReply(slots: any[]): string | null {
   return null;
 }
 
-function buildRequestedDaySlotReply(slots: any[]): string | null {
-  if (slots.length === 1) {
-    return `I have ${slots[0].startLocal}. Does that work?`;
-  }
-  if (slots.length >= 2) {
-    return `I have ${slots[0].startLocal} or ${slots[1].startLocal} — do either of those work?`;
-  }
-  return null;
-}
-
-function extractRequestedScheduleWindowClauses(textRaw: string | null | undefined): string[] {
-  const text = String(textRaw ?? "").trim();
-  if (!text) return [];
-  const sentences = text
-    .split(/(?<=[.!?])\s+/)
-    .map(s => s.trim())
-    .filter(Boolean);
-  const sourceSentences = sentences.length ? sentences : [text];
-  // today/tomorrow are real day anchors too — "tomorrow after 3" must resolve a window
-  // clause (the Kody bound-offer path retries with the parser's normalized "tomorrow after 3"
-  // phrase; without these tokens the clause extraction returned nothing and the turn
-  // degraded to a vague deferral). parseRequestedDayTime already handles both tokens.
-  const dayRe =
-    /\b(today|tomorrow|monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|thurs|friday|fri|saturday|sat|sunday|sun)\b/gi;
-  const clauses: string[] = [];
-  for (const sentence of sourceSentences) {
-    const matches = Array.from(sentence.matchAll(dayRe));
-    if (!matches.length) continue;
-    for (let i = 0; i < matches.length; i += 1) {
-      const start = matches[i].index ?? 0;
-      const end = i + 1 < matches.length ? matches[i + 1].index ?? sentence.length : sentence.length;
-      const rawClause = sentence.slice(start, end).replace(/\bor\s*$/i, "").trim();
-      const dayLabel = String(matches[i][0] ?? "").trim();
-      const sentenceHasAllDay = /\b(?:free|available)?\s*all\s+day\b/i.test(sentence);
-      const clause = sentenceHasAllDay && dayLabel ? `${dayLabel} any time` : rawClause;
-      if (!clause) continue;
-      if (!hasScheduleTimeSignal(clause)) continue;
-      if (!hasRequestedScheduleWindowText(clause)) continue;
-      if (!clauses.some(existing => existing.toLowerCase() === clause.toLowerCase())) {
-        clauses.push(clause);
-      }
-    }
-  }
-  return clauses;
+/** Day-scoped slot search (scheduleSlotSearch.ts) with this conv's config + preferred reps. */
+async function findScheduleSlotsForRequestedDay(args: {
+  conv: any;
+  dayInfo: { day: string; date: Date };
+  appointmentType: string;
+}): Promise<any[]> {
+  const cfg = await getSchedulerConfigHot();
+  return findScheduleSlotsForDayWithConfig({
+    ...args,
+    cfg,
+    preferredSalespeople: getPreferredSalespeopleForConv(cfg, args.conv)
+  });
 }
 
 async function findScheduleSlotsForRequestedWindowClauses(args: {
@@ -22814,7 +22791,10 @@ async function findScheduleSlotsForRequestedWindowClauses(args: {
   text: string | null | undefined;
   appointmentType: string;
 }): Promise<any[]> {
-  const clauses = extractRequestedScheduleWindowClauses(args.text);
+  const clauses = extractRequestedScheduleWindowClauses(args.text, {
+    hasScheduleTimeSignal,
+    hasRequestedScheduleWindowText
+  });
   if (!clauses.length) return [];
   const cfg = await getSchedulerConfigHot();
   const seen = new Set<string>();
@@ -22898,63 +22878,26 @@ async function findDayPartOnlyScheduleSlots(args: {
   }
 }
 
-async function findScheduleSlotsForRequestedDay(args: {
-  conv: any;
-  dayInfo: { day: string; date: Date };
-  appointmentType: string;
-}): Promise<any[]> {
-  const cfg = await getSchedulerConfigHot();
-  const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
-  const durationMinutes =
-    appointmentTypes[args.appointmentType]?.durationMinutes ??
-    appointmentTypes.inventory_visit?.durationMinutes ??
-    60;
-  const preferredSalespeople = getPreferredSalespeopleForConv(cfg, args.conv);
-  const salespeople = cfg.salespeople ?? [];
-  if (!preferredSalespeople.length || !salespeople.length) return [];
-
-  const candidatesByDay = generateCandidateSlots(cfg, new Date(), durationMinutes, 14);
-  const requestedDayKey = dayKey(args.dayInfo.date, cfg.timezone);
-  const dayPool = candidatesByDay.filter(d => dayKey(d.dayStart, cfg.timezone) === requestedDayKey);
-  if (!dayPool.length) return [];
-
-  let cal: any = null;
+/** Next open times for a lead who accepted our ask without naming one (schedulingAcceptance.ts). */
+async function applyAcceptedVisitTimeOffer(
+  conv: any
+): Promise<{ reply: string; slotCount: number } | null> {
   try {
-    cal = await getAuthedCalendarClient();
-  } catch {
-    cal = null;
+    const appointmentType = inferAppointmentTypeFromConv(conv);
+    const cfg = await getSchedulerConfigHot();
+    const { slots, reply } = await resolveAcceptedVisitTimeOffer({
+      cfg,
+      preferredSalespeople: getPreferredSalespeopleForConv(cfg, conv),
+      appointmentType
+    });
+    if (!reply) return null;
+    setLastSuggestedSlots(conv, slots);
+    setDialogState(conv, appointmentType === "test_ride" ? "test_ride_offer_sent" : "schedule_offer_sent");
+    return { reply, slotCount: slots.length };
+  } catch (e: any) {
+    console.log("[scheduler] accepted-visit time offer failed", e?.message ?? e);
+    return null;
   }
-
-  const timeMin = new Date().toISOString();
-  const timeMax = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
-  for (const salespersonId of preferredSalespeople) {
-    const sp = salespeople.find((p: any) => p.id === salespersonId);
-    if (!sp) continue;
-    let expanded: { start: Date; end: Date }[] = [];
-    if (cal) {
-      try {
-        const fb = await queryFreeBusy(cal, [sp.calendarId], timeMin, timeMax, cfg.timezone);
-        const busy = (fb.calendars?.[sp.calendarId]?.busy ?? []) as any;
-        expanded = expandBusyBlocks(busy, cfg.minGapBetweenAppointmentsMinutes ?? 60);
-      } catch {
-        expanded = [];
-      }
-    }
-    const picked = pickSlotsForSalesperson(cfg, sp.id, sp.calendarId, dayPool, expanded, 2);
-    if (picked.length > 0) {
-      return picked.map((slot: any) => ({
-        salespersonId: sp.id,
-        salespersonName: sp.name,
-        calendarId: sp.calendarId,
-        start: slot.start,
-        end: slot.end,
-        startLocal: formatSlotLocal(slot.start, cfg.timezone),
-        endLocal: formatSlotLocal(slot.end, cfg.timezone),
-        appointmentType: args.appointmentType
-      }));
-    }
-  }
-  return [];
 }
 
 async function findScheduleSlotsForRequestedWindow(args: {
@@ -54846,6 +54789,28 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         turnFinanceIntent: false
       });
     }
+    // Mirror of the live arm — the SAME referee decides, so the two paths cannot drift.
+    if (
+      shouldOfferTimesAfterAcceptance({
+        action,
+        scheduleDialogState: isScheduleDialogState(getDialogState(conv)),
+        scheduleOfferContext: hasScheduleOfferContext(regenLastOutboundForActionText, getDialogState(conv))
+      })
+    ) {
+      const offered = await applyAcceptedVisitTimeOffer(conv);
+      if (offered) {
+        recordRouteOutcome("regen", "accept_scheduling_ask_offered_times", {
+          convId: conv.id,
+          leadKey: conv.leadKey,
+          slotCount: offered.slotCount
+        });
+        return respondWithSmsRegeneratedDraft(offered.reply, undefined, {
+          turnSchedulingIntent: true,
+          turnAvailabilityIntent: false,
+          turnFinanceIntent: false
+        });
+      }
+    }
     if (action === "ask_for_available_times") {
       const appointmentType = inferAppointmentTypeFromConv(conv);
       let windowSlots = await findScheduleSlotsForRequestedWindowClauses({
@@ -64244,7 +64209,15 @@ if (authToken && signature) {
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
-  if (event.provider === "twilio" && isShortAckNoReplyText(inboundText)) {
+  // The lexical sign-off test stays (removing it fails toward replying to every "thanks"), but the
+  // PARSER outranks it in the one case it provably gets wrong: a bare affirmative answering our own
+  // "what day works?" is an acceptance, not a sign-off, and dying here is what stranded 18 leads in
+  // the funnel's accepted_no_time bucket. Parser silent or unaccepted => the word list still wins.
+  if (
+    event.provider === "twilio" &&
+    isShortAckNoReplyText(inboundText) &&
+    !(customerAckActionAccepted && customerAckActionParse?.action === "accept_scheduling_ask")
+  ) {
     discardPendingDrafts(conv, "short_ack_no_reply");
     delete conv.emailDraft;
     saveConversation(conv);
@@ -65214,6 +65187,19 @@ if (authToken && signature) {
     scheduleDialogState: isScheduleDialogState(getDialogState(conv)),
     scheduleOfferContext: hasScheduleOfferContext(lastOutboundText, getDialogState(conv))
   });
+  // The customer accepted our own open ask without naming a time — answer with CONCRETE times
+  // instead of re-asking the question that stranded them. No real slot => fall through.
+  if (event.provider === "twilio" && sched.kind === "offer_times_after_acceptance") {
+    const offered = await applyAcceptedVisitTimeOffer(conv);
+    if (offered) {
+      recordRouteOutcome("live", "accept_scheduling_ask_offered_times", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        slotCount: offered.slotCount
+      });
+      return publishLiveTwilioReply(offered.reply, { turnSchedulingIntent: true });
+    }
+  }
   if (
     event.provider === "twilio" &&
     (sched.kind === "confirm_appointment" ||
