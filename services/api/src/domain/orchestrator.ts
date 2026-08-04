@@ -2245,6 +2245,13 @@ export async function orchestrateInbound(
     dealerProfile?: any;
     agentNameOverride?: string | null;
     needsEmpathy?: boolean | null;
+    // The FULL open customer turn — every message they sent that we have not answered yet — built
+    // by `buildOpenTurnInquiry` (openCustomerTurn.ts) at the call site, where conv.messages is in
+    // hand. Feeds the draft composer's `inquiry` ONLY: routing and the typed parsers keep reading
+    // the single triggering message, so this widens what we ANSWER without moving a route decision.
+    // Absent/blank => `event.body`, i.e. exactly today's behaviour (Joe, 2026-08-04: a second
+    // question asked before the pending draft was sent went unanswered).
+    openTurnInquiry?: string | null;
     // True when the customer has ALREADY received a customer-facing outbound on this thread
     // (hasCustomerReceivedOutbound over conv.messages — sent providers only, never draft_ai).
     // Mid-thread, the pricing branches drop their "Hey {name}, it's {agent} over at {dealer}."
@@ -5162,7 +5169,9 @@ export async function orchestrateInbound(
         cta: ctx?.cta ?? null,
         leadKey: event.from,
         lead,
-        inquiry: event.body,
+        // The whole open turn when the customer stacked messages on us, else the triggering
+        // message — see `openTurnInquiry` on ctx. Composer input only; routing is untouched.
+        inquiry: String(ctx?.openTurnInquiry ?? "").trim() || event.body,
         history,
         stockId,
         inventoryUrl,

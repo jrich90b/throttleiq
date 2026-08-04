@@ -1065,6 +1065,7 @@ import {
   shouldHandlePendingIncomingInventoryTurn
 } from "./domain/pendingIncomingInventory.js";
 import { buildCustomerReceivedHistory, buildEffectiveHistory } from "./domain/effectiveContext.js";
+import { buildOpenTurnInquiry, getLastInboundBody, getLastInboundMessage, hasMultiMessageOpenTurn } from "./domain/openCustomerTurn.js";
 import { isWorkerDrivenTicks, isWorkerTickTask, type WorkerTickTask } from "./domain/workerTasks.js";
 import {
   buildEscalationDigest,
@@ -16310,16 +16311,6 @@ function colorMatchesAlias(
     if (hasAliasMatch) return true;
   }
   return hasStrongColorTokenMatch(itemColor, leadColor, leadTrim);
-}
-
-function getLastInboundBody(conv: any): string | null {
-  const msg = conv.messages?.slice().reverse().find((m: any) => m.direction === "in");
-  return msg?.body ?? null;
-}
-
-function getLastInboundMessage(conv: any): any | null {
-  const msg = conv.messages?.slice().reverse().find((m: any) => m.direction === "in");
-  return msg ?? null;
 }
 
 function findConversationByOutcomeToken(token: string): any | null {
@@ -40717,7 +40708,8 @@ async function maybeRedraftOnNegativeFeedback(args: {
         leadSource: (lead as any)?.source ?? null,
         bucket: (conv as any)?.classification?.bucket ?? null,
         cta: (conv as any)?.classification?.cta ?? null,
-        inquiry: inbound,
+        // The re-draft answers the whole open turn too (openCustomerTurn.ts), not just the rated message.
+        inquiry: buildOpenTurnInquiry(conv.messages) || inbound,
         history: buildHistory(conv, 10),
         dealerProfile,
         steering: decision.steering ?? null,
@@ -59376,6 +59368,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     regenInboundDepartmentIntent
   );
   const result = await safeOrchestrateInbound("regen", event, history, {
+    // Same open turn the live path answers — both paths stay in lockstep (CLAUDE.md rule 5).
+    openTurnInquiry: buildOpenTurnInquiry(conv.messages),
     staffCorrections: collectRecentStaffCorrections(conv, new Date().toISOString()),
     appointment: conv.appointment,
     followUp: conv.followUp,
@@ -69299,7 +69293,11 @@ if (authToken && signature) {
     String(event.body ?? ""),
     inboundDepartmentIntent
   );
+  // The only production signal that the widened `inquiry` reaches the composer. Low-volume by construction.
+  if (hasMultiMessageOpenTurn(conv.messages)) recordRouteOutcome("live", "open_turn_multi_message_answered", { convId: conv.id, leadKey: conv.leadKey });
   const result = await safeOrchestrateInbound("twilio_inbound", event, history, {
+    // Every inbound since the last outbound they RECEIVED — a pending draft is not an answer (Joe, 8/4).
+    openTurnInquiry: buildOpenTurnInquiry(conv.messages),
     staffCorrections: collectRecentStaffCorrections(conv, new Date().toISOString()),
     appointment: conv.appointment,
     followUp: conv.followUp,
