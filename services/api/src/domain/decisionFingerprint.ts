@@ -630,6 +630,43 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     }, ["decideInventoryWatchDisarm"]);
   }
 
+  // Added 2026-08-04 with the finance-outcome-notify un-stacking. Sampled once PER LANE because
+  // the eight lanes are exactly where the three preserved divergences live — the two "pending"
+  // lanes write different records, the two "resolved" lanes stamp different clocks, and
+  // `notify_sent` alone skips `updatedAt`. A single sample would hide all three. PROBE: the lane
+  // and both status inputs are pinned per sample, so the referee consults nothing but its own
+  // arbitration — it reads no stored state at all.
+  for (const lane of [
+    "token_mint",
+    "outcome_signal",
+    "prompt_sent",
+    "notify_sent",
+    "public_link_pending",
+    "public_link_resolved",
+    "staff_sms_pending",
+    "staff_sms_resolved"
+  ] as const) {
+    add(`financeOutcomeNotify:${lane}`, () => {
+      if (typeof reducer.decideFinanceOutcomeNotifyState !== "function") return undefined;
+      // PROBE: fixed inputs; `declined` exercises both status-carrying lanes' branch.
+      const decision = reducer.decideFinanceOutcomeNotifyState({
+        lane,
+        outcomeStatus: "declined",
+        sentStatus: "declined"
+      });
+      return {
+        mintToken: decision.mintToken,
+        status: decision.status,
+        stampPendingAt: decision.stampPendingAt,
+        answerStamp: decision.answerStamp,
+        stampPromptSent: decision.stampPromptSent,
+        sentLatch: decision.sentLatch,
+        touchUpdatedAt: decision.touchUpdatedAt,
+        divergence: decision.divergence
+      };
+    }, ["decideFinanceOutcomeNotifyState"]);
+  }
+
   // Added 2026-08-02 with the appointment-CONFIRM un-stacking. Sampled once PER LANE, because the
   // whole point of this referee is that the slot-match lane answers `acknowledged` and the
   // reschedule latch differently from the two booked lanes — a single sample would hide exactly

@@ -6635,3 +6635,169 @@ export function decideInventoryWatchDisarm(
     why: `${input.lane}: data repair — ${remaining} watch(es) kept; the lead's mode, chase and pending flag are not this lane's business`
   };
 }
+
+/**
+ * WHERE IS THIS FINANCE OUTCOME IN THE MANAGER-NOTIFICATION LIFECYCLE?
+ *
+ * `conv.financeOutcomeNotify` is the record behind the business-manager loop: we mint a reply
+ * token, text the manager "what happened with the financing?", and stamp what came back. Seven
+ * places used to hand-write that record — the token mint, the parsed-outcome write, the prompt
+ * sender, the notification sender, the public outcome link (pending + resolved) and the staff-SMS
+ * reply lane (pending + resolved). They now all ask here.
+ *
+ * The lanes deliberately write DIFFERENT field sets; that is the whole reason a referee is worth
+ * having, because the differences were invisible while they sat 20,000 lines apart.
+ *
+ * DIVERGENCE 1 — THE TWO "PENDING" LANES DO NOT AGREE ON THE RECORD. A manager who answers the
+ * public link with PENDING gets `status:"pending"` + `pendingAt`. A manager who TEXTS back
+ * "pending" / "no answer" / "left a voicemail" gets `outcomePendingAt` and NO `status` at all.
+ * `scripts/outcome_qa_audit.ts` reports a pending outcome only when it sees `status === "pending"`
+ * AND `pendingAt`, so the texted answer never reaches the QA report. Preserved, not merged: the
+ * blast radius is a REPORT, and normalizing it would start writing a `status` the SMS lane has
+ * never written. **Measured 2026-08-04: 807 conversations, 67 carry this record, and ZERO carry
+ * either pending shape — so this is a portability defect, not a live one.**
+ *
+ * DIVERGENCE 2 — THE TWO "RESOLVED" LANES STAMP DIFFERENT FIELD NAMES for the same event: the
+ * public link writes `outcomePromptRespondedAt`, the staff SMS writes `outcomePromptResolvedAt`.
+ * Both have ZERO consumers (grep-verified across services/api, scripts, apps/web, packages), so
+ * nothing today can tell them apart — but both HAVE fired in production (4 responded / 1 resolved),
+ * so anything later built on "when did the manager answer?" would silently see a fifth of the truth.
+ *
+ * DIVERGENCE 3 — `notify_sent` IS THE ONLY LANE THAT DOES NOT BUMP `updatedAt`. That field is the
+ * second-choice freshness input to the staff-SMS token matcher (index.ts, after
+ * `outcomePromptSentAt` and before `conv.updatedAt`), so it can only matter on a record whose ONLY
+ * event was an outbound notification — and `saveConversation` moves `conv.updatedAt` regardless.
+ * Preserved rather than tidied: adding a stamp would widen the window in which an old token still
+ * matches a staff reply, which is the fail-toward-acting direction.
+ *
+ * NOT A DIVERGENCE, pinned so a later tidy-up does not "fix" it: `token_mint` keeps an existing
+ * token instead of replacing it, and `prompt_sent` keeps an existing `userId` when the caller has
+ * no better one. Both are deliberate — the token is what an inbound staff SMS is matched against
+ * (index.ts `isFinanceOutcomeTokenForConversation`), so re-minting one would strand a manager who
+ * is mid-reply, and blanking `userId` would lose the attribution the matcher falls back on.
+ */
+export type FinanceOutcomeNotifyLane =
+  | "token_mint"
+  | "outcome_signal"
+  | "prompt_sent"
+  | "notify_sent"
+  | "public_link_pending"
+  | "public_link_resolved"
+  | "staff_sms_pending"
+  | "staff_sms_resolved";
+
+/** Which "the manager answered" timestamp a lane stamps — divergence 2. */
+export type FinanceOutcomeAnswerStamp = "responded" | "resolved" | "pending_only" | null;
+
+export type FinanceOutcomeNotifyInput = {
+  lane: FinanceOutcomeNotifyLane;
+  /** `outcome_signal` only: the parsed outcome being recorded. */
+  outcomeStatus?: "approved" | "declined" | "needs_more_info" | null;
+  /** `notify_sent` only: which manager notification just went out. */
+  sentStatus?: "approved" | "declined" | "needs_more_info" | null;
+};
+
+export type FinanceOutcomeNotifyDecision = {
+  /** Mint a reply token when the record has none (never replace one). */
+  mintToken: boolean;
+  /** What to write into `status`; `null` = leave whatever is there. */
+  status: "approved" | "declined" | "needs_more_info" | "pending" | null;
+  /** Stamp `pendingAt` — the public link's half of divergence 1. */
+  stampPendingAt: boolean;
+  /** Which "the manager answered" clock this lane stamps — divergence 2. */
+  answerStamp: FinanceOutcomeAnswerStamp;
+  /** Record the outbound prompt (sent-at, source id, assignee, phone). */
+  stampPromptSent: boolean;
+  /** Which per-status "we already told the manager" latch to set; `null` = none. */
+  sentLatch: "approvedSentAt" | "declinedSentAt" | "needsInfoSentAt" | null;
+  /** Bump `updatedAt` — every lane but `notify_sent` (divergence 3). */
+  touchUpdatedAt: boolean;
+  divergence: string | null;
+  why: string;
+};
+
+/** Pure. */
+export function decideFinanceOutcomeNotifyState(
+  input: FinanceOutcomeNotifyInput
+): FinanceOutcomeNotifyDecision {
+  const base = {
+    mintToken: false,
+    status: null,
+    stampPendingAt: false,
+    answerStamp: null,
+    stampPromptSent: false,
+    sentLatch: null,
+    touchUpdatedAt: true,
+    divergence: null
+  } as const;
+  switch (input.lane) {
+    case "token_mint":
+      return {
+        ...base,
+        mintToken: true,
+        // The mint is the one lane that predates the record; it stamps nothing else, including the
+        // clock, because "we generated a token" is not yet an event in the manager's lifecycle.
+        touchUpdatedAt: false,
+        why: "token_mint: give this conversation a reply token if it has none — never replace one"
+      };
+    case "outcome_signal":
+      return {
+        ...base,
+        status: input.outcomeStatus ?? null,
+        why: `outcome_signal: a finance outcome of ${input.outcomeStatus ?? "unknown"} was recorded`
+      };
+    case "prompt_sent":
+      return {
+        ...base,
+        stampPromptSent: true,
+        why: "prompt_sent: the outcome prompt went out — record when, off what, to whom"
+      };
+    case "notify_sent":
+      return {
+        ...base,
+        sentLatch:
+          input.sentStatus === "declined"
+            ? "declinedSentAt"
+            : input.sentStatus === "approved"
+              ? "approvedSentAt"
+              : "needsInfoSentAt",
+        // Divergence 3.
+        touchUpdatedAt: false,
+        divergence: "notify_sent_does_not_bump_updated_at",
+        why: `notify_sent: the ${input.sentStatus ?? "needs_more_info"} notification went out — latch it so it goes out once`
+      };
+    case "public_link_pending":
+      return {
+        ...base,
+        status: "pending",
+        stampPendingAt: true,
+        answerStamp: "responded",
+        // Divergence 1, the half the QA audit can see.
+        divergence: "public_link_pending_writes_a_status_the_staff_sms_lane_never_writes",
+        why: "public_link_pending: the manager pressed PENDING on the link — status + pendingAt"
+      };
+    case "public_link_resolved":
+      return {
+        ...base,
+        answerStamp: "responded",
+        why: "public_link_resolved: the manager answered on the link; the outcome itself is written by outcome_signal"
+      };
+    case "staff_sms_pending":
+      return {
+        ...base,
+        stampPendingAt: false,
+        answerStamp: "pending_only",
+        // Divergence 1, the half nothing reports on.
+        divergence: "staff_sms_pending_stamps_only_outcome_pending_at_so_the_qa_audit_never_sees_it",
+        why: "staff_sms_pending: the manager texted back that it is still pending — outcomePendingAt only"
+      };
+    default:
+      return {
+        ...base,
+        answerStamp: "resolved",
+        // Divergence 2.
+        divergence: "staff_sms_resolved_stamps_a_different_answer_clock_than_the_public_link",
+        why: "staff_sms_resolved: the manager texted back a real outcome; the outcome itself is written by outcome_signal"
+      };
+  }
+}

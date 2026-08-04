@@ -733,8 +733,15 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 // 4 -> 2. The FOURTH lane (`vin_normalize`) was invisible to the queue until the third was refereed
 // — refereeing one write un-collapses its neighbours, the adjacency artifact this program has now
 // hit five times. MEASURED on the post-change tree.
+// 81 -> 76. The finance-outcome-NOTIFY un-stacking (2026-08-04) — the whole Tier-2 field, cleared.
+// Detector cut 5 (#510) had just made these five sites visible for the first time; seven places
+// hand-wrote the business-manager notification record and now all ask `decideFinanceOutcomeNotifyState`
+// through `applyFinanceOutcomeNotifyState`. `financeOutcomeNotify` 5 -> 0. The two staff-SMS lanes
+// were NOT in the queue's five — they sat within 40 lines of an `applyFinanceOutcomeStatusFromSignal`
+// call and so read as refereed by an applier that never actually decided these fields. Wired anyway:
+// the queue is a lower bound every time. MEASURED on the post-change tree.
 // RATCHET DOWN ONLY.
-const UNREFEREED_WRITER_BASELINE = 81;
+const UNREFEREED_WRITER_BASELINE = 76;
 
 {
   const sourceFiles: SourceFile[] = [];

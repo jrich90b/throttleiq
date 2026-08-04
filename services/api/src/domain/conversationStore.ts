@@ -32,6 +32,9 @@ import {
   decideInventoryWatchDisarm,
   type InventoryWatchDisarmLane,
   type InventoryWatchDisarmDecision,
+  decideFinanceOutcomeNotifyState,
+  type FinanceOutcomeNotifyLane,
+  type FinanceOutcomeNotifyDecision,
   decideScheduleInviteBudget,
   decideCadenceLifecycle,
   decideAppointmentAttribution,
@@ -7964,4 +7967,54 @@ export function applyAppointmentAttribution(
     conv.appointment.bookedBy = decision.bookedBy as AppointmentBookedBy;
   }
   return decision;
+}
+
+/**
+ * The single place the business-manager finance-outcome record is written. Seven lanes across
+ * index.ts used to hand-write it; they now all pass through here and ask
+ * `decideFinanceOutcomeNotifyState` (routeStateReducer), where the three preserved divergences and
+ * the two deliberate keep-what-is-there rules are documented.
+ *
+ * The caller supplies the clock and the mint, because neither belongs to a pure referee: `nowIso`
+ * so a lane that stamps two fields cannot straddle a second, and `mintedToken` so the randomness
+ * stays out of the decision. A minted token is DISCARDED when the record already has one.
+ */
+export function applyFinanceOutcomeNotifyState(
+  conv: Conversation,
+  input: {
+    lane: FinanceOutcomeNotifyLane;
+    nowIso: string;
+    outcomeStatus?: "approved" | "declined" | "needs_more_info" | null;
+    sentStatus?: "approved" | "declined" | "needs_more_info" | null;
+    /** `token_mint` only: the candidate token, used only when the record carries none. */
+    mintedToken?: string;
+    /** `prompt_sent` only. */
+    promptSourceMessageId?: string;
+    promptUserId?: string;
+    promptPhone?: string;
+  }
+): { decision: FinanceOutcomeNotifyDecision; state: any } {
+  const decision = decideFinanceOutcomeNotifyState({
+    lane: input.lane,
+    outcomeStatus: input.outcomeStatus ?? null,
+    sentStatus: input.sentStatus ?? null
+  });
+  const state = ((conv as any).financeOutcomeNotify = (conv as any).financeOutcomeNotify ?? {});
+  if (decision.mintToken && !String(state.outcomeToken ?? "").trim()) {
+    state.outcomeToken = String(input.mintedToken ?? "").trim();
+  }
+  if (decision.status) state.status = decision.status;
+  if (decision.stampPendingAt) state.pendingAt = input.nowIso;
+  if (decision.answerStamp === "responded") state.outcomePromptRespondedAt = input.nowIso;
+  else if (decision.answerStamp === "resolved") state.outcomePromptResolvedAt = input.nowIso;
+  else if (decision.answerStamp === "pending_only") state.outcomePendingAt = input.nowIso;
+  if (decision.stampPromptSent) {
+    state.outcomePromptSentAt = input.nowIso;
+    state.lastPromptSourceMessageId = String(input.promptSourceMessageId ?? "").trim() || undefined;
+    state.userId = String(input.promptUserId ?? "").trim() || state.userId;
+    state.phone = input.promptPhone;
+  }
+  if (decision.sentLatch) state[decision.sentLatch] = input.nowIso;
+  if (decision.touchUpdatedAt) state.updatedAt = input.nowIso;
+  return { decision, state };
 }
