@@ -201,6 +201,13 @@ try {
     console.log(`Suppressed ${part.suppressed.length} finding(s) already covered by an open/merged loop PR:`);
     for (const s of part.suppressed.slice(0, 20)) console.log(`   - ${s.key} → PR #${s.prNumber} (${s.state})`);
   }
+  if (part.ambiguous.length) {
+    // Coverage cap: more findings share the key than PRs cover it, so none of them is dropped.
+    console.log(`Kept ${part.ambiguous.length} finding(s) on AMBIGUOUS PR coverage (a key with more findings than PRs):`);
+    for (const a of part.ambiguous.slice(0, 20)) {
+      console.log(`   ? ${a.key} — ${a.findingCount} findings, ${a.prCount} PR(s) ${a.prNumbers.map(n => `#${n}`).join(", ")}`);
+    }
+  }
 } catch {
   /* gh unavailable / any error → keep every finding (fail toward surfacing, never toward hiding) */
 }
