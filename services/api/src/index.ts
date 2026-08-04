@@ -388,7 +388,7 @@ import {
   isTruncatedDraftBody,
   type CadenceQualityGateDecision
 } from "./domain/draftQualityGate.js";
-import { sampleCadenceQualityConsensus, cadenceQualityConsensusSamples } from "./domain/cadenceQualityConsensus.js";
+import { sampleCadenceQualityConsensus, cadenceQualityConsensusSamples, resolveCadenceUnanimousFloor } from "./domain/cadenceQualityConsensus.js";
 import { resolveNoResponseTrace } from "./domain/noResponseTrace.js";
 import { daysSinceLastCustomerReply } from "./domain/cadenceQualityFacts.js";
 import {
@@ -5327,14 +5327,14 @@ async function runCadenceQualityJudgeShadow(
         message: text, channel, cadenceKind, history: buildHistory(conv, 8),
         lead: conv.lead, sale: conv.sale, daysSinceLastInbound: daysSinceLastCustomerReply(conv)
       }),
-      { samples: enforce ? cadenceQualityConsensusSamples() : 1, floor: cadenceQualityEnforceFloor() }
+      { samples: enforce ? cadenceQualityConsensusSamples() : 1, floor: cadenceQualityEnforceFloor(), unanimousFloor: resolveCadenceUnanimousFloor({ enforce, cadenceKind, sale: conv?.sale }) }
     );
     const verdict = consensus.verdict;
     if (!verdict) return null;
     const decision = decideCadenceQualityGate({
       enabled: enforce,
       verdict,
-      minConfidence: enforce ? cadenceQualityEnforceFloor() : undefined
+      minConfidence: enforce ? consensus.floorApplied : undefined
     });
     if (decision.action !== "pass") {
       recordDecisionTrace({
