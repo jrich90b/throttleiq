@@ -141,4 +141,32 @@ assert.ok(/FLYWHEEL_REFAIL/.test(flywheel), "refail keeps its kill switch");
 const shadowReplay = fs.readFileSync("scripts/inbound_shadow_replay.ts", "utf8");
 assert.ok(/--conv/.test(shadowReplay) && /convIds/.test(shadowReplay), "the replay harness supports the per-conversation filter refail depends on");
 
-console.log("PASS corpus replay flywheel eval (self-test + shared-judge + cost-cap + finding-shape + refail guards)");
+// HARNESS-vs-AGENT error attribution (2026-08-04). The harness boots one temporary API per case
+// out of the same deploy checkout a deploy runs `npm ci` in; a deploy landing mid-sweep made 29
+// consecutive boots fail on module resolution. Those became 9 of the 12 criticals — 75% of the
+// release-BLOCKING signal — plus one "draft: (none)" P1 per conversation. Pinned so the
+// attribution can't drift back to blaming the agent, and so the honesty rails stay:
+assert.ok(
+  /classifyReplayErrorCause/.test(flywheel) && /excluded_harness_error/.test(flywheel),
+  "the flywheel attributes replay errors before scoring them"
+);
+assert.ok(
+  /gate_coverage_complete/.test(flywheel) && /gate_pass: criticalsZero && regressionsZero && coverageComplete/.test(flywheel),
+  "lost coverage is a BLOCKING bar — a gutted sweep can never read PASS"
+);
+assert.ok(
+  /harnessErrors/.test(flywheel) && /UNMEASURED/.test(flywheel),
+  "the run reports what it lost instead of quietly scoring a smaller corpus"
+);
+// The classifier lives in the shared pure module (ci:eval pins its fail direction in
+// replay_fidelity:eval), not re-implemented scorer-side where the two could drift apart.
+assert.ok(
+  /from "\.\.\/services\/api\/src\/domain\/replayFidelity\.ts"/.test(flywheel),
+  "attribution is imported from the pure module, never re-spelled in the scorer"
+);
+assert.ok(
+  /classifyReplayErrorCause\(err\?\.message\) !== "harness"/.test(shadowReplay),
+  "only a harness-caused boot failure is retried — a real agent failure is not re-rolled until it passes"
+);
+
+console.log("PASS corpus replay flywheel eval (self-test + shared-judge + cost-cap + finding-shape + refail guards + harness-error attribution & coverage floor)");

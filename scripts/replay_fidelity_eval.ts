@@ -19,6 +19,7 @@
 import assert from "node:assert/strict";
 import {
   checkReplayFidelity,
+  classifyReplayErrorCause,
   composeReplayCommentLines,
   hasHydrationCompleted,
   isStoredVehicleConsistentWithBody,
@@ -326,6 +327,59 @@ import {
   );
 }
 
+// ── classifyReplayErrorCause: who failed, the harness or the agent? (2026-08-04) ────────
+{
+  // The verbatim error from the 08-04 sweep: a deploy ran `npm ci` in the deploy checkout while
+  // the harness was booting one temporary API per case, and 29 consecutive cases died here.
+  const REAL_BOOT_FAILURE =
+    "temporary API exited early (1): node:internal/modules/esm/resolve:873\n" +
+    "  throw new ERR_MODULE_NOT_FOUND(packageName, fileURLToPath(base), null);\n" +
+    "Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'dotenv' imported from " +
+    "/home/ubuntu/leadrider-api/americanharley/services/api/dist/domain/sentryInit.js";
+  assert.equal(
+    classifyReplayErrorCause(REAL_BOOT_FAILURE),
+    "harness",
+    "the production 08-04 boot failure must be attributed to the harness, not the agent"
+  );
+
+  for (const [text, why] of [
+    ["temporary API did not become healthy: ...", "a boot that never went healthy ran no turn"],
+    ["temporary API exited before the prepared thread loaded (1): ...", "died before the thread loaded"],
+    ["services/api/dist/index.js is missing. Run `npm --workspace @throttleiq/api run build` first.", "no build to replay"],
+    ["replay fidelity: replayed conversation lost its mode (expected \"autopilot\")", "the fidelity backstop is a harness fault"],
+    ["no free port assigned", "the harness could not even get a port"],
+    ["Error: Cannot find module '/home/ubuntu/.../node_modules/@sentry/node/index.js'", "the other install-race spelling"]
+  ] as const) {
+    assert.equal(classifyReplayErrorCause(text), "harness", why);
+  }
+
+  // FAIL DIRECTION — the load-bearing pin. Anything not proven to be a harness fault stays an
+  // AGENT failure, so it keeps its CRITICAL and keeps its work order. Widening this list must
+  // never be the way a real defect gets excused off the gate.
+  assert.equal(
+    classifyReplayErrorCause("timed out waiting for Twilio shadow job"),
+    "agent",
+    "the API booted and then failed to answer — that IS evidence about the agent"
+  );
+  assert.equal(
+    classifyReplayErrorCause("Twilio shadow job failed: draft generation threw"),
+    "agent",
+    "a job the agent failed is an agent failure"
+  );
+  assert.equal(
+    classifyReplayErrorCause("something nobody has seen before"),
+    "agent",
+    "an UNRECOGNISED error must default to agent — unknown never silently leaves the gate"
+  );
+  for (const empty of ["", "   ", null, undefined]) {
+    assert.equal(
+      classifyReplayErrorCause(empty),
+      "agent",
+      "a missing error string is not proof of a harness fault"
+    );
+  }
+}
+
 console.log(
-  "PASS replay_fidelity eval — hydration-complete signal + prepared-thread fidelity guard + synthetic-ADF comment dedupe + per-turn lead resolution (phantom corpus_replay_regression becomes a visible harness error; takeover/no-baseline never error; a walk-in note never duplicates the inquiry behind a raw label)"
+  "PASS replay_fidelity eval — hydration-complete signal + prepared-thread fidelity guard + synthetic-ADF comment dedupe + per-turn lead resolution + harness-vs-agent error attribution (phantom corpus_replay_regression becomes a visible harness error; takeover/no-baseline never error; a walk-in note never duplicates the inquiry behind a raw label; an unrecognised error stays the agent's)"
 );
