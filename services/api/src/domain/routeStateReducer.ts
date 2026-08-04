@@ -3924,6 +3924,148 @@ export function decideLeadCloseout(input: LeadCloseoutInput): LeadCloseoutDecisi
   };
 }
 
+// Who may put a bike ON HOLD for a lead, and what does that hold record say? One referee for what
+// were two hand-maintained copies of the same fourteen-field block.
+//
+// This is the INVERSE of `decideInventoryAvailabilityReopen` (PR #463), which only ever CLEARS a
+// hold — it could never vouch for the two places that WRITE one. Those two:
+//   appointment_outcome   `applyOutcomeHold` — a rep records the appointment outcome as "held".
+//   console_resolution    the console's manual-resolution endpoint, resolution === "hold".
+// They were copies down to the field ORDER, which is why they are safe to merge; the persisted JSON
+// must stay byte-identical, so the order below is the originals' order and must not be "tidied".
+//
+// TWO DIVERGENCES, BOTH PRESERVED AS-IS (named, not fixed):
+//
+// (1) THE MODE STOMP — the one that can matter to a customer. Both lanes stop the chase. The
+//     console lane then sets `paused_indefinite` only when this request did NOT also arm an
+//     inventory watch AND the thread is not already `manual_handoff`; the appointment-outcome lane
+//     sets it unconditionally, overwriting BOTH. Overwriting `manual_handoff` is the fail-unsafe
+//     half: the thread stops saying "a human owns this", and when the hold is later cleared the
+//     console's own hold_clear branch flips a `unit_hold`/`order_hold` thread back to ACTIVE — so
+//     the agent can resume texting a lead a human had taken over. Nothing is texted at hold time
+//     (the chase is stopped either way), so this is a LATENT divergence, not a live send.
+//     Named `appointment_outcome_hold_overwrites_a_human_handoff`; fix direction is to adopt the
+//     console lane's guards, and that belongs in its own `fix/` PR with its own evidence.
+//
+// (2) THE NULL KEY — cosmetic today, kept so the stored record is unchanged. An on-order hold has
+//     no stock number or VIN, so `normalizeInventoryHoldKey` returns null. The outcome lane stores
+//     that null; the console lane collapses it to `undefined`, which drops the property from the
+//     saved JSON entirely. Every reader coalesces (`conv.hold?.key &&`, `!hold.key`,
+//     `?? undefined`), so the two behave identically — but they are not the same stored record, so
+//     the difference is carried on the decision rather than normalized away.
+//
+// FAIL DIRECTION for whoever changes this later: a hold STOPS outreach, so an unresolved lane
+// should hold rather than not. What is NOT reversible is waking the agent up on a thread a human
+// owns — hence divergence 1's direction.
+export type InventoryHoldRecordLane = "appointment_outcome" | "console_resolution";
+
+/**
+ * Structural mirror of the stored `conv.hold` record. `routeStateReducer` deliberately imports no
+ * store types (they drag the whole `Conversation` graph in), so the shape is restated here and
+ * narrowed with a documented cast in the applier.
+ */
+export type InventoryHoldRecord = {
+  key: string | null | undefined;
+  onOrder: true | undefined;
+  stockId: string | undefined;
+  vin: string | undefined;
+  year: string | undefined;
+  make: string | undefined;
+  model: string | undefined;
+  trim: string | undefined;
+  color: string | undefined;
+  label: string | undefined;
+  note: string | undefined;
+  reason: "unit_hold" | "order_hold";
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type InventoryHoldRecordInput = {
+  lane: InventoryHoldRecordLane;
+  /** `normalizeInventoryHoldKey(stockId, vin)` — null when nothing identifies a physical unit. */
+  holdKey: string | null;
+  /** The bike is on order rather than on the floor; both lanes reject a hold that is neither. */
+  onOrder: boolean;
+  unit: {
+    stockId?: string;
+    vin?: string;
+    year?: string;
+    make?: string;
+    model?: string;
+    trim?: string;
+    color?: string;
+    label?: string;
+  };
+  note?: string;
+  /** `conv.hold?.createdAt` — when this lead FIRST held a bike; preserved across a re-hold. */
+  existingCreatedAt?: string;
+  nowIso: string;
+  /** console lane only: this same request also armed an inventory watch. */
+  watchApplied?: boolean;
+  /** `conv.followUp?.mode` as it stands before the hold lands. */
+  currentFollowUpMode?: string;
+};
+
+export type InventoryHoldRecordDecision = {
+  reason: "unit_hold" | "order_hold";
+  /** Exactly what gets stored on `conv.hold`, field order included. */
+  record: InventoryHoldRecord;
+  /** Both lanes stop the chase, under the hold reason. */
+  stopCadenceReason: string;
+  /** Force the thread to `paused_indefinite`. See divergence 1. */
+  setPausedIndefinite: boolean;
+  /** Names the preserved disagreement when this lane is the odd one out. */
+  divergence: string | null;
+  why: string;
+};
+
+export function decideInventoryHoldRecord(
+  input: InventoryHoldRecordInput
+): InventoryHoldRecordDecision {
+  const outcomeLane = input.lane === "appointment_outcome";
+  const reason: "unit_hold" | "order_hold" = input.onOrder ? "order_hold" : "unit_hold";
+  const handoffOwned = String(input.currentFollowUpMode ?? "") === "manual_handoff";
+  // Divergence 1. The console lane looks before it writes; the outcome lane never did.
+  const setPausedIndefinite = outcomeLane ? true : !input.watchApplied && !handoffOwned;
+  const unit = input.unit;
+  return {
+    reason,
+    record: {
+      // Divergence 2. The outcome lane keeps the null; the console lane drops the property.
+      key: outcomeLane ? input.holdKey : input.holdKey || undefined,
+      onOrder: input.onOrder || undefined,
+      stockId: unit.stockId,
+      vin: unit.vin,
+      year: unit.year,
+      make: unit.make,
+      model: unit.model,
+      trim: unit.trim,
+      color: unit.color,
+      label: unit.label,
+      note: input.note,
+      reason,
+      createdAt: input.existingCreatedAt ?? input.nowIso,
+      updatedAt: input.nowIso
+    },
+    stopCadenceReason: reason,
+    setPausedIndefinite,
+    divergence:
+      outcomeLane && (handoffOwned || input.watchApplied)
+        ? "appointment_outcome_hold_overwrites_a_human_handoff"
+        : null,
+    why: outcomeLane
+      ? handoffOwned
+        ? "held from the appointment outcome — the chase stops and the thread is forced to paused_indefinite, overwriting a human handoff"
+        : "held from the appointment outcome — the chase stops and the thread is forced to paused_indefinite"
+      : setPausedIndefinite
+        ? "held from the console — the chase stops and the thread pauses indefinitely"
+        : handoffOwned
+          ? "held from the console — the chase stops, but a human owns this thread so its mode stands"
+          : "held from the console — the chase stops, but a watch was armed on this same request so its mode stands"
+  };
+}
+
 // Who may release a HELD draft — one referee for what were six independent decisions.
 //
 // `draftHeld` is the "being fixed" marker: the quality gate withheld a reply, so staff see a card

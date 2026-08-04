@@ -510,6 +510,38 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     }, ["decideLeadCloseout"]);
   }
 
+  // Added 2026-08-03 with the inventory-HOLD-RECORD un-stacking (the INVERSE of the availability
+  // reopen below: that one only ever CLEARS a hold, this one is the two places that WRITE one).
+  // Sampled once PER LANE, because the lanes are the disagreement — the appointment-outcome lane
+  // forces `paused_indefinite` unconditionally while the console lane spares a thread a human owns
+  // or a watch was just armed on.
+  // PROBE: the lane, the hold key/on-order flag and the clock are held fixed (all are properties of
+  // the CALL SITE, not of stored state); `watchApplied` is pinned false so the ONLY stored input is
+  // the lead's actual follow-up mode plus the createdAt already on its hold. So between a baseline
+  // and a candidate run only the arbitration itself can move the fingerprint.
+  for (const lane of ["appointment_outcome", "console_resolution"] as const) {
+    add(`inventoryHoldRecord:${lane}`, conv => {
+      if (!conv || typeof reducer.decideInventoryHoldRecord !== "function") return undefined;
+      const decision = reducer.decideInventoryHoldRecord({
+        lane, // PROBE
+        holdKey: "probe-hold-key", // PROBE
+        onOrder: false, // PROBE
+        unit: { stockId: "PROBE-1" }, // PROBE
+        nowIso: "2026-01-01T00:00:00.000Z", // PROBE
+        watchApplied: false, // PROBE
+        existingCreatedAt: str(conv?.hold?.createdAt) ?? undefined,
+        currentFollowUpMode: str(conv?.followUp?.mode) ?? undefined
+      });
+      return {
+        reason: decision.reason,
+        setPausedIndefinite: decision.setPausedIndefinite,
+        recordKey: decision.record.key ?? null,
+        createdAt: decision.record.createdAt,
+        divergence: decision.divergence
+      };
+    }, ["decideInventoryHoldRecord"]);
+  }
+
   // Added 2026-08-02 with the appointment-CONFIRM un-stacking. Sampled once PER LANE, because the
   // whole point of this referee is that the slot-match lane answers `acknowledged` and the
   // reschedule latch differently from the two booked lanes — a single sample would hide exactly

@@ -23,6 +23,9 @@ import {
   decideCloseoutReversal,
   type CloseoutReversalCause,
   type CloseoutReversalDecision,
+  decideInventoryHoldRecord,
+  type InventoryHoldRecordInput,
+  type InventoryHoldRecordDecision,
   decideCadenceLifecycle,
   decideAppointmentAttribution,
   type AppointmentAttributionLane,
@@ -5550,6 +5553,35 @@ export function applyLeadCloseout(
       if (w && w.status !== "paused") w.status = "paused";
     }
   }
+  return decision;
+}
+
+// The ONE place a bike is put on hold FOR a lead. Both write sites — the appointment-outcome "held"
+// lane and the console's manual-resolution endpoint — ask `decideInventoryHoldRecord` instead of
+// each hand-writing the same fourteen fields plus the same cadence/mode aftermath. See that referee
+// for the two preserved divergences (the outcome lane's unconditional mode stomp, and the null key).
+//
+// The inventory-store side of a hold (`setInventoryHold` / `clearInventoryHold`) deliberately stays
+// at the call sites: it is async I/O against a different store, identical in both lanes, and pulling
+// it in here would widen a behavior-preserving cleanup into a lifecycle change.
+//
+// Deliberately does NOT stamp `conv.updatedAt` or save — both callers already do, and adding a write
+// here would change persisted timestamps.
+export function applyInventoryHoldRecord(
+  conv: Conversation,
+  input: Omit<InventoryHoldRecordInput, "existingCreatedAt" | "currentFollowUpMode">
+): InventoryHoldRecordDecision {
+  const decision = decideInventoryHoldRecord({
+    ...input,
+    existingCreatedAt: conv.hold?.createdAt,
+    currentFollowUpMode: conv.followUp?.mode
+  });
+  // The referee mirrors the record STRUCTURALLY (it imports no store types), and its `key` is
+  // `string | null | undefined` because the outcome lane stores a literal null. The stored type
+  // says `key?: string`, which both lanes already violated the same way before this extraction.
+  conv.hold = decision.record as unknown as Conversation["hold"];
+  stopFollowUpCadence(conv, decision.stopCadenceReason);
+  if (decision.setPausedIndefinite) setFollowUpMode(conv, "paused_indefinite", decision.reason);
   return decision;
 }
 

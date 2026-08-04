@@ -627,8 +627,17 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 //   `closedAt` 1 -> 0. The second sold copy was INVISIBLE to the queue until the first was rewired
 //   (the collapse artifact #455/#462 both recorded) — re-measure after every rewire, never assume
 //   the listed sites are all of them.
+// 116 -> 114: the inventory-HOLD-record un-stacking (this commit). "Who may put a bike on hold for
+//   a lead, and what does that hold record say?" was answered twice — `applyOutcomeHold` (a rep
+//   records the appointment outcome as "held") and the console's manual-resolution endpoint — as
+//   hand-maintained copies of the same fourteen-field block plus the same cadence/mode aftermath.
+//   Both now ask `decideInventoryHoldRecord` through `applyInventoryHoldRecord`. `hold` 2 -> 0, the
+//   Tier-1 field cleared. Two divergences preserved and named (the outcome lane's unconditional
+//   mode stomp over a human handoff; the null vs dropped `key` on an on-order hold).
+//   Baseline MEASURED on the pre-change commit 46ba0e1d (= 116), not carried from this constant —
+//   see the "a ratchet baseline is a ceiling, not a measurement" lesson on the 122 -> 116 entry.
 // RATCHET DOWN ONLY.
-const UNREFEREED_WRITER_BASELINE = 116;
+const UNREFEREED_WRITER_BASELINE = 114;
 
 {
   const sourceFiles: SourceFile[] = [];
