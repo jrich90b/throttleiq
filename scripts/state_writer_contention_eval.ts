@@ -665,7 +665,7 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 // analyzer had collapsed (a second voice arm in the same function, the console watch-set endpoint,
 // the walk-in email arm, and the initial-ADF unavailable arm). MEASURED on the post-change tree.
 // RATCHET DOWN ONLY.
-const UNREFEREED_WRITER_BASELINE = 93;
+const UNREFEREED_WRITER_BASELINE = 92;
 
 {
   const sourceFiles: SourceFile[] = [];

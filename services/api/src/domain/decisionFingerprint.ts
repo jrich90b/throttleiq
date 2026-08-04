@@ -601,10 +601,15 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
   // that. PROBE: the lane is held fixed per sample; the only stored state consulted is the lead's
   // actual reschedulePending latch, so between a baseline and a candidate run only the arbitration
   // itself can move the fingerprint.
+  // 2026-08-04: the two STAFF lanes joined the table (divergences 3 and 4). `salesperson_manual_send`
+  // is the first lane that consults the STORED status/acknowledged rather than only the latch, so
+  // those are passed through from the lead as-is — the probe still holds the lane fixed.
   for (const lane of [
     "customer_slot_match",
     "customer_confirm_booking",
-    "voice_summary_booking"
+    "voice_summary_booking",
+    "salesperson_manual_booking",
+    "salesperson_manual_send"
   ] as const) {
     add(`appointmentConfirmRecord:${lane}`, conv => {
       if (!conv?.appointment || typeof reducer.decideAppointmentConfirmRecord !== "function") {
@@ -612,11 +617,16 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
       }
       const decision = reducer.decideAppointmentConfirmRecord({
         lane, // PROBE
+        currentStatus: conv.appointment?.status ?? null,
+        currentAcknowledged: conv.appointment?.acknowledged ?? null,
         reschedulePending: conv.appointment?.reschedulePending
       });
       return {
         confirm: decision.confirm,
         acknowledged: decision.acknowledged,
+        // NOT in the fingerprint on purpose: adding a field to the payload reads as 183 changed
+        // decisions in the equivalence diff while every value is identical, which buries a real
+        // change in noise. `confirmedBy` is pinned behaviourally in appointment_confirm_record:eval.
         clearReschedulePending: decision.clearReschedulePending,
         divergence: decision.divergence
       };

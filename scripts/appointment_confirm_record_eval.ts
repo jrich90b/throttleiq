@@ -47,7 +47,8 @@ process.env.CONVERSATIONS_DB_PATH =
 const { decideAppointmentConfirmRecord } = await import(
   "../services/api/src/domain/routeStateReducer.ts"
 );
-const { confirmAppointmentIfMatchesSuggested, applyAppointmentConfirmRecord } = await import(
+const { confirmAppointmentIfMatchesSuggested, applyAppointmentConfirmRecord, markAppointmentAcknowledged } =
+  await import(
   "../services/api/src/domain/conversationStore.ts"
 );
 
@@ -100,6 +101,51 @@ for (const lane of ["customer_confirm_booking", "voice_summary_booking"] as cons
   eq(d.confirm, false, "an unrecognized lane refuses — never stamp a confirm nothing holds");
 }
 
+// --- SECOND SLICE (2026-08-04): the two STAFF lanes ----------------------------------------------
+// Divergence 3: the manual-outbound path used to ask on the CUSTOMER lane and then overwrite both
+// answers it got back. It has its own lane now, and the answer it always applied is the one pinned.
+{
+  const d = decideAppointmentConfirmRecord({ lane: "salesperson_manual_booking", reschedulePending: true });
+  eq(d.confirm, true, "salesperson_manual_booking stamps the record");
+  eq(d.confirmedBy, "salesperson", "the rep typed the words — crediting the customer for them is false");
+  eq(d.acknowledged, true, "a human pressed send on that time, so the robotic YES/NO re-ask stays off");
+  eq(d.clearReschedulePending, false, "no calendar event on this path either — the latch is left alone");
+  eq(
+    d.divergence,
+    "slot_match_confirm_leaves_the_reschedule_latch_standing",
+    "...and the standing-latch contradiction is still named, exactly as on the customer lane"
+  );
+}
+// Divergence 4 — none: the manual-send lane already agreed with the referee. It may only put the
+// word on file for a record that is ALREADY confirmed, and it never touches WHO confirmed it.
+{
+  const confirmed = { lane: "salesperson_manual_send", currentStatus: "confirmed" } as const;
+  const d = decideAppointmentConfirmRecord(confirmed);
+  eq(d.confirm, true, "staff sending on a confirmed thread may put the word on file");
+  eq(d.acknowledged, true, "...which is what stands the automatic re-ask down");
+  eq(d.confirmedBy, null, "...but this lane has NO view on who confirmed — the credit is left alone");
+  eq(d.clearReschedulePending, false, "...and it never clears the reschedule latch");
+}
+eq(
+  decideAppointmentConfirmRecord({ lane: "salesperson_manual_send", currentStatus: "pending" }).confirm,
+  false,
+  "a manual send must NOT stamp a confirm into existence — nothing was agreed yet"
+);
+eq(
+  decideAppointmentConfirmRecord({ lane: "salesperson_manual_send", currentStatus: null }).confirm,
+  false,
+  "...and with no appointment at all there is nothing to acknowledge"
+);
+eq(
+  decideAppointmentConfirmRecord({
+    lane: "salesperson_manual_send",
+    currentStatus: "confirmed",
+    currentAcknowledged: true
+  }).confirm,
+  false,
+  "already acknowledged — nothing to restamp, so no needless save"
+);
+
 // =================================================================================================
 // THE WRITE SITE — the store's slot-match function actually asks the referee
 // (the two index.ts booked sites are covered by the registry + decision equivalence; they cannot
@@ -144,6 +190,60 @@ const SLOT = {
   const matched = confirmAppointmentIfMatchesSuggested(conv, "what colors does it come in?");
   eq(matched, false, "an unrelated text matches nothing");
   eq(conv.appointment.status, "none", "...and the record is untouched");
+}
+
+// --- the manual-outbound lane: the rep's OWN send matched the slot --------------------------------
+{
+  const conv: any = {
+    id: "a3",
+    status: "open",
+    scheduler: { lastSuggestedSlots: [SLOT] },
+    appointment: { status: "none", updatedAt: "2026-08-01T00:00:00.000Z", reschedulePending: true }
+  };
+  const matched = confirmAppointmentIfMatchesSuggested(
+    conv,
+    "See you Wed Aug 5, 11:00 AM",
+    undefined,
+    { lane: "salesperson_manual_booking" }
+  );
+  eq(matched, true, "the rep's own outbound matched the suggested slot");
+  eq(conv.appointment.confirmedBy, "salesperson", "the credit goes to the rep who typed it");
+  eq(conv.appointment.acknowledged, true, "...and the automatic re-ask stands down");
+  eq(conv.appointment.reschedulePending, true, "...while the standing latch is still LEFT AS-IS");
+}
+
+// --- markAppointmentAcknowledged: staff sent something on a confirmed thread ----------------------
+{
+  const conv: any = {
+    id: "a4",
+    status: "open",
+    appointment: {
+      status: "confirmed",
+      confirmedBy: "customer",
+      acknowledged: false,
+      reschedulePending: true,
+      updatedAt: "2026-08-01T00:00:00.000Z"
+    }
+  };
+  markAppointmentAcknowledged(conv);
+  eq(conv.appointment.acknowledged, true, "a manual send puts the word on file");
+  eq(conv.appointment.confirmedBy, "customer", "...WITHOUT stealing the credit from the customer");
+  eq(conv.appointment.reschedulePending, true, "...and without clearing the reschedule latch");
+}
+{
+  const conv: any = {
+    id: "a5",
+    status: "open",
+    appointment: { status: "pending", acknowledged: false, updatedAt: "2026-08-01T00:00:00.000Z" }
+  };
+  markAppointmentAcknowledged(conv);
+  eq(conv.appointment.status, "pending", "an unconfirmed appointment is NOT confirmed by a manual send");
+  eq(conv.appointment.acknowledged, false, "...and nothing is put on file for it");
+}
+{
+  const conv: any = { id: "a6", status: "open" };
+  markAppointmentAcknowledged(conv);
+  eq(conv.appointment, undefined, "no appointment at all: a manual send must not create one");
 }
 
 // =================================================================================================
