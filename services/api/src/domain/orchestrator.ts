@@ -46,6 +46,7 @@ import {
   decideEventPromoTurn,
   decidePriceAnswerAnchor,
   decidePriceObjectionTurn,
+  decideScheduleInviteBudget,
   decideStockNumberInterestTurn
 } from "./routeStateReducer.js";
 import { buildLongTermTimelineMessage } from "./longTermMessage.js";
@@ -866,6 +867,28 @@ export function buildMonthlyPaymentLine(opts: {
   );
 }
 
+
+/**
+ * Next-step options for a finance answer. Joe, 2026-08-04: "the agent should offer a time to
+ * schedule not just stop in."
+ *
+ * The permission to ask comes from decideScheduleInviteBudget (routeStateReducer, PR #493) — the ONE
+ * referee for how often we ask a lead to come in. We READ it and never write the counter: a booking
+ * link inside a finance answer the customer asked for is not a fresh proactive invite. Once the
+ * budget is spent, or scheduling is muted, we fall back to the softer "stop in" wording rather than
+ * pestering someone who has already ignored three invitations.
+ */
+function financeNextStepOptions(
+  profile: Awaited<ReturnType<typeof getDealerProfile>> | null,
+  ctx?: { followUp?: any }
+): { mayOfferTime: boolean; bookingUrl?: string | null } {
+  const budget = decideScheduleInviteBudget({ inviteCount: ctx?.followUp?.scheduleInviteCount });
+  const muted = ctx?.followUp?.scheduleMuted === true;
+  return {
+    mayOfferTime: !budget.spent && !muted,
+    bookingUrl: (profile as any)?.bookingUrl ?? null
+  };
+}
 
 function buildFinanceAppLine(profile: Awaited<ReturnType<typeof getDealerProfile>> | null): string {
   const url = String(profile?.creditAppUrl ?? "").trim();
@@ -3559,7 +3582,8 @@ export async function orchestrateInbound(
           // quoting one — even though it prints no percentage.
           if (calculatorAprBand) {
             pricingOrPaymentsLine = `${pricingOrPaymentsLine} ${buildPaymentRangeDisclaimerLine(
-              (dealerProfile as any)?.creditAppUrl
+              (dealerProfile as any)?.creditAppUrl,
+              financeNextStepOptions(dealerProfile, ctx)
             )}`;
           }
           // Financial empathy: if the customer led with a monthly target, acknowledge it
@@ -3996,7 +4020,7 @@ export async function orchestrateInbound(
           aprBand: paymentsAprBand
         });
         if (paymentsAprBand) {
-          draft = `${draft} ${buildPaymentRangeDisclaimerLine((dealerProfile as any)?.creditAppUrl)}`;
+          draft = `${draft} ${buildPaymentRangeDisclaimerLine((dealerProfile as any)?.creditAppUrl, financeNextStepOptions(dealerProfile, ctx))}`;
         }
         // Financial empathy: acknowledge a stated monthly target before the ballpark. Generation-only.
         if (targetMonthly != null) {

@@ -236,21 +236,56 @@ export function decideFinanceRateAnswer(input: {
   return { arm: "explain_only", floorApr: null, reason: "first_ask_explains" };
 }
 
-/** The next step Joe named: the credit app link, or come in. */
-function buildNextStepLine(creditAppUrl?: string | null): string {
+/**
+ * The next step Joe named: the credit app link, or come in.
+ *
+ * Joe, 2026-08-04: "the agent should offer a time to schedule not just stop in." A vague "stop in"
+ * asks the customer to do the work of picking a moment; a booking link hands them real availability.
+ *
+ * WHY `mayOfferTime` IS AN INPUT AND NOT DECIDED HERE: how often we may ask a lead to come in is
+ * owned by ONE referee, `decideScheduleInviteBudget` (routeStateReducer, PR #493) — it caps at 3 and
+ * latches `scheduleMuted` after. Deciding it locally would be the fourth place asking the same
+ * question on the same counter, which is the exact re-stacking the un-stack loop exists to prevent.
+ * The caller asks the referee and passes the answer down. This module never writes the counter
+ * either: a booking link inside a finance answer the customer ASKED for is not a fresh proactive
+ * invite, so it reads the budget without spending it.
+ *
+ * FAIL DIRECTION: no booking URL, or a spent/muted budget, falls back to today's "stop in" wording —
+ * we never invent a link and never pester someone who has already ignored three invitations.
+ */
+export type FinanceNextStepOptions = {
+  /** From decideScheduleInviteBudget: is there still room to ask this lead to come in? */
+  mayOfferTime?: boolean;
+  /** dealerProfile.bookingUrl — real availability, so the customer picks a slot that exists. */
+  bookingUrl?: string | null;
+};
+
+function buildNextStepLine(
+  creditAppUrl?: string | null,
+  opts?: FinanceNextStepOptions
+): string {
   const url = String(creditAppUrl ?? "").trim();
-  if (url) return `You can start the application here: ${url}, or stop in and we'll run it with you.`;
-  return "I can send you the application, or you're welcome to stop in and we'll run it with you.";
+  const booking = String(opts?.bookingUrl ?? "").trim();
+  const timeOffer =
+    opts?.mayOfferTime && booking
+      ? `If you'd rather do it in person, you can grab a time here: ${booking}.`
+      : opts?.mayOfferTime
+        ? "If you'd rather do it in person, what day works for you and I'll get you on the schedule?"
+        : "Or stop in and we'll run it with you.";
+  if (url) return `You can start the application here: ${url}. ${timeOffer}`;
+  return `I can send you the application. ${timeOffer}`;
 }
 
 /**
  * The FIRST answer: no number, just the honest reason and a next step. Deliberately does NOT
  * mention a percentage, so the disclaimer invariant has nothing to attach to.
  */
-export function buildFinanceRateExplainReply(args?: { creditAppUrl?: string | null }): string {
+export function buildFinanceRateExplainReply(
+  args?: { creditAppUrl?: string | null } & FinanceNextStepOptions
+): string {
   return (
     "I don't want to quote you a rate that isn't real — yours comes out of the credit application, " +
-    `so anything I put in a text now would be a guess. ${buildNextStepLine(args?.creditAppUrl)}`
+    `so anything I put in a text now would be a guess. ${buildNextStepLine(args?.creditAppUrl, args)}`
   );
 }
 
@@ -264,14 +299,14 @@ export function buildFinanceRateFloorReply(args: {
   condition: "new" | "used";
   promoNote: boolean;
   creditAppUrl?: string | null;
-}): string {
+} & FinanceNextStepOptions): string {
   const unit = args.condition === "new" ? "new" : "pre-owned";
   const promo = args.promoNote
     ? " There are promotional rates that run sometimes too, so it's worth checking."
     : "";
   return (
     `Our rates on ${unit} bikes start as low as ${formatAprPercent(args.floorApr)} APR for well-qualified buyers.` +
-    `${promo} ${FINANCE_RATE_APPLICATION_DISCLAIMER} ${buildNextStepLine(args.creditAppUrl)}`
+    `${promo} ${FINANCE_RATE_APPLICATION_DISCLAIMER} ${buildNextStepLine(args.creditAppUrl, args)}`
   );
 }
 
@@ -314,8 +349,11 @@ export function resolveCalculatorAprBand(
  * the same obligation as quoting one outright — even though it never prints a percentage (which is
  * why `mentionsFinanceRate` alone would not catch it).
  */
-export function buildPaymentRangeDisclaimerLine(creditAppUrl?: string | null): string {
+export function buildPaymentRangeDisclaimerLine(
+  creditAppUrl?: string | null,
+  opts?: FinanceNextStepOptions
+): string {
   return `That's off our best rate — ${FINANCE_RATE_APPLICATION_DISCLAIMER.charAt(0).toLowerCase()}${FINANCE_RATE_APPLICATION_DISCLAIMER.slice(
     1
-  )} ${buildNextStepLine(creditAppUrl)}`;
+  )} ${buildNextStepLine(creditAppUrl, opts)}`;
 }

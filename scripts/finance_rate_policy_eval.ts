@@ -32,6 +32,7 @@ import {
   resolveCalculatorAprBand,
   resolveFinanceRatePolicy
 } from "../services/api/src/domain/financeRatePolicy.js";
+import { decideScheduleInviteBudget } from "../services/api/src/domain/routeStateReducer.js";
 
 const NOW = Date.parse("2026-08-04T12:00:00.000Z");
 const DAY = 86_400_000;
@@ -288,8 +289,42 @@ assert.ok(/applicat/i.test(disclaimed), "the range disclaimer names the applicat
 assert.ok(disclaimed.includes("https://example.com/apply"), "…and carries the credit app link");
 assert.ok(!/https?:/.test(buildPaymentRangeDisclaimerLine(null)), "…and never fabricates a link when none is configured");
 
+
+// ---------------------------------------------------------------------------
+// 10. Joe, 2026-08-04: "the agent should offer a time to schedule not just stop in."
+//     The PERMISSION comes from decideScheduleInviteBudget — the one referee for how often we ask a
+//     lead to come in — so this never becomes a fourth place inventing its own invite policy.
+// ---------------------------------------------------------------------------
+const BOOKING = "https://americanharley.leadrider.ai/book?token=abc";
+
+const withTime = buildPaymentRangeDisclaimerLine("https://app.example", {
+  mayOfferTime: true,
+  bookingUrl: BOOKING
+});
+assert.ok(withTime.includes(BOOKING), "with budget left we hand them real availability");
+assert.ok(!/stop in and we/i.test(withTime), "…instead of the vague \"stop in\"");
+
+// No booking URL configured => ask for a day rather than fabricate a link.
+const noBooking = buildFinanceRateFloorReply({
+  floorApr: 6.59,
+  condition: "new",
+  promoNote: true,
+  mayOfferTime: true
+});
+assert.ok(/what day works/i.test(noBooking), "no booking URL => ask what day works");
+assert.ok(!/https?:/.test(noBooking), "…and never invent a booking link");
+
+// Budget SPENT (or muted) => back to the soft wording. We do not pester.
+const spent = buildFinanceRateExplainReply({ creditAppUrl: "https://app.example", mayOfferTime: false, bookingUrl: BOOKING });
+assert.ok(/stop in/i.test(spent), "a spent budget falls back to the soft close");
+assert.ok(!spent.includes(BOOKING), "…and does NOT hand out a booking link");
+
+// The referee itself is what decides that, and it caps at 3.
+assert.equal(decideScheduleInviteBudget({ inviteCount: 0 }).spent, false, "a fresh lead has room");
+assert.equal(decideScheduleInviteBudget({ inviteCount: 3 }).spent, true, "three invites in, we stop asking");
+
 console.log(
   "PASS finance rate policy eval — explain-first, floor-on-press (6.59 new / 8.79 used), promo caveat, " +
     "application disclaimer invariant, stale-floor + unknown-condition + bad-APR fail-safes, payment range " +
-    "amortized at the REAL dealer floor with its own disclaimer, unset-policy revert path intact"
+    "amortized at the REAL dealer floor with its own disclaimer, unset-policy revert path intact, schedule offer gated by the invite-budget referee"
 );
