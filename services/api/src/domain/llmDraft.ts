@@ -30,7 +30,8 @@ import { runJudgeShadowArm } from "./judgeShadowArm.js";
 import {
   DRAFT_QUALITY_JUDGE_JSON_SCHEMA,
   buildDraftQualityJudgePrompt,
-  coerceDraftQualityOverall
+  coerceDraftQualityOverall,
+  type DraftQualityUnitFacts
 } from "./draftQualityJudgePrompt.js";
 import {
   WALK_IN_OUTCOME_PARSER_JSON_SCHEMA,
@@ -10617,6 +10618,10 @@ export async function judgeDraftQualityWithLLM(args: {
   history?: { direction: "in" | "out"; body: string }[];
   lead?: Conversation["lead"];
   channel?: "sms" | "email";
+  // The resolved unit's FEED FACTS — the only numbers the judge may treat as ground truth. Omitted
+  // (or without a checkable number) => the prompt is byte-identical to the pre-2026-08-04 prompt,
+  // so every caller that cannot resolve a single unit keeps today's behaviour exactly.
+  unitFacts?: DraftQualityUnitFacts | null;
 }): Promise<DraftQualityJudgeParse | null> {
   const useLLM =
     process.env.LLM_ENABLED === "1" &&
@@ -10644,7 +10649,8 @@ export async function judgeDraftQualityWithLLM(args: {
     historyLines: history,
     leadModel: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
     leadSource: lead?.source ?? null,
-    channel: args.channel
+    channel: args.channel,
+    unitFacts: args.unitFacts ?? null
   });
 
   const runParse = async (model: string): Promise<any | null> =>
@@ -15733,6 +15739,33 @@ function appendSelfHealWinRecord(record: Record<string, unknown>): void {
   }
 }
 
+/**
+ * The judge's ground truth for this turn, read off the SAME DraftContext the composer wrote from.
+ * Zero extra lookups and zero added latency: the orchestrator already resolved these feed facts to
+ * let the composer ANSWER price/mileage asks (Phase 2, 2026-07-11); this just stops the reviewer
+ * being the only one in the room who cannot see them.
+ *
+ * Returns null unless a specific unit resolved with a real number — a general model inquiry has no
+ * one price, and a fact-check with nothing to check invites the judge to reason about numbers it
+ * cannot see. Null => the judge prompt is byte-identical to its pre-2026-08-04 form.
+ */
+function buildJudgeUnitFacts(ctx: DraftContext): DraftQualityUnitFacts | null {
+  const price = typeof ctx.inventoryListPrice === "number" && ctx.inventoryListPrice > 0 ? ctx.inventoryListPrice : null;
+  const mileage = typeof ctx.inventoryMileage === "number" && ctx.inventoryMileage > 0 ? ctx.inventoryMileage : null;
+  if (price === null && mileage === null) return null;
+  const vehicle = (ctx.lead as any)?.vehicle ?? {};
+  const label =
+    [vehicle?.year, vehicle?.make, vehicle?.model ?? vehicle?.description].map(v => String(v ?? "").trim()).filter(Boolean).join(" ") ||
+    null;
+  return {
+    label,
+    listPrice: price,
+    mileage,
+    stockId: ctx.stockId ?? null,
+    status: ctx.inventoryStatus ?? null
+  };
+}
+
 export async function selfHealDraftWithLLM(args: {
   draft: string;
   ctx: DraftContext;
@@ -15743,7 +15776,8 @@ export async function selfHealDraftWithLLM(args: {
   const inbound = String(args.ctx.inquiry ?? "").trim();
   if (!original.trim() || !inbound) return { draft: original, healed: false, outcome: "no_op" };
   try {
-    const v1 = await judgeDraftQualityWithLLM({ draft: original, inbound, history: args.ctx.history, lead: args.ctx.lead, channel });
+    const unitFacts = buildJudgeUnitFacts(args.ctx);
+    const v1 = await judgeDraftQualityWithLLM({ draft: original, inbound, history: args.ctx.history, lead: args.ctx.lead, channel, unitFacts });
     const conf1 = typeof v1?.confidence === "number" ? v1.confidence : 0;
     // Deterministic echo trigger (2026-07-27): the LLM judge misses the "parrots the customer's words
     // back" class, so catch it here — an echoed opening forces the re-draft even if the judge passed it.
@@ -15763,7 +15797,7 @@ export async function selfHealDraftWithLLM(args: {
       cacheSelfHealVerdict(inbound, original, v1); // returned draft is the bad original → gate reuses v1 to hold
       return { draft: original, healed: false, outcome: "still_failing" };
     }
-    const v2 = await judgeDraftQualityWithLLM({ draft: steered, inbound, history: args.ctx.history, lead: args.ctx.lead, channel });
+    const v2 = await judgeDraftQualityWithLLM({ draft: steered, inbound, history: args.ctx.history, lead: args.ctx.lead, channel, unitFacts });
     const conf2 = typeof v2?.confidence === "number" ? v2.confidence : 0;
     if (v2 && v2.overall !== "good" && conf2 >= 0.8) {
       // Re-draft still bad — keep the ORIGINAL so the publish gate holds it (don't ship a worse re-roll).
