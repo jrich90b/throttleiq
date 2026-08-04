@@ -39,6 +39,11 @@ export type GoldExample = {
   reply?: string | null;
 };
 
+/**
+ * One graded item. The three TEXTS and the judge's own reasons are part of the record on purpose:
+ * the whole point of this report is to let a human check the grader's work, and the first version
+ * stored only the verdict — which made calibration, the reason the score exists, impossible.
+ */
 export type GoldItemVerdict = {
   key: string;
   convId: string | null;
@@ -46,6 +51,12 @@ export type GoldItemVerdict = {
   correct: boolean;
   votes: boolean[];
   why: string;
+  /** The customer's turn, the reply a human actually sent, and what the agent produced. */
+  inbound?: string;
+  humanReply?: string;
+  agentReply?: string;
+  /** One stated reason per judge sample — where a grader mistake is visible. */
+  judgeReasons?: string[];
 };
 
 /**

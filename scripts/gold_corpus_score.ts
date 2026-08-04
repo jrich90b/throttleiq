@@ -90,7 +90,11 @@ function historyBefore(convId: string | null | undefined, at: string | null | un
     .map(m => ({ direction: m.direction === "in" ? ("in" as const) : ("out" as const), body: String(m.body) }));
 }
 
-async function judgeOnce(inbound: string, humanReply: string, agentReply: string): Promise<boolean | null> {
+async function judgeOnce(
+  inbound: string,
+  humanReply: string,
+  agentReply: string
+): Promise<{ correct: boolean | null; why: string }> {
   try {
     const parsed: any = await requestStructuredJson({
       model: process.env.OPENAI_GOLD_SCORE_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini",
@@ -98,9 +102,13 @@ async function judgeOnce(inbound: string, humanReply: string, agentReply: string
       schemaName: "gold_equivalence",
       schema: GOLD_EQUIVALENCE_JSON_SCHEMA
     });
-    return typeof parsed?.correct === "boolean" ? parsed.correct : null;
+    return {
+      correct: typeof parsed?.correct === "boolean" ? parsed.correct : null,
+      why: typeof parsed?.why === "string" ? parsed.why : ""
+    };
   } catch {
-    return null; // an unparseable verdict counts as NOT correct via tallyVotes — pessimistic on purpose
+    // an unparseable verdict counts as NOT correct via tallyVotes — pessimistic on purpose
+    return { correct: null, why: "judge call failed" };
   }
 }
 
@@ -128,19 +136,34 @@ for (const [i, ex] of items.entries()) {
   if (!agentReply) {
     // No draft at all is a miss, not a skip: silence where a human replied is the failure mode the
     // wrongful-silence work exists for, and dropping it would flatter the score.
-    verdicts.push({ key, convId: ex.convId ?? null, tier: ex.tier ?? null, correct: false, votes: [], why: "agent produced no reply" });
+    verdicts.push({
+      key,
+      convId: ex.convId ?? null,
+      tier: ex.tier ?? null,
+      correct: false,
+      votes: [],
+      why: "agent produced no reply",
+      inbound,
+      humanReply,
+      agentReply: ""
+    });
     continue;
   }
 
-  const votes = await Promise.all(Array.from({ length: SAMPLES }, () => judgeOnce(inbound, humanReply, agentReply)));
-  const correct = tallyVotes(votes);
+  const samples = await Promise.all(Array.from({ length: SAMPLES }, () => judgeOnce(inbound, humanReply, agentReply)));
+  const correct = tallyVotes(samples.map(s => s.correct));
   verdicts.push({
     key,
     convId: ex.convId ?? null,
     tier: ex.tier ?? null,
     correct,
-    votes: votes.filter((v): v is boolean => typeof v === "boolean"),
-    why: correct ? "matches the human outcome" : "diverges from the human outcome"
+    votes: samples.map(s => s.correct).filter((v): v is boolean => typeof v === "boolean"),
+    why: correct ? "matches the human outcome" : "diverges from the human outcome",
+    // The evidence a human needs to check the grader — without these the report cannot be calibrated.
+    inbound,
+    humanReply,
+    agentReply,
+    judgeReasons: samples.map(s => s.why).filter(Boolean)
   });
   if ((i + 1) % 10 === 0) console.log(`  scored ${i + 1}/${items.length}…`);
 }
