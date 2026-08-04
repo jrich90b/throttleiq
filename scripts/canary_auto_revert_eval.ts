@@ -38,6 +38,7 @@ import {
   decideCanaryGate,
   measureCanarySlice,
   decideCanaryProgress,
+  CANARY_JUDGE_RULE_VERSION,
   scaleCounters,
   DEFAULT_CANARY_THRESHOLDS,
   type CanaryCounters,
@@ -630,7 +631,14 @@ ok(DEFAULT_CANARY_THRESHOLDS.runawayMinPerHour > 0, "and an absolute runaway flo
 
   // --- THE RUN-LENGTH RULE ------------------------------------------------------------------------
   const m = (status: "pass" | "fail" | "inconclusive", fatal = false): CanaryMeasurement => ({
-    atMs: 0, sliceStartMs: 0, sliceEndMs: 0, counters: slice(), status, ...(fatal ? { fatal: true } : {}), reason: ""
+    atMs: 0, sliceStartMs: 0, sliceEndMs: 0, counters: slice(), status,
+    ...(fatal ? { fatal: true } : {}), reason: "", ruleVersion: CANARY_JUDGE_RULE_VERSION
+  });
+  // A verdict recorded before the current judging rule existed. Missing `ruleVersion` IS v1 — every
+  // measurement written before the stamp existed reads this way, which is the whole point.
+  const stale = (status: "pass" | "fail" | "inconclusive", fatal = false): CanaryMeasurement => ({
+    atMs: 0, sliceStartMs: 0, sliceEndMs: 0, counters: slice(), status,
+    ...(fatal ? { fatal: true } : {}), reason: "recorded under the old rule"
   });
   const progress = (ms: CanaryMeasurement[]) => decideCanaryProgress({ measurements: ms });
 
@@ -668,6 +676,46 @@ ok(DEFAULT_CANARY_THRESHOLDS.runawayMinPerHour > 0, "and an absolute runaway flo
     progress([m("pass"), m("pass"), m("fail"), m("pass")]).consecutivePasses,
     1,
     "a failed slice RESETS the consecutive-pass streak — the three clean ones must be CONSECUTIVE"
+  );
+
+  // --- A VERDICT FROM A SUPERSEDED RULE IS NOT EVIDENCE ---------------------------------------
+  // The live case this was written for: a busy slice (16 sends) was judged "the agent went quiet"
+  // hours before PR #504 taught the counter that an approved draft which gets SENT is still a
+  // draft. That phantom held one of two tolerated failures and had reset the streak.
+  eq(
+    progress([stale("fail"), stale("fail"), stale("fail")]).status,
+    "watching",
+    "stale failures never accumulate into a regression — the rule that produced them is gone"
+  );
+  eq(
+    progress([m("pass"), m("pass"), stale("fail"), m("pass")]).consecutivePasses,
+    3,
+    "a stale failure does NOT reset the streak — it is neutral, exactly like a quiet window"
+  );
+  // SYMMETRY is the half that protects the funnel lever: a stale PASS must not promote either, or
+  // a behaviour deploy unlocks on a measurement nothing stands behind.
+  eq(
+    progress([stale("pass"), stale("pass"), stale("pass")]).status,
+    "watching",
+    "stale passes do NOT promote to healthy — the neutrality cuts both ways"
+  );
+  eq(
+    progress(Array.from({ length: 9 }, () => stale("pass"))).status,
+    "unknown",
+    "a full watch of nothing but stale verdicts concluded NOTHING — UNKNOWN, never a clean bill"
+  );
+  // ...but a runaway is a raw send-rate count that no counting-rule change can invalidate.
+  eq(
+    progress([stale("fail", true)]).status,
+    "regressed",
+    "a FATAL runaway stays terminal on sight however old the rule that recorded it"
+  );
+  // And a measurement stamped with the CURRENT rule is scored normally — the downgrade must key on
+  // the version, not simply excuse every failure.
+  eq(
+    progress([m("fail"), m("fail"), m("fail")]).status,
+    "regressed",
+    "current-rule failures still regress — the stale downgrade is not a blanket amnesty"
   );
 }
 
