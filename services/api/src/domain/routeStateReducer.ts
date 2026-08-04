@@ -5966,6 +5966,35 @@ const CADENCE_STOP_PROTECTED_REASONS = new Set<string>(["manual_handoff", "purch
 /** Kinds that survive those reasons. */
 const CADENCE_PROTECTED_KINDS = new Set<string>(["post_sale", "long_term"]);
 
+/**
+ * DIVERGENCE 1, SECOND HALF (Charles Desalvo +17168614216 — Joe filed "No sold cadence"
+ * 2026-08-03T12:32Z; reproduced against the live record).
+ *
+ * Close reasons that mean the lead closed BECAUSE IT SOLD. A `post_sale` chase must survive them:
+ * closing a sold lead is exactly WHEN the owner sequence is supposed to run, so stopping the chase
+ * on that transition deletes the whole point of it.
+ *
+ * The comment above says divergence 1 is "not reachable today — closeConversation is never called
+ * with either of those two reasons". True of the reason strings, and beside the point: the walk-in
+ * sold branch reaches the same outcome twelve lines apart. `sendgridInbound.ts` asks
+ * `stopFollowUpCadence(conv, "manual_handoff")`, which this referee correctly REFUSES for a
+ * post-sale chase — and then calls `closeConversation(conv, "sold_walkin_note")`, whose `close`
+ * verb had no such check and killed it anyway. Charles's record is that sequence frozen in place:
+ * `kind: "post_sale"`, `anchorAt` equal to `sale.soldAt` to the millisecond (the console sold
+ * button armed it), `status: "stopped"`, `stopReason: "sold_walkin_note"`. He bought a Street
+ * Glide on 2026-08-03 and the owner sequence never sent a thing.
+ *
+ * FAIL DIRECTION — this one sends MORE, which is the opposite of this referee's usual bias, so it
+ * is deliberately narrow: `post_sale` only (a `long_term` chase on a closed lead still stops), and
+ * only for reasons that literally mean sold. It does not invent behavior — it restores PARITY with
+ * the three console sold paths (index.ts 20518 / 41289 / 41812 / 42915), which never call
+ * closeConversation at all and so already leave an ACTIVE post-sale chase on a closed, sold lead.
+ * +17163741119 (Tim Williams) is the healthy comparison: `closedReason: "sold"`, post_sale ACTIVE,
+ * and it duly sent his congratulations touch on 2026-08-01. Each individual touch is still gated
+ * downstream by the cadence-quality judge and `decidePostSaleOwnershipTurn`.
+ */
+const CADENCE_CLOSE_SOLD_REASONS = new Set<string>(["sold", "sold_walkin_note"]);
+
 export type CadenceLifecycleInput = {
   verb: CadenceLifecycleVerb | string;
   /**
@@ -6008,6 +6037,8 @@ export function decideCadenceLifecycle(input: CadenceLifecycleInput): CadenceLif
   const hasRecord = input.hasRecord ?? hasChase;
   const protectedChase =
     CADENCE_STOP_PROTECTED_REASONS.has(reason) && CADENCE_PROTECTED_KINDS.has(kind);
+  /** The lead is closing BECAUSE IT SOLD, and this is the owner sequence. See divergence 1's second half. */
+  const soldCloseSparesPostSale = kind === "post_sale" && CADENCE_CLOSE_SOLD_REASONS.has(reason);
 
   // Every verb needs a cadence RECORD to move — all four originals returned early without one.
   const apply = !recognized || !hasRecord
@@ -6018,7 +6049,7 @@ export function decideCadenceLifecycle(input: CadenceLifecycleInput): CadenceLif
         ? status === "active"
         : verb === "resume"
           ? status === "stopped"
-          : /* close */ hasChase;
+          : /* close */ hasChase && !soldCloseSparesPostSale;
 
   const refused = { clearNextDue: false, clearPause: false, clearStopReason: false };
   const writes = !apply
@@ -6042,19 +6073,24 @@ export function decideCadenceLifecycle(input: CadenceLifecycleInput): CadenceLif
           : "stopped",
     ...writes,
     divergence:
-      verb === "stop" && hasRecord && protectedChase
-        ? "only_the_stop_verb_protects_a_post_sale_or_long_term_chase"
-        : verb === "close" && apply && CADENCE_PROTECTED_KINDS.has(kind)
-          ? "closing_the_lead_stops_a_protected_chase_that_stop_would_have_spared"
-          : verb === "pause" && apply && CADENCE_PROTECTED_KINDS.has(kind)
-            ? "pause_hushes_a_protected_chase_that_stop_would_have_spared"
-            : null,
+      verb === "close" && hasRecord && soldCloseSparesPostSale
+        ? "a_sold_close_spares_the_post_sale_chase_it_hands_off_to"
+        : verb === "stop" && hasRecord && protectedChase
+          ? "only_the_stop_verb_protects_a_post_sale_or_long_term_chase"
+          : verb === "close" && apply && CADENCE_PROTECTED_KINDS.has(kind)
+            ? "closing_the_lead_stops_a_protected_chase_that_stop_would_have_spared"
+            : verb === "pause" && apply && CADENCE_PROTECTED_KINDS.has(kind)
+              ? "pause_hushes_a_protected_chase_that_stop_would_have_spared"
+              : null,
     why: !recognized
       ? `unrecognized cadence-lifecycle verb "${verb}" — refused, the chase stays where it is`
       : !hasRecord
         ? `${verb}: there is no chase on this lead — nothing to move`
         : !apply
-          ? verb === "stop"
+          ? verb === "close" && soldCloseSparesPostSale
+            ? `close: refused — the lead is closing as "${reason}", and a post-sale chase is the ` +
+              "owner sequence that close is supposed to hand off to, not something it ends"
+            : verb === "stop"
             ? `stop: refused — a ${kind} chase survives "${reason}"; that is expected post-sale ` +
               "traffic, not a reason to kill the sequence the sale started"
             : `${verb}: refused — the chase is "${status}", not the state this verb moves from`

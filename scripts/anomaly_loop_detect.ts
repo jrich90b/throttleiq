@@ -101,6 +101,8 @@ const rawAnomalyCount = anomalies.length;
 // below, marked, so a fix that didn't hold can never be silently eaten.
 let suppressedByDisposition: Array<{ convId: string; dimension: string; disposition: string; reason: string }> = [];
 let regressionOfDisposed: Array<{ convId: string; dimension: string; disposition: string; reason: string }> = [];
+/** The regression ANOMALIES themselves, held for the shield that runs after every suppression pass. */
+let regressionAnomalies: any[] = [];
 try {
   const { parseDispositionLedgerPayload, partitionByDispositions } = await import(
     "../services/api/src/domain/dispositionLedger.ts"
@@ -114,14 +116,12 @@ try {
         anomalies.length = 0;
         // Regressions stay in the feed, tagged, so the digest and the loop can see that a
         // disposed finding came back rather than treating it as brand new.
-        anomalies.push(
-          ...part.kept,
-          ...part.regressions.map(r => ({
-            ...(r.anomaly as any),
-            regressionOfDisposed: true,
-            dispositionReason: r.reason
-          }))
-        );
+        regressionAnomalies = part.regressions.map(r => ({
+          ...(r.anomaly as any),
+          regressionOfDisposed: true,
+          dispositionReason: r.reason
+        }));
+        anomalies.push(...part.kept, ...regressionAnomalies);
         suppressedByDisposition = part.suppressed.map(s => ({
           convId: String(s.anomaly.convId ?? ""),
           dimension: String(s.anomaly.dimension ?? ""),
@@ -303,6 +303,31 @@ try {
   /* malformed sweep file / any error → keep every finding (fail toward surfacing, never toward hiding) */
 }
 
+// THE REGRESSION SHIELD — runs LAST, after every suppression pass above. The disposition ledger
+// promises that a disposed finding whose event postdates its fix boundary comes back; the four
+// passes above match on `convId::dimension` alone and were silently eating exactly those. Proven on
+// +17168614216 (Joe's "No sold cadence", 2026-08-03T12:32Z): correctly marked a regression, then
+// dropped by the PR pass against PR #470 — merged four hours BEFORE the report was even filed.
+// See `restoreDisposedRegressions` in domain/dispositionLedger.ts for the fail direction.
+let restoredRegressions: Array<{ convId: string; dimension: string; reason: string }> = [];
+if (regressionAnomalies.length) {
+  const { restoreDisposedRegressions } = await import("../services/api/src/domain/dispositionLedger.ts");
+  const shield = restoreDisposedRegressions(anomalies as any[], regressionAnomalies);
+  if (shield.restored.length) {
+    anomalies.length = 0;
+    anomalies.push(...shield.anomalies);
+    restoredRegressions = shield.restored.map(r => ({
+      convId: String((r as any).convId ?? ""),
+      dimension: String((r as any).dimension ?? ""),
+      reason: String((r as any).dispositionReason ?? "regression-of-disposed")
+    }));
+    console.log(
+      `RESTORED ${restoredRegressions.length} regression-of-disposed finding(s) that a later suppression pass had dropped:`
+    );
+    for (const r of restoredRegressions.slice(0, 20)) console.log(`   - ${r.convId} ${r.dimension} — ${r.reason}`);
+  }
+}
+
 // Persistence: an anomaly seen in the PRIOR run too (same convId+dimension). Used to flag a `healed`
 // dimension that the reconcile tick never actually clears (a heal gap) rather than a one-tick transient.
 const keyOf = (a: any) => `${a?.convId ?? ""}::${a?.dimension ?? ""}`;
@@ -401,6 +426,10 @@ const payload = {
   suppressedByDisposition,
   regressionOfDisposedCount: regressionOfDisposed.length,
   regressionOfDisposed,
+  // Regressions a later suppression pass had dropped and the shield put back — a non-empty list
+  // means a pass tried to hide a finding the ledger had already re-armed.
+  restoredRegressionCount: restoredRegressions.length,
+  restoredRegressions,
   suppressedStaleCount: suppressed.length,
   suppressedStale: suppressed.map(s => ({ convId: s.anomaly.convId, dimension: s.anomaly.dimension, reason: s.reason })),
   suppressedByOpenPrCount: suppressedByOpenPr.length,
