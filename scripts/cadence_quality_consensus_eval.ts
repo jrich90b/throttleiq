@@ -17,12 +17,16 @@
  * Run: npx tsx scripts/cadence_quality_consensus_eval.ts
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   decideCadenceQualityConsensus,
   sampleCadenceQualityConsensus,
   verdictHoldsBack,
   cadenceQualityConsensusSamples,
-  CADENCE_QUALITY_CONSENSUS_SAMPLES_DEFAULT
+  cadenceQualityUnanimousFloor,
+  resolveCadenceUnanimousFloor,
+  CADENCE_QUALITY_CONSENSUS_SAMPLES_DEFAULT,
+  CADENCE_QUALITY_UNANIMOUS_FLOOR_DEFAULT
 } from "../services/api/src/domain/cadenceQualityConsensus.ts";
 
 const FLOOR = 0.9;
@@ -202,4 +206,165 @@ const gGood = (c = 0.9): DraftQualityVerdict => ({ intentOk: true, toneOk: true,
   n += 3;
 }
 
-console.log(`PASS cadence-quality consensus eval (${n} assertions — vote, fail-direction toward sending, winning-side verdict, early exit, shadow stays 1 call, draft-gate confirm-on-block)`);
+// --- 7) POST-SALE UNANIMITY: sub-floor agreement is evidence, not a vote to send -------------------
+// THE PRODUCTION TURNS THIS PINS (2026-08-04 work order, 26 judged proactive touches). The two that
+// actually REACHED a customer were both unanimous `suppress` at 0.88 — just under the 0.90 enforce
+// floor — so every sample was counted as a vote to SEND and the agreement between them was thrown
+// away. Both were the generic post-sale check-in charter C3.1 forbids:
+//   +17163741119::2  2026-08-01T14:30  "Congrats on your Tri Glide Ultra! If you need anything,
+//                                       just let me know."  (customer replied 4 minutes later)
+//   +17163440581     2026-07-21T14:30  "Thanks again for coming to see us for your Road King
+//                                       Special."            (landed on an open fob issue)
+// Every touch judged at 0.90 was correctly held — the judge was right all 26 times; the gate could
+// not act on two of them.
+const UFLOOR = 0.8;
+const sub = (c = 0.88) => ({ overall: "suppress", confidence: c });
+
+// Today's behaviour WITHOUT the unanimity option — unchanged, and still the default everywhere
+// except a settled post-sale thread.
+assert.equal(
+  decideCadenceQualityConsensus([sub(), sub(), sub()], FLOOR).holdBack,
+  false,
+  "3 unanimous sub-floor suppressions still SEND when no unanimity floor is supplied (live leads)"
+);
+const uni = decideCadenceQualityConsensus([sub(), sub(), sub()], FLOOR, { unanimousFloor: UFLOOR });
+assert.equal(uni.holdBack, true, "…and are HELD on a settled post-sale thread (+17163741119::2)");
+assert.equal(uni.unanimousBelowFloor, true, "the hold is attributed to the unanimity path");
+assert.equal(uni.agreement, "unanimous");
+assert.equal(uni.floorApplied, UFLOOR, "floorApplied reports the floor actually used, for the gate");
+assert.equal(uni.verdict?.confidence, 0.88, "the representative verdict comes from the held side");
+n += 6;
+
+// A SINGLE dissenting sample still sends: the path turns on agreement, not on a lowered bar.
+assert.equal(
+  decideCadenceQualityConsensus([sub(), sub(), send()], FLOOR, { unanimousFloor: UFLOOR }).holdBack,
+  false,
+  "one genuine send vote breaks the unanimity — 2 sub-floor suppressions are not enough"
+);
+// A judge that is actually unsure is not agreement. The floor is lowered, never removed.
+assert.equal(
+  decideCadenceQualityConsensus([sub(0.6), sub(0.6), sub(0.6)], FLOOR, { unanimousFloor: UFLOOR }).holdBack,
+  false,
+  "unanimous but BELOW the unanimity floor => sends (a coin flip is not evidence)"
+);
+// One sample is not unanimity — it is the very irreproducibility this module manages.
+assert.equal(
+  decideCadenceQualityConsensus([sub()], FLOOR, { unanimousFloor: UFLOOR }).holdBack,
+  false,
+  "a single sample can never trigger the unanimity path"
+);
+// `hold` counts alongside `suppress`, same as the ordinary test.
+assert.equal(
+  decideCadenceQualityConsensus([{ overall: "hold", confidence: 0.85 }, sub()], FLOOR, { unanimousFloor: UFLOOR }).holdBack,
+  true,
+  "hold and suppress both count toward the agreement"
+);
+// Failed samples are still dropped, not counted as dissent — consistent with section 3.
+const uniNull = decideCadenceQualityConsensus([sub(), null, sub()] as any, FLOOR, { unanimousFloor: UFLOOR });
+assert.equal(uniNull.holdBack, true, "a dropped sample does not break unanimity among the usable ones");
+assert.equal(uniNull.usableVotes, 2);
+n += 6;
+
+// The path can only ADD a hold-back, never overturn one: when the ordinary majority already held,
+// the enforce floor is what gets reported to the gate.
+const majorityWins = decideCadenceQualityConsensus([hold(0.95), hold(0.95), send()], FLOOR, { unanimousFloor: UFLOOR });
+assert.equal(majorityWins.holdBack, true);
+assert.equal(majorityWins.unanimousBelowFloor, false, "a real majority is not relabelled as unanimity");
+assert.equal(majorityWins.floorApplied, FLOOR, "an ordinary hold still reports the ENFORCE floor to the gate");
+// And a plain send decision reports the enforce floor too, so the gate is never loosened by accident.
+assert.equal(
+  decideCadenceQualityConsensus([send(), send()], FLOOR, { unanimousFloor: UFLOOR }).floorApplied,
+  FLOOR,
+  "a send decision never hands the gate a lowered floor"
+);
+n += 4;
+
+// EARLY EXIT must not abort before unanimity can be seen: two sub-floor suppressions read 2-0 to
+// SEND under the old majority test, which would have stopped the loop one sample short.
+calls = 0;
+r = await sampleCadenceQualityConsensus(counted(sub()), { samples: 3, floor: FLOOR, unanimousFloor: UFLOOR });
+assert.equal(calls, 3, "an all-suppress post-sale touch spends the third sample to confirm the agreement");
+assert.equal(r.holdBack, true, "…and is held");
+// The moment a genuine send appears, unanimity is dead and the old early exit applies again.
+calls = 0;
+r = await sampleCadenceQualityConsensus(counted(send()), { samples: 3, floor: FLOOR, unanimousFloor: UFLOOR });
+assert.equal(calls, 2, "a stable send still costs only two calls — the extra sample is not a blanket cost");
+assert.equal(r.holdBack, false);
+n += 4;
+
+// --- 8) the unanimity floor itself ----------------------------------------------------------------
+const withUFloor = (v: string | undefined, fn: () => void) => {
+  const prev = process.env.CADENCE_QUALITY_UNANIMOUS_MIN_CONFIDENCE;
+  if (v === undefined) delete process.env.CADENCE_QUALITY_UNANIMOUS_MIN_CONFIDENCE;
+  else process.env.CADENCE_QUALITY_UNANIMOUS_MIN_CONFIDENCE = v;
+  try { fn(); } finally {
+    if (prev === undefined) delete process.env.CADENCE_QUALITY_UNANIMOUS_MIN_CONFIDENCE;
+    else process.env.CADENCE_QUALITY_UNANIMOUS_MIN_CONFIDENCE = prev;
+  }
+};
+withUFloor(undefined, () => assert.equal(cadenceQualityUnanimousFloor(), CADENCE_QUALITY_UNANIMOUS_FLOOR_DEFAULT));
+withUFloor(undefined, () => assert.equal(cadenceQualityUnanimousFloor(), 0.8, "defaults to 0.80 — under the 0.90 breakpoint, well over a coin flip"));
+withUFloor("0.85", () => assert.equal(cadenceQualityUnanimousFloor(), 0.85, "env-tunable"));
+withUFloor("nope", () => assert.equal(cadenceQualityUnanimousFloor(), 0.8, "an invalid floor falls back to the default"));
+withUFloor("0", () => assert.equal(cadenceQualityUnanimousFloor(), 0.8, "a zero floor would disable the confidence check — rejected"));
+// The unanimity floor must stay BELOW the enforce floor, or the path is dead code.
+assert.ok(CADENCE_QUALITY_UNANIMOUS_FLOOR_DEFAULT < 0.9, "the unanimity floor sits below the enforce breakpoint");
+n += 6;
+
+// --- 9) THE SCOPE PREDICATE: null everywhere except a settled post-sale thread ---------------------
+// This is the whole safety argument. Anything that returns null keeps today's fail-toward-sending
+// behaviour byte for byte, so each way OUT of the path is worth its own assertion.
+const SOLD = "2026-07-31T20:12:53.459Z";
+assert.equal(
+  resolveCadenceUnanimousFloor({ enforce: true, cadenceKind: "post_sale", sale: { soldAt: SOLD } }),
+  CADENCE_QUALITY_UNANIMOUS_FLOOR_DEFAULT,
+  "a settled post-sale thread votes at the unanimity floor (+17163741119::2)"
+);
+assert.equal(
+  resolveCadenceUnanimousFloor({ enforce: true, cadenceKind: "standard", sale: { soldAt: SOLD } }),
+  null,
+  "a STANDARD cadence is untouched — a wrongly-suppressed touch there ghosts a live lead"
+);
+assert.equal(
+  resolveCadenceUnanimousFloor({ enforce: true, cadenceKind: "engaged", sale: { soldAt: SOLD } }),
+  null,
+  "…and so is an engaged cadence"
+);
+assert.equal(
+  resolveCadenceUnanimousFloor({ enforce: true, cadenceKind: "post_sale", sale: null }),
+  null,
+  "post_sale WITHOUT a recorded sale is not settled — the judge's own 'did they actually buy?' doubt"
+);
+assert.equal(
+  resolveCadenceUnanimousFloor({ enforce: true, cadenceKind: "post_sale", sale: { soldAt: "  " } }),
+  null,
+  "a blank soldAt is not a sale"
+);
+assert.equal(
+  resolveCadenceUnanimousFloor({ enforce: false, cadenceKind: "post_sale", sale: { soldAt: SOLD } }),
+  null,
+  "SHADOW never votes — it takes one sample, and one sample is not agreement"
+);
+assert.equal(
+  resolveCadenceUnanimousFloor({ enforce: true, cadenceKind: null, sale: { soldAt: SOLD } }),
+  null,
+  "no cadence kind => no unanimity path"
+);
+n += 7;
+
+// --- 10) WIRING: the predicate and the shared floor are actually in the live path ------------------
+// Both are one edit away from silently reverting to the old behaviour, so pin them at the call site.
+const idxSrc = readFileSync(new URL("../services/api/src/index.ts", import.meta.url), "utf8");
+assert.match(
+  idxSrc,
+  /resolveCadenceUnanimousFloor\(\{ enforce, cadenceKind, sale: conv\?\.sale \}\)/,
+  "the live cadence gate asks the scope predicate rather than re-deriving it inline"
+);
+assert.match(
+  idxSrc,
+  /minConfidence: enforce \? consensus\.floorApplied : undefined/,
+  "the gate re-checks confidence at the floor the vote actually used, never a stale enforce floor"
+);
+n += 2;
+
+console.log(`PASS cadence-quality consensus eval (${n} assertions — vote, fail-direction toward sending, winning-side verdict, early exit, shadow stays 1 call, draft-gate confirm-on-block, post-sale sub-floor unanimity)`);
