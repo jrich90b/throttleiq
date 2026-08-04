@@ -288,6 +288,60 @@ assert.equal(
   `a self-deferral with no dependency should stay defer_no_window, got ${selfDefer.disposition}`
 );
 
+// 11) THE FIX — describing the bike you are TRADING is not announcing a private sale.
+// Production replay (Brent Marshall +17169941544, 2026-08-03): mid-negotiation on a 2026 Street
+// Glide (trade quoted $17,125, $650/mo quoted hours later) he sent a photo of his own 2019 Street
+// Glide Special and described its condition and the tour pack he had for it. The parser returned
+// sell_on_own @0.85 and applyCustomerDispositionCloseout ran 7ms later, marking his open
+// arrival-notify task done on a live deal. On current main this reproduced 3/3 (0.78-0.88).
+const tradeDescription = await disp(
+  "That's my bike. It's absolutely flawless plus like I said I have the tour pack for it. That's the same color.",
+  [
+    {
+      direction: "out",
+      body: "Currently the only Touring model I have in stock with the Dark Billiard Gray and Black Trim is a 2026 Street Glide. H-D just introduced an offer on new Street Glide models giving you $1,000 credit. Would you consider that?"
+    },
+    {
+      direction: "in",
+      body: "I may consider that the only thing with that bike is, I hate the factory handlebars. Would you guys be interested in swapping the bars from my bike to that one  if we made a deal?  I also need a tour pack."
+    },
+    { direction: "in", body: "Could you send me a couple pictures of that bike, please?" }
+  ]
+);
+assert.ok(
+  !CLOSEOUT_DISPOSITIONS.has(tradeDescription.disposition),
+  `describing the trade mid-negotiation must NOT close the lead — got ${tradeDescription.disposition}`
+);
+assert.equal(
+  tradeDescription.disposition,
+  "none",
+  `describing your own trade should parse as none, got ${tradeDescription.disposition}`
+);
+
+// 11b) GENERALIZATION — same shape, different wording, no verbatim overlap with the few-shot.
+const tradeDescriptionParaphrase = await disp(
+  "Here's a pic of mine, never been dropped and I put the chrome pack on it last summer.",
+  [{ direction: "out", body: "What year is the bike you'd be trading in?" }]
+);
+assert.ok(
+  !CLOSEOUT_DISPOSITIONS.has(tradeDescriptionParaphrase.disposition),
+  `a paraphrased trade description must NOT close the lead — got ${tradeDescriptionParaphrase.disposition}`
+);
+
+// 11c) REGRESSION GUARD — a genuine sell-it-without-us still closes out, in wording that does NOT
+// appear in any few-shot (protects EXAMPLE B/B4 against the trade-description carve-out bleeding
+// into "a customer talking about their own bike never closes").
+const sellToBuddy = await disp("I'm just gonna sell it to my neighbor myself, he's been after it for a while.");
+assert.equal(
+  sellToBuddy.disposition,
+  "sell_on_own",
+  `selling it privately to a buddy should stay sell_on_own, got ${sellToBuddy.disposition}`
+);
+assert.ok(
+  !sellToBuddy.sellToDealerInterest,
+  `selling it privately must NOT set sell_to_dealer_interest`
+);
+
 console.log(
-  "PASS customer disposition eval — price-objection carve-out + alert-keeper live-ask carve-out + decide-soon window + sell-outright-to-dealer carve-out + qualification-answer carve-out + silence-chase carve-out + dependency-pause carve-out (none / defer_no_window / defer_with_window / sell_on_own)"
+  "PASS customer disposition eval — price-objection carve-out + alert-keeper live-ask carve-out + decide-soon window + sell-outright-to-dealer carve-out + qualification-answer carve-out + silence-chase carve-out + dependency-pause carve-out + trade-description carve-out (none / defer_no_window / defer_with_window / sell_on_own)"
 );

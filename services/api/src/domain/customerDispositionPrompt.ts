@@ -153,5 +153,14 @@ output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","
   `EXAMPLE Z
 out: "If the test ride for the Road Glide Limited is still on your list, I can help get it set up."
 inbound: "I'm on hold kinda till my son decides if he is going to get one also"
-output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","sell_to_dealer_interest":false,"confidence":0.9}`
+output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","sell_to_dealer_interest":false,"confidence":0.9}`,
+  // AA pins the production miss (Brent Marshall +17169941544, 2026-08-03): mid-negotiation on a
+  // 2026 Street Glide - trade quoted at $17,125, $650/mo quoted hours later - he sent a PHOTO of
+  // his own 2019 Street Glide Special and described it. That was read as sell_on_own @0.85 and
+  // applyCustomerDispositionCloseout ran 7ms later, marking his open arrival-notify task done on
+  // a live deal. Describing the bike you are TRADING is not announcing a private sale.
+  `EXAMPLE AA
+out: "Currently the only Touring model I have in stock with the Dark Billiard Gray and Black Trim is a 2026 Street Glide. H-D just introduced an offer on new Street Glide models giving you $1,000 credit. Would you consider that?"
+inbound: "That's my bike. It's absolutely flawless plus like I said I have the tour pack for it. That's the same color."
+output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","sell_to_dealer_interest":false,"confidence":0.93}`
   ];
