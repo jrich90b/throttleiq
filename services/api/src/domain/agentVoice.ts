@@ -636,3 +636,22 @@ export function buildPriceObjectionCheaperWatchReply(modelLabel?: string | null)
     "Any specific year, color, or mileage you want me to target?"
   );
 }
+
+/**
+ * The customer on an inventory watch tells us they BOUGHT A BIKE (Joe, 2026-08-04: "these should
+ * acknowledge, let them know we are here if they need anything for the bike and take them off the
+ * watch list"). Lives here with the rest of the customer-facing copy so it is testable without
+ * booting the server.
+ *
+ * Names the bike ONLY when the customer named it in that very message — the parser refuses to carry
+ * one over from the thread or the lead record. Congratulating someone on the wrong bike is worse
+ * than congratulating them on no bike at all, so a blank falls back to the generic line.
+ */
+export function buildAcquiredVehicleAck(vehicle?: string | null): string {
+  const named = String(vehicle ?? "").replace(/\s+/g, " ").trim();
+  const congrats = named ? `Congrats on the ${named}!` : "Congrats on the new bike!";
+  return (
+    `${congrats} Thanks for letting me know — I'll take you off the alert list. ` +
+    "If you ever need anything for it — parts, service, or gear — just text me here."
+  );
+}

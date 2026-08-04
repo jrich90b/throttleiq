@@ -27,6 +27,21 @@ export const STAFF_PING_HISTORY_LIMIT = 10;
 
 const SUMMARY_MAX_CHARS = 70;
 
+/**
+ * The manager's own words on the ping, capped so one pasted paragraph can't blow up the SMS
+ * (Joe, 2026-08-04).
+ *
+ * Christopher Szczesny +17169400722: the thread had no open task, so the ping collapsed to
+ * "LeadRider: Joe asked you to take a look at Christopher Szczesny." Stone got poked with no idea
+ * why. The note is that missing reason.
+ *
+ * PERSON-ONLY, deliberately (Joe's ruling, 2026-08-04): the note reaches the staff SMS and the
+ * audit trail and NOWHERE else. It is never written to agent context and never becomes draft
+ * steering — a manager's aside to a rep must not silently change what the agent says to a
+ * customer. Making it steer is a separate, gated decision; `staff_ping:eval` pins that boundary.
+ */
+export const STAFF_PING_NOTE_MAX_CHARS = 220;
+
 export type StaffPingOwnerSource = "task_owner" | "lead_owner";
 
 /** Who the ping is aimed at, before the user store has been consulted. */
@@ -45,7 +60,14 @@ export type StaffPingRecord = {
   toUserName: string;
   taskIds: string[];
   delivered: boolean;
+  /** The manager's reason, as it was sent. Audit trail only — never read back into a draft. */
+  note?: string;
 };
+
+/** Trim + cap a manager note; empty/blank collapses to "" so callers can treat it as absent. */
+export function normalizeStaffPingNote(raw: unknown): string {
+  return String(raw ?? "").replace(/\s+/g, " ").trim().slice(0, STAFF_PING_NOTE_MAX_CHARS);
+}
 
 export type StaffPingDecision =
   | { kind: "disabled" }
@@ -59,6 +81,8 @@ export type StaffPingDecision =
       targetPhone: string;
       message: string;
       taskIds: string[];
+      /** Normalized manager note actually included in `message` (""when none). */
+      note: string;
     };
 
 function cleanText(raw: unknown): string {
@@ -155,6 +179,8 @@ export function buildStaffPingMessage(args: {
   customerName: string;
   tasks: TodoTask[];
   link?: string | null;
+  /** The manager's reason for poking. Rendered above the link so it survives a truncated preview. */
+  note?: string | null;
 }): string {
   const manager = cleanText(args.managerName) || "A manager";
   const customer = cleanText(args.customerName) || "a lead";
@@ -172,6 +198,10 @@ export function buildStaffPingMessage(args: {
     // No open card on the thread — the manager still wants eyes on it (Joe default #3).
     lines.push(`LeadRider: ${manager} asked you to take a look at ${customer}.`);
   }
+  // The manager's own words go ABOVE the link: a phone notification preview truncates from the
+  // end, and the reason is the part the rep needs to see without opening anything.
+  const note = normalizeStaffPingNote(args.note);
+  if (note) lines.push(`Note: ${note}`);
   const link = cleanText(args.link);
   if (link) lines.push(`Open: ${link}`);
   return lines.join("\n");
@@ -189,6 +219,8 @@ export function decideStaffPing(args: {
   customerName: string;
   tasks: TodoTask[];
   link?: string | null;
+  /** Optional manager reason, straight from the Ping dialog. Staff-facing only. */
+  note?: string | null;
 }): StaffPingDecision {
   if (!args.enabled) return { kind: "disabled" };
   if (!args.ownerRef) return { kind: "no_target" };
@@ -214,6 +246,7 @@ export function decideStaffPing(args: {
     };
   }
 
+  const note = normalizeStaffPingNote(args.note);
   return {
     kind: "send",
     targetId: String(args.target?.id ?? args.ownerRef.id ?? "").trim(),
@@ -223,9 +256,34 @@ export function decideStaffPing(args: {
       managerName: args.managerName,
       customerName: args.customerName,
       tasks: args.tasks,
-      link: args.link
+      link: args.link,
+      note
     }),
-    taskIds: (args.tasks ?? []).map(t => String(t?.id ?? "").trim()).filter(Boolean)
+    taskIds: (args.tasks ?? []).map(t => String(t?.id ?? "").trim()).filter(Boolean),
+    note
+  };
+}
+
+/**
+ * Build the audit record for a ping that was just attempted. Lives here, next to the type it
+ * builds, so index.ts is not the place that decides what a ping record contains.
+ */
+export function buildStaffPingRecord(args: {
+  nowIso: string;
+  actorId?: string | null;
+  managerName: string;
+  decision: Extract<StaffPingDecision, { kind: "send" }>;
+  delivered: boolean;
+}): StaffPingRecord {
+  return {
+    at: args.nowIso,
+    byUserId: String(args.actorId ?? "").trim() || undefined,
+    byUserName: args.managerName,
+    toUserId: args.decision.targetId || undefined,
+    toUserName: args.decision.targetName,
+    taskIds: args.decision.taskIds,
+    delivered: args.delivered,
+    note: args.decision.note || undefined
   };
 }
 

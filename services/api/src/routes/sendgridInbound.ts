@@ -136,7 +136,7 @@ import {
 import { getDealerProfile } from "../domain/dealerProfile.js";
 import { getDealerWeatherStatus } from "../domain/weather.js";
 import { getInventoryNote } from "../domain/inventoryNotes.js";
-import { getInventoryFeed, hasInventoryForModelYear, findInventoryMatches, findInventoryPrice } from "../domain/inventoryFeed.js";
+import { getInventoryFeed, hasInventoryForModelYear, findInventoryMatches, findInventoryPrice, unitColorCarriesStated } from "../domain/inventoryFeed.js";
 import { decideAvailabilityAssertion } from "../domain/availabilityAssertionGuard.js";
 import {
   buildInventoryBackedVehicleFactAnswer,
@@ -158,12 +158,13 @@ import {
   buildWalkInSpecRecapClause,
   buildWalkInReturnVisitTail,
   formatWalkInReturnDayLabel,
-  formatWalkInFamilyLabel
+  formatWalkInFamilyLabel,
+  resolveWalkInFollowUpSubject
 } from "../domain/walkInFollowUpTopic.js";
 // SHADOW judge on this lane's drafts (Joe Step 2, 2026-08-02) — fire-and-forget, never awaited.
 import { runEmailLaneJudgeShadow } from "../domain/emailLaneJudgeShadow.js";
 // The watch-phrase helpers moved to the domain module so the eval exercises the regex that runs.
-import { extractWatchDirectiveSegment, hasWatchIntentPhrase } from "../domain/walkInInventoryWant.js";
+import { extractWatchDirectiveSegment, hasWatchIntentPhrase, resolveWalkInNoteColor } from "../domain/walkInInventoryWant.js";
 import { isFamilyOnlyModelLabel, referencesFamilyOnlyInText } from "../domain/modelFamily.js";
 import {
   isDealerLocationQuestionText,
@@ -190,7 +191,7 @@ import {
   incomingInventoryPurposeConfidenceFloor
 } from "../domain/pendingIncomingInventory.js";
 import { buildOffersLine, resolveOffersUrl } from "../domain/offers.js";
-import { applyWatchFieldHygiene, formatWatchYearLabel } from "../domain/watchFieldHygiene.js";
+import { applyWatchFieldHygiene, dropUnstockedWatchColor, formatWatchYearLabel } from "../domain/watchFieldHygiene.js";
 import {
   buildInternationalShippingUnavailableReply,
   shouldDeclineInternationalShipping
@@ -2351,6 +2352,7 @@ function buildTrafficLogProWalkInTail(args: {
   step: number;
   comment: string;
   modelLabel?: string | null;
+  yearLabel?: string | null;
   hasPricingFollowupIntent?: boolean;
 }): string | null {
   const step = Math.trunc(Number(args.step));
@@ -2358,7 +2360,16 @@ function buildTrafficLogProWalkInTail(args: {
   const source = String(args.comment ?? "").toLowerCase();
   const inferredModelLabel = String(args.modelLabel ?? "").trim() || extractWalkInModelHint(args.comment) || "";
   const label = formatWatchModelForMessage(inferredModelLabel || "bike");
-  const followUpTopic = extractTrafficLogProFollowUpTopic(args.comment);
+  // The prose span the note yields is a SUGGESTION, not the subject. When a model slot resolved,
+  // the bike is what we follow up about — see resolveWalkInFollowUpSubject (Rick Williamson Jr.,
+  // +17165241170: "I'll follow up about the floor with the 131ci engine").
+  const proseFollowUpTopic = extractTrafficLogProFollowUpTopic(args.comment);
+  const followUpTopic = resolveWalkInFollowUpSubject({
+    proseTopic: proseFollowUpTopic,
+    modelLabel: label,
+    yearLabel: args.yearLabel,
+    proseIsTimingOnly: isTimingOnlyFollowUpTopic(proseFollowUpTopic)
+  });
   const hasFinanceCue =
     /\b(finance|f\s*&\s*i|f and i|credit\s*app|approval|approved|paperwork|contract|lender|bank|credit union|docs?)\b/.test(
       source
@@ -4453,7 +4464,15 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       lead.vehicleCondition = "used";
     }
   }
-  if (!lead.vehicleColor) {
+  // A Traffic Log Pro "Inquiry" is our own salesperson's CRM log, not customer speech, so a colour
+  // word in it may not mint the lead's paint colour by keyword match. Rick Williamson Sr.
+  // (+17168609581) "was on for the back the blue ride" and came out `color: "blue"`, which hid all
+  // three Road Glide 3s we had on the floor. Same provenance law the internal-note topic guard and
+  // walkInInventoryWant.ts already apply to this payload class: "is this field customer speech at
+  // all?" is answerable from the payload, so deterministic is correct here. A colour a staff note
+  // genuinely states is not lost — it comes back through the walk-in outcome PARSER below, which
+  // can tell "Dark Billiard Gray" from the name of a charity ride.
+  if (!lead.vehicleColor && !isTrafficLogProPayloadHint) {
     const inquiryColorHint = extractColorFromText(inquiryVehicleHintText);
     if (inquiryColorHint) {
       lead.vehicleColor = normalizeDisplayCase(inquiryColorHint);
@@ -7512,9 +7531,17 @@ export async function handleSendgridInbound(req: Request, res: Response) {
             maxPrice: llmInventoryEntities?.maxPrice ?? undefined
           }
         : null);
-    const desiredColor =
-      extractColorFromText(watchSourceText) ??
-      (inventoryEntityAccepted ? llmInventoryEntities?.color ?? undefined : undefined);
+    // PARSER FIRST (was `extractColorFromText(...) ?? parser`, i.e. the keyword list could never
+    // lose). The staff-note parser's confident "" — "there is no bike colour in this note" — is the
+    // answer that stops a charity ride's name becoming paint; see resolveWalkInNoteColor.
+    const desiredColor = resolveWalkInNoteColor({
+      parserColor: llmWalkInOutcome?.desiredColor ?? null,
+      parserConfidence: llmWalkInOutcome?.desiredColorConfidence ?? null,
+      keywordColor:
+        extractColorFromText(watchSourceText) ??
+        (inventoryEntityAccepted ? llmInventoryEntities?.color ?? undefined : undefined),
+      confidenceMin: Number(process.env.WALKIN_NOTE_COLOR_CONFIDENCE_MIN ?? 0.8)
+    });
     const desiredTrim =
       extractTrimFromText(watchSourceText) ??
       (inventoryEntityAccepted ? llmInventoryEntities?.trim ?? undefined : undefined);
@@ -7525,9 +7552,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const rangeLabel = yearRangeLabel ? `${yearRangeLabel} ` : "";
     let hasUsedMatch = false;
     let hasNewMatch = false;
+    // Kept rather than discarded: the watch arm below needs to know which COLOURS these units come
+    // in before it stamps one onto a watch. Same lookup, no extra feed call.
+    let modelLabelMatches: Array<{ color?: string | null }> = [];
     if (modelLabel) {
       try {
         const matches = await findInventoryMatches({ year: null, model: modelLabel });
+        modelLabelMatches = matches;
         if (matches.length) {
           hasUsedMatch = matches.some(m => String(m.condition ?? "").toLowerCase().includes("used"));
           hasNewMatch = matches.some(
@@ -7840,6 +7871,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         step: trafficLogProStep,
         comment: walkInCleanedComment,
         modelLabel,
+        // The follow-up subject wants the year the note actually stated. `yearRangeLabel` only
+        // fills in for a RANGE ("2017-2020"); a note naming one year lands in `singleYear`, which
+        // is how Rick Jr.'s "2021" was in hand and still absent from the sentence. Both are parsed
+        // slots — this local exists so neither the spec recap nor the watch labels shift.
+        yearLabel: yearRangeLabel || (singleYear ? String(singleYear) : ""),
         hasPricingFollowupIntent
       });
       if (tlpStepTail) {
@@ -8066,7 +8102,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       }
       // The Traffic Log Pro walk-in path is where "(Step 2)" landed in color and "Special" in
       // trim (+17167992882) — the step tag rides along in the salesperson's comment text.
-      const hygienicWalkInWatch = applyWatchFieldHygiene(watch);
+      // Then: a colour NONE of the matched units carries is dropped, so the watch degrades to a
+      // model-only watch that can fire instead of an exact-colour watch that never can
+      // (+17168609581, blue vs three Road Glide 3s). Empty match set preserves the colour.
+      const hygienicWalkInWatch = dropUnstockedWatchColor(
+        applyWatchFieldHygiene(watch),
+        modelLabelMatches,
+        (unitColor, wantedColor) => unitColorCarriesStated(unitColor, { color: wantedColor })
+      );
       applyInventoryWatchArm(conv, {
         lane: "email_walk_in",
         watches: [hygienicWalkInWatch],

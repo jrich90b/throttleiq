@@ -71,7 +71,14 @@ if (savedFloor === undefined) delete process.env.CADENCE_QUALITY_ENFORCE_MIN_CON
 const src = fs.readFileSync(path.resolve("services/api/src/index.ts"), "utf8");
 assert.match(src, /if \(isCadenceQualityEnforceEnabled\(\)\) \{[\s\S]{0,400}enfDecision\?\.action === "suppress"/, "the cadence loop must gate on enforce + a suppress decision before the send branches");
 assert.match(src, /\[followup\]\[cadence-quality-enforce\] suppressed low-value proactive touch/, "a suppressed touch is logged");
-assert.match(src, /enfDecision\?\.action === "suppress"[\s\S]{0,200}advanceFollowUpCadence\(conv, cfg\.timezone\)[\s\S]{0,40}continue;/, "on suppress the loop advances the cadence and skips the send");
+// On suppress the loop advances the cadence and skips the send — but it advances as a touch that
+// NEVER HAPPENED. `stepIndex` moves (we tried this rung and had nothing worth saying) while
+// lastSentAt/lastSentStep and the delivered-touch count do not, so a held message can never be read
+// back as outreach. Before this, held rungs counted toward DISENGAGED_TAPER_AFTER_TOUCHES: measured
+// on the live store 2026-08-04, 13 of 37 tapered leads had under 9 outbound messages of any kind,
+// and only 2 of the 37 ever got the close-out. `endSequence` is the deliberate exception — holding
+// the CLOSE-OUT still ends the ladder, because only the goodbye was withheld, not the decision.
+assert.match(src, /enfDecision\?\.action === "suppress"[\s\S]{0,300}advanceFollowUpCadence\(conv, cfg\.timezone, \{ delivered: false, endSequence: disengagedCloseoutActive \}\)[\s\S]{0,40}continue;/, "on suppress the loop advances the cadence WITHOUT counting a touch, and skips the send");
 assert.match(src, /if \(!isCadenceQualityEnforceEnabled\(\)\)\s*\n?\s*void runCadenceQualityJudgeShadow/, "the shadow fire-and-forget is skipped under enforce (no double-judge)");
 // Window widened 120 -> 200: the signature grew an `enforcing?: boolean` opt (see the call-site pins below).
 assert.match(src, /runCadenceQualityJudgeShadow[\s\S]{0,200}Promise<CadenceQualityGateDecision \| null>/, "the judge returns the gate decision so the caller can enforce");

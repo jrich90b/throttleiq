@@ -78,6 +78,58 @@ const allCovered = applyLedgerToPayload(
 );
 assert.equal((allCovered.payload as any).stop, true, "all work orders covered → stop:true");
 
+// --- COVERAGE CAP: a key shared by MORE findings than PRs cover suppresses NOTHING (2026-08-04) ---
+// Production signal: Tony Mooradian +17165236994 filed two DISTINCT operator reports, both
+// `reported_issue` — "Pricing was answered but the pricing flag still shows in the inbox" and
+// "I don't think this one should have been closed". PR #507 fixed the first. The old exact-key
+// match then dropped BOTH rows, so the wrongful-close report vanished from the work order.
+{
+  const TONY = "+17165236994";
+  const tonyPrs: MergedPrSummary[] = [
+    {
+      number: 507,
+      title: "the task-inbox Pricing badge expires when the price is actually answered",
+      body: `landed\n${findingKeyMarker(`${TONY}::reported_issue`)}\n`,
+      mergedAt: new Date(NOW - DAY).toISOString()
+    }
+  ];
+  const tonyRows = [
+    { convId: TONY, dimension: "reported_issue", tier: 2, action: "escalate", notify: true, detail: "operator-reported (task_inbox): Pricing was answered but the pricing flag still shows in the inbox" },
+    { convId: TONY, dimension: "reported_issue", tier: 2, action: "escalate", notify: true, detail: "operator-reported (routing): I don’t think this one should have been closed" }
+  ];
+  const part2 = partitionWorkOrdersByLoopPr(tonyRows, { openPrs: [], mergedPrs: tonyPrs, nowMs: NOW });
+  assert.equal(part2.suppressed.length, 0, "2 findings share the key but only 1 PR covers it → suppress NOTHING");
+  assert.equal(part2.kept.length, 2, "both operator reports stay in the work order");
+  assert.equal(part2.ambiguous.length, 2, "both are flagged as ambiguous coverage for manual triage");
+  assert.deepEqual(part2.ambiguous[0].prNumbers, [507], "the covering PR is named so the digest can show it");
+  assert.equal(part2.ambiguous[0].findingCount, 2, "ambiguity reports how many findings share the key");
+  assert.equal(part2.ambiguous[0].prCount, 1, "…and how many PRs cover it");
+
+  // A SECOND PR covering the same key restores suppression: coverage now accounts for both findings.
+  const bothCovered = partitionWorkOrdersByLoopPr(tonyRows, {
+    openPrs: [{ number: 611, title: "wrongful close", body: `fixes\n${findingKeyMarker(`${TONY}::reported_issue`)}\n` }],
+    mergedPrs: tonyPrs,
+    nowMs: NOW
+  });
+  assert.equal(bothCovered.suppressed.length, 2, "2 PRs for 2 same-key findings → both suppressed");
+  assert.equal(bothCovered.ambiguous.length, 0, "no ambiguity once coverage matches the finding count");
+
+  // Unchanged for the ordinary singleton case — one finding, one PR still dedups.
+  const singleton = partitionWorkOrdersByLoopPr([tonyRows[0]], { openPrs: [], mergedPrs: tonyPrs, nowMs: NOW });
+  assert.equal(singleton.suppressed.length, 1, "a lone finding with a covering PR is still suppressed");
+  assert.equal(singleton.ambiguous.length, 0, "…and is not flagged ambiguous");
+
+  // The payload surfaces the ambiguity so the digest can never silently swallow it.
+  const amb = applyLedgerToPayload(
+    { workOrders: tonyRows, workOrderCount: 2, byTier: { "0": 0, "1": 0, "2": 2 }, byAction: {}, notifyCount: 2, stop: false },
+    { openPrs: [], mergedPrs: tonyPrs, nowMs: NOW }
+  );
+  assert.equal((amb.payload as any).workOrderCount, 2, "no work order is dropped on ambiguous coverage");
+  assert.equal((amb.payload as any).ambiguousPrCoverageCount, 2, "payload carries the ambiguous-coverage count");
+  assert.equal((amb.payload as any).ambiguousPrCoverage[1].dimension, "reported_issue", "…with the dimension for the digest line");
+  assert.equal((amb.payload as any).stop, false, "work remains → stop:false");
+}
+
 // --- ledger FILE payload (the gh-less box's substitute for live gh) ---
 {
   const { parseLoopPrLedgerPayload } = await import("../services/api/src/domain/loopPrDedup.ts");
@@ -100,4 +152,4 @@ assert.equal((allCovered.payload as any).stop, true, "all work orders covered �
   assert.ok(filtered && filtered.openPrs.length === 1 && filtered.mergedPrs.length === 0, "rows without a PR number are dropped; missing lists default empty");
 }
 
-console.log("PASS loop_pr_ledger_suppression eval — exact-key open/merged suppression + fail-safe keeps + payload recompute + box ledger-file freshness guard");
+console.log("PASS loop_pr_ledger_suppression eval — exact-key open/merged suppression + coverage cap on shared keys + fail-safe keeps + payload recompute + box ledger-file freshness guard");

@@ -127,6 +127,51 @@ export function formatWatchYearLabel(watch: {
   return `${min}-${max}`;
 }
 
+/**
+ * Drop a watch colour that NO unit in the matched set actually carries.
+ *
+ * The mirror of `narrowUnitsByColorFinish` (inventoryFeed.ts, #494 `ec09d078`), which already
+ * established the rule on the PRICE reader: *"a stated colour/finish that matches no unit returns
+ * the unnarrowed set, so a colour we do not stock degrades to the model's honest range rather than
+ * to silence."* The availability/watch lane never got the equivalent, and Rick Williamson Sr.
+ * (+17168609581) is the bill: a watch for a *blue* Road Glide 3 against three units in Iron Horse
+ * Metallic, Dark Billiard Gray and Vivid Black. The matcher hard-rejects on colour, so the watch
+ * was stored, read "active" in the console, and could never fire — the exact failure this module
+ * was built for, one field further along than `sanitizeWatchColorValue` can see. That helper
+ * catches junk SHAPES ("(Step 2)", digits, brackets); a well-formed colour word that simply is not
+ * in the feed passes it untouched.
+ *
+ * Deterministic is correct here and AGENTS.md allows it: this reads OUR OWN inventory records, and
+ * never customer language to decide intent. It is an invariant guard, not comprehension.
+ *
+ * FAIL DIRECTION — load-bearing, and subtractive only:
+ *  - It may only DROP a colour nothing carries. It never widens a colour we do stock (that would
+ *    hand the customer a bike in the wrong paint) and never touches model, year, or price.
+ *  - An empty or failed feed read PRESERVES the colour. "I could not see the inventory" must never
+ *    be read as "we have none in that colour" — that would silently strip a real constraint.
+ *  - Removing the guard fails toward telling a customer we have nothing when we have three, and
+ *    arming a promise we can never keep. Fail-unsafe ⇒ it stays.
+ *
+ * Colour equality routes through the caller-supplied `unitCarriesColor` so this keeps ONE
+ * definition of "does this unit match that colour" — the same discipline #494 used for models,
+ * rather than minting a second notion here. Pinned by `watch_field_hygiene:eval`.
+ */
+export function dropUnstockedWatchColor<T extends { color?: string | null }>(
+  watch: T,
+  units: ReadonlyArray<{ color?: string | null }>,
+  unitCarriesColor: (unitColor: string, wantedColor: string) => boolean
+): T {
+  const wanted = String(watch.color ?? "").trim();
+  if (!wanted) return watch;
+  // No units to compare against — an unread feed is not evidence of absence.
+  if (!units.length) return watch;
+  const stocked = units.some(u => {
+    const unitColor = String(u.color ?? "").trim();
+    return unitColor ? unitCarriesColor(unitColor, wanted) : false;
+  });
+  return stocked ? watch : ({ ...watch, color: undefined } as T);
+}
+
 /** Apply both repairs to a watch-shaped record in place-safe fashion. */
 export function applyWatchFieldHygiene<T extends { model?: string | null; trim?: string | null; color?: string | null }>(
   watch: T

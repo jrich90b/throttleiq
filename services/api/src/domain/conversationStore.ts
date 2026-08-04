@@ -11,6 +11,8 @@ import {
   decideHeldDraftRelease,
   decideSoldCloseout,
   decideLeadCloseout,
+  decidePendingCloseoutOnSend,
+  type PendingCloseoutSendDecision,
   type LeadCloseoutLane,
   type LeadCloseoutDecision,
   decideAppointmentTeardown,
@@ -29,6 +31,18 @@ import {
   decideInventoryWatchArm,
   type InventoryWatchArmLane,
   type InventoryWatchArmDecision,
+  decideInventoryWatchDisarm,
+  type InventoryWatchDisarmLane,
+  type InventoryWatchDisarmDecision,
+  resolveInventoryWatchExactness,
+  resolveInventoryWatchListNormalization,
+  type InventoryWatchListNormalizationDecision,
+  decideAppointmentPromptRecord,
+  type AppointmentPromptLane,
+  type AppointmentPromptRecordDecision,
+  decideFinanceOutcomeNotifyState,
+  type FinanceOutcomeNotifyLane,
+  type FinanceOutcomeNotifyDecision,
   decideScheduleInviteBudget,
   decideCadenceLifecycle,
   decideAppointmentAttribution,
@@ -333,6 +347,10 @@ export type FollowUpCadence = {
   stepIndex: number;
   lastSentAt?: string;
   lastSentStep?: number;
+  // How many cadence touches ACTUALLY produced a message. `stepIndex` is a rung on the
+  // schedule and advances even when a gate stays quiet, so it is not a count of outreach —
+  // see deliveredCadenceTouches / DISENGAGED_TAPER_AFTER_TOUCHES.
+  deliveredTouches?: number;
   stopReason?: string;
   kind?: "standard" | "engaged" | "long_term" | "post_sale";
   deferredMessage?: string;
@@ -874,6 +892,13 @@ export type Conversation = {
   status?: "open" | "closed";
   closedAt?: string;
   closedReason?: string;
+  /**
+   * A closeout waiting on an actual SEND (Joe, 2026-08-04). Armed when the customer tells us they
+   * bought a bike; fired by the send route once the acknowledgement really goes out, never when the
+   * draft is merely written. One writer (`armPendingCloseout`), one consumer
+   * (`applyPendingCloseoutOnSend`), and the close itself still goes through `applyLeadCloseout`.
+   */
+  pendingCloseout?: { reason: string; armedAt: string };
   sale?: {
     soldAt?: string;
     soldById?: string;
@@ -5584,6 +5609,47 @@ export function applyLeadCloseout(
   return decision;
 }
 
+/**
+ * Arm a closeout that only fires when a reply actually goes out (Joe, 2026-08-04: "After we send
+ * draft and it goes through it should close the lead"). Writes nothing but the note itself — the
+ * lead stays open, in the inbox, and fully workable until the send.
+ */
+export function armPendingCloseout(conv: Conversation, reason: string) {
+  conv.pendingCloseout = { reason, armedAt: nowIso() };
+}
+
+/**
+ * Fire (or refuse) an armed closeout because an outbound just went out. Asks
+ * `decidePendingCloseoutOnSend` whether this send earns the close, and routes the close itself
+ * through `applyLeadCloseout` — the one closeout referee — so this never becomes another writer of
+ * `conv.status`. `applyLeadCloseout` also pauses any surviving active watch, which is belt-and-braces
+ * here since the acquisition turn already paused them.
+ *
+ * Returns the decision so callers can log it; a refusal still clears a stale arm.
+ */
+export function applyPendingCloseoutOnSend(
+  conv: Conversation,
+  input: { nowIso: string }
+): PendingCloseoutSendDecision {
+  const armed = conv.pendingCloseout;
+  const lastInbound = [...(conv.messages ?? [])]
+    .reverse()
+    .find(m => String((m as any)?.direction ?? "") === "in");
+  const lastInboundAtMs = lastInbound ? Date.parse(String((lastInbound as any).at ?? "")) : NaN;
+  const decision = decidePendingCloseoutOnSend({
+    armed: !!armed,
+    armedAtMs: Date.parse(String(armed?.armedAt ?? "")),
+    lastInboundAtMs: Number.isFinite(lastInboundAtMs) ? lastInboundAtMs : null,
+    alreadyClosed: conv.status === "closed"
+  });
+  if (decision.kind === "close_lead") {
+    applyLeadCloseout(conv, { nowIso: input.nowIso, lane: "generic_close", reason: armed?.reason });
+    markOpenTodosDoneForConversation(conv.id);
+  }
+  if (decision.clearArm) conv.pendingCloseout = undefined;
+  return decision;
+}
+
 // The ONE place a bike is put on hold FOR a lead. Both write sites — the appointment-outcome "held"
 // lane and the console's manual-resolution endpoint — ask `decideInventoryHoldRecord` instead of
 // each hand-writing the same fourteen fields plus the same cadence/mode aftermath. See that referee
@@ -5647,6 +5713,45 @@ export function applyInventoryWatchArm(
   }
   setFollowUpMode(conv, decision.followUpMode, decision.followUpModeReason);
   stopFollowUpCadence(conv, decision.stopCadenceReason);
+  return decision;
+}
+
+/**
+ * The single place an inventory watch comes OFF a conversation — the inverse of
+ * `applyInventoryWatchArm`. Three lanes used to hand-write the same three fields; they now all ask
+ * `decideInventoryWatchDisarm` (routeStateReducer), which is where both preserved divergences and
+ * the deliberate per-lane aftermath are documented.
+ *
+ * `setDialogState` lives in index.ts (it also stamps `lastIntent`), so the one lane that steps the
+ * dialog back hands it in along with the states it steps back FROM — the store cannot see either.
+ */
+export function applyInventoryWatchDisarm(
+  conv: Conversation,
+  input: {
+    lane: InventoryWatchDisarmLane;
+    /** The watches that survive. */
+    remaining: InventoryWatch[];
+    /** `only_if_pruned` lanes pass this: repoint the mirror just when the mirror itself was pruned. */
+    mirrorWasPruned?: boolean;
+    /** `caller_picks` lanes pass the survivor they matched; undefined falls back to the first. */
+    mirrorPick?: InventoryWatch;
+    reason?: string;
+    stepDialogBack?: (conv: any) => void;
+  }
+): InventoryWatchDisarmDecision {
+  const decision = decideInventoryWatchDisarm({ lane: input.lane, remainingCount: input.remaining.length });
+  const empty = input.remaining.length === 0;
+  conv.inventoryWatches =
+    empty && decision.emptyListShape === "undefined" ? undefined : input.remaining;
+  if (decision.mirrorRule === "first" || (decision.mirrorRule === "only_if_pruned" && input.mirrorWasPruned)) {
+    conv.inventoryWatch = input.remaining[0];
+  } else if (decision.mirrorRule === "caller_picks") {
+    conv.inventoryWatch = input.mirrorPick ?? input.remaining[0];
+  }
+  if (decision.clearPending) conv.inventoryWatchPending = undefined;
+  if (decision.followUpMode) setFollowUpMode(conv, decision.followUpMode, input.reason ?? "inventory_watch_clear");
+  if (decision.stopCadence) stopFollowUpCadence(conv, input.reason ?? "inventory_watch_clear");
+  if (decision.stepDialogBack) input.stepDialogBack?.(conv);
   return decision;
 }
 
@@ -5785,30 +5890,88 @@ export function buildDisengagedCadenceCloseout(firstName?: string): string {
   return `I'll pause my check-ins here so I'm not crowding your phone, ${name}. Text me anytime you're ready and I'll jump right back in to help.`;
 }
 
+/**
+ * Pure. How many cadence touches have ACTUALLY produced a message for this lead.
+ *
+ * The taper threshold is a count of OUTREACH ("after this many touches with zero customer
+ * inbound" — Joe set it at 9), but `stepIndex`/`lastSentStep` are positions on the schedule and
+ * advance even when a gate stays quiet: the cadence-quality gate, the value gate, and the
+ * past-dated-event guard all call advanceFollowUpCadence WITHOUT sending anything. Measured on
+ * the live store 2026-08-04: of 37 leads ended with stopReason "disengaged_taper", 13 had fewer
+ * than 9 outbound messages of ANY kind (three had 2), and only 2 of the 37 ever received the
+ * close-out — the rest were dropped mid-ladder and simply went silent. Counting rungs as touches
+ * is what did that, so the count now lives in its own field.
+ *
+ * Legacy records (written before this field existed) fall back to `lastSentStep + 1` — exactly
+ * the number the taper used to read — so in-flight cadences keep their current position and this
+ * change can never RE-open a ladder into extra messaging.
+ */
+export function deliveredCadenceTouches(cadence: FollowUpCadence | undefined | null): number {
+  if (!cadence) return 0;
+  const tracked = Number(cadence.deliveredTouches);
+  if (Number.isFinite(tracked) && tracked >= 0) return Math.floor(tracked);
+  const legacy = Number(cadence.lastSentStep);
+  return Number.isFinite(legacy) && legacy >= 0 ? Math.floor(legacy) + 1 : 0;
+}
+
 // True when the touch about to be sent should be the disengagement close-out:
 // a never-engaged sales lead (not post-sale/long-term) at or past the taper
-// threshold.
-export function shouldSendDisengagedCloseout(conv: Conversation, sendingStep: number): boolean {
+// threshold. `deliveredTouchesBeforeThisOne` counts touches that actually went out — a rung the
+// cadence skipped in silence is not outreach and must not spend the lead's patience budget.
+export function shouldSendDisengagedCloseout(
+  conv: Conversation,
+  deliveredTouchesBeforeThisOne: number
+): boolean {
   const cadence = conv.followUpCadence;
   if (!cadence) return false;
   if (cadence.kind === "post_sale" || cadence.kind === "long_term") return false;
   if (customerEngagedWithCadence(conv)) return false;
-  return Number(sendingStep) >= DISENGAGED_TAPER_AFTER_TOUCHES;
+  return Number(deliveredTouchesBeforeThisOne) >= DISENGAGED_TAPER_AFTER_TOUCHES;
 }
 
-export function advanceFollowUpCadence(conv: Conversation, timeZone: string) {
+/**
+ * Move the cadence to its next rung.
+ *
+ * `delivered` says whether this rung actually produced a message. It defaults to TRUE so every
+ * send path keeps its existing behaviour untouched; the four gates that advance the schedule
+ * while staying completely silent (cadence-quality suppress, the value gate and its repeat
+ * backstop, the past-dated-event guard) pass `{ delivered: false }`. A silent rung still burns —
+ * we tried it and had nothing worth saying — but it must not stamp `lastSentAt`/`lastSentStep`
+ * as though a customer heard from us, and it must not spend a touch against the taper.
+ *
+ * `endSequence` is the one exception, and it is not a contradiction: when the rung being held IS
+ * the close-out, the decision to stop chasing was already taken on the DELIVERED count and only
+ * the goodbye got withheld. Ending is right there; going back to chasing is not.
+ */
+export function advanceFollowUpCadence(
+  conv: Conversation,
+  timeZone: string,
+  opts?: { delivered?: boolean; endSequence?: boolean }
+) {
   if (!conv.followUpCadence || conv.followUpCadence.status !== "active") return;
+  const delivered = opts?.delivered !== false;
   const nextStep = conv.followUpCadence.stepIndex + 1;
-  conv.followUpCadence.lastSentAt = nowIso();
-  conv.followUpCadence.lastSentStep = conv.followUpCadence.stepIndex;
+  // The count BEFORE this touch — the same number shouldSendDisengagedCloseout was asked, so the
+  // rung that sends the close-out is exactly the rung that ends the ladder (as it was when both
+  // read the pre-increment stepIndex). Comparing the post-increment count would end the sequence
+  // one touch early, i.e. without ever sending the close-out.
+  const deliveredBefore = deliveredCadenceTouches(conv.followUpCadence);
+  if (delivered) {
+    conv.followUpCadence.lastSentAt = nowIso();
+    conv.followUpCadence.lastSentStep = conv.followUpCadence.stepIndex;
+    conv.followUpCadence.deliveredTouches = deliveredBefore + 1;
+  }
   conv.followUpCadence.stepIndex = nextStep;
   // Disengagement taper: once the close-out touch has gone out to a lead that
   // never replied, end the cadence instead of running the rest of the schedule.
+  // Only a DELIVERED touch can trip this — the close-out rides out on the send path, so ending
+  // the ladder from a silent gate retired the lead without ever saying goodbye to them.
   if (
+    (delivered || opts?.endSequence === true) &&
     conv.followUpCadence.kind !== "post_sale" &&
     conv.followUpCadence.kind !== "long_term" &&
     !customerEngagedWithCadence(conv) &&
-    Number(conv.followUpCadence.lastSentStep ?? 0) >= DISENGAGED_TAPER_AFTER_TOUCHES
+    deliveredBefore >= DISENGAGED_TAPER_AFTER_TOUCHES
   ) {
     conv.followUpCadence.status = "completed";
     conv.followUpCadence.stopReason = "disengaged_taper";
@@ -7860,4 +8023,143 @@ export function applyAppointmentAttribution(
     conv.appointment.bookedBy = decision.bookedBy as AppointmentBookedBy;
   }
   return decision;
+}
+
+/**
+ * The single place the business-manager finance-outcome record is written. Seven lanes across
+ * index.ts used to hand-write it; they now all pass through here and ask
+ * `decideFinanceOutcomeNotifyState` (routeStateReducer), where the three preserved divergences and
+ * the two deliberate keep-what-is-there rules are documented.
+ *
+ * The caller supplies the clock and the mint, because neither belongs to a pure referee: `nowIso`
+ * so a lane that stamps two fields cannot straddle a second, and `mintedToken` so the randomness
+ * stays out of the decision. A minted token is DISCARDED when the record already has one.
+ */
+export function applyFinanceOutcomeNotifyState(
+  conv: Conversation,
+  input: {
+    lane: FinanceOutcomeNotifyLane;
+    nowIso: string;
+    outcomeStatus?: "approved" | "declined" | "needs_more_info" | null;
+    sentStatus?: "approved" | "declined" | "needs_more_info" | null;
+    /** `token_mint` only: the candidate token, used only when the record carries none. */
+    mintedToken?: string;
+    /** `prompt_sent` only. */
+    promptSourceMessageId?: string;
+    promptUserId?: string;
+    promptPhone?: string;
+  }
+): { decision: FinanceOutcomeNotifyDecision; state: any } {
+  const decision = decideFinanceOutcomeNotifyState({
+    lane: input.lane,
+    outcomeStatus: input.outcomeStatus ?? null,
+    sentStatus: input.sentStatus ?? null
+  });
+  const state = ((conv as any).financeOutcomeNotify = (conv as any).financeOutcomeNotify ?? {});
+  if (decision.mintToken && !String(state.outcomeToken ?? "").trim()) {
+    state.outcomeToken = String(input.mintedToken ?? "").trim();
+  }
+  if (decision.status) state.status = decision.status;
+  if (decision.stampPendingAt) state.pendingAt = input.nowIso;
+  if (decision.answerStamp === "responded") state.outcomePromptRespondedAt = input.nowIso;
+  else if (decision.answerStamp === "resolved") state.outcomePromptResolvedAt = input.nowIso;
+  else if (decision.answerStamp === "pending_only") state.outcomePendingAt = input.nowIso;
+  if (decision.stampPromptSent) {
+    state.outcomePromptSentAt = input.nowIso;
+    state.lastPromptSourceMessageId = String(input.promptSourceMessageId ?? "").trim() || undefined;
+    state.userId = String(input.promptUserId ?? "").trim() || state.userId;
+    state.phone = input.promptPhone;
+  }
+  if (decision.sentLatch) state[decision.sentLatch] = input.nowIso;
+  if (decision.touchUpdatedAt) state.updatedAt = input.nowIso;
+  return { decision, state };
+}
+
+/**
+ * The single place a "we already asked about this appointment" mark is written — the 24-hour
+ * YES/NO confirmation record and the internal attendance question. Eight lanes across index.ts
+ * used to write these by hand (six of them byte-identical copies inside one function); they now
+ * all ask `decideAppointmentPromptRecord` (routeStateReducer), where both preserved divergences
+ * and the deliberate no-status shape of the attendance mark are documented.
+ */
+export function applyAppointmentPromptRecord(
+  conv: Conversation,
+  input: {
+    lane: AppointmentPromptLane;
+    nowIso: string;
+    answer?: "yes" | "no" | null;
+    /** `confirmation_reminder_sent` only: which trigger fired, and for when. */
+    triggerMeta?: Record<string, unknown>;
+  }
+): AppointmentPromptRecordDecision {
+  const decision = decideAppointmentPromptRecord({ lane: input.lane, answer: input.answer ?? null });
+  // NOTE: bound as a plain `const appt = conv.appointment` on purpose. The contention analyzer
+  // recognises THAT alias form, so these writes still read as writes of `appointment`; a
+  // `(conv as any).appointment` binding makes them invisible and the wiring check vacuous.
+  const appt = conv.appointment;
+  if (!appt) return decision;
+  if (decision.confirmationStatus) {
+    appt.confirmation = {
+      ...(decision.preserveExistingConfirmation ? (appt.confirmation ?? {}) : {}),
+      ...(decision.stampSentAt ? { sentAt: input.nowIso } : {}),
+      status: decision.confirmationStatus,
+      ...(decision.stampRespondedAt ? { respondedAt: input.nowIso } : {}),
+      ...(decision.carryTriggerMeta ? (input.triggerMeta ?? {}) : {})
+    };
+  }
+  if (decision.stampAttendanceQuestionedAt) appt.attendanceQuestionedAt = input.nowIso;
+  return decision;
+}
+
+/**
+ * The single place `inventoryWatch.exactness` is written. Ten copies of the same ladder used to
+ * live in index.ts; they now pass their two per-lane flags here and
+ * `resolveInventoryWatchExactness` (routeStateReducer) owns the rungs and both divergences.
+ *
+ * Writes nothing when the ladder does not fire — every original ended without an `else`, leaving
+ * the caller's `model_only` literal standing.
+ */
+export function applyInventoryWatchExactness(
+  watch: any,
+  opts: { recognisesYearRange: boolean; trimCountsAsDistinguishing: boolean }
+): void {
+  if (!watch) return;
+  const decision = resolveInventoryWatchExactness({
+    year: watch.year,
+    yearMin: watch.yearMin,
+    yearMax: watch.yearMax,
+    color: watch.color,
+    trim: watch.trim,
+    recognisesYearRange: opts.recognisesYearRange,
+    trimCountsAsDistinguishing: opts.trimCountsAsDistinguishing
+  });
+  if (decision.exactness) watch.exactness = decision.exactness;
+}
+
+/**
+ * The single place the legacy singular watch and the watch LIST are reconciled for reading.
+ * Both alert paths used to hand-write the same prefer-list / wrap-singular / backfill block;
+ * they now ask `resolveInventoryWatchListNormalization` (routeStateReducer), which is where the
+ * deliberate "an explicitly EMPTY list is a statement, not a gap" rule is documented.
+ *
+ * Returns the watches the caller should read this turn — empty means "skip this lead".
+ */
+export function applyInventoryWatchListNormalization(
+  conv: Conversation
+): { watches: InventoryWatch[]; decision: InventoryWatchListNormalizationDecision } {
+  const list = conv.inventoryWatches;
+  const decision = resolveInventoryWatchListNormalization({
+    listLength: list === undefined || list === null ? null : list.length,
+    hasSingular: !!conv.inventoryWatch
+  });
+  if (decision.backfillListFromSingular && conv.inventoryWatch) {
+    conv.inventoryWatches = [conv.inventoryWatch];
+  }
+  const watches =
+    decision.source === "list"
+      ? (list ?? [])
+      : decision.source === "singular" && conv.inventoryWatch
+        ? [conv.inventoryWatch]
+        : [];
+  return { watches, decision };
 }

@@ -416,6 +416,58 @@ const file = (path: string, text: string): SourceFile => ({ path, text });
     "a bare identifier does NOT excuse a non-bookkeeping `…At` leaf — only updatedAt/createdAt widen"
   );
 
+  // CUT 5 (2026-08-04) — `const alias = (conv.field = conv.field ?? {})`, the initialise-and-bind
+  // idiom. It has TWO halves and they only tell the truth together: 5a stops the ROOT default from
+  // counting (cut 3 already excuses that exact write when it stands alone), and 5b binds the alias
+  // so the SUB-KEY writes that follow start counting. Ship 5a alone and a field drops toward zero
+  // while a live disagreement on its sub-keys stays invisible — which is what
+  // `financeOutcomeNotify` looked like before this: eight identical defaults counted, two
+  // competing `status` writers not.
+  assert.equal(
+    findWriteSites([
+      file("wrap.ts", "const notifyState = ((conv as any).financeOutcomeNotify = (conv as any).financeOutcomeNotify ?? {});")
+    ]).get("financeOutcomeNotify"),
+    undefined,
+    "cut 5a: the wrapped idempotent default is the same non-write cut 3 already excuses"
+  );
+  assert.equal(
+    (findWriteSites([
+      file(
+        "wrap2.ts",
+        [
+          "function markPending(conv: any) {",
+          "  const notifyState = ((conv as any).financeOutcomeNotify = (conv as any).financeOutcomeNotify ?? {});",
+          '  notifyState.status = "pending";',
+          "}"
+        ].join("\n")
+      )
+    ]).get("financeOutcomeNotify") ?? []).length,
+    1,
+    "cut 5b: a sub-key write through the wrapped alias IS contention and must be counted"
+  );
+  // 5a adds no NEW excuse — the unwrapped text meets the same three rules. A real decision wearing
+  // the wrapper still counts, which is what stops this from becoming a way to hide a write.
+  assert.equal(
+    (findWriteSites([
+      file("wrap3.ts", 'const s = (conv.status = "closed");')
+    ]).get("status") ?? []).length,
+    1,
+    "cut 5a must not peel a wrapper around a REAL assignment into an excuse"
+  );
+  // ...and cut 5b is strictly ADDITIVE to the alias pass: the plain binding form it sits beside
+  // must keep working. It is tried first and the wrapped form only as a fallback, so a regression
+  // here would silently drop every alias-only writer the queue has ever found.
+  assert.equal(
+    (findWriteSites([
+      file(
+        "wrap4.ts",
+        ["function f(conv: any) {", "  const cad = conv.followUpCadence;", '  cad.status = "stopped";', "}"].join("\n")
+      )
+    ]).get("followUpCadence") ?? []).length,
+    1,
+    "cut 5b must not displace the plain alias binding it falls back from"
+  );
+
   // A genuine overwrite must never be excluded — that is the whole fight surface.
   assert.equal(
     (findWriteSites([file("real.ts", 'conv.appointment = { status: "confirmed" };')]).get("appointment") ?? []).length,
@@ -664,8 +716,47 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 // the queue named six lanes and `inventory_watch_arm:eval`'s arm-signature scan found FOUR more the
 // analyzer had collapsed (a second voice arm in the same function, the console watch-set endpoint,
 // the walk-in email arm, and the initial-ADF unavailable arm). MEASURED on the post-change tree.
+// 92 -> 90. Detector CUT 5 (2026-08-04) — a MEASUREMENT change, not a code change, and one that
+// moves the number in BOTH directions on purpose. 5a stops the wrapped idempotent default
+// (`const alias = (conv.field = conv.field ?? {})`) from counting; 5b binds that alias so the
+// sub-key writes after it start counting. `financeOutcomeNotify` went 7 unrefereed writers -> 5,
+// and the five it names now are entirely different sites: the eight it used to name were eight
+// copies of the same harmless default, while the actual disagreement — two lanes writing
+// `notifyState.status`, one of them bypassing `applyFinanceOutcomeStatusFromSignal` outright — was
+// invisible. Shipping 5a without 5b would have dropped the field toward zero and hidden that.
+// Same standard as cut 4: the cut had to go both ways or it would have been dishonest.
+// 90 -> 81. The inventory-watch DISARM un-stacking (2026-08-04) — the INVERSE of #500's arm
+// referee, and the same cluster tell: the three watch fields' unrefereed writers sat on adjacent
+// lines inside four functions. Four lanes now ask `decideInventoryWatchDisarm` and write through
+// `applyInventoryWatchDisarm`: the customer's stop request, our own held-unit heal, and the two
+// worker repair endpoints. `inventoryWatches` 5 -> 2, `inventoryWatch` 4 -> 1, `inventoryWatchPending`
+// 4 -> 2. The FOURTH lane (`vin_normalize`) was invisible to the queue until the third was refereed
+// — refereeing one write un-collapses its neighbours, the adjacency artifact this program has now
+// hit five times. MEASURED on the post-change tree.
+// 81 -> 76. The finance-outcome-NOTIFY un-stacking (2026-08-04) — the whole Tier-2 field, cleared.
+// Detector cut 5 (#510) had just made these five sites visible for the first time; seven places
+// hand-wrote the business-manager notification record and now all ask `decideFinanceOutcomeNotifyState`
+// through `applyFinanceOutcomeNotifyState`. `financeOutcomeNotify` 5 -> 0. The two staff-SMS lanes
+// were NOT in the queue's five — they sat within 40 lines of an `applyFinanceOutcomeStatusFromSignal`
+// call and so read as refereed by an applier that never actually decided these fields. Wired anyway:
+// the queue is a lower bound every time. MEASURED on the post-change tree.
 // RATCHET DOWN ONLY.
-const UNREFEREED_WRITER_BASELINE = 92;
+// 76 -> 74. The appointment-PROMPT un-stacking (2026-08-04): the two marks that stop us asking the
+// same question twice — the 24h YES/NO confirmation record and the internal attendance question —
+// now have one referee (`decideAppointmentPromptRecord`) and one writer
+// (`applyAppointmentPromptRecord`). EIGHT lanes, where the queue could see two: six of them were
+// byte-identical copies inside one function, which `countWriters` collapses to a single writer.
+// `appointment` 4 -> 2. MEASURED on the post-change tree.
+// RATCHET DOWN ONLY.
+// 74 -> 72. The watch-RECORD-SHAPE un-stacking (2026-08-04): `inventoryWatches` 2 -> 0. Two alert
+// paths hand-wrote the same prefer-list / wrap-singular / backfill block; they now ask
+// `resolveInventoryWatchListNormalization`. Shipped alongside the exactness ladder (10 copies, 3
+// shapes, both disagreements preserved) — which moved the ratchet by 0, because refereeing
+// `inventoryWatch`'s only unrefereed writer UN-COLLAPSED a neighbour ~20 lines above
+// (`pref.watch.make = leadVehicle.make`, a fill-a-blank backfill). Seventh sighting of that
+// artifact; the neighbour is scoped as the next slice. MEASURED on the post-change tree.
+// RATCHET DOWN ONLY.
+const UNREFEREED_WRITER_BASELINE = 72;
 
 {
   const sourceFiles: SourceFile[] = [];

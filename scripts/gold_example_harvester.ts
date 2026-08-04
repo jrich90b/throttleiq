@@ -34,6 +34,19 @@ type Msg = {
   callMethod?: string | null;
   feedback?: any;
 };
+/**
+ * DEFAULT HARVEST WINDOW — 90 days (Joe, 2026-08-04). This harvest REBUILDS the candidates file, so
+ * the window is not a lookback, it IS the corpus size. The hourly loop ran it at 168h and the golden
+ * corpus was a rolling WEEK: 89 examples, 20 in the eval hold-out. At n=20 a 9/20 score puts the
+ * agent's true rate anywhere from 26% to 66% — too wide to set a floor on, so the one number meant
+ * to answer "is the agent getting better" could not answer it. 90 days yields 701 candidates / 117
+ * in the hold-out (measured 8/4), tightening that to roughly +/-9. Deterministic and LLM-free, so a
+ * wider scan costs seconds and no money.
+ */
+export const DEFAULT_HARVEST_SINCE_HOURS = 2160;
+/** Cap high enough that the WINDOW is what bounds the corpus, never an arbitrary row limit. */
+export const DEFAULT_HARVEST_LIMIT = 5000;
+
 type GoldTier = "positive_feedback" | "human_verbatim";
 type Candidate = { tier: GoldTier; convId: string | null; at: string | null; by: string | null; inbound: string; reply: string };
 
@@ -149,14 +162,35 @@ function selfTest(): void {
   assert.equal(cands[0].inbound, "is the sportster still available?");
   assert.match(cands[0].reply, /^Yes! The Sportster/);
 
+  // The window is the corpus size, and the corpus size is what makes the gold score readable.
+  // A default narrow enough to starve the eval hold-out would silently make the number meaningless
+  // long before anything went red, so pin the floor on the DEFAULT itself.
+  assert.ok(
+    DEFAULT_HARVEST_SINCE_HOURS >= 2160,
+    `default harvest window ${DEFAULT_HARVEST_SINCE_HOURS}h is under 90 days — the eval hold-out goes thin and the gold score stops meaning anything`
+  );
+  assert.ok(DEFAULT_HARVEST_LIMIT >= 2000, "the row cap must not become the thing that bounds the corpus");
+
+  // …and prove the window actually GATES: the same conversation is harvested inside it, dropped
+  // outside it. A default that was never read would pass the assertion above and change nothing.
+  const old = [{ id: "old", messages: [
+    { direction: "in", provider: "twilio", body: "still available?", at: "2020-01-01T00:00:00Z" },
+    { direction: "out", provider: "twilio", body: "Yes it is, come take a look", actorUserName: "X", providerMessageId: "SM99", at: "2020-01-01T00:01:00Z" }
+  ] }];
+  const noExamples = path.join(process.env.TMPDIR || "/tmp", `gold_window_${process.pid}.json`);
+  fs.writeFileSync(noExamples, JSON.stringify({ version: 1, examples: [] }));
+  assert.equal(harvest(old, { sinceHours: 24 * 365 * 50, limit: 50, manualExamplesPath: noExamples }).length, 1, "inside the window it is harvested");
+  assert.equal(harvest(old, { sinceHours: 1, limit: 50, manualExamplesPath: noExamples }).length, 0, "outside the window it is dropped — the window really is the corpus size");
+  fs.unlinkSync(noExamples);
+
   console.log("gold_example_harvester self-test passed");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 function runBatch(): void {
   const arg = (k: string, d: string) => (process.argv.find(a => a.startsWith(`${k}=`))?.split("=")[1] ?? d);
-  const sinceHours = Number(arg("--since-hours", "720"));
-  const limit = Number(arg("--limit", "200"));
+  const sinceHours = Number(arg("--since-hours", String(DEFAULT_HARVEST_SINCE_HOURS)));
+  const limit = Number(arg("--limit", String(DEFAULT_HARVEST_LIMIT)));
   const storePath = process.env.CONVERSATIONS_DB_PATH || "services/api/data/conversations.json";
   const dataDir = process.env.DATA_DIR || "data";
   const manualExamplesPath = process.env.MANUAL_REPLY_EXAMPLES_PATH || path.join(dataDir, "manual_reply_examples.json");

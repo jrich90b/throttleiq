@@ -58,6 +58,7 @@ import {
   type CanaryCounters,
   type CanaryVerdict,
   type CanaryMeasurement,
+  CANARY_JUDGE_RULE_VERSION,
   type CanaryProgressConfig
 } from "../services/api/src/domain/canaryHealth.ts";
 
@@ -309,7 +310,8 @@ function advanceCanary(baseline: BaselineFile): { verdict: CanaryVerdict | null;
       counters: sliceCounters,
       status: m.status,
       ...(m.fatal ? { fatal: true } : {}),
-      reason: m.reason
+      reason: m.reason,
+      ruleVersion: CANARY_JUDGE_RULE_VERSION
     });
   }
 

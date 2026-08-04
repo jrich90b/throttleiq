@@ -124,6 +124,25 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     return reducer.isInternationalLeadPhone(phone);
   }, ["isInternationalLeadPhone"]);
 
+  // Added 2026-08-04 (Joe — Mark Kocsis +17168609533). Fully projectable: the armed note and the
+  // last inbound both live on the stored conversation, so a lead that starts closing itself on the
+  // wrong send shows up as a decision DIFF rather than as a lead that quietly left the inbox. The
+  // clock is deliberately unused — this referee compares two stored timestamps to each other.
+  add("pendingCloseoutOnSend", conv => {
+    if (typeof reducer.decidePendingCloseoutOnSend !== "function") return undefined;
+    const armedAt = str(conv?.pendingCloseout?.armedAt);
+    const lastInbound = [...(Array.isArray(conv?.messages) ? conv.messages : [])]
+      .reverse()
+      .find((m: any) => str(m?.direction) === "in");
+    const lastInboundMs = lastInbound ? Date.parse(str(lastInbound?.at) ?? "") : NaN;
+    return reducer.decidePendingCloseoutOnSend({
+      armed: !!conv?.pendingCloseout,
+      armedAtMs: Date.parse(armedAt ?? ""),
+      lastInboundAtMs: Number.isFinite(lastInboundMs) ? lastInboundMs : null,
+      alreadyClosed: str(conv?.status) === "closed"
+    });
+  }, ["decidePendingCloseoutOnSend"]);
+
   // Added 2026-08-01 with PR #398 — the worked example of an un-stacking referee.
   add("financeDeclinedCadence", conv => {
     if (typeof reducer.decideFinanceDeclinedCadence !== "function") return undefined;
@@ -136,6 +155,19 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
       cadenceStatus: conv?.followUpCadence?.status ?? null
     });
   }, ["decideFinanceDeclinedCadence"]);
+
+  // Added 2026-08-04 (Joe: "a pre qual should not create a finance outcome"). Fully projectable —
+  // every input is stored conversation state, so a prequal-origin lead that starts nagging the
+  // business manager again shows up as a decision DIFF, not just a missing SMS nobody notices.
+  add("businessManagerFinanceOutcomePrompt", conv => {
+    if (typeof reducer.decideBusinessManagerFinanceOutcomePrompt !== "function") return undefined;
+    return reducer.decideBusinessManagerFinanceOutcomePrompt({
+      leadCta: conv?.classification?.cta ?? null,
+      leadBucket: conv?.classification?.bucket ?? null,
+      followUpReason: conv?.followUp?.reason ?? null,
+      appointmentType: conv?.appointment?.appointmentType ?? null
+    });
+  }, ["decideBusinessManagerFinanceOutcomePrompt"]);
 
   // Added 2026-08-03 with the seller-photo frame fix (Tom +17164454081). Sampled as: given this
   // conversation's stored seller/trade signals, whose bike would we assume a photo shows? Purely a
@@ -593,6 +625,138 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
         divergence: decision.divergence
       };
     }, ["decideInventoryWatchArm"]);
+  }
+
+  // Added 2026-08-04 with the inventory-watch DISARM un-stacking (the inverse of the arm referee
+  // above). Sampled once PER LANE for the same reason: the four lanes disagree about the shape of
+  // an emptied list, about the pending ask, and about the singular mirror, and one sample would
+  // hide all three. PROBE: the lane is held fixed per sample and `remainingCount` is pinned to 0 —
+  // the boundary both "when empty" rules turn on — so the referee consults nothing but its own
+  // arbitration.
+  for (const lane of ["customer_stop", "held_guard_heal", "model_prune", "vin_normalize"] as const) {
+    add(`inventoryWatchDisarm:${lane}`, () => {
+      if (typeof reducer.decideInventoryWatchDisarm !== "function") return undefined;
+      const decision = reducer.decideInventoryWatchDisarm({ lane, remainingCount: 0 }); // PROBE
+      return {
+        emptyListShape: decision.emptyListShape,
+        mirrorRule: decision.mirrorRule,
+        clearPending: decision.clearPending,
+        followUpMode: decision.followUpMode,
+        stopCadence: decision.stopCadence,
+        stepDialogBack: decision.stepDialogBack,
+        divergence: decision.divergence
+      };
+    }, ["decideInventoryWatchDisarm"]);
+  }
+
+  // Added 2026-08-04 with the finance-outcome-notify un-stacking. Sampled once PER LANE because
+  // the eight lanes are exactly where the three preserved divergences live — the two "pending"
+  // lanes write different records, the two "resolved" lanes stamp different clocks, and
+  // `notify_sent` alone skips `updatedAt`. A single sample would hide all three. PROBE: the lane
+  // and both status inputs are pinned per sample, so the referee consults nothing but its own
+  // arbitration — it reads no stored state at all.
+  for (const lane of [
+    "token_mint",
+    "outcome_signal",
+    "prompt_sent",
+    "notify_sent",
+    "public_link_pending",
+    "public_link_resolved",
+    "staff_sms_pending",
+    "staff_sms_resolved"
+  ] as const) {
+    add(`financeOutcomeNotify:${lane}`, () => {
+      if (typeof reducer.decideFinanceOutcomeNotifyState !== "function") return undefined;
+      // PROBE: fixed inputs; `declined` exercises both status-carrying lanes' branch.
+      const decision = reducer.decideFinanceOutcomeNotifyState({
+        lane,
+        outcomeStatus: "declined",
+        sentStatus: "declined"
+      });
+      return {
+        mintToken: decision.mintToken,
+        status: decision.status,
+        stampPendingAt: decision.stampPendingAt,
+        answerStamp: decision.answerStamp,
+        stampPromptSent: decision.stampPromptSent,
+        sentLatch: decision.sentLatch,
+        touchUpdatedAt: decision.touchUpdatedAt,
+        divergence: decision.divergence
+      };
+    }, ["decideFinanceOutcomeNotifyState"]);
+  }
+
+  // Added 2026-08-04 with the appointment-PROMPT un-stacking. Sampled once PER LANE, and the
+  // confirmation ANSWER lane twice, because the yes/no branch is the only input the referee reads:
+  // one sample would hide the confirmed/declined split. PROBE: lane and answer are pinned, so the
+  // referee consults nothing but its own arbitration — it reads no stored state at all.
+  for (const probe of [
+    { name: "reminder_sent", lane: "confirmation_reminder_sent", answer: null },
+    { name: "answer_yes", lane: "confirmation_answer", answer: "yes" },
+    { name: "answer_no", lane: "confirmation_answer", answer: "no" },
+    { name: "attendance_asked", lane: "attendance_question_asked", answer: null }
+  ] as const) {
+    add(`appointmentPromptRecord:${probe.name}`, () => {
+      if (typeof reducer.decideAppointmentPromptRecord !== "function") return undefined;
+      const decision = reducer.decideAppointmentPromptRecord({
+        lane: probe.lane,
+        answer: probe.answer
+      }); // PROBE
+      return {
+        confirmationStatus: decision.confirmationStatus,
+        stampSentAt: decision.stampSentAt,
+        stampRespondedAt: decision.stampRespondedAt,
+        preserveExistingConfirmation: decision.preserveExistingConfirmation,
+        carryTriggerMeta: decision.carryTriggerMeta,
+        stampAttendanceQuestionedAt: decision.stampAttendanceQuestionedAt,
+        divergence: decision.divergence
+      };
+    }, ["decideAppointmentPromptRecord"]);
+  }
+
+  // Added 2026-08-04 with the watch-EXACTNESS un-stacking. Sampled once per RULE PAIR, because the
+  // two flags ARE the two preserved divergences: seven lanes do not recognise a year range, and
+  // two do not count a trim as distinguishing. PROBE: the watch inputs are pinned at the value that
+  // exercises every rung (a year, a year range, and a trim but no colour), so only the arbitration
+  // can move the fingerprint.
+  for (const rule of [
+    { name: "range_trim", recognisesYearRange: true, trimCountsAsDistinguishing: true },
+    { name: "range_colour", recognisesYearRange: true, trimCountsAsDistinguishing: false },
+    { name: "norange_trim", recognisesYearRange: false, trimCountsAsDistinguishing: true },
+    { name: "norange_colour", recognisesYearRange: false, trimCountsAsDistinguishing: false }
+  ] as const) {
+    add(`inventoryWatchExactness:${rule.name}`, () => {
+      if (typeof reducer.resolveInventoryWatchExactness !== "function") return undefined;
+      const decision = reducer.resolveInventoryWatchExactness({
+        year: 2023,
+        yearMin: 2020,
+        yearMax: 2024,
+        color: null,
+        trim: "CVO",
+        recognisesYearRange: rule.recognisesYearRange,
+        trimCountsAsDistinguishing: rule.trimCountsAsDistinguishing
+      }); // PROBE
+      return { exactness: decision.exactness, divergence: decision.divergence };
+    }, ["resolveInventoryWatchExactness"]);
+  }
+
+  // Added 2026-08-04 with the watch-LIST normalization un-stacking. Sampled at the three record
+  // shapes that matter — a populated list, an ABSENT list with a legacy singular (the heal), and an
+  // explicitly EMPTY list with a singular (the deliberate non-heal, so a disarmed lead is not
+  // resurrected). PROBE: the shape is pinned per sample.
+  for (const shape of [
+    { name: "populated_list", listLength: 2, hasSingular: true },
+    { name: "absent_list_legacy_singular", listLength: null, hasSingular: true },
+    { name: "empty_list_stale_singular", listLength: 0, hasSingular: true }
+  ] as const) {
+    add(`inventoryWatchListNormalization:${shape.name}`, () => {
+      if (typeof reducer.resolveInventoryWatchListNormalization !== "function") return undefined;
+      const decision = reducer.resolveInventoryWatchListNormalization({
+        listLength: shape.listLength,
+        hasSingular: shape.hasSingular
+      }); // PROBE
+      return { source: decision.source, backfillListFromSingular: decision.backfillListFromSingular };
+    }, ["resolveInventoryWatchListNormalization"]);
   }
 
   // Added 2026-08-02 with the appointment-CONFIRM un-stacking. Sampled once PER LANE, because the

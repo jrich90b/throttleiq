@@ -157,7 +157,30 @@ const CEILINGS: Ceiling[] = [
     // resolveSalesTopicHint (domain/salesTopicHint.ts), which also expires a pricing hint once we
     // have actually quoted the lead (+17165236994, operator "Pricing was answered but the pricing
     // flag still shows in the inbox").
-    max: 71_333,
+    // 71_333 -> 71_331. The OPEN-CUSTOMER-TURN fix funded its own wiring: `getLastInboundBody` /
+    // `getLastInboundMessage` moved out to domain/openCustomerTurn.ts, next to the open-turn
+    // builder they contrast with (the single newest message vs every message still unanswered).
+    // Three lines of new wiring at the live/regen/re-draft draft paths, nine lines out — taken at
+    // the REAL count, not the ceiling, so the slice funds itself with two to spare.
+    // 71_331 -> 71_330. The inventory-watch DISARM un-stacking: four hand-written copies of the
+    // "what survives when a watch comes off" block became calls to applyInventoryWatchDisarm.
+    // Only -1: the first three lanes gave back 4 lines and the FOURTH (vin_normalize, which the
+    // queue could not see until the third was refereed) cost 2 back plus the import. Worth it —
+    // an un-refereed fourth copy is what the next hand-rolled fifth one would have been modelled on.
+    // REBASE NOTE (ROUTINE_CONTRACT rule 3, the #418 trap): authored against a 71_333 main and
+    // proposed 71_332; #511 landed -2 first, so this is re-derived on the INTEGRATED tree.
+    // 71_330 -> 71_315. The finance-outcome-NOTIFY un-stacking: the seven places that hand-wrote
+    // the business-manager notification record became calls to applyFinanceOutcomeNotifyState.
+    // -4 from the wiring itself, and -11 more because main had already fallen below the ceiling —
+    // taken at the REAL count on the integrated tree, never at either branch's.
+    // 71_315 -> 71_298. The appointment-PROMPT un-stacking: SIX byte-identical copies of the
+    // "mark the 24h confirmation ask as sent" block inside processAppointmentConfirmations (one per
+    // delivery branch) collapsed to one local `markConfirmationAsked()` over the applier, and the
+    // customer's YES/NO record went the same way. Re-derived on the INTEGRATED tree after #524.
+    // 71_298 -> 71_271. The watch-RECORD-SHAPE un-stacking: TEN copies of the "how specific is
+    // this watch?" ladder and TWO copies of the legacy-singular-vs-list block became calls to
+    // applyInventoryWatchExactness / applyInventoryWatchListNormalization.
+    max: 71_271,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
