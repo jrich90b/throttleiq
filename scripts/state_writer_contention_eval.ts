@@ -741,7 +741,14 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 // call and so read as refereed by an applier that never actually decided these fields. Wired anyway:
 // the queue is a lower bound every time. MEASURED on the post-change tree.
 // RATCHET DOWN ONLY.
-const UNREFEREED_WRITER_BASELINE = 76;
+// 76 -> 74. The appointment-PROMPT un-stacking (2026-08-04): the two marks that stop us asking the
+// same question twice — the 24h YES/NO confirmation record and the internal attendance question —
+// now have one referee (`decideAppointmentPromptRecord`) and one writer
+// (`applyAppointmentPromptRecord`). EIGHT lanes, where the queue could see two: six of them were
+// byte-identical copies inside one function, which `countWriters` collapses to a single writer.
+// `appointment` 4 -> 2. MEASURED on the post-change tree.
+// RATCHET DOWN ONLY.
+const UNREFEREED_WRITER_BASELINE = 74;
 
 {
   const sourceFiles: SourceFile[] = [];

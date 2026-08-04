@@ -667,6 +667,34 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     }, ["decideFinanceOutcomeNotifyState"]);
   }
 
+  // Added 2026-08-04 with the appointment-PROMPT un-stacking. Sampled once PER LANE, and the
+  // confirmation ANSWER lane twice, because the yes/no branch is the only input the referee reads:
+  // one sample would hide the confirmed/declined split. PROBE: lane and answer are pinned, so the
+  // referee consults nothing but its own arbitration — it reads no stored state at all.
+  for (const probe of [
+    { name: "reminder_sent", lane: "confirmation_reminder_sent", answer: null },
+    { name: "answer_yes", lane: "confirmation_answer", answer: "yes" },
+    { name: "answer_no", lane: "confirmation_answer", answer: "no" },
+    { name: "attendance_asked", lane: "attendance_question_asked", answer: null }
+  ] as const) {
+    add(`appointmentPromptRecord:${probe.name}`, () => {
+      if (typeof reducer.decideAppointmentPromptRecord !== "function") return undefined;
+      const decision = reducer.decideAppointmentPromptRecord({
+        lane: probe.lane,
+        answer: probe.answer
+      }); // PROBE
+      return {
+        confirmationStatus: decision.confirmationStatus,
+        stampSentAt: decision.stampSentAt,
+        stampRespondedAt: decision.stampRespondedAt,
+        preserveExistingConfirmation: decision.preserveExistingConfirmation,
+        carryTriggerMeta: decision.carryTriggerMeta,
+        stampAttendanceQuestionedAt: decision.stampAttendanceQuestionedAt,
+        divergence: decision.divergence
+      };
+    }, ["decideAppointmentPromptRecord"]);
+  }
+
   // Added 2026-08-02 with the appointment-CONFIRM un-stacking. Sampled once PER LANE, because the
   // whole point of this referee is that the slot-match lane answers `acknowledged` and the
   // reschedule latch differently from the two booked lanes — a single sample would hide exactly

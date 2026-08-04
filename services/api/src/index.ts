@@ -519,6 +519,7 @@ import {
   applyInventoryWatchArm,
   applyInventoryWatchDisarm,
   applyFinanceOutcomeNotifyState,
+  applyAppointmentPromptRecord,
   applyCloseoutReversal,
   applyAppointmentConfirmRecord,
   clearAppointmentStaffPromptState
@@ -34603,6 +34604,14 @@ async function processAppointmentConfirmations() {
       triggeredAt: new Date().toISOString(),
       scheduledFor: appt.whenIso
     };
+    // All six delivery branches below mark the ask the same way — the mark IS the "only ask once"
+    // rule (the guard above skips any appointment whose confirmation.sentAt is set).
+    const markConfirmationAsked = () =>
+      applyAppointmentPromptRecord(conv, {
+        lane: "confirmation_reminder_sent",
+        nowIso: new Date().toISOString(),
+        triggerMeta
+      });
     console.log("[appt-confirm] reminder trigger", {
       convId: conv.id,
       leadRef: conv?.lead?.leadRef ?? null,
@@ -34620,18 +34629,10 @@ async function processAppointmentConfirmations() {
           windowMs: 10 * 60 * 1000
         })
       ) {
-        appt.confirmation = {
-          sentAt: new Date().toISOString(),
-          status: "pending",
-          ...triggerMeta
-        };
+        markConfirmationAsked();
         continue;
       }
-      appt.confirmation = {
-        sentAt: new Date().toISOString(),
-        status: "pending",
-        ...triggerMeta
-      };
+      markConfirmationAsked();
       appendOutbound(conv, from ?? "salesperson", toNumber, smsMessage, "draft_ai");
     } else if (from && accountSid && authToken && toNumber.startsWith("+")) {
       try {
@@ -34641,20 +34642,12 @@ async function processAppointmentConfirmations() {
             windowMs: 10 * 60 * 1000
           })
         ) {
-          appt.confirmation = {
-            sentAt: new Date().toISOString(),
-            status: "pending",
-            ...triggerMeta
-          };
+          markConfirmationAsked();
           continue;
         }
         const client = twilio(accountSid, authToken);
         const msg = await client.messages.create({ from, to: toNumber, body: smsMessage });
-        appt.confirmation = {
-          sentAt: new Date().toISOString(),
-          status: "pending",
-          ...triggerMeta
-        };
+        markConfirmationAsked();
         appendOutbound(conv, from, toNumber, smsMessage, "twilio", msg.sid);
         queueTlpLogForConversation(conv); // [tlp-autosend-log] appointment-confirm auto-send → CRM log
       } catch (e: any) {
@@ -34668,18 +34661,10 @@ async function processAppointmentConfirmations() {
           windowMs: 10 * 60 * 1000
         })
       ) {
-        appt.confirmation = {
-          sentAt: new Date().toISOString(),
-          status: "pending",
-          ...triggerMeta
-        };
+        markConfirmationAsked();
         continue;
       }
-      appt.confirmation = {
-        sentAt: new Date().toISOString(),
-        status: "pending",
-        ...triggerMeta
-      };
+      markConfirmationAsked();
       appendUndeliveredOutbound(conv, "salesperson", toNumber, smsMessage);
       queueTlpLogForConversation(conv); // [tlp-autosend-log] appointment-confirm fallback auto-send → CRM log
     }
@@ -34936,7 +34921,7 @@ async function processAppointmentQuestions() {
     const whenText = formatSlotLocal(appt.whenIso, cfg.timezone);
     const text = `Did the customer show for the ${whenText} appointment?`;
     addInternalQuestion(conv.id, conv.leadKey, text, "attendance");
-    appt.attendanceQuestionedAt = now.toISOString();
+    applyAppointmentPromptRecord(conv, { lane: "attendance_question_asked", nowIso: now.toISOString() });
   }
 }
 
@@ -63130,11 +63115,9 @@ if (authToken && signature) {
     const isNo = /\b(n|no|nope|nah|cancel|reschedule)\b/.test(text);
     if (isYes || isNo) {
       let tz = "America/New_York";
-      conv.appointment.confirmation = {
-        ...conv.appointment.confirmation,
-        status: isYes ? "confirmed" : "declined",
-        respondedAt: new Date().toISOString()
-      };
+      applyAppointmentPromptRecord(conv, {
+        lane: "confirmation_answer", nowIso: new Date().toISOString(), answer: isYes ? "yes" : "no"
+      });
       if (isNo) {
         try {
           const cfg = await getSchedulerConfigHot();

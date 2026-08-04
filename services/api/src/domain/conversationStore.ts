@@ -32,6 +32,9 @@ import {
   decideInventoryWatchDisarm,
   type InventoryWatchDisarmLane,
   type InventoryWatchDisarmDecision,
+  decideAppointmentPromptRecord,
+  type AppointmentPromptLane,
+  type AppointmentPromptRecordDecision,
   decideFinanceOutcomeNotifyState,
   type FinanceOutcomeNotifyLane,
   type FinanceOutcomeNotifyDecision,
@@ -8017,4 +8020,40 @@ export function applyFinanceOutcomeNotifyState(
   if (decision.sentLatch) state[decision.sentLatch] = input.nowIso;
   if (decision.touchUpdatedAt) state.updatedAt = input.nowIso;
   return { decision, state };
+}
+
+/**
+ * The single place a "we already asked about this appointment" mark is written — the 24-hour
+ * YES/NO confirmation record and the internal attendance question. Eight lanes across index.ts
+ * used to write these by hand (six of them byte-identical copies inside one function); they now
+ * all ask `decideAppointmentPromptRecord` (routeStateReducer), where both preserved divergences
+ * and the deliberate no-status shape of the attendance mark are documented.
+ */
+export function applyAppointmentPromptRecord(
+  conv: Conversation,
+  input: {
+    lane: AppointmentPromptLane;
+    nowIso: string;
+    answer?: "yes" | "no" | null;
+    /** `confirmation_reminder_sent` only: which trigger fired, and for when. */
+    triggerMeta?: Record<string, unknown>;
+  }
+): AppointmentPromptRecordDecision {
+  const decision = decideAppointmentPromptRecord({ lane: input.lane, answer: input.answer ?? null });
+  // NOTE: bound as a plain `const appt = conv.appointment` on purpose. The contention analyzer
+  // recognises THAT alias form, so these writes still read as writes of `appointment`; a
+  // `(conv as any).appointment` binding makes them invisible and the wiring check vacuous.
+  const appt = conv.appointment;
+  if (!appt) return decision;
+  if (decision.confirmationStatus) {
+    appt.confirmation = {
+      ...(decision.preserveExistingConfirmation ? (appt.confirmation ?? {}) : {}),
+      ...(decision.stampSentAt ? { sentAt: input.nowIso } : {}),
+      status: decision.confirmationStatus,
+      ...(decision.stampRespondedAt ? { respondedAt: input.nowIso } : {}),
+      ...(decision.carryTriggerMeta ? (input.triggerMeta ?? {}) : {})
+    };
+  }
+  if (decision.stampAttendanceQuestionedAt) appt.attendanceQuestionedAt = input.nowIso;
+  return decision;
 }
