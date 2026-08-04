@@ -348,10 +348,31 @@ import {
     ["services/api/dist/index.js is missing. Run `npm --workspace @throttleiq/api run build` first.", "no build to replay"],
     ["replay fidelity: replayed conversation lost its mode (expected \"autopilot\")", "the fidelity backstop is a harness fault"],
     ["no free port assigned", "the harness could not even get a port"],
-    ["Error: Cannot find module '/home/ubuntu/.../node_modules/@sentry/node/index.js'", "the other install-race spelling"]
+    [
+      "temporary API exited early (1): Error: Cannot find module '/home/ubuntu/x/node_modules/@sentry/node/index.js'",
+      "the other install-race spelling, still behind the boot anchor"
+    ]
   ] as const) {
     assert.equal(classifyReplayErrorCause(text), "harness", why);
   }
+
+  // THE HOLE THE 08-04 PRE-SHIP REVIEW FOUND, pinned shut. `replayOne` appends the child's last
+  // 20 log lines to every error string, so a module-resolution line can ride along on a REAL
+  // agent failure. Matching that symptom free-floating would strip a genuine CRITICAL and its
+  // work order off the gate — so only harness-thrown anchors count, never symptoms.
+  assert.equal(
+    classifyReplayErrorCause(
+      "timed out waiting for Twilio shadow job\nRecent API logs:\n" +
+        "Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/app/node_modules/some-optional-dep/index.js'"
+    ),
+    "agent",
+    "a module-not-found line in the APPENDED API LOGS must never excuse an agent failure"
+  );
+  assert.equal(
+    classifyReplayErrorCause("Twilio shadow job failed: Cannot find package 'handlebars'"),
+    "agent",
+    "the API booted and then threw — a bare package error is the agent's, not the harness's"
+  );
 
   // FAIL DIRECTION — the load-bearing pin. Anything not proven to be a harness fault stays an
   // AGENT failure, so it keeps its CRITICAL and keeps its work order. Widening this list must

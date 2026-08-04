@@ -292,11 +292,24 @@ export type ReplayErrorCause = "harness" | "agent";
 
 /**
  * Failures that prove the temporary API never got far enough to answer for the agent.
- * Every one of these is thrown by the harness itself (`inbound_shadow_replay.ts`) BEFORE or
- * INSTEAD OF a draft, or by node while loading that process.
+ *
+ * ONLY phrases the HARNESS ITSELF throws (`inbound_shadow_replay.ts`), never symptoms. That
+ * restriction is deliberate and load-bearing: `replayOne` builds its `error` field as
+ * `${err.message}` + "\nRecent API logs:\n" + the child's last 20 log lines, so ANY pattern
+ * that could appear in ordinary API output is reachable from a genuine agent failure. A bare
+ * `ERR_MODULE_NOT_FOUND` / `Cannot find module '...'` match would therefore let a real
+ * in-turn failure that merely logged such a line be excused off the release gate and lose its
+ * work order — the one outcome this whole classifier exists to prevent.
+ *
+ * Those symptom patterns are also unnecessary: all 29 boot failures in the 08-04 incident are
+ * matched by the `temporary API exited early` anchor alone (verified against the stored replay
+ * JSON), because `waitForHealth` embeds the child's output INSIDE its own thrown message. So
+ * the anchors carry the real case and the symptoms only add risk.
  */
 const HARNESS_ERROR_PATTERNS: readonly RegExp[] = [
-  // startApi / waitForHealth / waitForPreparedConversation — the boot never completed.
+  // startApi / waitForHealth / waitForPreparedConversation — the boot never completed. These
+  // carry the underlying node module-resolution text inside them, which is how the
+  // concurrent-`npm ci` signature is caught without matching it free-floating.
   /temporary API exited early/i,
   /temporary API did not become healthy/i,
   /temporary API exited before the prepared thread loaded/i,
@@ -305,11 +318,7 @@ const HARNESS_ERROR_PATTERNS: readonly RegExp[] = [
   // checkReplayFidelity's backstop: it ran, but not against the prepared thread.
   /replay fidelity:/i,
   // findFreePort.
-  /no free port assigned/i,
-  // node's own module resolution — the concurrent-install signature.
-  /ERR_MODULE_NOT_FOUND/,
-  /Cannot find package '/i,
-  /Cannot find module '/i
+  /no free port assigned/i
 ];
 
 export function classifyReplayErrorCause(errorText: string | null | undefined): ReplayErrorCause {
