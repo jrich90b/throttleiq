@@ -1603,12 +1603,23 @@ export function decideDealStatusCheckTurn(
 // spamming, so the floor is moderate; the caller may also escalate a clearly-done customer to the
 // disposition closeout, which pauses the watch anyway.)
 // ---------------------------------------------------------------------------
-export type WatchOptOutTurnKind = "pause_watch" | "none";
+// ACQUISITION ARM (Joe, 2026-08-04 — Mark Kocsis +17168609533). A watch alert drew "Thanks for
+// keeping me in mind but I actually just picked up a 2023 street glide anniversary edition." Telling
+// us they BOUGHT A BIKE is not the same as "stop the alerts", and Joe wants it handled differently:
+// congratulate them, say we are here for anything the bike needs, take them off the watch list, and
+// close the lead ONCE THAT REPLY ACTUALLY GOES OUT. Hence a second kind rather than a flag —
+// `pause_watch` deliberately KEEPS a live lead (they may still buy from us), this one does not.
+//
+// FAIL DIRECTION is stricter here than for pause_watch, because closing a live lead is the expensive
+// mistake: it takes the acquisition intent AND the same confidence floor, and the close is DEFERRED
+// — the caller arms it and only a genuinely SENT acknowledgement fires it. A draft staff discard
+// leaves the lead exactly where it was. Everything unsure still falls to `none`.
+export type WatchOptOutTurnKind = "acknowledge_and_close" | "pause_watch" | "none";
 
 export type WatchOptOutTurnInput = {
   hasActiveWatch: boolean;
   parserAccepted: boolean;
-  intent?: string | null; // "watch_opt_out" | "none"
+  intent?: string | null; // "acquired_vehicle" | "watch_opt_out" | "none"
   confidence: number;
   confidenceMin: number;
 };
@@ -1620,11 +1631,64 @@ export type WatchOptOutTurnDecision = {
 export function decideWatchOptOutTurn(input: WatchOptOutTurnInput): WatchOptOutTurnDecision {
   if (!input.hasActiveWatch) return { kind: "none" }; // nothing to remove
   if (!input.parserAccepted) return { kind: "none" };
-  if (input.intent !== "watch_opt_out") return { kind: "none" };
+  const acquired = input.intent === "acquired_vehicle";
+  if (!acquired && input.intent !== "watch_opt_out") return { kind: "none" };
   if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) {
     return { kind: "none" };
   }
-  return { kind: "pause_watch" };
+  return { kind: acquired ? "acknowledge_and_close" : "pause_watch" };
+}
+
+// --- Deferred closeout, fired by an actual SEND (Joe, 2026-08-04) ------------
+// "After we send draft and it goes through it should close the lead."
+//
+// The close cannot happen when the draft is WRITTEN, because in suggest mode a draft is a proposal —
+// staff may edit it, sit on it, or throw it away. So the acquisition turn ARMS a closeout and the
+// send route fires it. Nothing else may write `conv.status` off the back of this: the firing call
+// goes through `applyLeadCloseout`, the one closeout referee (#484).
+//
+// FAIL DIRECTION: refuse. Every uncertain input leaves the lead OPEN, which is recoverable — a lead
+// that should have closed just sits in the inbox, whereas a wrongly closed one silently stops being
+// worked. The interesting refusal is the third: if the customer has said ANYTHING since we armed,
+// they have re-engaged, and whatever they now want outranks a stale "close after send" note.
+export type PendingCloseoutSendKind = "close_lead" | "none";
+
+export type PendingCloseoutSendInput = {
+  /** Is a closeout armed on this conversation at all? */
+  armed: boolean;
+  /** When it was armed (ms). Non-finite = cannot compare = refuse. */
+  armedAtMs: number;
+  /** The newest INBOUND message time (ms), or null when there is none. */
+  lastInboundAtMs: number | null;
+  /** `conv.status === "closed"` — already done, nothing to fire. */
+  alreadyClosed: boolean;
+};
+
+export type PendingCloseoutSendDecision = {
+  kind: PendingCloseoutSendKind;
+  /** Drop the arm even when we refuse to close — a stale arm must not linger and fire later. */
+  clearArm: boolean;
+  why: string;
+};
+
+export function decidePendingCloseoutOnSend(
+  input: PendingCloseoutSendInput
+): PendingCloseoutSendDecision {
+  if (!input.armed) return { kind: "none", clearArm: false, why: "no closeout is armed on this lead" };
+  if (input.alreadyClosed) {
+    return { kind: "none", clearArm: true, why: "the lead is already closed — drop the stale arm" };
+  }
+  if (!Number.isFinite(input.armedAtMs)) {
+    return { kind: "none", clearArm: true, why: "the arm carries no usable timestamp — refuse and drop it" };
+  }
+  if (input.lastInboundAtMs !== null && input.lastInboundAtMs > input.armedAtMs) {
+    return {
+      kind: "none",
+      clearArm: true,
+      why: "the customer has written since we armed — they re-engaged, so the lead stays open"
+    };
+  }
+  return { kind: "close_lead", clearArm: true, why: "the acknowledgement went out — close the lead" };
 }
 
 // --- Post-sale ownership loss (2026-07-08) -----------------------------------
@@ -3555,6 +3619,77 @@ export function decideFinanceDeclinedCadence(
     needsLongTermHeal: isFinanceDeclined && cadenceIsShortTerm && cadenceStatus === "active",
     reason: isFinanceDeclined ? `finance_declined:${signals.join("+")}` : "not_finance_declined"
   };
+}
+
+/**
+ * May we PROACTIVELY text the business manager asking for a finance outcome? (Joe ruling
+ * 2026-08-04: "a pre qual should not create a finance outcome.")
+ *
+ * Christopher Szczesny +17169400722 arrived 8/2 from "Marketplace - Prequal", which stamps the
+ * conversation `bucket: finance_prequal` / `cta: prequalify` FOREVER. Two days later the whole
+ * thread was inventory — "can u dsend pics", "looking for a used road glide with some goodies" —
+ * and the state agreed (`dialogState: inventory_answered`). A staff-initiated call then hit his
+ * voicemail, and the no-contact handler texted Stone "Finance outcome needed: … Reply OUTCOME
+ * <token> APPROVED | DECLINED | NEEDS_INFO | PENDING" plus an open task. There was no credit app,
+ * no approval pending, no finance appointment — nothing whose outcome a manager could report.
+ *
+ * The old gate read HOW THE LEAD ARRIVED as if it were WHAT THE DEAL IS DOING NOW: a prequal
+ * origin label never expires, so every prequal-sourced lead nags the manager the first time a
+ * call goes to voicemail. This referee requires a real finance ARTEFACT instead:
+ *   - `cta: hdfs_coa` — a SUBMITTED HDFS credit application (note `hdfs_coa_online` also carries
+ *     bucket `finance_prequal`, so the bucket alone can never be the discriminator);
+ *   - a live credit-app / financing-declined follow-up state;
+ *   - a booked `finance_discussion` appointment.
+ * A soft prequal form on its own is NOT one.
+ *
+ * Fail-direction: this gates an unprompted SMS to staff plus an open task, so the safe direction
+ * is to stay quiet about a deal that does not exist. Nothing here blocks RECORDING an outcome —
+ * the outcome token/link still exists, the appointment-outcome lane has its own (already
+ * artefact-only) gate, and staff explicitly picking "approved"/"declined" on a task still writes
+ * the finance outcome through `isFinanceOutcomeContextForConversation`.
+ */
+export type BusinessManagerFinanceOutcomePromptInput = {
+  /** classification.cta — how the lead came in ("prequalify", "hdfs_coa", …). */
+  leadCta?: string | null;
+  /** classification.bucket — kept for the reason string; never sufficient on its own. */
+  leadBucket?: string | null;
+  followUpReason?: string | null;
+  appointmentType?: string | null;
+};
+
+export type BusinessManagerFinanceOutcomePromptDecision = {
+  /** May the caller send the business-manager finance-outcome prompt? */
+  prompt: boolean;
+  reason: string;
+};
+
+const FINANCE_OUTCOME_LIVE_FOLLOW_UP_REASONS = new Set([
+  "credit_app",
+  "credit_app_cosigner",
+  "credit_app_needs_info",
+  "credit_app_approved",
+  "financing_declined"
+]);
+
+export function decideBusinessManagerFinanceOutcomePrompt(
+  input: BusinessManagerFinanceOutcomePromptInput
+): BusinessManagerFinanceOutcomePromptDecision {
+  const cta = String(input.leadCta ?? "").trim().toLowerCase();
+  const bucket = String(input.leadBucket ?? "").trim().toLowerCase();
+  const followUpReason = String(input.followUpReason ?? "").trim().toLowerCase();
+  const appointmentType = String(input.appointmentType ?? "").trim().toLowerCase();
+
+  const signals: string[] = [];
+  if (cta === "hdfs_coa") signals.push("credit_app_online");
+  if (FINANCE_OUTCOME_LIVE_FOLLOW_UP_REASONS.has(followUpReason)) signals.push("follow_up_reason");
+  if (appointmentType === "finance_discussion") signals.push("finance_appointment");
+
+  if (signals.length) return { prompt: true, reason: `finance_artifact:${signals.join("+")}` };
+  // The two labels that used to be enough on their own, named so the skip is legible in a trace.
+  if (bucket === "finance_prequal" || cta === "prequalify") {
+    return { prompt: false, reason: "prequal_origin_only" };
+  }
+  return { prompt: false, reason: "no_finance_context" };
 }
 
 // How long the proactive cadence goes QUIET after we just reached out — one referee for what were
@@ -5895,6 +6030,35 @@ const CADENCE_STOP_PROTECTED_REASONS = new Set<string>(["manual_handoff", "purch
 /** Kinds that survive those reasons. */
 const CADENCE_PROTECTED_KINDS = new Set<string>(["post_sale", "long_term"]);
 
+/**
+ * DIVERGENCE 1, SECOND HALF (Charles Desalvo +17168614216 — Joe filed "No sold cadence"
+ * 2026-08-03T12:32Z; reproduced against the live record).
+ *
+ * Close reasons that mean the lead closed BECAUSE IT SOLD. A `post_sale` chase must survive them:
+ * closing a sold lead is exactly WHEN the owner sequence is supposed to run, so stopping the chase
+ * on that transition deletes the whole point of it.
+ *
+ * The comment above says divergence 1 is "not reachable today — closeConversation is never called
+ * with either of those two reasons". True of the reason strings, and beside the point: the walk-in
+ * sold branch reaches the same outcome twelve lines apart. `sendgridInbound.ts` asks
+ * `stopFollowUpCadence(conv, "manual_handoff")`, which this referee correctly REFUSES for a
+ * post-sale chase — and then calls `closeConversation(conv, "sold_walkin_note")`, whose `close`
+ * verb had no such check and killed it anyway. Charles's record is that sequence frozen in place:
+ * `kind: "post_sale"`, `anchorAt` equal to `sale.soldAt` to the millisecond (the console sold
+ * button armed it), `status: "stopped"`, `stopReason: "sold_walkin_note"`. He bought a Street
+ * Glide on 2026-08-03 and the owner sequence never sent a thing.
+ *
+ * FAIL DIRECTION — this one sends MORE, which is the opposite of this referee's usual bias, so it
+ * is deliberately narrow: `post_sale` only (a `long_term` chase on a closed lead still stops), and
+ * only for reasons that literally mean sold. It does not invent behavior — it restores PARITY with
+ * the three console sold paths (index.ts 20518 / 41289 / 41812 / 42915), which never call
+ * closeConversation at all and so already leave an ACTIVE post-sale chase on a closed, sold lead.
+ * +17163741119 (Tim Williams) is the healthy comparison: `closedReason: "sold"`, post_sale ACTIVE,
+ * and it duly sent his congratulations touch on 2026-08-01. Each individual touch is still gated
+ * downstream by the cadence-quality judge and `decidePostSaleOwnershipTurn`.
+ */
+const CADENCE_CLOSE_SOLD_REASONS = new Set<string>(["sold", "sold_walkin_note"]);
+
 export type CadenceLifecycleInput = {
   verb: CadenceLifecycleVerb | string;
   /**
@@ -5937,6 +6101,8 @@ export function decideCadenceLifecycle(input: CadenceLifecycleInput): CadenceLif
   const hasRecord = input.hasRecord ?? hasChase;
   const protectedChase =
     CADENCE_STOP_PROTECTED_REASONS.has(reason) && CADENCE_PROTECTED_KINDS.has(kind);
+  /** The lead is closing BECAUSE IT SOLD, and this is the owner sequence. See divergence 1's second half. */
+  const soldCloseSparesPostSale = kind === "post_sale" && CADENCE_CLOSE_SOLD_REASONS.has(reason);
 
   // Every verb needs a cadence RECORD to move — all four originals returned early without one.
   const apply = !recognized || !hasRecord
@@ -5947,7 +6113,7 @@ export function decideCadenceLifecycle(input: CadenceLifecycleInput): CadenceLif
         ? status === "active"
         : verb === "resume"
           ? status === "stopped"
-          : /* close */ hasChase;
+          : /* close */ hasChase && !soldCloseSparesPostSale;
 
   const refused = { clearNextDue: false, clearPause: false, clearStopReason: false };
   const writes = !apply
@@ -5971,19 +6137,24 @@ export function decideCadenceLifecycle(input: CadenceLifecycleInput): CadenceLif
           : "stopped",
     ...writes,
     divergence:
-      verb === "stop" && hasRecord && protectedChase
-        ? "only_the_stop_verb_protects_a_post_sale_or_long_term_chase"
-        : verb === "close" && apply && CADENCE_PROTECTED_KINDS.has(kind)
-          ? "closing_the_lead_stops_a_protected_chase_that_stop_would_have_spared"
-          : verb === "pause" && apply && CADENCE_PROTECTED_KINDS.has(kind)
-            ? "pause_hushes_a_protected_chase_that_stop_would_have_spared"
-            : null,
+      verb === "close" && hasRecord && soldCloseSparesPostSale
+        ? "a_sold_close_spares_the_post_sale_chase_it_hands_off_to"
+        : verb === "stop" && hasRecord && protectedChase
+          ? "only_the_stop_verb_protects_a_post_sale_or_long_term_chase"
+          : verb === "close" && apply && CADENCE_PROTECTED_KINDS.has(kind)
+            ? "closing_the_lead_stops_a_protected_chase_that_stop_would_have_spared"
+            : verb === "pause" && apply && CADENCE_PROTECTED_KINDS.has(kind)
+              ? "pause_hushes_a_protected_chase_that_stop_would_have_spared"
+              : null,
     why: !recognized
       ? `unrecognized cadence-lifecycle verb "${verb}" — refused, the chase stays where it is`
       : !hasRecord
         ? `${verb}: there is no chase on this lead — nothing to move`
         : !apply
-          ? verb === "stop"
+          ? verb === "close" && soldCloseSparesPostSale
+            ? `close: refused — the lead is closing as "${reason}", and a post-sale chase is the ` +
+              "owner sequence that close is supposed to hand off to, not something it ends"
+            : verb === "stop"
             ? `stop: refused — a ${kind} chase survives "${reason}"; that is expected post-sale ` +
               "traffic, not a reason to kill the sequence the sale started"
             : `${verb}: refused — the chase is "${status}", not the state this verb moves from`
@@ -6385,5 +6556,559 @@ export function decideInventoryWatchArm(input: InventoryWatchArmInput): Inventor
         : dialogRoute === "direct"
           ? `${input.lane}: watch armed, chase stops, dialog state written directly — a durable opt-out survives`
           : `${input.lane}: watch armed and the chase stops, but the dialog state is left untouched`
+  };
+}
+
+/**
+ * INVENTORY-WATCH DISARM — "a watch is coming OFF this lead: what does the record look like
+ * afterwards?" The exact INVERSE of `decideInventoryWatchArm` above, and a separate referee rather
+ * than a lane on that one because the questions differ in kind: arming asks what to switch ON,
+ * disarming asks what SURVIVES, and the three lanes disagree about survival in ways arming cannot.
+ *
+ * THREE LANES, each of which hand-wrote the same three Tier-2 fields:
+ *   1. `customer_stop`   — `clearInventoryWatchState`. The customer told us to stop. Everything goes.
+ *   2. `held_guard_heal` — `applyStaleHeldUnitWatchHeal`. WE armed a watch on a unit that turned out
+ *      to be in stock; prune only the watches we created ourselves, keep the customer's.
+ *   3. `model_prune`     — the `/internal/worker/watch-prune/:id` repair endpoint. A data fix: drop
+ *      the watches naming these models, keep the rest.
+ *   4. `vin_normalize`   — the `/internal/worker/watch-normalize-vin` repair endpoint. Strips VIN
+ *      trim codes out of watch models and dedupes what collapses together, so it REMOVES watches
+ *      too. The queue could not see this lane until lane 3 was refereed — refereeing 3 un-collapsed
+ *      it, the adjacency artifact this program has now hit five times.
+ *
+ * TWO DIVERGENCES, PRESERVED AND NAMED — measured against the live store 2026-08-04 (802
+ * conversations, 90 carrying a watch array, 89 carrying the singular mirror, 0 mismatched mirrors):
+ *
+ *   D1 — EMPTY ARRAY vs UNDEFINED, when nothing survives. The heal lane collapses to `undefined`;
+ *   the prune lane writes the empty array it computed. **1 lead carries an empty array today.**
+ *   Readers split on it: the `Array.isArray(x) ? x : …` idiom treats `[]` as "no watches", but a
+ *   plain truthiness test reads it as "has watches". The only reader doing the latter today is the
+ *   Langfuse telemetry payload's `hasInventoryWatch` (index.ts) — an observability field, not a
+ *   decision. So D1 is real but currently costs a wrong flag in a trace, nothing customer-facing.
+ *
+ *   D2 — THE PENDING FLAG. `inventoryWatchPending` means "we are waiting to hear WHICH bike".
+ *   customer_stop always clears it; held_guard_heal clears it only when nothing survives;
+ *   model_prune never touches it — so a fully-pruned lead can still be flagged as owing us an
+ *   answer about a watch it no longer has. **3 leads carry the pending flag today and all 3 have
+ *   no watch at all**, which is this shape (it has other doors too). Partly self-healing:
+ *   `reduceStaleWorkflowStateForInbound` clears a stale pending on the next inbound.
+ *
+ *   D3 — THE MIRROR, between the two sibling repair endpoints. `model_prune` repoints the singular
+ *   mirror ONLY when the mirror itself was pruned, leaving a survivor byte-identical;
+ *   `vin_normalize` re-derives it every run from the cleaned model name (falling back to the first
+ *   survivor). Both are defensible for their own job — one is surgical, one is a rewrite — so both
+ *   are preserved behind `mirrorRule` rather than normalized into a single answer.
+ *
+ * NOT A DIVERGENCE — pinned so a later tidy-up does not flatten it. The three lanes leave the lead
+ * in deliberately different places, because they are answers to three different events.
+ * customer_stop pauses the lead indefinitely, stops the chase and steps the dialog back; the heal
+ * does the OPPOSITE (its caller restores active mode and resumes the chase) because it exists to
+ * undo OUR mistake; the repair endpoint touches neither, because a data fix is not a customer
+ * event. Merging their aftermath would be the bug, not the cleanup.
+ *
+ * KNOWN GAP, NOT FIXED HERE (its own PR): no lane un-parks a lead whose last watch just left. A
+ * lead sits in `followUp.mode = "holding_inventory"` / reason `inventory_watch` with zero watches,
+ * frozen for a watch that no longer exists (+15856048591, found 2026-08-04). This referee is the
+ * place that fix will hang off once it exists — every disarm now passes through one door.
+ */
+export type InventoryWatchDisarmLane =
+  | "customer_stop"
+  | "held_guard_heal"
+  | "model_prune"
+  | "vin_normalize";
+
+/**
+ * How the singular `inventoryWatch` mirror is repointed. The two repair endpoints differ here and
+ * it is not cosmetic: `only_if_pruned` leaves a surviving mirror byte-identical, while
+ * `caller_picks` re-derives it every time from the cleaned model name.
+ */
+export type InventoryWatchMirrorRule = "first" | "only_if_pruned" | "caller_picks";
+
+export type InventoryWatchDisarmInput = {
+  lane: InventoryWatchDisarmLane;
+  /** How many watches survive this disarm. */
+  remainingCount: number;
+};
+
+export type InventoryWatchDisarmDecision = {
+  /** What an EMPTY survivor list is written as — divergence 1. */
+  emptyListShape: "empty_array" | "undefined";
+  /** How to repoint the singular mirror. */
+  mirrorRule: InventoryWatchMirrorRule;
+  /** Clear `inventoryWatchPending` — divergence 2. */
+  clearPending: boolean;
+  /** The aftermath. `null` = this lane leaves the lead's mode and chase alone. */
+  followUpMode: "paused_indefinite" | null;
+  stopCadence: boolean;
+  /** Step the dialog back out of a watch state, when it is in one. */
+  stepDialogBack: boolean;
+  divergence: string | null;
+  why: string;
+};
+
+/** Pure. */
+export function decideInventoryWatchDisarm(
+  input: InventoryWatchDisarmInput
+): InventoryWatchDisarmDecision {
+  const remaining = Math.max(0, Number(input.remainingCount) || 0);
+  if (input.lane === "customer_stop") {
+    return {
+      emptyListShape: "undefined",
+      mirrorRule: "first",
+      clearPending: true,
+      followUpMode: "paused_indefinite",
+      stopCadence: true,
+      stepDialogBack: true,
+      divergence: null,
+      why: "customer_stop: the customer asked us to stop watching — every watch goes and the lead parks"
+    };
+  }
+  if (input.lane === "held_guard_heal") {
+    return {
+      emptyListShape: "undefined",
+      mirrorRule: "first",
+      // Divergence 2, the conservative half: only clear "which bike?" when nothing is left to ask about.
+      clearPending: remaining === 0,
+      followUpMode: null,
+      stopCadence: false,
+      stepDialogBack: false,
+      divergence: null,
+      why:
+        remaining === 0
+          ? "held_guard_heal: our own held-unit watch was wrong and nothing survives it — the record clears"
+          : `held_guard_heal: our own held-unit watch was wrong; ${remaining} customer watch(es) survive untouched`
+    };
+  }
+  // Both remaining lanes are DATA REPAIRS on the worker endpoints and share an answer: store the
+  // list you computed, touch nothing about the lead. They differ only on the mirror — that is D3.
+  return {
+    // Divergence 1 — a repair stores the empty list it computed rather than collapsing it.
+    emptyListShape: "empty_array",
+    mirrorRule: input.lane === "model_prune" ? "only_if_pruned" : "caller_picks",
+    // Divergence 2 — a data repair never claims to know whether the customer still owes us an answer.
+    clearPending: false,
+    followUpMode: null,
+    stopCadence: false,
+    stepDialogBack: false,
+    divergence:
+      input.lane === "model_prune"
+        ? remaining === 0
+          ? "model_prune_stores_an_empty_array_and_leaves_the_pending_flag_standing"
+          : "model_prune_leaves_the_pending_flag_standing"
+        : "vin_normalize_rederives_the_mirror_where_its_sibling_repair_leaves_a_survivor_alone",
+    why: `${input.lane}: data repair — ${remaining} watch(es) kept; the lead's mode, chase and pending flag are not this lane's business`
+  };
+}
+
+/**
+ * WHERE IS THIS FINANCE OUTCOME IN THE MANAGER-NOTIFICATION LIFECYCLE?
+ *
+ * `conv.financeOutcomeNotify` is the record behind the business-manager loop: we mint a reply
+ * token, text the manager "what happened with the financing?", and stamp what came back. Seven
+ * places used to hand-write that record — the token mint, the parsed-outcome write, the prompt
+ * sender, the notification sender, the public outcome link (pending + resolved) and the staff-SMS
+ * reply lane (pending + resolved). They now all ask here.
+ *
+ * The lanes deliberately write DIFFERENT field sets; that is the whole reason a referee is worth
+ * having, because the differences were invisible while they sat 20,000 lines apart.
+ *
+ * DIVERGENCE 1 — THE TWO "PENDING" LANES DO NOT AGREE ON THE RECORD. A manager who answers the
+ * public link with PENDING gets `status:"pending"` + `pendingAt`. A manager who TEXTS back
+ * "pending" / "no answer" / "left a voicemail" gets `outcomePendingAt` and NO `status` at all.
+ * `scripts/outcome_qa_audit.ts` reports a pending outcome only when it sees `status === "pending"`
+ * AND `pendingAt`, so the texted answer never reaches the QA report. Preserved, not merged: the
+ * blast radius is a REPORT, and normalizing it would start writing a `status` the SMS lane has
+ * never written. **Measured 2026-08-04: 807 conversations, 67 carry this record, and ZERO carry
+ * either pending shape — so this is a portability defect, not a live one.**
+ *
+ * DIVERGENCE 2 — THE TWO "RESOLVED" LANES STAMP DIFFERENT FIELD NAMES for the same event: the
+ * public link writes `outcomePromptRespondedAt`, the staff SMS writes `outcomePromptResolvedAt`.
+ * Both have ZERO consumers (grep-verified across services/api, scripts, apps/web, packages), so
+ * nothing today can tell them apart — but both HAVE fired in production (4 responded / 1 resolved),
+ * so anything later built on "when did the manager answer?" would silently see a fifth of the truth.
+ *
+ * DIVERGENCE 3 — `notify_sent` IS THE ONLY LANE THAT DOES NOT BUMP `updatedAt`. That field is the
+ * second-choice freshness input to the staff-SMS token matcher (index.ts, after
+ * `outcomePromptSentAt` and before `conv.updatedAt`), so it can only matter on a record whose ONLY
+ * event was an outbound notification — and `saveConversation` moves `conv.updatedAt` regardless.
+ * Preserved rather than tidied: adding a stamp would widen the window in which an old token still
+ * matches a staff reply, which is the fail-toward-acting direction.
+ *
+ * NOT A DIVERGENCE, pinned so a later tidy-up does not "fix" it: `token_mint` keeps an existing
+ * token instead of replacing it, and `prompt_sent` keeps an existing `userId` when the caller has
+ * no better one. Both are deliberate — the token is what an inbound staff SMS is matched against
+ * (index.ts `isFinanceOutcomeTokenForConversation`), so re-minting one would strand a manager who
+ * is mid-reply, and blanking `userId` would lose the attribution the matcher falls back on.
+ */
+export type FinanceOutcomeNotifyLane =
+  | "token_mint"
+  | "outcome_signal"
+  | "prompt_sent"
+  | "notify_sent"
+  | "public_link_pending"
+  | "public_link_resolved"
+  | "staff_sms_pending"
+  | "staff_sms_resolved";
+
+/** Which "the manager answered" timestamp a lane stamps — divergence 2. */
+export type FinanceOutcomeAnswerStamp = "responded" | "resolved" | "pending_only" | null;
+
+export type FinanceOutcomeNotifyInput = {
+  lane: FinanceOutcomeNotifyLane;
+  /** `outcome_signal` only: the parsed outcome being recorded. */
+  outcomeStatus?: "approved" | "declined" | "needs_more_info" | null;
+  /** `notify_sent` only: which manager notification just went out. */
+  sentStatus?: "approved" | "declined" | "needs_more_info" | null;
+};
+
+export type FinanceOutcomeNotifyDecision = {
+  /** Mint a reply token when the record has none (never replace one). */
+  mintToken: boolean;
+  /** What to write into `status`; `null` = leave whatever is there. */
+  status: "approved" | "declined" | "needs_more_info" | "pending" | null;
+  /** Stamp `pendingAt` — the public link's half of divergence 1. */
+  stampPendingAt: boolean;
+  /** Which "the manager answered" clock this lane stamps — divergence 2. */
+  answerStamp: FinanceOutcomeAnswerStamp;
+  /** Record the outbound prompt (sent-at, source id, assignee, phone). */
+  stampPromptSent: boolean;
+  /** Which per-status "we already told the manager" latch to set; `null` = none. */
+  sentLatch: "approvedSentAt" | "declinedSentAt" | "needsInfoSentAt" | null;
+  /** Bump `updatedAt` — every lane but `notify_sent` (divergence 3). */
+  touchUpdatedAt: boolean;
+  divergence: string | null;
+  why: string;
+};
+
+/** Pure. */
+export function decideFinanceOutcomeNotifyState(
+  input: FinanceOutcomeNotifyInput
+): FinanceOutcomeNotifyDecision {
+  const base = {
+    mintToken: false,
+    status: null,
+    stampPendingAt: false,
+    answerStamp: null,
+    stampPromptSent: false,
+    sentLatch: null,
+    touchUpdatedAt: true,
+    divergence: null
+  } as const;
+  switch (input.lane) {
+    case "token_mint":
+      return {
+        ...base,
+        mintToken: true,
+        // The mint is the one lane that predates the record; it stamps nothing else, including the
+        // clock, because "we generated a token" is not yet an event in the manager's lifecycle.
+        touchUpdatedAt: false,
+        why: "token_mint: give this conversation a reply token if it has none — never replace one"
+      };
+    case "outcome_signal":
+      return {
+        ...base,
+        status: input.outcomeStatus ?? null,
+        why: `outcome_signal: a finance outcome of ${input.outcomeStatus ?? "unknown"} was recorded`
+      };
+    case "prompt_sent":
+      return {
+        ...base,
+        stampPromptSent: true,
+        why: "prompt_sent: the outcome prompt went out — record when, off what, to whom"
+      };
+    case "notify_sent":
+      return {
+        ...base,
+        sentLatch:
+          input.sentStatus === "declined"
+            ? "declinedSentAt"
+            : input.sentStatus === "approved"
+              ? "approvedSentAt"
+              : "needsInfoSentAt",
+        // Divergence 3.
+        touchUpdatedAt: false,
+        divergence: "notify_sent_does_not_bump_updated_at",
+        why: `notify_sent: the ${input.sentStatus ?? "needs_more_info"} notification went out — latch it so it goes out once`
+      };
+    case "public_link_pending":
+      return {
+        ...base,
+        status: "pending",
+        stampPendingAt: true,
+        answerStamp: "responded",
+        // Divergence 1, the half the QA audit can see.
+        divergence: "public_link_pending_writes_a_status_the_staff_sms_lane_never_writes",
+        why: "public_link_pending: the manager pressed PENDING on the link — status + pendingAt"
+      };
+    case "public_link_resolved":
+      return {
+        ...base,
+        answerStamp: "responded",
+        why: "public_link_resolved: the manager answered on the link; the outcome itself is written by outcome_signal"
+      };
+    case "staff_sms_pending":
+      return {
+        ...base,
+        stampPendingAt: false,
+        answerStamp: "pending_only",
+        // Divergence 1, the half nothing reports on.
+        divergence: "staff_sms_pending_stamps_only_outcome_pending_at_so_the_qa_audit_never_sees_it",
+        why: "staff_sms_pending: the manager texted back that it is still pending — outcomePendingAt only"
+      };
+    default:
+      return {
+        ...base,
+        answerStamp: "resolved",
+        // Divergence 2.
+        divergence: "staff_sms_resolved_stamps_a_different_answer_clock_than_the_public_link",
+        why: "staff_sms_resolved: the manager texted back a real outcome; the outcome itself is written by outcome_signal"
+      };
+  }
+}
+
+/**
+ * DID WE ALREADY ASK THIS CUSTOMER ABOUT THIS APPOINTMENT, AND WHAT MARKS THAT WE DID?
+ *
+ * Two prompts hang off a booked appointment and each leaves a mark that stops it repeating:
+ * the 24-hour YES/NO confirmation text (`appointment.confirmation`) and the internal
+ * "did the customer show?" question we put to staff afterwards (`attendanceQuestionedAt`).
+ * EIGHT places used to write those marks by hand — six byte-identical copies of the same
+ * five-line "pending" block inside the reminder sender, the customer's YES/NO reply, and the
+ * attendance ask. They now all ask here.
+ *
+ * WHY THE MARK MATTERS MORE THAN IT LOOKS: `processAppointmentConfirmations` skips any
+ * appointment whose `confirmation.sentAt` is set, so the mark IS the "only ask once" rule. A
+ * lane that forgot to stamp it would re-text the same customer every pass.
+ *
+ * DIVERGENCE 1 — THREE OF THE SIX REMINDER COPIES STAMP "SENT" WITHOUT SENDING. Each delivery
+ * mode (draft/suggest, live Twilio, undelivered fallback) first checks `isRecentDuplicateOutbound`
+ * and, on a hit, stamps the record and `continue`s WITHOUT appending an outbound. Preserved,
+ * because a duplicate hit means the same text went out through another path inside 10 minutes —
+ * the customer HAS been asked. Named so nobody later "fixes" it into re-texting.
+ *
+ * DIVERGENCE 2 — THE ANSWER LANE SPREADS THE EXISTING RECORD (`...confirmation`) where the
+ * sender REPLACES it. That is what keeps `sentAt` and the trigger metadata alive next to the
+ * answer, so "asked at X, answered at Y" survives; a replace would erase the ask.
+ *
+ * NOT A DIVERGENCE, pinned as such: the attendance lane stamps a bare clock and no status, because
+ * the question goes to STAFF, not the customer — there is no YES/NO coming back down this channel
+ * to record. Giving it a status shape to match its sibling would invent a state nothing sets.
+ */
+export type AppointmentPromptLane =
+  | "confirmation_reminder_sent"
+  | "confirmation_answer"
+  | "attendance_question_asked";
+
+export type AppointmentPromptRecordInput = {
+  lane: AppointmentPromptLane;
+  /** `confirmation_answer` only: what the customer replied. */
+  answer?: "yes" | "no" | null;
+};
+
+export type AppointmentPromptRecordDecision = {
+  /** What `confirmation.status` becomes; `null` = this lane does not touch the confirmation. */
+  confirmationStatus: "pending" | "confirmed" | "declined" | null;
+  /** Stamp `confirmation.sentAt` — the "only ask once" mark. */
+  stampSentAt: boolean;
+  /** Stamp `confirmation.respondedAt`. */
+  stampRespondedAt: boolean;
+  /** Keep the existing confirmation fields alongside the new ones — divergence 2. */
+  preserveExistingConfirmation: boolean;
+  /** Carry the sender's trigger metadata onto the record. */
+  carryTriggerMeta: boolean;
+  /** Stamp `attendanceQuestionedAt`. */
+  stampAttendanceQuestionedAt: boolean;
+  divergence: string | null;
+  why: string;
+};
+
+/** Pure. */
+export function decideAppointmentPromptRecord(
+  input: AppointmentPromptRecordInput
+): AppointmentPromptRecordDecision {
+  if (input.lane === "confirmation_reminder_sent") {
+    return {
+      confirmationStatus: "pending",
+      stampSentAt: true,
+      stampRespondedAt: false,
+      // The sender REPLACES the record — there is nothing to keep, it only runs when sentAt is blank.
+      preserveExistingConfirmation: false,
+      carryTriggerMeta: true,
+      stampAttendanceQuestionedAt: false,
+      // Divergence 1 — three of the six copies reach this on a suppressed duplicate.
+      divergence: "confirmation_reminder_marks_sent_even_when_a_duplicate_suppressed_the_send",
+      why: "confirmation_reminder_sent: the 24h YES/NO ask is out — mark it pending so it is asked once"
+    };
+  }
+  if (input.lane === "confirmation_answer") {
+    return {
+      confirmationStatus: input.answer === "yes" ? "confirmed" : "declined",
+      stampSentAt: false,
+      stampRespondedAt: true,
+      // Divergence 2 — keep the ask (sentAt + trigger meta) next to the answer.
+      preserveExistingConfirmation: true,
+      carryTriggerMeta: false,
+      stampAttendanceQuestionedAt: false,
+      divergence: null,
+      why: `confirmation_answer: the customer replied ${input.answer === "yes" ? "YES" : "NO"} to the 24h ask`
+    };
+  }
+  return {
+    confirmationStatus: null,
+    stampSentAt: false,
+    stampRespondedAt: false,
+    preserveExistingConfirmation: true,
+    carryTriggerMeta: false,
+    stampAttendanceQuestionedAt: true,
+    divergence: null,
+    why: "attendance_question_asked: staff were asked whether the customer showed — stamp it so we ask once"
+  };
+}
+
+/**
+ * HOW SPECIFIC IS THIS WATCH? — `inventoryWatch.exactness`.
+ *
+ * TEN places in `index.ts` (plus one repair script) each carried their own copy of the same
+ * three-rung ladder: a year RANGE means a model range, a year PLUS a distinguishing detail means
+ * an exact unit, a bare year means year+model, and anything less stays model-only. They now all
+ * ask here.
+ *
+ * MEASURED BEFORE WRITING THIS (and it is the reason the divergences below are preserved rather
+ * than fixed): **`exactness` has ZERO readers.** Nothing in `services/api/src` or `apps/web`
+ * consults it — grep-verified — so it is a descriptive field today, not a matching input.
+ * That makes the two disagreements below free to keep AND free to get wrong later, which is
+ * exactly why they are named on the decision instead of quietly normalised.
+ *
+ * DIVERGENCE 1 — THE MODEL-RANGE RUNG IS MISSING FROM SEVEN OF THE TEN LANES. Only the ADF
+ * multi-watch build, the context-note build and the manual-outbound list recognise
+ * `yearMin`+`yearMax` as "model range"; on the other seven a year range falls through to
+ * model-only. Preserved per lane behind `recognisesYearRange`.
+ *
+ * DIVERGENCE 2 — WHAT COUNTS AS "DISTINGUISHING". Eight lanes accept a COLOUR **or** a TRIM
+ * ("2023 Road Glide CVO" is exact); two — the seller-intake list builders — accept a colour only,
+ * so the same customer's trim-only watch reads year_model there. Preserved behind
+ * `trimCountsAsDistinguishing`.
+ *
+ * FAIL DIRECTION, worth stating because it is not the usual one: an exactness that reads TOO
+ * SPECIFIC would, the day something consumes it, narrow which arrivals we alert a customer about
+ * — i.e. fail toward silence. So when a lane's rule is in doubt the ladder must fall DOWN
+ * (model_only), never up, and every rung below requires strictly more evidence than the one under it.
+ */
+export type InventoryWatchExactness = "exact" | "year_model" | "model_range" | "model_only";
+
+export type InventoryWatchExactnessInput = {
+  /** A single pinned model year. */
+  year?: number | string | null;
+  /** A pinned year RANGE. */
+  yearMin?: number | string | null;
+  yearMax?: number | string | null;
+  color?: string | null;
+  trim?: string | null;
+  /** Divergence 1 — does this lane read a year range as a model range? */
+  recognisesYearRange: boolean;
+  /** Divergence 2 — does a TRIM count as distinguishing, or only a colour? */
+  trimCountsAsDistinguishing: boolean;
+};
+
+export type InventoryWatchExactnessDecision = {
+  /** `null` = this lane's ladder does not fire; the caller's existing value stands. */
+  exactness: InventoryWatchExactness | null;
+  divergence: string | null;
+  why: string;
+};
+
+/** Pure. */
+export function resolveInventoryWatchExactness(
+  input: InventoryWatchExactnessInput
+): InventoryWatchExactnessDecision {
+  const hasRange = !!input.yearMin && !!input.yearMax;
+  const hasYear = !!input.year;
+  const distinguishing = !!input.color || (input.trimCountsAsDistinguishing && !!input.trim);
+  if (input.recognisesYearRange && hasRange) {
+    return {
+      exactness: "model_range",
+      divergence: null,
+      why: "a pinned year RANGE describes a span of model years, not one unit"
+    };
+  }
+  if (hasYear && distinguishing) {
+    return {
+      exactness: "exact",
+      divergence: null,
+      why: "a year plus a colour or trim names one unit closely enough to call it exact"
+    };
+  }
+  if (hasYear) {
+    return {
+      exactness: "year_model",
+      // Divergence 2 is named HERE, where it actually bites: this lane is holding a trim it does
+      // not count, so it lands a rung lower than the eight lanes that do.
+      divergence:
+        !input.trimCountsAsDistinguishing && !!input.trim
+          ? "this lane ignores TRIM, so a trim-only watch reads year_model where eight other lanes read exact"
+          : null,
+      why: "a bare year pins the model year, nothing finer"
+    };
+  }
+  // Every original ladder ENDS here with no `else` — the caller's literal already defaults to
+  // model_only, and a lane with a year range it does not recognise falls through to exactly that.
+  return {
+    exactness: null,
+    divergence:
+      !input.recognisesYearRange && hasRange
+        ? "this lane does not recognise a year RANGE, so the watch stays model_only"
+        : null,
+    why: "nothing pins a year — the caller's model_only default stands"
+  };
+}
+
+/**
+ * THE LEGACY SINGULAR WATCH AND THE LIST — which is the truth, and does reading it repair the record?
+ *
+ * A conversation may carry `inventoryWatch` (the original single watch), `inventoryWatches` (the
+ * list that replaced it), or both. Two alert paths — the watchlist sweep and the
+ * available-item notifier — each hand-wrote the same eight lines: prefer a non-empty list,
+ * otherwise wrap the singular, and if the list was missing entirely, backfill it from the singular.
+ * They now both ask here.
+ *
+ * The backfill is a HEAL, and its guard is deliberately `!conv.inventoryWatches` (missing), NOT
+ * `!conv.inventoryWatches?.length` (missing or empty): an explicitly EMPTY list is a record that
+ * says "this lead has no watches", and re-populating it from a stale singular would resurrect a
+ * watch a disarm lane just took off. See `decideInventoryWatchDisarm`, whose repair lanes store
+ * exactly that empty array.
+ */
+export type InventoryWatchListNormalizationInput = {
+  /** `undefined` = no list field at all; `[]` = an explicitly empty list. */
+  listLength: number | null;
+  hasSingular: boolean;
+};
+
+export type InventoryWatchListNormalizationDecision = {
+  /** Which source the caller should read this turn. */
+  source: "list" | "singular" | "none";
+  /** Write the singular into the list field — only when the list is absent entirely. */
+  backfillListFromSingular: boolean;
+  why: string;
+};
+
+/** Pure. */
+export function resolveInventoryWatchListNormalization(
+  input: InventoryWatchListNormalizationInput
+): InventoryWatchListNormalizationDecision {
+  const listLength = input.listLength;
+  if (listLength !== null && listLength > 0) {
+    return { source: "list", backfillListFromSingular: false, why: "the list has entries — it is the truth" };
+  }
+  if (!input.hasSingular) {
+    return { source: "none", backfillListFromSingular: false, why: "no list entries and no legacy singular" };
+  }
+  return {
+    source: "singular",
+    // Only when the list field is ABSENT. An empty list is a statement, not a gap.
+    backfillListFromSingular: listLength === null,
+    why:
+      listLength === null
+        ? "legacy record: only the singular exists — read it and backfill the list"
+        : "an explicitly EMPTY list stands; read the singular this turn but do not resurrect it into the list"
   };
 }

@@ -427,23 +427,41 @@ export function unitInScopeForModelPriceAnswer(
  * to silence or an empty price line. Purely subtractive otherwise — it can only tighten a range
  * toward the bike asked about.
  */
+function colorFinishTokens(value: string | null | undefined): string[] {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .split(" ")
+    .filter(Boolean);
+}
+
+/**
+ * Does ONE unit's packed colour string carry the colour/finish the customer stated?
+ *
+ * Lifted out of `narrowUnitsByColorFinish` unchanged (token-subset over the packed `color` field)
+ * so the availability/watch lane can ask the same question the price lane asks, instead of minting
+ * a second notion of colour equality — the one-definition discipline #494 used for models. A
+ * stated value with no usable tokens matches everything, which is what the caller wants: nothing
+ * stated means nothing to narrow by.
+ */
+export function unitColorCarriesStated(
+  unitColor: string | null | undefined,
+  stated: { color?: string | null; finish?: string | null }
+): boolean {
+  const wanted = [...colorFinishTokens(stated.color), ...colorFinishTokens(stated.finish)];
+  if (!wanted.length) return true;
+  const have = new Set(colorFinishTokens(unitColor));
+  return wanted.every(w => have.has(w));
+}
+
 export function narrowUnitsByColorFinish<T extends { color?: string }>(
   units: T[],
   stated: { color?: string | null; finish?: string | null }
 ): T[] {
   if (!Array.isArray(units) || units.length <= 1) return units;
-  const tokens = (value: string | null | undefined) =>
-    String(value ?? "")
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, " ")
-      .split(" ")
-      .filter(Boolean);
-  const wanted = [...tokens(stated.color), ...tokens(stated.finish)];
+  const wanted = [...colorFinishTokens(stated.color), ...colorFinishTokens(stated.finish)];
   if (!wanted.length) return units;
-  const narrowed = units.filter(u => {
-    const have = new Set(tokens(u?.color));
-    return wanted.every(w => have.has(w));
-  });
+  const narrowed = units.filter(u => unitColorCarriesStated(u?.color, stated));
   return narrowed.length ? narrowed : units;
 }
 

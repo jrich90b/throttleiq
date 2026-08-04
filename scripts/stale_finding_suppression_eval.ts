@@ -433,6 +433,51 @@ const rec = (over: Partial<DispositionRecord> = {}): DispositionRecord => ({
   assert.match(runner, /Refusing to write/, "a corrupt ledger must not be silently replaced by an empty one");
 }
 
+// 27. THE REGRESSION SHIELD — section 17's promise has to survive the FOUR suppression passes that
+//     run after the ledger. They all match on `convId::dimension` alone, so they were eating the
+//     very findings the ledger had just re-armed. Charles Desalvo +17168614216: Joe's "No sold
+//     cadence" report (2026-08-03T12:32Z) was marked a regression and then dropped by the PR pass
+//     against PR #470 — merged at 08:43 the same morning, FOUR HOURS before the report existed.
+{
+  const { restoreDisposedRegressions } = await import("../services/api/src/domain/dispositionLedger.ts");
+  const { findingKeyOf } = await import("../services/api/src/domain/loopPrDedup.ts");
+  const keyOf = (a: any) => findingKeyOf(a?.convId ?? null, a?.dimension ?? null);
+  const regression = {
+    convId: "+17168614216",
+    dimension: "reported_issue",
+    regressionOfDisposed: true,
+    dispositionReason: "regression-of-disposed: event 2026-08-03T12:32:09.440Z postdates the fixed boundary"
+  };
+  const other = { convId: "+15550001111", dimension: "held_draft" };
+
+  // The bug, exactly: a later pass dropped the regression.
+  const eaten = restoreDisposedRegressions([other], [regression]);
+  assert.equal(eaten.restored.length, 1, "a dropped regression must be put back");
+  assert.equal(
+    eaten.anomalies.filter(a => keyOf(a) === "+17168614216::reported_issue").length,
+    1,
+    "the restored regression must be in the feed exactly once"
+  );
+  assert.ok(
+    eaten.anomalies.some(a => keyOf(a) === "+15550001111::held_draft"),
+    "restoring must not disturb the findings that survived"
+  );
+
+  // No-op when the passes behaved — the shield must never duplicate a surviving finding.
+  const untouched = restoreDisposedRegressions([other, regression], [regression]);
+  assert.equal(untouched.restored.length, 0, "a regression already in the feed is not restored again");
+  assert.equal(untouched.anomalies.length, 2, "the shield must not duplicate a surviving regression");
+
+  // Two regressions on the SAME lead+dimension collapse to one key, as everything downstream assumes.
+  const dupes = restoreDisposedRegressions([], [regression, { ...regression }]);
+  assert.equal(dupes.anomalies.length, 1, "one key restores once, however many times it appears");
+
+  // Nothing to shield ⇒ nothing changes.
+  const none = restoreDisposedRegressions([other], []);
+  assert.equal(none.restored.length, 0);
+  assert.equal(none.anomalies.length, 1, "no regressions ⇒ the feed passes through untouched");
+}
+
 console.log(
-  "PASS stale-finding suppression eval (suppress pre-fix / keep uncertain / ledger integrity / wiring + already-shipped echoes: named-fix-postdates-event / regression-safe / scope / wiring + disposition ledger: permanent policy suppression / regression-of-disposed fail-safe / boundary / operator-report reportedAt fallback / parse+upsert fail-safety / vocabulary / wiring)"
+  "PASS stale-finding suppression eval (suppress pre-fix / keep uncertain / ledger integrity / wiring + already-shipped echoes: named-fix-postdates-event / regression-safe / scope / wiring + disposition ledger: permanent policy suppression / regression-of-disposed fail-safe / boundary / operator-report reportedAt fallback / parse+upsert fail-safety / vocabulary / wiring / regression shield vs the later suppression passes)"
 );

@@ -27,19 +27,22 @@ import { listOpenLoopPrs, listRecentlyMergedLoopPrs } from "./loopPrLedger.ts";
 export type LedgerFilterResult = {
   payload: Record<string, unknown>;
   suppressed: Array<{ convId: string; dimension: string; prNumber: number; state: string; mergedAt?: string | null }>;
+  ambiguous: Array<{ convId: string; dimension: string; findingCount: number; prCount: number; prNumbers: number[] }>;
 };
 
 /**
  * Pure: given a next.json payload and the current open/merged loop PRs, return a new payload with
  * PR-covered work orders removed and its summary counts recomputed over the KEPT work orders. The
  * dropped findings are recorded under `suppressedByOpenPr` so nothing is hidden from the digest.
+ * Findings whose key has MORE rows than covering PRs are kept and listed under
+ * `ambiguousPrCoverage` — see the coverage cap in `partitionWorkOrdersByLoopPr`.
  */
 export function applyLedgerToPayload(
   payload: Record<string, unknown>,
   args: { openPrs?: OpenPrSummary[] | null; mergedPrs?: MergedPrSummary[] | null; nowMs?: number; windowDays?: number }
 ): LedgerFilterResult {
   const workOrders: LoopWorkOrder[] = Array.isArray((payload as any)?.workOrders) ? (payload as any).workOrders : [];
-  const { kept, suppressed } = partitionWorkOrdersByLoopPr(workOrders, args);
+  const { kept, suppressed, ambiguous } = partitionWorkOrdersByLoopPr(workOrders, args);
 
   const byTier: Record<string, number> = { "0": 0, "1": 0, "2": 0 };
   const byAction: Record<string, number> = {};
@@ -63,6 +66,14 @@ export function applyLedgerToPayload(
   }));
   const suppressedByOpenPr = [...priorSuppressed, ...newlySuppressed];
 
+  const ambiguousPrCoverage = ambiguous.map(a => ({
+    convId: String(a.workOrder.convId ?? ""),
+    dimension: String(a.workOrder.dimension ?? ""),
+    findingCount: a.findingCount,
+    prCount: a.prCount,
+    prNumbers: a.prNumbers
+  }));
+
   const outPayload: Record<string, unknown> = {
     ...payload,
     workOrders: kept,
@@ -72,9 +83,11 @@ export function applyLedgerToPayload(
     notifyCount,
     suppressedByOpenPrCount: suppressedByOpenPr.length,
     suppressedByOpenPr,
+    ambiguousPrCoverageCount: ambiguousPrCoverage.length,
+    ambiguousPrCoverage,
     stop: kept.length === 0
   };
-  return { payload: outPayload, suppressed: newlySuppressed };
+  return { payload: outPayload, suppressed: newlySuppressed, ambiguous: ambiguousPrCoverage };
 }
 
 function arg(name: string, fallback = ""): string {
@@ -92,13 +105,19 @@ function main(): void {
   }
   const payload = JSON.parse(fs.readFileSync(inPath, "utf8"));
   const before = Array.isArray(payload?.workOrders) ? payload.workOrders.length : 0;
-  const { payload: out, suppressed } = applyLedgerToPayload(payload, {
+  const { payload: out, suppressed, ambiguous } = applyLedgerToPayload(payload, {
     openPrs: listOpenLoopPrs(),
     mergedPrs: listRecentlyMergedLoopPrs()
   });
   fs.writeFileSync(outPath, JSON.stringify(out, null, 2));
   console.log(`loop_pr_ledger_filter — ${before} → ${(out as any).workOrderCount} work order(s); dropped ${suppressed.length} already covered by a loop PR.`);
   for (const s of suppressed.slice(0, 30)) console.log(`   - ${s.convId}::${s.dimension} → PR #${s.prNumber} (${s.state})`);
+  if (ambiguous.length) {
+    console.log(`   ${ambiguous.length} finding(s) KEPT on ambiguous coverage (more findings than PRs share the key) — triage by hand:`);
+    for (const a of ambiguous.slice(0, 30)) {
+      console.log(`   ? ${a.convId}::${a.dimension} — ${a.findingCount} findings, ${a.prCount} PR(s) ${a.prNumbers.map(n => `#${n}`).join(", ")}`);
+    }
+  }
 }
 
 // Run the CLI only when invoked directly — importing the module (e.g. from the eval) must not

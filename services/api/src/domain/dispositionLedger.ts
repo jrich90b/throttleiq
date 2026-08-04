@@ -284,3 +284,57 @@ export function partitionByDispositions<T extends DisposableFinding>(
   }
   return { kept, suppressed, regressions };
 }
+
+// ===================================================================================================
+// THE REGRESSION SHIELD (2026-08-04 — Charles Desalvo +17168614216)
+//
+// `partitionByDispositions` above makes a promise: a disposed finding whose event POSTDATES its fix
+// boundary comes back marked `regression-of-disposed`, so "a fix that did not hold is never silently
+// eaten". That promise did not survive the rest of the detector. Four more suppression passes run
+// AFTER it — PR-ledger, already-shipped echo, stale-finding, re-replay — and every one of them
+// matches on `convId::dimension` alone, which is exactly the key the ledger just decided must be
+// seen. Whichever fires first wins, and the regression disappears with no trace in the work order.
+//
+// MEASURED. Joe filed "No sold cadence" on +17168614216 at 2026-08-03T12:32Z. The 8/4 08:55 feed
+// classified it correctly as a regression (its event postdates the 08:56 fixed boundary) and then
+// dropped it anyway, because PR #470 — merged at 08:43 that SAME MORNING, four hours before the
+// report was even filed — shares the lead's `reported_issue` key. Work-order rows: zero. Nobody
+// could have worked it. Generalized: one PR on a lead permanently blinds every LATER report on that
+// lead, because a lead has ONE key per dimension no matter how many separate things go wrong on it.
+//
+// The shield is deliberately dumb and runs LAST: whatever the passes did, put back anything the
+// ledger marked as a regression. FAIL DIRECTION: it can only ever ADD findings back, and only ones
+// a routine already disposed and the ledger already re-armed — so the worst case is re-triaging a
+// finding, never hiding one. Restoring is a no-op when the passes left the regression alone.
+// ===================================================================================================
+
+export type RegressionShieldResult<T> = {
+  /** The surviving findings, plus any regression a later pass had dropped. */
+  anomalies: T[];
+  /** The ones this shield had to put back — empty when the passes behaved. */
+  restored: T[];
+};
+
+/**
+ * Put back any ledger-marked regression that a downstream suppression pass dropped.
+ *
+ * Order is preserved: survivors keep their position, restored regressions are appended.
+ */
+export function restoreDisposedRegressions<T extends { convId?: unknown; dimension?: unknown }>(
+  survivors: readonly T[],
+  regressions: readonly T[]
+): RegressionShieldResult<T> {
+  // Same key function every suppression pass uses — `findingKeyOf` from loopPrDedup, already
+  // imported above and used by `partitionByDispositions`. Sharing it is the point: the shield must
+  // recognize a finding as "already present" by exactly the key the passes matched on to drop it.
+  const keyOf = (a: T) => findingKeyOf((a as any)?.convId ?? null, (a as any)?.dimension ?? null);
+  const present = new Set(survivors.map(keyOf));
+  const restored: T[] = [];
+  for (const r of regressions) {
+    const key = keyOf(r);
+    if (present.has(key)) continue;
+    present.add(key); // never restore the same key twice
+    restored.push(r);
+  }
+  return { anomalies: [...survivors, ...restored], restored };
+}

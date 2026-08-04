@@ -263,7 +263,15 @@ const eq = (id: string, actual: unknown, expected: unknown) => {
   const tickIdx = idx.indexOf('console.log("[followup][cadence-value-gate] later touch has no value trigger');
   const tickBlock = tickIdx >= 0 ? idx.slice(tickIdx - 2600, tickIdx + 2400) : "";
   eq("tick_block_flag_gated", /isCadenceValueGateEnabled\(\)/.test(tickBlock), true);
-  eq("tick_suppress_advances_and_continues", /advanceFollowUpCadence\(conv, cfg\.timezone\);\s*\n\s*continue;/.test(tickBlock), true);
+  // The value gate stays QUIET, so the rung it walks past is not a touch: stepIndex moves, but
+  // lastSentAt/lastSentStep and the delivered-touch count do not. Counting these silent rungs was
+  // retiring leads as "disengaged" that we had barely contacted (live store 2026-08-04: 13 of 37
+  // tapered leads had under 9 outbound messages of any kind) — see disengaged_taper_eval.
+  eq(
+    "tick_suppress_advances_and_continues",
+    /advanceFollowUpCadence\(conv, cfg\.timezone, \{ delivered: false \}\);\s*\n\s*continue;/.test(tickBlock),
+    true
+  );
   eq("tick_replace_swaps_message", /message = valueGate\.message;/.test(tickBlock), true);
   eq(
     "tick_passes_value_overrides",

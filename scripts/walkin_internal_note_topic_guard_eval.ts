@@ -15,19 +15,26 @@ import {
   buildWalkInReturnVisitTail,
   formatWalkInReturnDayLabel,
   formatWalkInFamilyLabel,
-  describeWalkInNoteProvenance
+  describeWalkInNoteProvenance,
+  resolveWalkInFollowUpSubject
 } from "../services/api/src/domain/walkInFollowUpTopic.ts";
 import { referencesFamilyOnlyInText } from "../services/api/src/domain/modelFamily.ts";
 import { parseRequestedDateOnly } from "../services/api/src/domain/conversationStore.ts";
 import { buildIntentJudgePrompt } from "./intent_handled_audit.ts";
-import { hasAdfFinanceApplicationContext } from "../services/api/src/domain/workflowRegressionGuards.ts";
+import {
+  hasAdfFinanceApplicationContext,
+  buildTimingAwareWalkInFollowUpLine,
+  isTimingOnlyFollowUpTopic
+} from "../services/api/src/domain/workflowRegressionGuards.ts";
 import {
   buildWalkInOutcomePrompt,
   coerceUnmetInventoryWant,
   coerceWalkInReturnVisit,
   coerceWalkInOutcomeState,
   extractWatchDirectiveSegment,
-  hasWatchIntentPhrase
+  hasWatchIntentPhrase,
+  resolveWalkInNoteColor,
+  WALK_IN_OUTCOME_EXAMPLES
 } from "../services/api/src/domain/walkInInventoryWant.ts";
 
 // The exact production failure topic, and each internal-note tell in isolation → rejected.
@@ -564,4 +571,302 @@ assert.doesNotMatch(
   "the return-visit slot must not ride on walkInOutcomeAccepted — unreachable for this note class"
 );
 
-console.log("PASS walk-in internal-note follow-up topic guard eval (+ slot-only spec recap, committed return day, TLP finance-context guard, judge provenance)");
+// --- The follow-up subject is the BIKE, not the phrase trailing it (Joe report 2026-08-04) -----
+// Rick Williamson Jr. +17165241170, Traffic Log Pro ref 11729, first touch sent
+// 2026-08-04T14:10:16.148Z. Joe's report: "Why did this saying follow up on 'floor' in the
+// original draft?"
+//
+// The note (production text, byte-for-byte):
+//   "Rick Jr. was in for the back the blue ride and showed interest in the 2021 Road Glide Special
+//    we have on the floor with the 131ci engine. Ran some numbers on his trade in. Needs follow up
+//    (Step 2)"
+// What shipped:
+//   "Thanks for stopping in - I'll follow up about the floor with the 131ci engine."
+//
+// `extractTrafficLogProFollowUpTopic` takes the first about|on|with|regarding in the note and
+// everything to the next `.` — here the "on" in "we have ON the floor" — so the topic became the
+// locative modifier. The prose values pinned below are that extractor's VERIFIED output on the
+// production text; the fix is that they can no longer BE the subject when a model slot resolved.
+//
+// NOTE ON SCOPE: this section asserts the TOPIC/subject field only. The colour half of the same
+// two leads ("Back the Blue" → lead.vehicle.color = "blue") is a separate finding.
+const RICK_JR_PROSE_TOPIC = "the floor with the 131ci engine";
+const RICK_JR_SHIPPED_LINE = "Thanks for stopping in - I'll follow up about the floor with the 131ci engine.";
+
+const rickJrSubject = resolveWalkInFollowUpSubject({
+  proseTopic: RICK_JR_PROSE_TOPIC,
+  modelLabel: "Road Glide Special",
+  yearLabel: "2021",
+  proseIsTimingOnly: false
+});
+assert.equal(rickJrSubject, "the 2021 Road Glide Special", "the subject is the unit, not the locative modifier");
+const rickJrLine = buildTimingAwareWalkInFollowUpLine({
+  base: "Thanks for stopping in -",
+  followUpTopic: rickJrSubject,
+  modelLabel: "Road Glide Special"
+});
+assert.equal(
+  rickJrLine,
+  "Thanks for stopping in - I'll follow up about the 2021 Road Glide Special.",
+  "Rick Jr.'s first touch names the bike he came in for"
+);
+// The shipped sentence itself, pinned negatively — this is the defect, not a paraphrase of it.
+assert.notEqual(rickJrLine, RICK_JR_SHIPPED_LINE, "the 2026-08-04 draft must not be reproducible");
+assert.doesNotMatch(rickJrLine, /\bthe floor\b/i, "'the floor' is where the bike sits, never the topic");
+assert.doesNotMatch(rickJrLine, /131ci/i, "an engine spec is a modifier, not a follow-up subject");
+
+// Rick Williamson Sr. +17168609581, TLP ref 11728 — same event, same day, LATENT: his draft took
+// the watch tail so this prose never shipped. Pinned because the next note like it will.
+const rickSrSubject = resolveWalkInFollowUpSubject({
+  proseTopic: "for the back the blue ride and was asking about pricing on Road Glide 3",
+  modelLabel: "Road Glide 3",
+  yearLabel: "",
+  proseIsTimingOnly: false
+});
+assert.equal(rickSrSubject, "the Road Glide 3", "a whole clause is not a subject either");
+assert.doesNotMatch(
+  buildTimingAwareWalkInFollowUpLine({
+    base: "Thanks for stopping in -",
+    followUpTopic: rickSrSubject,
+    modelLabel: "Road Glide 3"
+  }),
+  /follow up about for the back the blue ride/i,
+  "the ungrammatical 'about for the back the blue ride' can no longer be composed"
+);
+
+// The two notes ALREADY in this corpus, now actually asserted on this field. Larry's
+// "pre-owned trikes" (the vague family) and Brent's "black motor" (the modifier again) were both
+// sitting in the fixtures with nothing binding them to a topic value.
+assert.equal(
+  resolveWalkInFollowUpSubject({
+    proseTopic: "pre-owned trikes",
+    modelLabel: "Tri Glide",
+    yearLabel: "2017-2020",
+    proseIsTimingOnly: false
+  }),
+  "the 2017-2020 Tri Glide",
+  "Larry Godzich: the logged spec beats the vague family"
+);
+assert.equal(
+  resolveWalkInFollowUpSubject({ proseTopic: "black motor", modelLabel: "Road Glide", yearLabel: "2026" }),
+  "the 2026 Road Glide",
+  "Brent Marshall: a finish is a modifier, not the unit"
+);
+
+// FAIL DIRECTIONS — every one of them lands on today's behaviour, never on new copy.
+assert.equal(
+  resolveWalkInFollowUpSubject({ proseTopic: "", modelLabel: "Road Glide Special", yearLabel: "2021" }),
+  "",
+  "no topic in => no topic out; this must never INVENT a follow-up promise"
+);
+assert.equal(resolveWalkInFollowUpSubject({}), "", "no inputs => no subject");
+assert.equal(
+  resolveWalkInFollowUpSubject({ proseTopic: "pre-owned trikes", modelLabel: "", yearLabel: "2017-2020" }),
+  "pre-owned trikes",
+  "no model slot => today's prose topic survives (never a regression to silence)"
+);
+assert.equal(
+  resolveWalkInFollowUpSubject({ proseTopic: "pre-owned trikes", modelLabel: "bike" }),
+  "pre-owned trikes",
+  "'bike' is formatWatchModelForMessage's no-model placeholder, not a model"
+);
+assert.equal(
+  resolveWalkInFollowUpSubject({ proseTopic: "the floor", modelLabel: "Road Glide Special", yearLabel: "" }),
+  "the Road Glide Special",
+  "no year in hand => the model alone, never a guessed year"
+);
+// extractWalkInModelHint joins the year INTO the label ("2021 Road Glide Special"). Saying it
+// twice would be its own defect.
+for (const label of ["2021 Road Glide Special", "2017-2020 Tri Glide"]) {
+  const subject = resolveWalkInFollowUpSubject({ proseTopic: "the floor", modelLabel: label, yearLabel: "2021" });
+  assert.equal(subject, `the ${label}`, `a year-carrying label is not double-stamped: ${label}`);
+  // "2017-2020 Tri Glide" legitimately carries two years (a RANGE) — what must never happen is the
+  // same year appearing twice because it was prepended onto a label that already had it.
+  assert.equal((subject.match(/\b2021\b/g) ?? []).length <= 1, true, `the year is never stamped twice: ${label}`);
+}
+// A timing-only topic is a WHEN. It passes through so the timing-aware line keeps pairing it with
+// the model — the existing +17168638237-era behaviour, unchanged.
+for (const when of ["next week", "tomorrow", "Tuesday"]) {
+  assert.equal(
+    resolveWalkInFollowUpSubject({
+      proseTopic: when,
+      modelLabel: "Road Glide Special",
+      yearLabel: "2021",
+      proseIsTimingOnly: isTimingOnlyFollowUpTopic(when)
+    }),
+    when,
+    `timing-only topic preserved: ${when}`
+  );
+}
+assert.equal(
+  buildTimingAwareWalkInFollowUpLine({
+    base: "Thanks for stopping in -",
+    followUpTopic: "next week",
+    modelLabel: "Road Glide Special"
+  }),
+  "Thanks for stopping in - I'll follow up next week about the Road Glide Special.",
+  "the timing-aware sentence still composes exactly as before"
+);
+
+// A slot-built subject must pass the internal-note guard it sits beside — same law, same module.
+for (const subject of [rickJrSubject, rickSrSubject]) {
+  assert.equal(isInternalNoteFollowUpTopic(subject), false, "a slot-built subject is never internal-note text");
+  assert.doesNotMatch(subject, /\$\s?\d/, "a subject never carries a dollar figure");
+  assert.doesNotMatch(subject, /\b(?:his|him|her|hers)\b/i, "a subject never carries third-person staff phrasing");
+}
+
+// WIRING. The prose topic must reach the referee and nothing else: a branch still reading the raw
+// extractor output would leave the defect live on that step.
+const proseTopicAt = sendgrid.indexOf("const proseFollowUpTopic = extractTrafficLogProFollowUpTopic(");
+const subjectRefereeAt = sendgrid.indexOf("const followUpTopic = resolveWalkInFollowUpSubject({");
+for (const [label, at] of [
+  ["const proseFollowUpTopic = extractTrafficLogProFollowUpTopic(", proseTopicAt],
+  ["const followUpTopic = resolveWalkInFollowUpSubject({", subjectRefereeAt]
+] as [string, number][]) {
+  assert.notEqual(at, -1, `the TLP walk-in tail must contain: ${label}`);
+}
+assert.ok(proseTopicAt < subjectRefereeAt, "the prose topic is extracted, then refereed — never used raw");
+assert.doesNotMatch(
+  sendgrid,
+  /const followUpTopic = extractTrafficLogProFollowUpTopic\(/,
+  "the raw extractor output must not be the tail's follow-up topic any more"
+);
+assert.match(
+  sendgrid,
+  /proseIsTimingOnly: isTimingOnlyFollowUpTopic\(proseFollowUpTopic\)/,
+  "the caller owns the timing predicate so walkInFollowUpTopic.ts stays a dependency-free leaf"
+);
+// The year has to actually arrive. `yearRangeLabel` alone is empty for a note naming ONE year,
+// which is exactly Rick Jr.'s case — that is why singleYear is in the expression.
+assert.match(
+  sendgrid,
+  /yearLabel: yearRangeLabel \|\| \(singleYear \? String\(singleYear\) : ""\)/,
+  "the TLP tail is handed the stated year, range or single"
+);
+
+console.log("PASS walk-in internal-note follow-up topic guard eval (+ slot-only spec recap, slot-built follow-up subject, committed return day, TLP finance-context guard, judge provenance)");
+
+// --- A ride's NAME is not the bike's paint colour (+17168609581, 2026-08-04) ---------------
+// Rick Williamson Sr.'s note said he "was on for the back the blue ride"; the keyword colour list
+// saw "blue", `lead.vehicle.color` became blue, the match against our three 2026 Road Glide 3s
+// (Iron Horse Metallic, Dark Billiard Gray, Vivid Black) failed, and the lane told him we'd "keep
+// an eye out" for a bike we had three of. His pricing question was never answered, and a watch for
+// a blue Road Glide 3 was armed that could never fire. Same note class, same day, same event:
+// +17165241170 and +17164327329 (LARRY_TLP_NOTE above) both came out blue too.
+const RICK_SR_TLP_NOTE =
+  "Rick was on for the back the blue ride and was asking about pricing on Road Glide 3. " +
+  "Needs follow up (Step 2)";
+const RICK_JR_TLP_NOTE =
+  "Rick Jr. was in for the back the blue ride and showed interest in the 2021 Road Glide Special " +
+  "we have on the floor with the 131ci engine. Ran some numbers on his trade in. Needs follow up (Step 2)";
+
+// THE PRECEDENCE IS THE FIX. The old call site read `keyword ?? parser`, so a correct parser answer
+// could never win. A CONFIDENT EMPTY parser answer — "there is no bike colour in this note" — is a
+// real answer and must beat the keyword, or nothing changes for Rick.
+assert.equal(
+  resolveWalkInNoteColor({ parserColor: "", parserConfidence: 0.95, keywordColor: "blue" }),
+  undefined,
+  "a confident 'no bike colour here' beats the keyword list — the +17168609581 fix"
+);
+// ANTI-OVER-SUPPRESSION: a colour a staff note genuinely states must survive. Blanking every
+// walk-in colour would be the lazy fix and would regress Brent Marshall's Dark Billiard Gray.
+assert.equal(
+  resolveWalkInNoteColor({ parserColor: "Dark Billiard Gray", parserConfidence: 0.95, keywordColor: "gray" }),
+  "Dark Billiard Gray",
+  "a colour the note really states is kept, and beats the coarser keyword hit"
+);
+// FAIL DIRECTION: the keyword arm survives only where the parser did not answer.
+assert.equal(
+  resolveWalkInNoteColor({ parserColor: "", parserConfidence: 0.4, keywordColor: "vivid black" }),
+  "vivid black",
+  "below the floor the keyword fallback still runs — this can only ever REMOVE a colour, never invent one"
+);
+assert.equal(
+  resolveWalkInNoteColor({ parserColor: "", parserConfidence: null, keywordColor: "red" }),
+  "red",
+  "parser absent (LLM failed) => today's behaviour, unchanged"
+);
+assert.equal(
+  resolveWalkInNoteColor({ parserColor: "", parserConfidence: 0.95, keywordColor: null }),
+  undefined,
+  "nothing stated anywhere => no colour"
+);
+assert.equal(
+  resolveWalkInNoteColor({ parserColor: "  Teal Thunder  ", parserConfidence: 0.9, keywordColor: "blue" }),
+  "Teal Thunder",
+  "the parser's answer is trimmed, not re-derived"
+);
+// The floor is configurable, and exactly-at-floor counts as answered.
+assert.equal(
+  resolveWalkInNoteColor({ parserColor: "", parserConfidence: 0.8, keywordColor: "blue" }),
+  undefined,
+  "at the floor the parser has answered"
+);
+assert.equal(
+  resolveWalkInNoteColor({ parserColor: "", parserConfidence: 0.85, keywordColor: "blue", confidenceMin: 0.9 }),
+  "blue",
+  "a raised floor puts the keyword fallback back in charge"
+);
+
+// THE GOLD LABELS. Both Back-the-Blue notes ride in the few-shot corpus, and both must be labelled
+// with NO colour — case-insensitively, because Larry's note capitalises "Back the Blue" and Rick's
+// lowercases it. Nobody may "fix" this with a literal-case match.
+const backTheBlueExamples = WALK_IN_OUTCOME_EXAMPLES.filter(ex => /back the blue/i.test(ex));
+assert.ok(
+  backTheBlueExamples.length >= 2,
+  "both Back-the-Blue production notes stay pinned as few-shots (lowercase and capitalised)"
+);
+for (const ex of backTheBlueExamples) {
+  assert.match(ex, /"desired_color":""/, "a charity ride's name is never labelled as paint");
+}
+// ...and the corpus still teaches the POSITIVE case, or the model learns "walk-in notes have no
+// colour", which is the over-suppression failure.
+assert.ok(
+  WALK_IN_OUTCOME_EXAMPLES.some(ex => /"desired_color":"Dark Billiard Gray"/.test(ex)),
+  "a genuinely stated colour is still taught as a colour"
+);
+// Every few-shot answers the slot — a corpus that half-answers a required field teaches the model
+// to omit it, and the schema is strict.
+for (const ex of WALK_IN_OUTCOME_EXAMPLES) {
+  assert.match(ex, /"desired_color":/, "every walk-in few-shot answers the colour slot");
+  assert.match(ex, /"desired_color_confidence":/, "…and carries its own confidence");
+}
+
+// THE PROMPT MUST TEACH THE CLASS, NOT THE INSTANCE. A blocklist of event names is precisely the
+// move this eval's regex warning forbids.
+const rickPrompt = buildWalkInOutcomePrompt({ text: RICK_SR_TLP_NOTE, historyLines: [] });
+for (const token of ["desired_color", "desired_color_confidence"]) {
+  assert.ok(rickPrompt.includes(token), `the prompt teaches ${token}`);
+}
+assert.ok(rickPrompt.includes(RICK_SR_TLP_NOTE), "the reported production turn rides as a few-shot");
+assert.match(rickPrompt, /Blue Knights/i, "the rule is taught as a CLASS with more than one instance");
+assert.match(rickPrompt, /CHARITY/i, "event/ride/chapter/charity names are named as the category");
+assert.match(rickPrompt, /paint colour|PAINT COLOUR/, "the slot is scoped to the bike's paint, not any colour word");
+
+// PROVENANCE: a Traffic Log Pro "Inquiry" is our own CRM log, so it may not mint the lead's colour
+// by keyword match. Pinned as ORDERING (each index guarded against -1 first, per the note above).
+const tlpHintAt = sendgrid.indexOf("const isTrafficLogProPayloadHint");
+const colorMintAt = sendgrid.indexOf("const inquiryColorHint");
+const parserColorAt = sendgrid.indexOf("resolveWalkInNoteColor(");
+for (const [label, at] of [
+  ["isTrafficLogProPayloadHint", tlpHintAt],
+  ["inquiryColorHint", colorMintAt],
+  ["resolveWalkInNoteColor", parserColorAt]
+] as [string, number][]) {
+  assert.notEqual(at, -1, `the walk-in colour lane must still contain ${label}`);
+}
+assert.ok(
+  tlpHintAt < colorMintAt,
+  "the TLP provenance hint is known BEFORE the keyword colour mint, so it can gate it"
+);
+assert.ok(
+  colorMintAt < parserColorAt,
+  "the keyword mint is the early/intake step; the parser-first resolve happens later, with the note parsed"
+);
+assert.doesNotMatch(
+  sendgrid.slice(Math.max(0, colorMintAt - 200), colorMintAt),
+  /if \(!lead\.vehicleColor\) \{\s*$/,
+  "the colour mint must carry a provenance condition beyond 'no colour yet'"
+);
+
+console.log("PASS walk-in internal-note follow-up topic guard eval (+ slot-only spec recap, committed return day, TLP finance-context guard, judge provenance, ride-name-is-not-paint colour slot)");

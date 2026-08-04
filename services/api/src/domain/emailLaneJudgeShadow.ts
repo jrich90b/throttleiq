@@ -24,6 +24,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { resolveReportDir } from "./reportPaths.js";
 import { anthropicMessagesRequest, extractAnthropicToolInput } from "./anthropicRequest.js";
 import {
   DRAFT_QUALITY_JUDGE_JSON_SCHEMA,
@@ -47,9 +48,10 @@ export function emailLaneJudgeDailyCap(): number {
 }
 
 export function emailLaneJudgeShadowDir(): string {
-  return (
-    process.env.EMAIL_LANE_JUDGE_SHADOW_DIR || path.resolve(process.cwd(), "reports", "email_lane_judge")
-  );
+  // Was `EMAIL_LANE_JUDGE_SHADOW_DIR || cwd/reports/...`, which skipped REPORT_ROOT entirely — so
+  // every verdict this judge produced (including the correct HOLD on Lococo's fabricated price)
+  // landed in the code tree, unread. See reportPaths.ts.
+  return resolveReportDir("email_lane_judge", "EMAIL_LANE_JUDGE_SHADOW_DIR");
 }
 
 /** In-process spend counter, reset on the UTC date roll. Pure claim fn so the eval can pin it. */

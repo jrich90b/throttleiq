@@ -30,7 +30,8 @@ import { runJudgeShadowArm } from "./judgeShadowArm.js";
 import {
   DRAFT_QUALITY_JUDGE_JSON_SCHEMA,
   buildDraftQualityJudgePrompt,
-  coerceDraftQualityOverall
+  coerceDraftQualityOverall,
+  type DraftQualityUnitFacts
 } from "./draftQualityJudgePrompt.js";
 import {
   WALK_IN_OUTCOME_PARSER_JSON_SCHEMA,
@@ -2559,11 +2560,22 @@ export type ReservationConfirmParse = {
 };
 
 export type WatchOptOutParse = {
-  // "watch_opt_out": the customer (who is on an inventory watch) wants OFF the alerts — no longer
-  //   interested in being notified, bought one elsewhere, "take me off the list", "stop the alerts",
-  //   "I'm all set". The side effect is to pause their watch so the watch-fire engine stops notifying.
+  // "acquired_vehicle": they TOLD US THEY NOW HAVE A BIKE — bought it, picked it up, took delivery,
+  //   "ended up getting one". The strongest form of done-looking, and it earns a different reply from
+  //   a bare opt-out: congratulate them, say we are here for anything the bike needs, and close the
+  //   lead once that reply actually goes out (Joe, 2026-08-04). Mark Kocsis (+17168609533) is the
+  //   case: "Thanks for keeping me in mind but I actually just picked up a 2023 street glide
+  //   anniversary edition."
+  // "watch_opt_out": they want OFF the alerts without telling us they bought anything — "take me off
+  //   the list", "stop the alerts", "I'm all set", "no longer looking". Pauses the watch, KEEPS the
+  //   lead: they may still buy from us.
   // "none": still interested / a concrete different ask / ambiguous.
-  intent: "watch_opt_out" | "none";
+  intent: "acquired_vehicle" | "watch_opt_out" | "none";
+  // What they said they bought, taken from THIS message ("2023 Street Glide Anniversary Edition"), so
+  // the acknowledgement can name it. Empty when they named nothing — NEVER inferred from the lead
+  // record or the thread, which is the over-attachment trap `passesModelRelevanceGuard` exists for. A
+  // blank vehicle only costs us a generic congratulations, which still reads right.
+  vehicle?: string;
   confidence?: number;
 };
 
@@ -3162,6 +3174,14 @@ export type WalkInOutcomeParse = {
   returnDayText?: string | null;
   /** Confidence in the return-visit classification only, independent of `confidence`. */
   returnVisitConfidence?: number;
+  /**
+   * The paint colour the note wants on the BIKE, exactly as written; empty/absent when the note
+   * states none. An event or ride NAME carrying a colour word is not a colour (walkInInventoryWant.ts,
+   * Rick Williamson Sr. +17168609581).
+   */
+  desiredColor?: string | null;
+  /** Confidence in the colour extraction only, independent of `confidence`. */
+  desiredColorConfidence?: number;
   confidence?: number;
 };
 
@@ -3972,9 +3992,10 @@ const RESERVATION_CONFIRM_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
 const WATCH_OPT_OUT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   type: "object",
   additionalProperties: false,
-  required: ["intent", "confidence"],
+  required: ["intent", "vehicle", "confidence"],
   properties: {
-    intent: { type: "string", enum: ["watch_opt_out", "none"] },
+    intent: { type: "string", enum: ["acquired_vehicle", "watch_opt_out", "none"] },
+    vehicle: { type: "string" },
     confidence: { type: "number" }
   }
 };
@@ -4825,7 +4846,10 @@ const CONVERSATION_STATE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   }
 };
 
-async function requestStructuredJson(args: {
+// Exported so the gold-corpus scorer asks its equivalence question through the SAME structured-JSON
+// path production uses (retries, fenced-JSON tolerance, capture) — a hand-rolled fetch in the scorer
+// would measure a different client than the one that serves customers.
+export async function requestStructuredJson(args: {
   model: string;
   prompt: string;
   schemaName: string;
@@ -8986,28 +9010,45 @@ export async function parseWatchOptOutWithLLM(args: {
     "Return only JSON that matches the provided schema.",
     "",
     "Classify intent:",
-    '- "watch_opt_out": they no longer want the alerts / are no longer interested in being notified /',
-    '  bought one elsewhere / are done looking: "take me off the list", "stop the alerts", "not',
-    '  interested anymore", "I already bought one", "I\'m all set", "no longer looking", "unsubscribe me',
-    '  from those", "you can stop letting me know".',
+    '- "acquired_vehicle": they say they NOW HAVE A BIKE — bought it, picked it up, took delivery,',
+    '  "ended up getting one", "found one", "I\'m riding it already". It does not matter whether they',
+    "  bought it from us or somewhere else, and they do NOT have to name the bike. This is the",
+    "  strongest form of done-looking, so prefer it over watch_opt_out whenever they say they got one.",
+    '- "watch_opt_out": they want the alerts to stop but did NOT say they got a bike: "take me off the',
+    '  list", "stop the alerts", "not interested anymore", "I\'m all set", "no longer looking",',
+    '  "unsubscribe me from those", "you can stop letting me know".',
     '- "none": still interested or engaging ("yes send details", "what\'s the price", "can I see it",',
     '  "still looking" ), a concrete different ask, or ambiguous. When unsure, choose none.',
+    "",
+    "Also return `vehicle`: what they said they bought, copied from THIS message (e.g. \"2023 Street",
+    'Glide Anniversary Edition"). Use "" when they named nothing, and NEVER take the bike from earlier',
+    "messages or from what we were watching for them — only from what they just said.",
     "",
     "Hard rules:",
     "- A question or any sign of continued interest => none.",
     '- "not right now" / "maybe later" / "next month" is a DEFER, not an opt-out => none (they still',
     "  want the watch).",
     "- Only opt_out when they clearly want the ALERTS to stop or are clearly done looking.",
-    "- confidence 0..1; use >= 0.7 only when the opt-out is clear.",
+    "- A bike they are SELLING or trading, or one they already owned before, is NOT an acquisition.",
+    "- Thanking us while saying they got one is still acquired_vehicle — the thanks is politeness,",
+    "  not continued interest.",
+    "- confidence 0..1; use >= 0.7 only when the opt-out or the acquisition is clear.",
     "",
     "Examples:",
-    '- "take me off the list please" -> {"intent":"watch_opt_out","confidence":0.95}',
-    '- "no thanks, I already bought one" -> {"intent":"watch_opt_out","confidence":0.93}',
-    '- "you can stop the alerts, not looking anymore" -> {"intent":"watch_opt_out","confidence":0.95}',
-    '- "I\'m all set, thanks" -> {"intent":"watch_opt_out","confidence":0.8}',
-    '- "yes! send me details" -> {"intent":"none","confidence":0.95}',
-    '- "what\'s the price?" -> {"intent":"none","confidence":0.95}',
-    '- "not right now, maybe next month" -> {"intent":"none","confidence":0.85}',
+    '- "take me off the list please" -> {"intent":"watch_opt_out","vehicle":"","confidence":0.95}',
+    '- "no thanks, I already bought one" -> {"intent":"acquired_vehicle","vehicle":"","confidence":0.93}',
+    '- "Thanks for keeping me in mind but I actually just picked up a 2023 street glide anniversary',
+    '  edition." -> {"intent":"acquired_vehicle","vehicle":"2023 Street Glide Anniversary Edition",',
+    '  "confidence":0.95}',
+    '- "ended up buying a Road Glide from another dealer last week" ->',
+    '  {"intent":"acquired_vehicle","vehicle":"Road Glide","confidence":0.95}',
+    '- "picked mine up saturday!" -> {"intent":"acquired_vehicle","vehicle":"","confidence":0.9}',
+    '- "you can stop the alerts, not looking anymore" -> {"intent":"watch_opt_out","vehicle":"","confidence":0.95}',
+    '- "I\'m all set, thanks" -> {"intent":"watch_opt_out","vehicle":"","confidence":0.8}',
+    '- "yes! send me details" -> {"intent":"none","vehicle":"","confidence":0.95}',
+    '- "what\'s the price?" -> {"intent":"none","vehicle":"","confidence":0.95}',
+    '- "not right now, maybe next month" -> {"intent":"none","vehicle":"","confidence":0.85}',
+    '- "thinking about selling my Sportster" -> {"intent":"none","vehicle":"","confidence":0.9}',
     "",
     history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
     `Message: ${text}`
@@ -9030,13 +9071,19 @@ export async function parseWatchOptOutWithLLM(args: {
     (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
   if (!parsed) return null;
 
+  const rawIntent = String(parsed.intent ?? "").toLowerCase();
   const intent: WatchOptOutParse["intent"] =
-    String(parsed.intent ?? "").toLowerCase() === "watch_opt_out" ? "watch_opt_out" : "none";
+    rawIntent === "acquired_vehicle" ? "acquired_vehicle" : rawIntent === "watch_opt_out" ? "watch_opt_out" : "none";
   const confidence =
     typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
       ? Math.max(0, Math.min(1, parsed.confidence))
       : undefined;
-  return { intent, confidence };
+  // Only carried on the acquisition arm, and only when they actually named something. Trimmed and
+  // length-capped because it goes straight into customer-facing copy — a runaway string would be a
+  // paragraph of model soup in the congratulations line.
+  const vehicleRaw = String(parsed.vehicle ?? "").replace(/\s+/g, " ").trim();
+  const vehicle = intent === "acquired_vehicle" && vehicleRaw.length <= 60 ? vehicleRaw : "";
+  return { intent, vehicle, confidence };
 }
 
 // Post-sale ownership-loss parser (2026-07-08). The conversation has an ACTIVE POST-SALE cadence
@@ -10617,6 +10664,10 @@ export async function judgeDraftQualityWithLLM(args: {
   history?: { direction: "in" | "out"; body: string }[];
   lead?: Conversation["lead"];
   channel?: "sms" | "email";
+  // The resolved unit's FEED FACTS — the only numbers the judge may treat as ground truth. Omitted
+  // (or without a checkable number) => the prompt is byte-identical to the pre-2026-08-04 prompt,
+  // so every caller that cannot resolve a single unit keeps today's behaviour exactly.
+  unitFacts?: DraftQualityUnitFacts | null;
 }): Promise<DraftQualityJudgeParse | null> {
   const useLLM =
     process.env.LLM_ENABLED === "1" &&
@@ -10644,7 +10695,8 @@ export async function judgeDraftQualityWithLLM(args: {
     historyLines: history,
     leadModel: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
     leadSource: lead?.source ?? null,
-    channel: args.channel
+    channel: args.channel,
+    unitFacts: args.unitFacts ?? null
   });
 
   const runParse = async (model: string): Promise<any | null> =>
@@ -13010,6 +13062,10 @@ export async function parseWalkInOutcomeWithLLM(args: {
     returnVisit: coerceWalkInReturnVisit(parsed.return_visit),
     returnDayText: cleanOptionalString(parsed.return_day_text),
     returnVisitConfidence: clamp01(parsed.return_visit_confidence),
+    // The paint colour the note wants on the BIKE — "" when the note states none. Fails closed:
+    // an absent confidence leaves the caller on the keyword fallback (resolveWalkInNoteColor).
+    desiredColor: cleanOptionalString(parsed.desired_color),
+    desiredColorConfidence: clamp01(parsed.desired_color_confidence),
     confidence
   };
 }
@@ -13372,6 +13428,8 @@ export async function parseInventoryEntitiesWithLLM(args: {
     "- Use current message as source of truth over prior lead vehicle. Prior lead/history only helps interpret alternates/test-ride context.",
     "- Street Glide 3 Limited is a 2026+ model. Do not return Street Glide 3 Limited with a 2025-or-earlier year.",
     "- Do not treat locations as colors (e.g. Silver Creek is not silver).",
+    "- Do not treat an event, ride, chapter or charity NAME as a color (e.g. 'the Back the Blue",
+    "  ride' and 'the Blue Knights' are not blue bikes) — that is something they attended.",
     "- A phone number, a date, a price range, or a timeframe range is NEVER a stock_id. A dealer stock number always begins with a LETTER (T10-26, S9-25, U570-24). '716-713-8288' is a phone number; '3-4 weeks', '10-15 thousand' and '2026-04' are not stock numbers. When the customer is handing over contact details rather than asking about a unit, target_type=none and is_availability_question=false.",
     "- Do not treat trade-in vehicle year/model as the shopping target unless the customer explicitly says they want another one.",
     "- confidence is 0..1.",
@@ -15741,6 +15799,33 @@ function appendSelfHealWinRecord(record: Record<string, unknown>): void {
   }
 }
 
+/**
+ * The judge's ground truth for this turn, read off the SAME DraftContext the composer wrote from.
+ * Zero extra lookups and zero added latency: the orchestrator already resolved these feed facts to
+ * let the composer ANSWER price/mileage asks (Phase 2, 2026-07-11); this just stops the reviewer
+ * being the only one in the room who cannot see them.
+ *
+ * Returns null unless a specific unit resolved with a real number — a general model inquiry has no
+ * one price, and a fact-check with nothing to check invites the judge to reason about numbers it
+ * cannot see. Null => the judge prompt is byte-identical to its pre-2026-08-04 form.
+ */
+function buildJudgeUnitFacts(ctx: DraftContext): DraftQualityUnitFacts | null {
+  const price = typeof ctx.inventoryListPrice === "number" && ctx.inventoryListPrice > 0 ? ctx.inventoryListPrice : null;
+  const mileage = typeof ctx.inventoryMileage === "number" && ctx.inventoryMileage > 0 ? ctx.inventoryMileage : null;
+  if (price === null && mileage === null) return null;
+  const vehicle = (ctx.lead as any)?.vehicle ?? {};
+  const label =
+    [vehicle?.year, vehicle?.make, vehicle?.model ?? vehicle?.description].map(v => String(v ?? "").trim()).filter(Boolean).join(" ") ||
+    null;
+  return {
+    label,
+    listPrice: price,
+    mileage,
+    stockId: ctx.stockId ?? null,
+    status: ctx.inventoryStatus ?? null
+  };
+}
+
 export async function selfHealDraftWithLLM(args: {
   draft: string;
   ctx: DraftContext;
@@ -15751,7 +15836,8 @@ export async function selfHealDraftWithLLM(args: {
   const inbound = String(args.ctx.inquiry ?? "").trim();
   if (!original.trim() || !inbound) return { draft: original, healed: false, outcome: "no_op" };
   try {
-    const v1 = await judgeDraftQualityWithLLM({ draft: original, inbound, history: args.ctx.history, lead: args.ctx.lead, channel });
+    const unitFacts = buildJudgeUnitFacts(args.ctx);
+    const v1 = await judgeDraftQualityWithLLM({ draft: original, inbound, history: args.ctx.history, lead: args.ctx.lead, channel, unitFacts });
     const conf1 = typeof v1?.confidence === "number" ? v1.confidence : 0;
     // Deterministic echo trigger (2026-07-27): the LLM judge misses the "parrots the customer's words
     // back" class, so catch it here — an echoed opening forces the re-draft even if the judge passed it.
@@ -15771,7 +15857,7 @@ export async function selfHealDraftWithLLM(args: {
       cacheSelfHealVerdict(inbound, original, v1); // returned draft is the bad original → gate reuses v1 to hold
       return { draft: original, healed: false, outcome: "still_failing" };
     }
-    const v2 = await judgeDraftQualityWithLLM({ draft: steered, inbound, history: args.ctx.history, lead: args.ctx.lead, channel });
+    const v2 = await judgeDraftQualityWithLLM({ draft: steered, inbound, history: args.ctx.history, lead: args.ctx.lead, channel, unitFacts });
     const conf2 = typeof v2?.confidence === "number" ? v2.confidence : 0;
     if (v2 && v2.overall !== "good" && conf2 >= 0.8) {
       // Re-draft still bad — keep the ORIGINAL so the publish gate holds it (don't ship a worse re-roll).
