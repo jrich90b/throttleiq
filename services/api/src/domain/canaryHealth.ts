@@ -39,7 +39,15 @@
 export type CanaryCounters = {
   /** Messages that actually reached a customer (provider twilio/sendgrid/human). */
   outboundToCustomer: number;
-  /** AI drafts produced (provider draft_ai) — the SILENCE detector, and a draft-flood detector. */
+  /**
+   * Drafts STILL SITTING as drafts (provider draft_ai) — a draft-flood detector.
+   *
+   * NOT a measure of how much the agent produced, and it must never be used as one:
+   * `finalizeDraftAsSent` rewrites an approved draft's `provider` to twilio/sendgrid/human IN
+   * PLACE, so the moment staff approve a draft it leaves this counter and joins
+   * `outboundToCustomer`. Read alone it says "the agent went quiet" precisely when staff were
+   * fastest at clearing the queue. The silence detector uses `repliesProduced` (below) instead.
+   */
   draftsProduced: number;
   /** Conversations whose closedAt falls in the window — wrongful-close detector. */
   conversationsClosed: number;
@@ -47,7 +55,21 @@ export type CanaryCounters = {
   draftsHeld: number;
   /** Conversations that contributed anything — the sample size behind the counts. */
   activeConversations: number;
+  /**
+   * Customer messages that came IN during the window. Never guarded in either direction — it is
+   * the customers' behaviour, not ours, and reverting a deploy because a Tuesday was busy (or
+   * quiet) is nonsense. It exists to answer one question: was there anything here to reply TO?
+   */
+  inboundFromCustomer: number;
 };
+
+/**
+ * Replies the agent produced in a window, however they ended up labelled: a draft staff approved
+ * is re-stamped as a send, so drafts and sends must be added before any "did we go quiet" ratio.
+ */
+export function repliesProduced(counters: CanaryCounters): number {
+  return (Number(counters?.draftsProduced) || 0) + (Number(counters?.outboundToCustomer) || 0);
+}
 
 export type CanaryWindow = { startMs: number; endMs: number };
 
@@ -80,6 +102,12 @@ export type CanaryThresholds = {
   runawayPeakMultiple: number;
   /** ...but never trip below this absolute rate, so a sleepy history can't make the bar trivial. */
   runawayMinPerHour: number;
+  /**
+   * A slice carrying fewer than this many customer events (inbound + replies out) cannot say
+   * whether the agent went quiet — nothing happened either way. Below it, a collapse verdict is
+   * downgraded to INCONCLUSIVE (neutral), never to a pass.
+   */
+  minSliceActivity: number;
 };
 
 export const DEFAULT_CANARY_THRESHOLDS: CanaryThresholds = {
@@ -92,11 +120,21 @@ export const DEFAULT_CANARY_THRESHOLDS: CanaryThresholds = {
   minBaselineOutbound: 20,
   minBaselineConversations: 8,
   runawayPeakMultiple: 3,
-  runawayMinPerHour: 12 // ~12x the normal hourly rate; nothing legitimate here sends that fast
+  runawayMinPerHour: 12, // ~12x the normal hourly rate; nothing legitimate here sends that fast
+  // ~6.6 inbound + ~10 replies per 8h slice here, so 3 events is a genuinely dead window (an
+  // overnight stretch), not merely a slow one. Set from the measurement, not from taste.
+  minSliceActivity: 3
 };
 
 const SEND_PROVIDERS = new Set(["twilio", "sendgrid", "human"]);
 const DRAFT_PROVIDER = "draft_ai";
+/** Rows written by the system about a call or a payment — never a message someone typed. */
+const LOG_ONLY_PROVIDERS = new Set([
+  "voice_call",
+  "voice_summary",
+  "voice_transcript",
+  "payment_event"
+]);
 
 /** Counters alarming when they RISE. `draftsProduced` is guarded in BOTH directions separately. */
 const INCREASE_GUARDED: (keyof CanaryCounters)[] = [
@@ -123,7 +161,8 @@ export function computeCanaryCounters(conversations: any[], window: CanaryWindow
     draftsProduced: 0,
     conversationsClosed: 0,
     draftsHeld: 0,
-    activeConversations: 0
+    activeConversations: 0,
+    inboundFromCustomer: 0
   };
 
   for (const conv of conversations ?? []) {
@@ -135,8 +174,17 @@ export function computeCanaryCounters(conversations: any[], window: CanaryWindow
     }
 
     for (const m of Array.isArray(conv?.messages) ? conv.messages : []) {
-      if (m?.direction !== "out") continue;
       if (!inWindow(ms(m?.at), window)) continue;
+      if (m?.direction === "in") {
+        // Same rule as the outbound side: voice/payment rows are LOG entries, not the customer
+        // writing to us, so they must not make a dead window look like a live one.
+        if (!LOG_ONLY_PROVIDERS.has(String(m?.provider ?? "").toLowerCase())) {
+          counters.inboundFromCustomer += 1;
+          touched = true;
+        }
+        continue;
+      }
+      if (m?.direction !== "out") continue;
       const provider = String(m?.provider ?? "").toLowerCase();
       // A DRAFT is not a SEND. Conflating them hides a draft flood — which still burns money and
       // still means a loop is running away, even though no customer was texted.
@@ -216,7 +264,9 @@ export function findDeadCounters(conversations: any[]): (keyof CanaryCounters)[]
     "outboundToCustomer",
     "draftsProduced",
     "conversationsClosed",
-    "activeConversations"
+    "activeConversations",
+    // A store with zero inbound is a store nobody ever texted — instrumentation, not a quiet week.
+    "inboundFromCustomer"
   ];
   return guarded.filter(k => all[k] === 0);
 }
@@ -325,18 +375,27 @@ export function decideCanaryVerdict(
     }
   }
 
-  // The MIRROR failure: the agent stopped drafting. An increase-only check is blind to it.
-  if (baseline.draftsProduced > 0) {
-    const ratio = current.draftsProduced / baseline.draftsProduced;
+  // The MIRROR failure: the agent stopped replying. An increase-only check is blind to it.
+  //
+  // Measured on drafts PLUS sends, never on drafts alone. `finalizeDraftAsSent` rewrites an
+  // approved draft's provider in place, so an approved draft moves from one counter to the other:
+  // on 2026-08-03 a slice with 9 customer messages in, 16 replies out and a fully-cleared draft
+  // queue was scored "drafting collapsed 2.33 -> 0 — the agent went quiet". The agent had replied
+  // to everyone; staff had simply approved every draft. Two more slices like it would have
+  // reverted a deploy already proven identical.
+  const baseReplies = repliesProduced(baseline);
+  const nowReplies = repliesProduced(current);
+  if (baseReplies > 0) {
+    const ratio = nowReplies / baseReplies;
     if (ratio < thresholds.minProducedRatio) {
       breaches.push({
         metric: "draftsProduced",
         kind: "collapse",
-        baseline: baseline.draftsProduced,
-        current: current.draftsProduced,
+        baseline: baseReplies,
+        current: nowReplies,
         limit: thresholds.minProducedRatio,
         detail:
-          `drafting collapsed ${baseline.draftsProduced} -> ${current.draftsProduced} ` +
+          `replies collapsed ${baseReplies} -> ${nowReplies} ` +
           `(x${ratio.toFixed(2)}, floor x${thresholds.minProducedRatio}) — the agent went quiet`
       });
     }
@@ -602,13 +661,16 @@ export const DEFAULT_CANARY_PROGRESS: CanaryProgressConfig = {
  */
 export function scaleCounters(counters: CanaryCounters, factor: number): CanaryCounters {
   const f = Number.isFinite(factor) && factor > 0 ? factor : 0;
-  const at = (n: number) => Math.round(n * f * 100) / 100;
+  // A baseline captured before a counter existed has it missing, not zero. Coercing here keeps an
+  // in-flight canary judging on the counters it DOES carry instead of turning every ratio to NaN.
+  const at = (n: number) => Math.round((Number(n) || 0) * f * 100) / 100;
   return {
     outboundToCustomer: at(counters.outboundToCustomer),
     draftsProduced: at(counters.draftsProduced),
     conversationsClosed: at(counters.conversationsClosed),
     draftsHeld: at(counters.draftsHeld),
-    activeConversations: at(counters.activeConversations)
+    activeConversations: at(counters.activeConversations),
+    inboundFromCustomer: at(counters.inboundFromCustomer)
   };
 }
 
@@ -670,10 +732,48 @@ export function measureCanarySlice(input: {
     minBaselineConversations: 0
   };
   const verdict = decideCanaryVerdict(scaled, input.sliceCounters, sliceThresholds, input.runaway);
+
+  // Did anything happen in THIS window? The floors above ask whether the BASELINE was big enough;
+  // nothing asked whether the slice itself carried any customers. An 8h stretch with nobody
+  // writing in and nothing going out cannot testify either way — it is neither a collapse (there
+  // was nothing to reply to) nor a clean bill of health (nothing was exercised).
+  const activity =
+    (Number(input.sliceCounters?.inboundFromCustomer) || 0) + repliesProduced(input.sliceCounters);
+  const tooQuietToJudge = activity < (thresholds.minSliceActivity ?? DEFAULT_CANARY_THRESHOLDS.minSliceActivity);
+
   if (verdict.status === "regressed") {
+    // A runaway or a RISING counter still fails on a quiet window — those need no traffic to be
+    // alarming. Only the "we went quiet" reading depends on there having been someone to answer.
+    const onlyCollapse = verdict.breaches.length > 0 && verdict.breaches.every(b => b.kind === "collapse");
+    if (tooQuietToJudge && onlyCollapse) {
+      return {
+        status: "inconclusive",
+        fatal: false,
+        verdict: {
+          status: "unknown",
+          breaches: [],
+          blockers: [`slice carried only ${activity} customer event(s) — nothing to reply to`],
+          reason: "a window with no customers in it cannot show the agent going quiet"
+        },
+        reason: `slice too quiet to judge: ${activity} customer event(s) in the window`
+      };
+    }
     return { status: "fail", fatal: false, verdict, reason: verdict.breaches[0]?.detail ?? verdict.reason };
   }
   if (verdict.status === "healthy") {
+    if (tooQuietToJudge) {
+      return {
+        status: "inconclusive",
+        fatal: false,
+        verdict: {
+          status: "unknown",
+          breaches: [],
+          blockers: [`slice carried only ${activity} customer event(s) — nothing was exercised`],
+          reason: "silence is not evidence the deploy is good"
+        },
+        reason: `slice too quiet to judge: ${activity} customer event(s) in the window`
+      };
+    }
     return { status: "pass", fatal: false, verdict, reason: "every guarded counter stayed inside its limit" };
   }
   return { status: "inconclusive", fatal: false, verdict, reason: verdict.blockers[0] ?? verdict.reason };

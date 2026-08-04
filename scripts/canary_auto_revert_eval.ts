@@ -60,7 +60,8 @@ const BASE: CanaryCounters = {
   draftsProduced: 12,
   conversationsClosed: 3,
   draftsHeld: 2,
-  activeConversations: 29
+  activeConversations: 29,
+  inboundFromCustomer: 24
 };
 const after = (over: Partial<CanaryCounters> = {}): CanaryCounters => ({ ...BASE, ...over });
 
@@ -129,14 +130,36 @@ eq(
 // 3. THE MIRROR FAILURE — the agent goes SILENT. Increase-only checks are blind to this.
 // ---------------------------------------------------------------------------
 {
-  const v = decideCanaryVerdict(BASE, after({ draftsProduced: 1 }));
-  eq(v.status, "regressed", "drafting collapsing to near-zero is a regression");
+  const v = decideCanaryVerdict(BASE, after({ draftsProduced: 1, outboundToCustomer: 2 }));
+  eq(v.status, "regressed", "replies collapsing to near-zero is a regression");
   eq(v.breaches.find(b => b.metric === "draftsProduced")?.kind, "collapse", "reported as a collapse");
 }
 eq(
-  decideCanaryVerdict(BASE, after({ draftsProduced: 0 })).status,
+  decideCanaryVerdict(BASE, after({ draftsProduced: 0, outboundToCustomer: 0 })).status,
   "regressed",
-  "producing NOTHING is the loudest version of the same failure"
+  "replying to NOBODY is the loudest version of the same failure"
+);
+
+// THE ACCOUNTING BUG THIS CHECK SHIPPED WITH (found 2026-08-04 on a live canary).
+// `finalizeDraftAsSent` rewrites an approved draft's provider to twilio/sendgrid IN PLACE, so an
+// approved draft LEAVES draftsProduced and JOINS outboundToCustomer. Reading draftsProduced alone
+// therefore scores "the agent went quiet" hardest exactly when staff cleared the queue fastest.
+// The real slice: 9 customers wrote in, 16 replies went out, 0 drafts left pending — scored
+// "drafting collapsed 2.33 -> 0". Two more of those would have reverted a proven-identical deploy.
+eq(
+  decideCanaryVerdict(BASE, after({ draftsProduced: 0, outboundToCustomer: 38 })).status,
+  "healthy",
+  "an EMPTY draft queue with every reply sent is staff being fast, NOT the agent going quiet"
+);
+{
+  const v = decideCanaryVerdict(BASE, after({ draftsProduced: 0, outboundToCustomer: 20 }));
+  eq(v.status, "healthy", "drafts at zero cannot mean silence while sends are healthy");
+  eq(v.breaches.length, 0, "...and nothing is reported as a collapse");
+}
+eq(
+  decideCanaryVerdict(BASE, after({ draftsProduced: 20, outboundToCustomer: 0 })).status,
+  "healthy",
+  "the mirror case: everything still drafted, nothing approved yet, is not silence either"
 );
 
 // ---------------------------------------------------------------------------
@@ -207,6 +230,7 @@ const CONVS = [
 
 {
   const c = computeCanaryCounters(CONVS, WINDOW);
+  eq(c.inboundFromCustomer, 1, "an inbound customer message is counted — it is what a reply answers");
   eq(c.outboundToCustomer, 3, "twilio + sendgrid + human are the real sends");
   eq(c.draftsProduced, 1, "draft_ai is a DRAFT, not a send — conflating them hides a draft flood");
   eq(c.conversationsClosed, 1, "only the close inside the window counts");
@@ -266,7 +290,7 @@ const CONVS = [
   ];
   eq(
     findDeadCounters(noDrafts),
-    ["draftsProduced"],
+    ["draftsProduced", "inboundFromCustomer"],
     "a counter that reads zero across the ENTIRE store is unwired instrumentation, not good news"
   );
   ok(
@@ -515,7 +539,8 @@ ok(DEFAULT_CANARY_THRESHOLDS.runawayMinPerHour > 0, "and an absolute runaway flo
     draftsProduced: 168,
     conversationsClosed: 28,
     draftsHeld: 14,
-    activeConversations: 322
+    activeConversations: 322,
+    inboundFromCustomer: 277
   };
   const slice = (over: Partial<CanaryCounters> = {}): CanaryCounters => ({
     outboundToCustomer: 9,
@@ -523,6 +548,7 @@ ok(DEFAULT_CANARY_THRESHOLDS.runawayMinPerHour > 0, "and an absolute runaway flo
     conversationsClosed: 1,
     draftsHeld: 0,
     activeConversations: 8,
+    inboundFromCustomer: 7,
     ...over
   });
   const measure = (counters: CanaryCounters, runaway?: any) =>
@@ -548,7 +574,44 @@ ok(DEFAULT_CANARY_THRESHOLDS.runawayMinPerHour > 0, "and an absolute runaway flo
 
   // --- both failure modes still register ----------------------------------------------------------
   eq(measure(slice({ outboundToCustomer: 40 })).status, "fail", "a send flood in one slice FAILS that slice");
-  eq(measure(slice({ draftsProduced: 0 })).status, "fail", "the agent going quiet (draft collapse) FAILS that slice");
+  eq(
+    measure(slice({ draftsProduced: 0, outboundToCustomer: 1 })).status,
+    "fail",
+    "the agent going quiet — nobody replied to a busy window — FAILS that slice"
+  );
+  eq(
+    measure(slice({ draftsProduced: 0 })).status,
+    "pass",
+    "but a cleared draft queue with every reply SENT is not silence — this exact shape false-failed a live canary on 2026-08-03"
+  );
+
+  // --- a DEAD window testifies to nothing: not a collapse, and not a clean bill of health ----------
+  const deadWindow = slice({
+    inboundFromCustomer: 0,
+    outboundToCustomer: 0,
+    draftsProduced: 0,
+    conversationsClosed: 0,
+    activeConversations: 0
+  });
+  eq(
+    measure(deadWindow).status,
+    "inconclusive",
+    "an 8h window with no customers in it cannot show the agent going quiet — there was nothing to answer"
+  );
+  ok(
+    measure(deadWindow).verdict.status !== "healthy",
+    "...and silence must never be laundered into a PASS that advances the promote streak"
+  );
+  eq(
+    measure(deadWindow, { runaway: true, perHour: 60, limit: 42 }).status,
+    "fail",
+    "a runaway still fails on a quiet window — a flood needs no baseline traffic to be alarming"
+  );
+  eq(
+    measure({ ...deadWindow, conversationsClosed: 6 }).status,
+    "fail",
+    "and a RISING counter still fails on a quiet window — only the went-quiet reading needs traffic"
+  );
   const fatal = measure(slice(), { runaway: true, perHour: 60, limit: 42 });
   eq(fatal.status, "fail", "a runaway slice fails");
   eq(fatal.fatal, true, "...and is FATAL — terminal on sight, exempt from the run-length rule");
