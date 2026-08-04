@@ -76,7 +76,25 @@ assert.ok(
 // It's fed by the fail-safe builder (returns null unless genuinely not_found/sold) and, when it fires,
 // sets a real watch on the conversation (the follow-up).
 assert.ok(/buildInitialAdfUnavailableInventoryWatch\(\{/.test(sgSrc), "the watch builder is invoked");
-assert.ok(/conv\.inventoryWatch = initialAdfUnavailableInventoryWatch\.watch;/.test(sgSrc), "a firing out-of-stock ADF sets the watch (the follow-up)");
+// WIRING + BEHAVIOUR, not a body pin. The three watch fields used to be written inline right here
+// and this line pinned that literal text; the 2026-08-04 arm un-stacking moved them behind
+// applyInventoryWatchArm and the pin went red on a refactor that changed nothing. A pin on where
+// code SITS cannot tell a regression from a refactor — so: grep that the lane is still wired to the
+// arm path, then prove the arm path actually arms.
+assert.ok(
+  /applyInventoryWatchArm\(conv, \{[\s\S]{0,200}initialAdfUnavailableInventoryWatch\.watch/.test(sgSrc),
+  "a firing out-of-stock ADF still routes its watch through the arm referee (the follow-up)"
+);
+{
+  const { applyInventoryWatchArm } = await import("../services/api/src/domain/conversationStore.ts");
+  const conv: any = { id: "adf-watch-probe", messages: [], inventoryWatchPending: { year: 2021, askedAt: "x" } };
+  const watch = { model: "Street Glide", status: "active", createdAt: "2026-01-01T00:00:00.000Z" };
+  applyInventoryWatchArm(conv, { lane: "email_adf_unavailable", watches: [watch as any], nowIso: "2026-01-01T00:00:00.000Z" });
+  assert.equal(conv.inventoryWatch?.model, "Street Glide", "the arm path sets the singular watch");
+  assert.equal(conv.inventoryWatches?.length, 1, "the arm path sets the watch list");
+  assert.equal(conv.inventoryWatchPending, undefined, "the arm path clears the pending which-model ask");
+  assert.equal(conv.dialogState?.name, "inventory_watch_active", "the ADF email lane still enters the active-watch dialog state");
+}
 // The time-first test-ride reply is produced ONLY when the bike is CONFIRMED in stock — never on
 // not_found / sold / on_hold / unknown (fail-safe: never promise a ride on a bike we can't confirm).
 assert.ok(

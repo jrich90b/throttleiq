@@ -137,7 +137,12 @@ const CEILINGS: Ceiling[] = [
     // manual-resolution endpoint) each wrote the same fourteen fields plus the cadence/mode
     // aftermath inline; both now call applyInventoryHoldRecord (conversationStore), which asks
     // decideInventoryHoldRecord (routeStateReducer). Net -13 after the import line.
-    max: 71_360,
+    // 71_360 -> 71_345. The inventory-watch ARM un-stacking: TEN places each hand-wrote the same
+    // "a watch is now set on this lead" block (the plural list + the singular mirror + clearing the
+    // pending ask + the dialog state + holding_inventory + stop the chase). Seven of the ten were in
+    // this file; they now call applyInventoryWatchArm (conversationStore), which asks
+    // decideInventoryWatchArm (routeStateReducer). Net -15 after the import line.
+    max: 71_345,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

@@ -562,6 +562,39 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     };
   }, ["decideScheduleInviteBudget"]);
 
+  // Added 2026-08-04 with the inventory-watch ARM un-stacking. Sampled once PER LANE: the whole
+  // point of this referee is that the console and email lanes take a DIFFERENT dialog-state route
+  // from the other four, and a single sample would hide exactly that. PROBE: the lane is held fixed
+  // per sample and `watchCount` is pinned to 1 (arming is a property of the CALL SITE, not of
+  // stored state), so the referee consults nothing but its own arbitration — which is what this
+  // fingerprint exists to freeze.
+  for (const lane of [
+    "voice_summary",
+    "context_note",
+    "watch_confirmation",
+    "console_watch_set",
+    "console_hold_resolution",
+    "held_unit_guard",
+    "manual_outbound",
+    "email_inbound",
+    "email_walk_in",
+    "email_adf_unavailable"
+  ] as const) {
+    add(`inventoryWatchArm:${lane}`, () => {
+      if (typeof reducer.decideInventoryWatchArm !== "function") return undefined;
+      const decision = reducer.decideInventoryWatchArm({ lane, watchCount: 1 }); // PROBE
+      return {
+        arm: decision.arm,
+        clearPending: decision.clearPending,
+        dialogRoute: decision.dialogRoute,
+        reversesWatchOptOut: decision.reversesWatchOptOut,
+        followUpMode: decision.followUpMode,
+        stopCadenceReason: decision.stopCadenceReason,
+        divergence: decision.divergence
+      };
+    }, ["decideInventoryWatchArm"]);
+  }
+
   // Added 2026-08-02 with the appointment-CONFIRM un-stacking. Sampled once PER LANE, because the
   // whole point of this referee is that the slot-match lane answers `acknowledged` and the
   // reschedule latch differently from the two booked lanes — a single sample would hide exactly

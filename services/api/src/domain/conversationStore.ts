@@ -26,6 +26,9 @@ import {
   decideInventoryHoldRecord,
   type InventoryHoldRecordInput,
   type InventoryHoldRecordDecision,
+  decideInventoryWatchArm,
+  type InventoryWatchArmLane,
+  type InventoryWatchArmDecision,
   decideScheduleInviteBudget,
   decideCadenceLifecycle,
   decideAppointmentAttribution,
@@ -5596,6 +5599,43 @@ export function applyInventoryHoldRecord(
   conv.hold = decision.record as unknown as Conversation["hold"];
   stopFollowUpCadence(conv, decision.stopCadenceReason);
   if (decision.setPausedIndefinite) setFollowUpMode(conv, "paused_indefinite", decision.reason);
+  return decision;
+}
+
+/**
+ * The single place an inventory watch is ARMED onto a conversation. Six lanes used to hand-write
+ * the same block; they now all ask `decideInventoryWatchArm` (routeStateReducer) — see that
+ * referee for the two preserved dialog-state divergences.
+ *
+ * `setDialogState` lives in index.ts (it also stamps `lastIntent` and reverses the durable watch
+ * opt-out), so the five in-file lanes hand it in. The email lane cannot — it writes the record
+ * directly, which IS divergence 2 — so the input type makes the callback mandatory for every lane
+ * except that one, and a future lane that forgets it will not compile.
+ */
+export function applyInventoryWatchArm(
+  conv: Conversation,
+  input: { watches: InventoryWatch[] } & (
+    | {
+        lane: Exclude<InventoryWatchArmLane, `email_${string}`>;
+        setDialogState: (conv: any, name: "inventory_watch_active") => void;
+        // Never read on these lanes: only the DIRECT dialog write needs a clock.
+        nowIso?: string;
+      }
+    | { lane: "email_inbound" | "email_walk_in" | "email_adf_unavailable"; setDialogState?: undefined; nowIso: string }
+  )
+): InventoryWatchArmDecision {
+  const decision = decideInventoryWatchArm({ lane: input.lane, watchCount: input.watches.length });
+  if (!decision.arm) return decision;
+  conv.inventoryWatches = input.watches;
+  conv.inventoryWatch = input.watches[0];
+  if (decision.clearPending) conv.inventoryWatchPending = undefined;
+  if (decision.dialogRoute === "helper" && decision.dialogState) {
+    input.setDialogState?.(conv, decision.dialogState);
+  } else if (decision.dialogRoute === "direct" && decision.dialogState) {
+    conv.dialogState = { name: decision.dialogState, updatedAt: input.nowIso ?? nowIso() };
+  }
+  setFollowUpMode(conv, decision.followUpMode, decision.followUpModeReason);
+  stopFollowUpCadence(conv, decision.stopCadenceReason);
   return decision;
 }
 

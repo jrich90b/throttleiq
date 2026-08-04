@@ -513,6 +513,7 @@ import {
   applyReschedulePendingLatch,
   applyInventoryAvailabilityReopen,
   applyInventoryHoldRecord,
+  applyInventoryWatchArm,
   applyCloseoutReversal,
   applyAppointmentConfirmRecord,
   clearAppointmentStaffPromptState
@@ -12877,12 +12878,11 @@ async function applyPostCallSummaryActions(opts: {
     const familyOnlyVoiceWatch = watches.find(w => isFamilyOnlyModelLabel(w.model));
     const hasAnyVoiceWatch = !!(conv.inventoryWatch || (conv.inventoryWatches && conv.inventoryWatches.length));
     if (specificVoiceWatches.length && !hasAnyVoiceWatch) {
-      conv.inventoryWatches = specificVoiceWatches;
-      conv.inventoryWatch = specificVoiceWatches[0];
-      conv.inventoryWatchPending = undefined;
-      setDialogState(conv, "inventory_watch_active");
-      setFollowUpMode(conv, "holding_inventory", "inventory_watch");
-      stopFollowUpCadence(conv, "inventory_watch");
+      applyInventoryWatchArm(conv, {
+        lane: "voice_summary",
+        watches: specificVoiceWatches,
+        setDialogState
+      });
       recordRouteOutcome("live", "voice_watch_set", {
         convId: conv.id,
         leadKey: conv.leadKey,
@@ -12948,12 +12948,7 @@ async function applyPostCallSummaryActions(opts: {
         note: "call_summary"
       };
       if (llmAvailability?.color) watch.color = llmAvailability.color;
-      conv.inventoryWatch = watch;
-      conv.inventoryWatches = [watch];
-      conv.inventoryWatchPending = undefined;
-      setDialogState(conv, "inventory_watch_active");
-      setFollowUpMode(conv, "holding_inventory", "inventory_watch");
-      stopFollowUpCadence(conv, "inventory_watch");
+      applyInventoryWatchArm(conv, { lane: "voice_summary", watches: [watch], setDialogState });
     }
   }
 
@@ -14442,11 +14437,7 @@ function ensureInventoryWatchForHeldCadence(
     return !wColor || !watchColor || inventoryColorMatchesContext({ color: wColor } as InventoryFeedItem, watchColor);
   });
   if (!duplicate) next.push(watch);
-  conv.inventoryWatches = next;
-  conv.inventoryWatch = next[0];
-  conv.inventoryWatchPending = undefined;
-  setFollowUpMode(conv, "holding_inventory", "inventory_watch");
-  stopFollowUpCadence(conv, "inventory_watch");
+  applyInventoryWatchArm(conv, { lane: "held_unit_guard", watches: next, setDialogState });
 }
 
 // Undo a stale held-unit follow-up hold once the lead's own unit is confirmed
@@ -26016,12 +26007,11 @@ async function applyActionStateFromContextNote(
         : [];
     const { merged, added } = mergeInventoryWatches(existing, newWatches);
     if (added.length) {
-      conv.inventoryWatches = merged;
-      conv.inventoryWatch = merged[0];
-      conv.inventoryWatchPending = undefined;
-      setDialogState(conv, "inventory_watch_active");
-      setFollowUpMode(conv, "holding_inventory", "inventory_watch");
-      stopFollowUpCadence(conv, "inventory_watch");
+      applyInventoryWatchArm(conv, {
+        lane: "context_note",
+        watches: merged,
+        setDialogState
+      });
       changed = true;
       reasons.push(
         `context_note_watch_set:${added
@@ -31143,12 +31133,11 @@ function applyInventoryWatchConfirmation(
   // ("Special") or an ADF form fragment reaches the trim/color slot (Joe ruling 2026-07-22 #3,
   // +17167992882). Every arm that funnels through this function gets the repair for free.
   const watch = applyWatchFieldHygiene(watchRaw);
-  conv.inventoryWatch = watch;
-  conv.inventoryWatches = [watch];
-  conv.inventoryWatchPending = undefined;
-  setDialogState(conv, "inventory_watch_active");
-  setFollowUpMode(conv, "holding_inventory", "inventory_watch");
-  stopFollowUpCadence(conv, "inventory_watch");
+  applyInventoryWatchArm(conv, {
+    lane: "watch_confirmation",
+    watches: [watch],
+    setDialogState
+  });
   // A bike matching this BRAND-NEW watch may already be on the floor. The ordinary cron only fires
   // on NEW arrivals, so a watcher whose model is already in stock is never notified (watch_fire_miss
   // backlog: +17166887637 wanted a Street Glide, stock T37-26 was already on the lot, never pinged).
@@ -42172,11 +42161,11 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
     }
 
     if (shouldApplyWatch) {
-      conv.inventoryWatches = watchList;
-      conv.inventoryWatch = watchList[0];
-      conv.inventoryWatchPending = undefined;
-      setFollowUpMode(conv, "holding_inventory", "inventory_watch");
-      stopFollowUpCadence(conv, "inventory_watch");
+      applyInventoryWatchArm(conv, {
+        lane: "console_hold_resolution",
+        watches: watchList,
+        setDialogState
+      });
     }
 
     const effectiveResolution =
@@ -42486,12 +42475,9 @@ app.post("/conversations/:id/watch", async (req, res) => {
       return res.status(400).json({ ok: false, error: "At least one watch model is required." });
     }
 
-    conv.inventoryWatches = watchList;
-    conv.inventoryWatch = watchList[0];
-    conv.inventoryWatchPending = undefined;
-    setFollowUpMode(conv, "holding_inventory", "inventory_watch");
-    stopFollowUpCadence(conv, "inventory_watch");
-    setDialogState(conv, "inventory_watch_active");
+    // ORDER NOTE: setDialogState used to run LAST here. Inert — setFollowUpMode reads only the
+    // cadence status, and the dialog helper writes only dialogState/lastIntent/the opt-out flag.
+    applyInventoryWatchArm(conv, { lane: "console_watch_set", watches: watchList, setDialogState });
     conv.updatedAt = nowIso;
     await processInventoryWatchlist(conv.id);
     saveConversation(conv);
@@ -53079,12 +53065,11 @@ app.post("/conversations/:id/send", async (req, res) => {
             : [];
         const { merged, added } = mergeInventoryWatches(existing, watches);
         if (added.length) {
-          conv.inventoryWatches = merged;
-          conv.inventoryWatch = merged[0];
-          conv.inventoryWatchPending = undefined;
-          setDialogState(conv, "inventory_watch_active");
-          setFollowUpMode(conv, "holding_inventory", "inventory_watch");
-          stopFollowUpCadence(conv, "inventory_watch");
+          applyInventoryWatchArm(conv, {
+            lane: "manual_outbound",
+            watches: merged,
+            setDialogState
+          });
           recordRouteOutcome("live", "manual_outbound_watch_set", {
             convId: conv.id,
             leadKey: conv.leadKey,

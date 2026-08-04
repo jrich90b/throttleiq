@@ -42,6 +42,7 @@ import {
   addCallTodoIfMissing,
   setFollowUpMode,
   pauseFollowUpCadence,
+  applyInventoryWatchArm,
   stopFollowUpCadence,
   computeFollowUpDueAt,
   markPricingEscalated,
@@ -4258,12 +4259,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
               // Junk trim/color never reaches the stored watch (Joe ruling 2026-07-22 #3): this
               // path writes the record directly rather than through applyInventoryWatchConfirmation.
               const hygienicWatch = applyWatchFieldHygiene(watch);
-              conv.inventoryWatch = hygienicWatch;
-              conv.inventoryWatches = [hygienicWatch];
-              conv.inventoryWatchPending = undefined;
-              conv.dialogState = { name: "inventory_watch_active", updatedAt: nowIso };
-              setFollowUpMode(conv, "holding_inventory", "inventory_watch");
-              stopFollowUpCadence(conv, "inventory_watch");
+              applyInventoryWatchArm(conv, {
+                lane: "email_inbound",
+                watches: [hygienicWatch],
+                nowIso
+              });
               watchHandledByParser = true;
             } else {
               conv.inventoryWatchPending = {
@@ -8071,12 +8071,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       // The Traffic Log Pro walk-in path is where "(Step 2)" landed in color and "Special" in
       // trim (+17167992882) — the step tag rides along in the salesperson's comment text.
       const hygienicWalkInWatch = applyWatchFieldHygiene(watch);
-      conv.inventoryWatch = hygienicWalkInWatch;
-      conv.inventoryWatches = [hygienicWalkInWatch];
-      conv.inventoryWatchPending = undefined;
-      conv.dialogState = { name: "inventory_watch_active", updatedAt: new Date().toISOString() };
-      setFollowUpMode(conv, "holding_inventory", "inventory_watch");
-      stopFollowUpCadence(conv, "inventory_watch");
+      applyInventoryWatchArm(conv, {
+        lane: "email_walk_in",
+        watches: [hygienicWalkInWatch],
+        nowIso: new Date().toISOString()
+      });
       walkInWatchSet = true;
     } else if (
       !walkInSpokenForHandoff &&
@@ -9269,12 +9268,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (initialAdfUnavailableInventoryWatch) {
     draft = initialAdfUnavailableInventoryWatch.reply;
     suppressAvailabilityAppend = true;
-    conv.inventoryWatch = initialAdfUnavailableInventoryWatch.watch;
-    conv.inventoryWatches = [initialAdfUnavailableInventoryWatch.watch];
-    conv.inventoryWatchPending = undefined;
-    conv.dialogState = { name: "inventory_watch_active", updatedAt: new Date().toISOString() };
-    setFollowUpMode(conv, "holding_inventory", "inventory_watch");
-    stopFollowUpCadence(conv, "inventory_watch");
+    applyInventoryWatchArm(conv, {
+      lane: "email_adf_unavailable",
+      watches: [initialAdfUnavailableInventoryWatch.watch],
+      nowIso: new Date().toISOString()
+    });
   }
   const initialAdfVehicleFactDecision = isInitialAdf && !initialCompositeSalesInquiryDecision
     && !initialAdfRiderCourseDecision

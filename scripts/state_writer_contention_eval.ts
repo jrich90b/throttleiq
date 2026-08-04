@@ -656,7 +656,16 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 //   collapse artifact again, MEASURED on the pre-change tree rather than assumed. That leader is
 //   the next slice.
 // RATCHET DOWN ONLY.
-const UNREFEREED_WRITER_BASELINE = 111;
+// 111 -> 93. The inventory-watch ARM un-stacking (2026-08-04). The three watch fields
+// (`inventoryWatches`, `inventoryWatch`, `inventoryWatchPending`) were always decided in the SAME
+// BREATH by the same block, which is why their unrefereed writers sat on adjacent line numbers —
+// one question wearing three fields. Ten arm lanes now ask `decideInventoryWatchArm` and write
+// through `applyInventoryWatchArm`. Watch fields 29 -> 13. The site list was a LOWER BOUND as usual:
+// the queue named six lanes and `inventory_watch_arm:eval`'s arm-signature scan found FOUR more the
+// analyzer had collapsed (a second voice arm in the same function, the console watch-set endpoint,
+// the walk-in email arm, and the initial-ADF unavailable arm). MEASURED on the post-change tree.
+// RATCHET DOWN ONLY.
+const UNREFEREED_WRITER_BASELINE = 93;
 
 {
   const sourceFiles: SourceFile[] = [];
