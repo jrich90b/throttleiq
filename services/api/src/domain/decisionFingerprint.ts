@@ -695,6 +695,51 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     }, ["decideAppointmentPromptRecord"]);
   }
 
+  // Added 2026-08-04 with the watch-EXACTNESS un-stacking. Sampled once per RULE PAIR, because the
+  // two flags ARE the two preserved divergences: seven lanes do not recognise a year range, and
+  // two do not count a trim as distinguishing. PROBE: the watch inputs are pinned at the value that
+  // exercises every rung (a year, a year range, and a trim but no colour), so only the arbitration
+  // can move the fingerprint.
+  for (const rule of [
+    { name: "range_trim", recognisesYearRange: true, trimCountsAsDistinguishing: true },
+    { name: "range_colour", recognisesYearRange: true, trimCountsAsDistinguishing: false },
+    { name: "norange_trim", recognisesYearRange: false, trimCountsAsDistinguishing: true },
+    { name: "norange_colour", recognisesYearRange: false, trimCountsAsDistinguishing: false }
+  ] as const) {
+    add(`inventoryWatchExactness:${rule.name}`, () => {
+      if (typeof reducer.resolveInventoryWatchExactness !== "function") return undefined;
+      const decision = reducer.resolveInventoryWatchExactness({
+        year: 2023,
+        yearMin: 2020,
+        yearMax: 2024,
+        color: null,
+        trim: "CVO",
+        recognisesYearRange: rule.recognisesYearRange,
+        trimCountsAsDistinguishing: rule.trimCountsAsDistinguishing
+      }); // PROBE
+      return { exactness: decision.exactness, divergence: decision.divergence };
+    }, ["resolveInventoryWatchExactness"]);
+  }
+
+  // Added 2026-08-04 with the watch-LIST normalization un-stacking. Sampled at the three record
+  // shapes that matter — a populated list, an ABSENT list with a legacy singular (the heal), and an
+  // explicitly EMPTY list with a singular (the deliberate non-heal, so a disarmed lead is not
+  // resurrected). PROBE: the shape is pinned per sample.
+  for (const shape of [
+    { name: "populated_list", listLength: 2, hasSingular: true },
+    { name: "absent_list_legacy_singular", listLength: null, hasSingular: true },
+    { name: "empty_list_stale_singular", listLength: 0, hasSingular: true }
+  ] as const) {
+    add(`inventoryWatchListNormalization:${shape.name}`, () => {
+      if (typeof reducer.resolveInventoryWatchListNormalization !== "function") return undefined;
+      const decision = reducer.resolveInventoryWatchListNormalization({
+        listLength: shape.listLength,
+        hasSingular: shape.hasSingular
+      }); // PROBE
+      return { source: decision.source, backfillListFromSingular: decision.backfillListFromSingular };
+    }, ["resolveInventoryWatchListNormalization"]);
+  }
+
   // Added 2026-08-02 with the appointment-CONFIRM un-stacking. Sampled once PER LANE, because the
   // whole point of this referee is that the slot-match lane answers `acknowledged` and the
   // reschedule latch differently from the two booked lanes — a single sample would hide exactly

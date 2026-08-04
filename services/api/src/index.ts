@@ -520,6 +520,8 @@ import {
   applyInventoryWatchDisarm,
   applyFinanceOutcomeNotifyState,
   applyAppointmentPromptRecord,
+  applyInventoryWatchExactness,
+  applyInventoryWatchListNormalization,
   applyCloseoutReversal,
   applyAppointmentConfirmRecord,
   clearAppointmentStaffPromptState
@@ -7297,16 +7299,8 @@ async function processInventoryWatchlist(targetConvId?: string, opts?: { include
       }
     }
     for (const conv of convs) {
-      const watches =
-        conv.inventoryWatches?.length
-          ? conv.inventoryWatches
-          : conv.inventoryWatch
-            ? [conv.inventoryWatch]
-            : [];
+      const { watches } = applyInventoryWatchListNormalization(conv);
       if (!watches.length) continue;
-      if (!conv.inventoryWatches && conv.inventoryWatch) {
-        conv.inventoryWatches = [conv.inventoryWatch];
-      }
       if (conv.status === "closed") continue;
       // Durable opt-out: a customer who asked us to stop alerting them is off
       // the watch alerts regardless of any later (re-)created active watch.
@@ -7571,16 +7565,8 @@ async function notifyInventoryWatchersForAvailableItem(
     // A held lead (manual_handoff or paused_indefinite "hold off") is off
     // proactive outreach until they re-engage — never fire a watch alert at them.
     if (isProactiveContactPaused(conv)) continue;
-    const watches =
-      conv.inventoryWatches?.length
-        ? conv.inventoryWatches
-        : conv.inventoryWatch
-          ? [conv.inventoryWatch]
-          : [];
+    const { watches } = applyInventoryWatchListNormalization(conv);
     if (!watches.length) continue;
-    if (!conv.inventoryWatches && conv.inventoryWatch) {
-      conv.inventoryWatches = [conv.inventoryWatch];
-    }
     const matchedWatch = watches.find((watch: InventoryWatch) => {
       if (!watch || watch.status === "paused") return false;
       if (
@@ -25759,9 +25745,7 @@ async function deriveContextNoteWatches(
       }
       // exactness is derived AFTER the guards — a dropped year pin turns year_model back into
       // model_only, and the literal above already defaults to model_only.
-      if (watch.yearMin && watch.yearMax) watch.exactness = "model_range";
-      else if (watch.year && (watch.color || watch.trim)) watch.exactness = "exact";
-      else if (watch.year) watch.exactness = "year_model";
+      applyInventoryWatchExactness(watch, { recognisesYearRange: true, trimCountsAsDistinguishing: true });
       watches.push(watch);
     }
   }
@@ -30898,9 +30882,7 @@ function parseInventoryWatchPreference(
     watch.maxPrice = swap;
   }
 
-  if (watch.yearMin && watch.yearMax) watch.exactness = "model_range";
-  else if (watch.year && (watch.color || watch.trim)) watch.exactness = "exact";
-  else if (watch.year) watch.exactness = "year_model";
+  applyInventoryWatchExactness(watch, { recognisesYearRange: true, trimCountsAsDistinguishing: true });
 
   const hasYearInfo = !!watch.year || (!!watch.yearMin && !!watch.yearMax);
   if (!hasYearInfo && !anyYear && pending.year) {
@@ -31051,8 +31033,7 @@ async function buildInventoryWatchFromConfirmedOutboundOffer(
     createdAt: new Date().toISOString(),
     note: "confirmed_staff_watch_offer"
   };
-  if (watch.year && (watch.color || watch.trim)) watch.exactness = "exact";
-  else if (watch.year) watch.exactness = "year_model";
+  applyInventoryWatchExactness(watch, { recognisesYearRange: false, trimCountsAsDistinguishing: true });
   return watch;
 }
 
@@ -31096,8 +31077,7 @@ async function buildInventoryWatchFromAcknowledgementIntent(args: {
     createdAt: new Date().toISOString(),
     note: "confirmed_inventory_watch_acknowledgement"
   };
-  if (watch.year && (watch.color || watch.trim)) watch.exactness = "exact";
-  else if (watch.year) watch.exactness = "year_model";
+  applyInventoryWatchExactness(watch, { recognisesYearRange: false, trimCountsAsDistinguishing: true });
   return watch;
 }
 
@@ -41955,8 +41935,7 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
             watch.minPrice = watch.maxPrice;
             watch.maxPrice = swap;
           }
-          if (watch.year && watch.color) watch.exactness = "exact";
-          else if (watch.year) watch.exactness = "year_model";
+          applyInventoryWatchExactness(watch, { recognisesYearRange: false, trimCountsAsDistinguishing: false });
           return watch;
         })
         .filter(Boolean) as InventoryWatch[];
@@ -42422,9 +42401,7 @@ app.post("/conversations/:id/watch", async (req, res) => {
           watch.minPrice = watch.maxPrice;
           watch.maxPrice = swap;
         }
-        if (watch.yearMin && watch.yearMax) watch.exactness = "model_range";
-        else if (watch.year && watch.color) watch.exactness = "exact";
-        else if (watch.year) watch.exactness = "year_model";
+        applyInventoryWatchExactness(watch, { recognisesYearRange: true, trimCountsAsDistinguishing: false });
         return watch;
       })
       .filter(Boolean) as InventoryWatch[];
@@ -61640,8 +61617,7 @@ if (authToken && signature) {
               status: "active",
               createdAt: nowIsoValue
             };
-            if (watch.year && (watch.color || watch.trim)) watch.exactness = "exact";
-            else if (watch.year) watch.exactness = "year_model";
+            applyInventoryWatchExactness(watch, { recognisesYearRange: false, trimCountsAsDistinguishing: true });
             pref = { action: "set", watch };
           }
           if (pref.action === "set" && pref.watch) {
@@ -64109,8 +64085,7 @@ if (authToken && signature) {
           status: "active",
           createdAt: new Date().toISOString()
         };
-        if (watch.year && (watch.color || watch.trim)) watch.exactness = "exact";
-        else if (watch.year) watch.exactness = "year_model";
+        applyInventoryWatchExactness(watch, { recognisesYearRange: false, trimCountsAsDistinguishing: true });
         pref = { action: "set", watch };
       }
       if (pref.action === "set" && pref.watch) {
@@ -67421,8 +67396,7 @@ if (authToken && signature) {
           status: "active",
           createdAt: new Date().toISOString()
         };
-        if (watch.year && (watch.color || watch.trim)) watch.exactness = "exact";
-        else if (watch.year) watch.exactness = "year_model";
+        applyInventoryWatchExactness(watch, { recognisesYearRange: false, trimCountsAsDistinguishing: true });
         pref = { action: "set", watch };
       }
       if (pref.action === "clarify") {
@@ -68207,8 +68181,7 @@ if (authToken && signature) {
           status: "active",
           createdAt: new Date().toISOString()
         };
-        if (watch.year && (watch.color || watch.trim)) watch.exactness = "exact";
-        else if (watch.year) watch.exactness = "year_model";
+        applyInventoryWatchExactness(watch, { recognisesYearRange: false, trimCountsAsDistinguishing: true });
         pref = { action: "set", watch };
       }
       if (pref.action === "set" && pref.watch) {

@@ -177,7 +177,10 @@ const CEILINGS: Ceiling[] = [
     // "mark the 24h confirmation ask as sent" block inside processAppointmentConfirmations (one per
     // delivery branch) collapsed to one local `markConfirmationAsked()` over the applier, and the
     // customer's YES/NO record went the same way. Re-derived on the INTEGRATED tree after #524.
-    max: 71_298,
+    // 71_298 -> 71_271. The watch-RECORD-SHAPE un-stacking: TEN copies of the "how specific is
+    // this watch?" ladder and TWO copies of the legacy-singular-vs-list block became calls to
+    // applyInventoryWatchExactness / applyInventoryWatchListNormalization.
+    max: 71_271,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

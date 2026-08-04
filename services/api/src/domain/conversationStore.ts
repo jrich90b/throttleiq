@@ -32,6 +32,9 @@ import {
   decideInventoryWatchDisarm,
   type InventoryWatchDisarmLane,
   type InventoryWatchDisarmDecision,
+  resolveInventoryWatchExactness,
+  resolveInventoryWatchListNormalization,
+  type InventoryWatchListNormalizationDecision,
   decideAppointmentPromptRecord,
   type AppointmentPromptLane,
   type AppointmentPromptRecordDecision,
@@ -8056,4 +8059,57 @@ export function applyAppointmentPromptRecord(
   }
   if (decision.stampAttendanceQuestionedAt) appt.attendanceQuestionedAt = input.nowIso;
   return decision;
+}
+
+/**
+ * The single place `inventoryWatch.exactness` is written. Ten copies of the same ladder used to
+ * live in index.ts; they now pass their two per-lane flags here and
+ * `resolveInventoryWatchExactness` (routeStateReducer) owns the rungs and both divergences.
+ *
+ * Writes nothing when the ladder does not fire — every original ended without an `else`, leaving
+ * the caller's `model_only` literal standing.
+ */
+export function applyInventoryWatchExactness(
+  watch: any,
+  opts: { recognisesYearRange: boolean; trimCountsAsDistinguishing: boolean }
+): void {
+  if (!watch) return;
+  const decision = resolveInventoryWatchExactness({
+    year: watch.year,
+    yearMin: watch.yearMin,
+    yearMax: watch.yearMax,
+    color: watch.color,
+    trim: watch.trim,
+    recognisesYearRange: opts.recognisesYearRange,
+    trimCountsAsDistinguishing: opts.trimCountsAsDistinguishing
+  });
+  if (decision.exactness) watch.exactness = decision.exactness;
+}
+
+/**
+ * The single place the legacy singular watch and the watch LIST are reconciled for reading.
+ * Both alert paths used to hand-write the same prefer-list / wrap-singular / backfill block;
+ * they now ask `resolveInventoryWatchListNormalization` (routeStateReducer), which is where the
+ * deliberate "an explicitly EMPTY list is a statement, not a gap" rule is documented.
+ *
+ * Returns the watches the caller should read this turn — empty means "skip this lead".
+ */
+export function applyInventoryWatchListNormalization(
+  conv: Conversation
+): { watches: InventoryWatch[]; decision: InventoryWatchListNormalizationDecision } {
+  const list = conv.inventoryWatches;
+  const decision = resolveInventoryWatchListNormalization({
+    listLength: list === undefined || list === null ? null : list.length,
+    hasSingular: !!conv.inventoryWatch
+  });
+  if (decision.backfillListFromSingular && conv.inventoryWatch) {
+    conv.inventoryWatches = [conv.inventoryWatch];
+  }
+  const watches =
+    decision.source === "list"
+      ? (list ?? [])
+      : decision.source === "singular" && conv.inventoryWatch
+        ? [conv.inventoryWatch]
+        : [];
+  return { watches, decision };
 }
