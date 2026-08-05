@@ -27505,21 +27505,20 @@ function buildFirstTimeRiderGuidanceReply(args: {
     const requirement = requiresEndorsement
       ? "For test rides, we do need a motorcycle endorsement."
       : "Before a test ride, I’d still want to make sure the bike is a safe fit for your experience.";
-    // The Jumpstart REPLACES the generic "sit on a few bikes" line rather than piling on: it is a
-    // strictly better version of the same offer, and appending both broke the SMS brevity budget.
-    const hands =
-      jumpstartInvite || " We can still help you sit on a few bikes and talk through beginner-friendly options.";
-    return `${requirement}${hands} If you’re still getting started, ${courseText} is a good next step.`;
+    return buildFirstTimeRiderBeginnerReply({
+      branch: "no_endorsement",
+      jumpstartInvite,
+      requirement,
+      courseText
+    });
   }
   if (parsed.hasEndorsement === true) {
     return "That makes sense. Since you have your endorsement, I’d still start by making sure the bike feels manageable: seat height, weight, and comfort. What kind of riding are you hoping to do?";
   }
   if (parsed.asksTestRide) {
-    // When the invite fires we ALREADY know they are starting out, so it replaces the endorsement
-    // question rather than asking something we have just been told (and two asks in one text).
-    return `That’s exciting. For a first ride, I’d want to make sure we match you with something comfortable and manageable before setting up a test ride.${jumpstartInvite || " Do you already have your motorcycle endorsement?"}`;
+    return buildFirstTimeRiderBeginnerReply({ branch: "asks_test_ride", jumpstartInvite });
   }
-  return `That’s exciting. For a first bike, I’d focus on comfort, seat height, weight, and confidence.${jumpstartInvite || " Do you already have your motorcycle endorsement, or are you still getting started?"}`;
+  return buildFirstTimeRiderBeginnerReply({ branch: "general", jumpstartInvite });
 }
 
 function buildInitialAdfFirstTimeRiderGuidanceReply(args: {

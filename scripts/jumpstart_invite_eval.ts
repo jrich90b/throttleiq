@@ -31,7 +31,10 @@ import {
   decideJumpstartInviteTurn,
   resolveRiderExperienceLevel
 } from "../services/api/src/domain/routeStateReducer.ts";
-import { buildJumpstartOneOnOneInvite } from "../services/api/src/domain/agentVoice.ts";
+import {
+  buildJumpstartOneOnOneInvite,
+  buildFirstTimeRiderBeginnerReply
+} from "../services/api/src/domain/agentVoice.ts";
 import {
   readFirstTimeRiderPolicy,
   readEnrollmentRidingHistory
@@ -206,35 +209,54 @@ assert.ok(
   "the course-price reply must not carry the Jumpstart invite"
 );
 assert.equal(
-  (beginnerBranch.slice(0, 4000).match(/jumpstartInvite \|\||jumpstartInvite\}/g) ?? []).length,
+  (beginnerBranch.slice(0, 4000).match(/buildFirstTimeRiderBeginnerReply\(\{/g) ?? []).length,
   3,
-  "exactly the three beginner-facing replies carry the invite"
+  "exactly the three beginner-facing replies are composed through the shared builder"
 );
-// BEHAVIOUR PRESERVED for a dealer with no Jumpstart: each of the three keeps today's exact words
-// as its fallback, so this change is invisible anywhere the capability is off.
-for (const todaysWords of [
-  "We can still help you sit on a few bikes and talk through beginner-friendly options.",
-  "Do you already have your motorcycle endorsement?",
-  "Do you already have your motorcycle endorsement, or are you still getting started?"
-]) {
-  assert.ok(
-    beginnerBranch.slice(0, 4000).includes(todaysWords),
-    `a dealer without a Jumpstart must still get today's exact wording: "${todaysWords}"`
-  );
-}
-// The invite REPLACES a clause rather than being appended, so the reply cannot run past the SMS
-// brevity budget. Pinned against the real budget helper, not a hand-copied number.
+// --- 5) The composition itself, RUN rather than grepped. -----------------------------------------
+// A grep-only version of this section passed a sabotage that APPENDED the invite instead of
+// substituting it (2026-08-05), so the three beginner bodies live in agentVoice and are executed
+// here. Two properties per branch: without a Jumpstart the reply is today's wording byte for byte,
+// and with one the invite REPLACES the clause it improves on and the result stays inside the SMS
+// brevity budget.
 process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "eval-no-live-key";
 const { exceedsSmsBrevityBudget } = await import("../services/api/src/domain/llmDraft.ts");
-const composed =
-  "For test rides, we do need a motorcycle endorsement." +
-  invite +
-  " If you’re still getting started, a motorcycle safety course is a good next step.";
-assert.equal(
-  exceedsSmsBrevityBudget(composed),
-  false,
-  `the beginner reply carrying the invite must stay inside the SMS brevity budget: "${composed}"`
-);
+
+const BRANCHES = [
+  {
+    branch: "no_endorsement" as const,
+    args: { requirement: "For test rides, we do need a motorcycle endorsement.", courseText: "a motorcycle safety course" },
+    // The clause the invite must REPLACE, not join.
+    replaced: "We can still help you sit on a few bikes and talk through beginner-friendly options."
+  },
+  { branch: "asks_test_ride" as const, args: {}, replaced: "Do you already have your motorcycle endorsement?" },
+  { branch: "general" as const, args: {}, replaced: "Do you already have your motorcycle endorsement, or are you still getting started?" }
+];
+for (const b of BRANCHES) {
+  const without = buildFirstTimeRiderBeginnerReply({ branch: b.branch, jumpstartInvite: "", ...b.args });
+  const withJs = buildFirstTimeRiderBeginnerReply({ branch: b.branch, jumpstartInvite: invite, ...b.args });
+  assert.ok(
+    without.includes(b.replaced),
+    `[${b.branch}] a dealer with no Jumpstart must keep today's exact wording`
+  );
+  assert.ok(!without.includes("Jumpstart"), `[${b.branch}] no Jumpstart in the profile ⇒ no Jumpstart in the reply`);
+  assert.ok(withJs.includes("Jumpstart"), `[${b.branch}] a Jumpstart dealer must actually offer it`);
+  // THE SABOTAGE THAT GOT THROUGH: appending leaves the replaced clause in place.
+  assert.ok(
+    !withJs.includes(b.replaced),
+    `[${b.branch}] the invite must REPLACE "${b.replaced}", not be appended alongside it`
+  );
+  assert.equal(
+    exceedsSmsBrevityBudget(withJs),
+    false,
+    `[${b.branch}] the reply carrying the invite must stay inside the SMS brevity budget: "${withJs}"`
+  );
+  // One ask per text: the invite already ends in a question.
+  assert.ok(
+    (withJs.match(/\?/g) ?? []).length <= 1,
+    `[${b.branch}] the reply must not ask the customer two questions at once: "${withJs}"`
+  );
+}
 // The rule lives in the reducer, not inline in the router.
 assert.ok(
   /export function decideJumpstartInviteTurn/.test(reducer) &&
