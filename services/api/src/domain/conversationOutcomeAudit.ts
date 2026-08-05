@@ -58,6 +58,11 @@ export type OutcomeAnomaly = {
   // template/trigger nit, not a customer-facing miss). False/absent = nothing blocked it — treat it as
   // the real thing. Sourced from cadenceQualityShadow.gateHeld, which is only ever set true on proof.
   cadenceTouchWasHeld?: boolean;
+  // cadence_quality_suppressed only: was the gate's action RECORDED for this touch at all? Only
+  // records the judge wrote on/after 2026-08-04 (#506) carry it; every older one is silent, and
+  // `cadenceTouchWasHeld: false` on those means "unknown, assumed went-out", NOT "measured, went
+  // out". False here ⇒ the row is an assumption; read the transcript before calling it a send.
+  cadenceTouchHeldKnown?: boolean;
 };
 
 /**
@@ -358,14 +363,31 @@ export function auditConversationOutcome(conv: AuditableConv, opts: { now?: Date
       // as identical P2 rows — 31 of the 80 orders on 2026-08-04 — so every routine re-derived this by
       // hand, and one got it wrong. FAIL DIRECTION: only a proven `gateHeld === true` de-prioritises;
       // absent (every pre-2026-08-04 record) or false keeps today's exact P2 treatment.
+      //
+      //     THREE states, not two (2026-08-05): #506 split held-vs-went-out but printed the SAME
+      //     "NOT HELD (went to the send/draft path)" sentence for a MEASURED miss and for a legacy
+      //     record that simply never stored a gate outcome. Measured live on 2026-08-05: 79 of the
+      //     store's 83 judge records carry no gate field, and all 4 that do are `good` verdicts —
+      //     so 100% of the ~28 P2 rows in that day's work order asserted a send that was never
+      //     measured, while the true rate is ~97% HELD (cadence-suppressed-lane-is-mostly-held).
+      //     The severity/fail direction is unchanged — unknown still gets the full-weight P2 and is
+      //     never promoted to held — but the sentence now says it is an ASSUMPTION, so a reader
+      //     stops re-deriving it by hand or, worse, believing it.
       const held = cqs.gateHeld === true;
+      const heldKnown = typeof cqs.gateHeld === "boolean";
+      const heldLabel = held
+        ? "HELD BEFORE SEND by the cadence-quality gate"
+        : heldKnown
+          ? `NOT HELD (went to the send/draft path${cqs.gateReason ? `, gate: ${cqs.gateReason}` : ""})`
+          : "HELD-NESS NOT RECORDED (judge record predates the gate-outcome field — ASSUMED went-out; confirm against the transcript before calling it a customer-facing send)";
       out.push({
         ...base,
         dimension: "cadence_quality_suppressed",
         severity: held ? "P3" : "P2",
         healed: false,
         cadenceTouchWasHeld: held,
-        detail: `${held ? "HELD BEFORE SEND by the cadence-quality gate" : `NOT HELD (went to the send/draft path${cqs.gateReason ? `, gate: ${cqs.gateReason}` : ""})`} — proactive cadence message judged ${cqs.overall} (${cqs.cadenceKind ?? "?"})${cqs.reason ? ` — ${String(cqs.reason).slice(0, 120)}` : ""}`,
+        cadenceTouchHeldKnown: heldKnown,
+        detail: `${heldLabel} — proactive cadence message judged ${cqs.overall} (${cqs.cadenceKind ?? "?"})${cqs.reason ? ` — ${String(cqs.reason).slice(0, 120)}` : ""}`,
         // The judged send's own timestamp IS the triggering event, so stamp it (mirrors 5d above and
         // the 👎 block below). Without it these rows carried NO event time — and they are the single
         // largest block in the work order (55 of 189 on 2026-07-30) — so THREE of the staleness passes

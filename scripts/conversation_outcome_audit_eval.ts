@@ -184,6 +184,7 @@ eq(
   const subFloor = one({ overall: "suppress", confidence: 0.88, gateHeld: false, gateReason: "below_confidence" });
   eq(subFloor.severity, "P2", "a sub-floor suppress was NOT blocked => it stays a full-weight finding");
   eq(subFloor.cadenceTouchWasHeld, false, "a touch nothing blocked is not labelled held");
+  eq(subFloor.cadenceTouchHeldKnown, true, "a gate outcome WAS recorded here — this row is measured, not assumed");
   assert.match(subFloor.detail, /NOT HELD/, "the detail says plainly that the touch went out");
   assert.match(subFloor.detail, /below_confidence/, "the detail carries WHY the gate let it through");
   n++; n++;
@@ -191,13 +192,20 @@ eq(
   // A `hold` verdict is never enforced — the first enforce flip is suppress-only by design.
   eq(one({ overall: "hold", gateHeld: false }).severity, "P2", "a hold verdict is never blocked => full-weight finding");
 
-  // FAIL-SAFE: every record written before 2026-08-04 carries no gate outcome at all. Unknown must read
-  // as NOT held — this change may only ever fail toward more noise, never toward hiding a real miss.
+  // FAIL-SAFE: every record written before 2026-08-04 carries no gate outcome at all. Unknown must be
+  // TREATED as not-held — this change may only ever fail toward more noise, never toward hiding a real
+  // miss — but it must not be WORDED as a measured send. Measured 2026-08-05: 79 of 83 live judge
+  // records are this legacy shape, so the old wording made ~28 P2 rows assert a delivery nobody had
+  // measured, against a true ~97% held rate. The three assertions below are the whole contract:
+  // treatment identical, never promoted to held, and the sentence admits it is an assumption.
   const legacy = one({ overall: "suppress" });
   eq(legacy.severity, "P2", "a legacy record with no gate outcome keeps today's exact treatment");
   eq(legacy.cadenceTouchWasHeld, false, "unknown is never silently promoted to held");
-  assert.match(legacy.detail, /NOT HELD/, "unknown reads as went-out, the noisier and safer direction");
-  n++;
+  eq(legacy.cadenceTouchHeldKnown, false, "unknown is FLAGGED as unknown, so no routine reads it as measured");
+  assert.match(legacy.detail, /NOT RECORDED/, "unknown says plainly that held-ness was never recorded");
+  assert.match(legacy.detail, /ASSUMED went-out/, "…while still reading as went-out, the noisier and safer direction");
+  assert.doesNotMatch(legacy.detail, /NOT HELD/, "unknown must NOT borrow the measured row's sentence — that ambiguity is the bug");
+  n++; n++;
   eq(legacy.occurredAt, CQ_AT, "occurredAt still = the judged send time (staleness passes keep working)");
 }
 
