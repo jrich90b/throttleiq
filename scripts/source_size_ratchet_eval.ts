@@ -221,7 +221,16 @@ const CEILINGS: Ceiling[] = [
     // wiring again — the four new referee knobs live in routeStateReducer, not here.
     // REBASE NOTE: re-derived on the INTEGRATED tree for the THIRD time (#512 then #492 each landed
     // -2 under this branch). The slice is worth -15 every time; the ceiling is not.
-    max: 71_182,
+    // 71_182 -> 71_147. The committed-return-day cadence line (+17167255404). index.ts was sitting
+    // EXACTLY on the ceiling again, so the slice funded itself: `buildWalkInCommentFollowUp` — a
+    // 66-line regex ladder over a salesperson's prose, unreachable by any eval down here — moved
+    // verbatim to domain/walkInCommentFollowUp.ts. Net -35 after two import lines and the wiring at
+    // both the live tick and the regenerate path.
+    // REBASE NOTE (ROUTINE_CONTRACT rule 3, the #418 trap): authored against a 71_201 main and
+    // proposed 71_166; #541/#543/#544 then ratcheted main to 71_182 underneath it. 71_166 would
+    // still have PASSED — the integrated tree is 71_147 — while quietly handing back 19 lines of
+    // headroom someone else's un-stacking had just won. A ceiling is a cap, never a budget.
+    max: 71_147,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
