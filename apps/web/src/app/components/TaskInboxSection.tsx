@@ -13,7 +13,7 @@ import {
   taskEffectiveDueMs
 } from "../lib/taskTriage";
 import type { DueBucket } from "../lib/taskTriage";
-import { salesCriticalKind, SALES_REASON_META } from "../lib/taskReason";
+import { isApprovalTodo, salesCriticalKind, SALES_REASON_META } from "../lib/taskReason";
 
 // Snooze presets, computed in the user's local time. Each pushes the task's due
 // time to 9am on the target day so it resurfaces at the start of the workday.
@@ -99,18 +99,6 @@ function isDealerRideOutcomeTodo(todo: any): boolean {
   return (
     String(todo?.sourceMessageId ?? "").startsWith("dealer_ride_outcome:") ||
     /\bdealer ride outcome needed\b/i.test(String(todo?.summary ?? ""))
-  );
-}
-
-function isApprovalTodo(todo: any): boolean {
-  const reason = String(todo?.reason ?? "").trim().toLowerCase();
-  const text = [todo?.reason, todo?.summary, todo?.action].map(value => String(value ?? "")).join(" ").toLowerCase();
-  return (
-    reason === "approval" ||
-    reason === "payments" ||
-    reason === "pricing" ||
-    reason === "manager" ||
-    /\b(credit|prequal|pre-qual|approval|finance|financing|payment|business manager)\b/.test(text)
   );
 }
 
