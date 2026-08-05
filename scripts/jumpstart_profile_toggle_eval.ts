@@ -22,7 +22,11 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 
-import { readFirstTimeRiderPolicy } from "../services/api/src/domain/firstTimeRiderPolicy.ts";
+import {
+  readFirstTimeRiderPolicy,
+  enrollmentSeatIsUnpaid,
+  REGISTRATION_NOTE_MAX_CHARS
+} from "../services/api/src/domain/firstTimeRiderPolicy.ts";
 
 const KEY = "jumpstartEnabled";
 const web = fs.readFileSync("apps/web/src/app/page.tsx", "utf8");
@@ -102,6 +106,50 @@ for (const ticked of [true, false]) {
     "saving the Jumpstart toggle must not clobber the course settings beside it"
   );
 }
+
+// --- 4) The two dealer-typed registration fields (Joe, 2026-08-05). ----------------------------
+for (const field of ["registrationNote", "unpaidSeatPaymentMethods"] as const) {
+  assert.ok(
+    new RegExp(`\\n\\s+${field}: "",`).test(web),
+    `the profile form must default ${field} to EMPTY — an unconfigured dealer says nothing extra`
+  );
+  assert.ok(
+    new RegExp(`${field}: profile\\?\\.policies\\?\\.firstTimeRider\\?\\.${field} \\?\\? ""`).test(web),
+    `the form must hydrate ${field} from policies.firstTimeRider`
+  );
+  assert.ok(
+    new RegExp(`${field}: dealerProfileForm\\.${field}\\.trim\\(\\),`).test(web),
+    `the save payload must write ${field} back, trimmed`
+  );
+  assert.ok(savePayload.includes(`${field}: dealerProfileForm.${field}.trim(),`), `${field} must save INSIDE firstTimeRider`);
+  assert.ok(new RegExp(`maxLength=\\{${REGISTRATION_NOTE_MAX_CHARS}\\}`).test(web), "the inputs must cap length in the console");
+  assert.equal(readFirstTimeRiderPolicy({ policies: { firstTimeRider: { [field]: "  hello  there " } } })[field], "hello there",
+    `${field} must be normalised to one line`);
+  assert.equal(readFirstTimeRiderPolicy({ policies: { firstTimeRider: { [field]: "x".repeat(REGISTRATION_NOTE_MAX_CHARS + 1) } } })[field], "",
+    `an over-long ${field} must be DROPPED, never truncated mid-sentence`);
+  assert.equal(readFirstTimeRiderPolicy({ policies: { firstTimeRider: {} } })[field], "", `${field} defaults to empty`);
+}
+
+// --- 5) Unpaid-seat detection: an ALLOWLIST of not-paid wordings. ------------------------------
+// The store holds exactly two Payment Status values, both unpaid, and NO example of a paid one —
+// so anything we cannot read plainly stays silent rather than telling someone their payment failed.
+for (const [status, unpaid] of [
+  ["Failed", true],
+  ["Awaiting Payment at Dealer", true],
+  ["Payment Declined", true],
+  ["Paid", false],
+  ["Complete", false],
+  ["Paid in Full", false],
+  ["", false],
+  ["Something We Have Never Seen", false]
+] as const) {
+  assert.equal(
+    enrollmentSeatIsUnpaid(`Enrollment Status: Enrolled-Payment Status: ${status}-Gender: Female`),
+    unpaid,
+    `enrollmentSeatIsUnpaid[${status || "(blank)"}]`
+  );
+}
+assert.equal(enrollmentSeatIsUnpaid("Interested in a Street Glide"), false, "a lead with no enrollment record is not 'unpaid'");
 
 console.log(
   "PASS jumpstart profile toggle eval — one key end to end (form default → hydrate → save → runtime read), off by default, independent of the course toggle"

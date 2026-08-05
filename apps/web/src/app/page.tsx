@@ -3626,6 +3626,8 @@ export default function Home() {
     riderToRiderFinancingEnabled: false,
     ridingAcademyEnabled: false,
     jumpstartEnabled: false,
+    registrationNote: "",
+    unpaidSeatPaymentMethods: "",
     riderCourseName: "",
     riderCoursePrice: "",
     riderCourseUrl: "",
@@ -7663,6 +7665,8 @@ export default function Home() {
             !!profile?.policies?.firstTimeRider?.riderCoursePrice ||
             !!profile?.policies?.firstTimeRider?.riderCourseUrl,
           jumpstartEnabled: profile?.policies?.firstTimeRider?.jumpstartEnabled === true,
+          registrationNote: profile?.policies?.firstTimeRider?.registrationNote ?? "",
+          unpaidSeatPaymentMethods: profile?.policies?.firstTimeRider?.unpaidSeatPaymentMethods ?? "",
           riderCourseName:
             profile?.policies?.firstTimeRider?.riderCourseName ??
             profile?.policies?.firstTimeRider?.trainingCourseName ??
@@ -12621,6 +12625,8 @@ export default function Home() {
             ridingAcademyEnabled: !!dealerProfileForm.ridingAcademyEnabled,
             riderCourseEnabled: !!dealerProfileForm.ridingAcademyEnabled,
             jumpstartEnabled: !!dealerProfileForm.jumpstartEnabled,
+            registrationNote: dealerProfileForm.registrationNote.trim(),
+            unpaidSeatPaymentMethods: dealerProfileForm.unpaidSeatPaymentMethods.trim(),
             riderCourseName: dealerProfileForm.riderCourseName.trim(),
             riderCoursePrice: dealerProfileForm.riderCoursePrice.trim(),
             riderCourseUrl: dealerProfileForm.riderCourseUrl.trim(),
@@ -18794,6 +18800,36 @@ export default function Home() {
                   </label>
                   <div className="text-xs text-slate-600">
                     Controls replies for course/pricing questions and first-time-rider guidance. If enabled but price is blank, the assistant asks staff to confirm price.
+                  </div>
+                  <label className="space-y-1 block">
+                    <div className="text-xs text-slate-600">Registration message note (max 200 characters)</div>
+                    <input
+                      className="border rounded px-3 py-2 text-sm w-full"
+                      maxLength={200}
+                      value={dealerProfileForm.registrationNote}
+                      onChange={e => setDealerProfileForm({ ...dealerProfileForm, registrationNote: e.target.value })}
+                      placeholder="Our riding academy manager will send you your e-course link that just needs to be completed prior to your course."
+                    />
+                  </label>
+                  <div className="text-xs text-slate-600">
+                    Added word for word to the reply someone gets when they register for a course. Leave blank and
+                    nothing extra is said.
+                  </div>
+                  <label className="space-y-1 block">
+                    <div className="text-xs text-slate-600">Unpaid seat — how it can be settled (max 200 characters)</div>
+                    <input
+                      className="border rounded px-3 py-2 text-sm w-full"
+                      maxLength={200}
+                      value={dealerProfileForm.unpaidSeatPaymentMethods}
+                      onChange={e =>
+                        setDealerProfileForm({ ...dealerProfileForm, unpaidSeatPaymentMethods: e.target.value })
+                      }
+                      placeholder="at the dealership or over the phone"
+                    />
+                  </label>
+                  <div className="text-xs text-slate-600">
+                    Used only when the registration says the seat is not paid. The assistant states that the seat
+                    is unpaid and how to settle it — never an amount. Leave blank and payment is never raised.
                   </div>
                   <label className="flex items-center gap-2 text-sm">
                     <input

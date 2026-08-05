@@ -37,7 +37,10 @@ import fs from "node:fs";
 
 import { decideRidingAcademyTurn } from "../services/api/src/domain/routeStateReducer.ts";
 import { buildRidingAcademyEnrollmentAck } from "../services/api/src/domain/agentVoice.ts";
-import { resolveEnrollmentJumpstartInvite } from "../services/api/src/domain/ridingAcademy.ts";
+import {
+  resolveEnrollmentJumpstartInvite,
+  resolveEnrollmentAckExtras
+} from "../services/api/src/domain/ridingAcademy.ts";
 import { resolveInitialAdfCadencePlan } from "../services/api/src/domain/conversationStore.ts";
 
 // The two real enrollment bodies, byte-for-byte from the americanharley store (2026-08-04).
@@ -202,6 +205,59 @@ assert.equal(
 );
 assert.ok(!/Jumpstart/.test(ack), "the plain registration reply must not mention a Jumpstart");
 
+// --- The DEALER-CONFIGURED registration extras (Joe, 2026-08-05) --------------------------------
+// Three rulings land in this one message: the dealer's own e-course note ("maybe each dealer can
+// type their template message in their profile"), the unpaid-seat line ("can be paid at the dealer
+// or over the phone if the payment fails"), and the Jumpstart offer. All four together measure 501
+// chars / 5 sentences against the REAL budget helper, so the ack carries the note plus EXACTLY ONE
+// of unpaid/Jumpstart — unpaid wins, because a class date is a deadline and an invite is not.
+const AH_PROFILE = {
+  policies: {
+    firstTimeRider: {
+      jumpstartEnabled: true,
+      registrationNote:
+        "Our riding academy manager will send you your e-course link that just needs to be completed prior to your course.",
+      unpaidSeatPaymentMethods: "at the dealership or over the phone"
+    }
+  }
+};
+const PAID_INQUIRY = SAVANNAH_INQUIRY.replace("Payment Status: Failed", "Payment Status: Paid");
+const compose = (profile: any, inquiry: string) =>
+  buildRidingAcademyEnrollmentAck("Savannah", "Alexandra", "American Harley-Davidson", resolveEnrollmentAckExtras(profile, inquiry));
+
+const unpaidMsg = compose(AH_PROFILE, SAVANNAH_INQUIRY);
+const paidMsg = compose(AH_PROFILE, PAID_INQUIRY);
+const bareMsg = compose({ policies: { firstTimeRider: {} } }, SAVANNAH_INQUIRY);
+
+// The dealer's note is inserted VERBATIM, in both the unpaid and paid shapes.
+for (const [label, msg] of [["unpaid", unpaidMsg], ["paid", paidMsg]] as const) {
+  assert.ok(
+    msg.includes(AH_PROFILE.policies.firstTimeRider.registrationNote),
+    `[${label}] the dealer's registration note must appear word for word`
+  );
+  assert.equal(exceedsSmsBrevityBudget(msg), false, `[${label}] must stay inside the SMS brevity budget: "${msg}"`);
+  assert.ok((msg.match(/\?/g) ?? []).length <= 1, `[${label}] one question per text`);
+}
+// PRECEDENCE: unpaid wins; the Jumpstart never rides alongside it.
+assert.ok(/isn't showing as paid yet/.test(unpaidMsg), "an unpaid seat must be flagged");
+assert.ok(
+  unpaidMsg.includes("at the dealership or over the phone"),
+  "the unpaid line must use the DEALER'S words for how to settle it"
+);
+assert.ok(!/Jumpstart/i.test(unpaidMsg), "the Jumpstart must NOT ride alongside the unpaid-seat line");
+// A settled seat gets the Jumpstart instead.
+assert.ok(/Jumpstart/i.test(paidMsg), "a settled seat at a Jumpstart dealer gets the offer");
+assert.ok(!/paid yet/.test(paidMsg), "a settled seat must never be told its payment is outstanding");
+// NEVER an amount, in any shape.
+for (const [label, msg] of [["unpaid", unpaidMsg], ["paid", paidMsg]] as const) {
+  assert.ok(
+    !/\$|\b\d+(\.\d{2})?\s*(dollars|usd)\b/i.test(msg),
+    `[${label}] the registration reply must never state an amount: "${msg}"`
+  );
+}
+// Nothing configured ⇒ the plain intro, byte for byte.
+assert.equal(bareMsg, ack, "an unconfigured dealer must get the plain approved intro, unchanged");
+
 // Portability: the copy itself must not hard-code this dealer (dealer #2 readiness).
 const ackOtherDealer = buildRidingAcademyEnrollmentAck("Pat", "Sales Team", "Queen City Harley-Davidson");
 assert.ok(
@@ -239,7 +295,7 @@ assert.ok(
 assert.ok(
   /decideRidingAcademyTurn\(\{ leadSource: input\.leadSource, inquiry: input\.inquiry \}\)\.kind ===\s*"riding_academy_enrollment_ack"/.test(
     adfFirstTouch
-  ) && /buildRidingAcademyEnrollmentAck\(\s*args\.firstName,\s*args\.agentName,\s*args\.dealerName,\s*args\.jumpstartInvite \?\? ""\s*\)/.test(adfFirstTouch),
+  ) && /buildRidingAcademyEnrollmentAck\(args\.firstName, args\.agentName, args\.dealerName, \{/.test(adfFirstTouch),
   "the shared resolver must decide from the reducer and build the approved enrollment copy"
 );
 // Precedence: the enrollment ack is checked BEFORE the non-buyer survey ack.

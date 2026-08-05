@@ -65,7 +65,7 @@ import type { InventoryWatch } from "../domain/conversationStore.js";
 import { isSuppressed } from "../domain/suppressionStore.js";
 import { isOptOutKeywordInbound } from "../domain/scoringExclusions.js";
 import { readFirstTimeRiderPolicy, hasRiderCoursePublicInfo } from "../domain/firstTimeRiderPolicy.js";
-import { resolveEnrollmentJumpstartInvite } from "../domain/ridingAcademy.js";
+import { resolveEnrollmentAckExtras } from "../domain/ridingAcademy.js";
 import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildRidingAcademyEnrollmentAck, shouldIntroduceOnAdfTouch, stripAgentIntroPhraseForDealer, stripLeadingAgentGreeting, hasCustomerReceivedOutbound, GENERIC_AGENT_DISPLAY_NAME, GENERIC_DEALER_DISPLAY_NAME, resolveDealerAgentName, greetingFirstName } from "../domain/agentVoice.js";
 import { buildAdfResubmissionAck, detectAdfFormResubmission } from "../domain/adfResubmission.js";
 import { buildMarketplaceRelayFirstTouchReply, buildMarketplaceRelayTaskSummary } from "../domain/marketplaceRelay.js";
@@ -9788,7 +9788,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       adfAckFirstName(),
       adfAckAgentName(),
       adfAckDealerName(),
-      resolveEnrollmentJumpstartInvite(dealerProfile, effectiveInquiry)
+      resolveEnrollmentAckExtras(dealerProfile, effectiveInquiry)
     );
   } else if (
     // Non-buyer / passenger survey lead (Elizabeth Klapa, 2026-06-25): a Dealer Lead App survey

@@ -31,7 +31,39 @@ export type FirstTimeRiderPolicy = {
    * false — only an explicit `true` turns it on.
    */
   jumpstartEnabled: boolean;
+  /**
+   * The dealer's own sentence for a NEW course registration — e.g. American Harley's *"Our riding
+   * academy manager will send you your e-course link that just needs to be completed prior to your
+   * course."* (Joe, 2026-08-05: *"This is dealer specific and maybe each dealer can type their
+   * template message in their profile."*) Inserted VERBATIM into the registration reply.
+   *
+   * Blank ⇒ nothing is added, which is the default and the portable behaviour: a store that has not
+   * written one never has words put in its mouth. Capped at REGISTRATION_NOTE_MAX_CHARS — a note
+   * longer than that is DROPPED rather than truncated mid-sentence, because half a sentence about
+   * someone's course is worse than none.
+   */
+  registrationNote: string;
+  /**
+   * How an UNPAID course seat can be settled, in the dealer's words — American Harley's is "at the
+   * dealership or over the phone" (Joe, 2026-08-05). Blank ⇒ the agent never raises payment at all.
+   * NEVER an amount: this says WHERE to pay, never HOW MUCH.
+   */
+  unpaidSeatPaymentMethods: string;
 };
+
+/**
+ * A dealer-typed note goes straight to a customer, so it is length-capped at roughly two SMS
+ * sentences. Over the cap it is dropped, not cut: the console also caps the input, so a dealer sees
+ * the limit while typing rather than discovering it in a customer's inbox.
+ */
+export const REGISTRATION_NOTE_MAX_CHARS = 200;
+
+/** Dealer-typed free text, normalised for a single-line SMS and dropped if it runs long. */
+function readDealerNote(raw: unknown): string {
+  const text = String(raw ?? "").replace(/\s+/g, " ").trim();
+  if (!text || text.length > REGISTRATION_NOTE_MAX_CHARS) return "";
+  return text;
+}
 
 export function readFirstTimeRiderPolicy(dealerProfile: any): FirstTimeRiderPolicy {
   const policies = dealerProfile?.policies ?? {};
@@ -48,7 +80,9 @@ export function readFirstTimeRiderPolicy(dealerProfile: any): FirstTimeRiderPoli
     // Both legacy keys must be explicitly false to drop the requirement (unchanged behaviour).
     requiresEndorsement:
       p.requiresMotorcycleEndorsementForTestRide !== false && p.testRideRequiresEndorsement !== false,
-    jumpstartEnabled: p.jumpstartEnabled === true
+    jumpstartEnabled: p.jumpstartEnabled === true,
+    registrationNote: readDealerNote(p.registrationNote),
+    unpaidSeatPaymentMethods: readDealerNote(p.unpaidSeatPaymentMethods)
   };
 }
 
@@ -82,4 +116,22 @@ export function readEnrollmentRidingHistory(inquiry?: string | null): string {
 export function readEnrollmentCourseName(inquiry?: string | null): string {
   const hit = String(inquiry ?? "").match(/\bcourse:\s*(.+?)(?=-[A-Z][A-Za-z /]*:|\n|$)/i);
   return hit?.[1] ? hit[1].trim() : "";
+}
+
+/**
+ * Does the enrollment record plainly say the seat is NOT settled?
+ *
+ * ALLOWLIST of not-paid wordings, on purpose. Across the whole americanharley store there are
+ * exactly two `Payment Status` values — "Failed" and "Awaiting Payment at Dealer" — and NO example
+ * of what a PAID one looks like, so "not one of the unpaid words" is the only thing we can read
+ * safely. Unknown, blank, and any future "Paid"/"Complete" all return false.
+ *
+ * FAIL DIRECTION: telling someone their payment failed when it did not is alarming and wrong, so
+ * silence is the default and only an explicit not-paid wording speaks up.
+ */
+export function enrollmentSeatIsUnpaid(inquiry?: string | null): boolean {
+  const hit = String(inquiry ?? "").match(/\bpayment status:\s*(.+?)(?=-[A-Z][A-Za-z /]*:|\n|$)/i);
+  const status = hit?.[1] ? hit[1].trim().toLowerCase() : "";
+  if (!status) return false;
+  return /\b(failed|declined|unpaid|awaiting payment|payment due|not paid|pending payment)\b/.test(status);
 }

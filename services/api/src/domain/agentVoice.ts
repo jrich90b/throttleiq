@@ -601,24 +601,34 @@ export function buildRidingAcademyEnrollmentAck(
   firstName: string | null | undefined,
   agentName: string,
   dealerName: string,
-  jumpstartInvite: string = ""
+  extras: { registrationNote?: string; unpaidSeatLine?: string; jumpstartInvite?: string } | string = {}
 ): string {
+  // Back-compat: earlier callers passed the Jumpstart invite as a bare 4th string.
+  const e = typeof extras === "string" ? { jumpstartInvite: extras } : extras;
+  const note = String(e.registrationNote ?? "").trim();
+  const unpaid = String(e.unpaidSeatLine ?? "").trim();
+  const jumpstart = String(e.jumpstartInvite ?? "").trim();
   const intro = buildAgentIntro(firstName, agentName, dealerName);
-  // Joe, 2026-08-05 (second ruling): a store WITH a Jumpstart offers it right here, in the
-  // registration reply — these are people who signed up to learn to ride. The offer takes the
-  // place of the generic "text me if a question comes up" tail rather than being bolted on: it is
-  // the concrete version of the same promise, and appending both runs past the SMS brevity budget.
-  // Empty invite (no Jumpstart at this store) ⇒ today's wording, byte for byte.
-  if (!jumpstartInvite) {
+
+  // Joe's ruling stack for this one message (2026-08-05), in priority order:
+  //   1. intro + thanks + "I'm your contact" — always;
+  //   2. the dealer's own registration note (the e-course link sentence) — always, when written;
+  //   3. EITHER the unpaid-seat line OR the Jumpstart offer — never both.
+  //
+  // Why never both: measured against the real SMS brevity budget, all four run to 501 characters
+  // across five sentences and stop reading like a text. The unpaid seat wins because it has a
+  // DEADLINE (the class date) and the Jumpstart is an invitation that can wait for any later turn.
+  const tail = unpaid || jumpstart;
+  if (!note && !tail) {
+    // Nothing configured and nothing to flag — the plain intro Joe approved, byte for byte.
     return (
       `${intro}Thanks for signing up for the Riding Academy — glad to have you in the class. ` +
       "I'm your contact here for anything to do with the course, so if a question comes up, just text me and I'll take care of it."
     );
   }
-  return (
-    `${intro}Thanks for signing up for the Riding Academy — I'm your contact here for anything to ` +
-    `do with the course.${jumpstartInvite}`
-  );
+  const contact =
+    "Thanks for signing up for the Riding Academy — I'm your contact here for anything to do with the course.";
+  return `${intro}${contact}${note ? ` ${note}` : ""}${tail ? ` ${tail}` : ""}`;
 }
 
 /**
@@ -750,4 +760,30 @@ export function buildFirstTimeRiderBeginnerReply(args: {
     "That’s exciting. For a first bike, I’d focus on comfort, seat height, weight, and confidence." +
     `${invite || " Do you already have your motorcycle endorsement, or are you still getting started?"}`
   );
+}
+
+/**
+ * The UNPAID-SEAT line for a course registration (Joe, 2026-08-05: *"Unpaid seats can be paid at
+ * the dealer or over the phone if the payment fails."*).
+ *
+ * `paymentMethods` is the dealer's own words from their profile ("at the dealership or over the
+ * phone"); blank ⇒ "" ⇒ the agent never raises payment. States that the seat is not settled and
+ * WHERE to settle it — never HOW MUCH, and never a due date we would have to be right about. The
+ * wording works for both statuses seen live ("Failed" and "Awaiting Payment at Dealer"): "isn't
+ * showing as paid yet" is true of both, where "your payment failed" would be wrong for the second.
+ * Pinned by `riding_academy_enrollment_ack:eval`.
+ */
+export function buildUnpaidSeatLine(paymentMethods: string): string {
+  const methods = String(paymentMethods ?? "").trim();
+  if (!methods) return "";
+  return `One thing to flag: your seat isn't showing as paid yet — you can take care of that ${methods}.`;
+}
+
+/**
+ * The SHORT Jumpstart offer used inside a course registration, where the message is already
+ * carrying an intro and the dealer's e-course note. The full `buildJumpstartOneOnOneInvite` wording
+ * pushes the registration reply to five sentences; this one keeps it at four.
+ */
+export function buildJumpstartRegistrationInvite(): string {
+  return "We've also got a Jumpstart here you can try before class — want me to set up one-on-one time on it?";
 }
