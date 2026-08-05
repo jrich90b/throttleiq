@@ -246,7 +246,12 @@ const CEILINGS: Ceiling[] = [
     // against an older main. Main has since ratcheted to 71_142 and the INTEGRATED tree measures
     // 71_042 — so 71_047 would have PASSED while handing back 5 lines someone else's un-stacking
     // had already won. Re-derived on the integrated tree; a ceiling is a cap, never a budget.
-    max: 71_042,
+    // 71_042 -> 71_025. The Jumpstart 1-on-1 invite (Joe, 2026-08-05) funded itself the same way:
+    // `policies.firstTimeRider` was being re-read by hand in FIVE places (three here, two in
+    // sendgridInbound.ts), each with its own defaults, so a new capability flag would have had to be
+    // added to all five. One `readFirstTimeRiderPolicy` in domain/firstTimeRiderPolicy.ts now serves
+    // every caller, and the new invite still lands 17 lines UNDER the old ceiling.
+    max: 71_025,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

@@ -16,7 +16,8 @@ import sharp from "sharp";
 import { orchestrateInbound, evaluateTestRideInventoryGate, buildBlockedTestRideInventoryDraft } from "./domain/orchestrator.js";
 import { resolveWatchOptOutOutcome } from "./domain/watchOptOutTurn.js";
 import { resolveAdfFirstTouchAckKind, buildAdfFirstTouchAck } from "./domain/ridingAcademy.js";
-import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildRidingAcademyEnrollmentAck, buildWatchAvailableReply, buildCholoWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, resolveIntroducedOwnerFirstName, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, hasCustomerReceivedOutbound, hasRecentDeliveredHumanOutbound } from "./domain/agentVoice.js";
+import { readFirstTimeRiderPolicy, hasRiderCoursePublicInfo, readEnrollmentRidingHistory } from "./domain/firstTimeRiderPolicy.js";
+import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildRidingAcademyEnrollmentAck, buildJumpstartOneOnOneInvite, buildFirstTimeRiderBeginnerReply, buildWatchAvailableReply, buildCholoWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, resolveIntroducedOwnerFirstName, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, hasCustomerReceivedOutbound, hasRecentDeliveredHumanOutbound } from "./domain/agentVoice.js";
 import {
   postSaleVehicleIsNew,
   postSaleAccessoryOrEnjoyMessage,
@@ -758,6 +759,7 @@ import {
   type DeptWidgetIntakeTurnKind,
   decideNonBuyerSurveyTurn,
   decideDealerLeadSurveyTurn,
+  decideJumpstartInviteTurn,
   decideFinancePricingTurn,
   decideFinanceProcessQuestionTurn,
   decideServiceSchedulingHandoffTurn,
@@ -27457,28 +27459,26 @@ function buildFirstTimeRiderGuidanceReply(args: {
   parsed: FirstTimeRiderGuidanceParse;
   dealerProfile: any;
   text?: string | null;
+  ridingHistory?: string | null;
 }): string {
   const parsed = args.parsed;
-  const policies = args.dealerProfile?.policies ?? {};
-  const firstTimePolicy =
-    policies?.firstTimeRider && typeof policies.firstTimeRider === "object"
-      ? policies.firstTimeRider
-      : {};
-  const requiresEndorsement =
-    firstTimePolicy.requiresMotorcycleEndorsementForTestRide !== false &&
-    firstTimePolicy.testRideRequiresEndorsement !== false;
-  const courseName =
-    String(firstTimePolicy.riderCourseName ?? "").trim() ||
-    String(firstTimePolicy.trainingCourseName ?? "").trim() ||
-    "a motorcycle safety course";
-  const courseUrl =
-    String(firstTimePolicy.riderCourseUrl ?? "").trim() ||
-    String(firstTimePolicy.trainingCourseUrl ?? "").trim();
+  const policy = readFirstTimeRiderPolicy(args.dealerProfile);
+  const requiresEndorsement = policy.requiresEndorsement;
+  const courseName = policy.courseName || "a motorcycle safety course";
+  const courseUrl = policy.courseUrl;
   const courseText = courseUrl ? `${courseName}: ${courseUrl}` : courseName;
   const courseDetails = courseUrl ? ` Course details are here: ${courseUrl}` : "";
-  const coursePrice =
-    String(firstTimePolicy.riderCoursePrice ?? "").trim() ||
-    String(firstTimePolicy.trainingCoursePrice ?? "").trim();
+  const coursePrice = policy.coursePrice;
+  // Joe, 2026-08-05: a store with a Jumpstart offers an inexperienced rider 1-on-1 time on it.
+  const jumpstartInvite =
+    decideJumpstartInviteTurn({
+      dealerHasJumpstart: policy.jumpstartEnabled,
+      riderIntent: parsed.intent,
+      hasEndorsement: parsed.hasEndorsement ?? null,
+      ridingHistory: args.ridingHistory ?? null
+    }).kind === "jumpstart_one_on_one_invite"
+      ? buildJumpstartOneOnOneInvite()
+      : "";
 
   if (parsed.intent === "rider_course_info" || parsed.asksRiderCourse) {
     const isAmbiguous = hasAmbiguousRiderCourseInfoText(args.text);
@@ -27505,38 +27505,34 @@ function buildFirstTimeRiderGuidanceReply(args: {
     const requirement = requiresEndorsement
       ? "For test rides, we do need a motorcycle endorsement."
       : "Before a test ride, I’d still want to make sure the bike is a safe fit for your experience.";
-    return `${requirement} We can still help you sit on a few bikes and talk through beginner-friendly options. If you’re still getting started, ${courseText} is a good next step.`;
+    // The Jumpstart REPLACES the generic "sit on a few bikes" line rather than piling on: it is a
+    // strictly better version of the same offer, and appending both broke the SMS brevity budget.
+    const hands =
+      jumpstartInvite || " We can still help you sit on a few bikes and talk through beginner-friendly options.";
+    return `${requirement}${hands} If you’re still getting started, ${courseText} is a good next step.`;
   }
   if (parsed.hasEndorsement === true) {
     return "That makes sense. Since you have your endorsement, I’d still start by making sure the bike feels manageable: seat height, weight, and comfort. What kind of riding are you hoping to do?";
   }
   if (parsed.asksTestRide) {
-    return "That’s exciting. For a first ride, I’d want to make sure we match you with something comfortable and manageable before setting up a test ride. Do you already have your motorcycle endorsement?";
+    // When the invite fires we ALREADY know they are starting out, so it replaces the endorsement
+    // question rather than asking something we have just been told (and two asks in one text).
+    return `That’s exciting. For a first ride, I’d want to make sure we match you with something comfortable and manageable before setting up a test ride.${jumpstartInvite || " Do you already have your motorcycle endorsement?"}`;
   }
-  return "That’s exciting. For a first bike, I’d focus on comfort, seat height, weight, and confidence. Do you already have your motorcycle endorsement, or are you still getting started?";
+  return `That’s exciting. For a first bike, I’d focus on comfort, seat height, weight, and confidence.${jumpstartInvite || " Do you already have your motorcycle endorsement, or are you still getting started?"}`;
 }
 
 function buildInitialAdfFirstTimeRiderGuidanceReply(args: {
   parsed: FirstTimeRiderGuidanceParse;
   dealerProfile: any;
   text?: string | null;
+  ridingHistory?: string | null;
 }): string {
   const parsed = args.parsed;
-  const policies = args.dealerProfile?.policies ?? {};
-  const firstTimePolicy =
-    policies?.firstTimeRider && typeof policies.firstTimeRider === "object"
-      ? policies.firstTimeRider
-      : {};
-  const courseName =
-    String(firstTimePolicy.riderCourseName ?? "").trim() ||
-    String(firstTimePolicy.trainingCourseName ?? "").trim() ||
-    "Riding Academy course";
-  const coursePrice =
-    String(firstTimePolicy.riderCoursePrice ?? "").trim() ||
-    String(firstTimePolicy.trainingCoursePrice ?? "").trim();
-  const courseUrl =
-    String(firstTimePolicy.riderCourseUrl ?? "").trim() ||
-    String(firstTimePolicy.trainingCourseUrl ?? "").trim();
+  const adfPolicy = readFirstTimeRiderPolicy(args.dealerProfile);
+  const courseName = adfPolicy.courseName || "Riding Academy course";
+  const coursePrice = adfPolicy.coursePrice;
+  const courseUrl = adfPolicy.courseUrl;
   if (parsed.intent === "rider_course_info" || parsed.asksRiderCourse) {
     const isAmbiguous = hasAmbiguousRiderCourseInfoText(args.text);
     const ambiguousPriceLine = coursePrice
@@ -27559,17 +27555,7 @@ function buildInitialAdfFirstTimeRiderGuidanceReply(args: {
 }
 
 function hasRiderCourseCustomerFacingInfo(dealerProfile: any): boolean {
-  const policies = dealerProfile?.policies ?? {};
-  const firstTimePolicy =
-    policies?.firstTimeRider && typeof policies.firstTimeRider === "object"
-      ? policies.firstTimeRider
-      : {};
-  return !!(
-    String(firstTimePolicy.riderCoursePrice ?? "").trim() ||
-    String(firstTimePolicy.trainingCoursePrice ?? "").trim() ||
-    String(firstTimePolicy.riderCourseUrl ?? "").trim() ||
-    String(firstTimePolicy.trainingCourseUrl ?? "").trim()
-  );
+  return hasRiderCoursePublicInfo(dealerProfile);
 }
 
 function applyFirstTimeRiderGuidanceState(conv: any, parsed?: FirstTimeRiderGuidanceParse | null) {
@@ -55395,7 +55381,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const replyBody = buildInitialAdfFirstTimeRiderGuidanceReply({
       parsed: regenAdfFirstTimeRiderDecision,
       dealerProfile,
-      text: event.body ?? ""
+      text: event.body ?? "",
+      ridingHistory: readEnrollmentRidingHistory(conv.lead?.inquiry)
     });
     const reply = `${buildAgentIntro(firstName, agentName, dealerName)}${replyBody}`.trim();
     applyFirstTimeRiderGuidanceState(conv, regenAdfFirstTimeRiderDecision);
@@ -55911,7 +55898,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const reply = buildFirstTimeRiderGuidanceReply({
       parsed: regenFirstTimeRiderDecision,
       dealerProfile: profile,
-      text: event.body ?? ""
+      text: event.body ?? "",
+      ridingHistory: readEnrollmentRidingHistory(conv.lead?.inquiry)
     });
     recordRouteOutcome("regen", "first_time_rider_guidance", {
       convId: conv.id,
@@ -61640,7 +61628,8 @@ if (authToken && signature) {
     const reply = buildFirstTimeRiderGuidanceReply({
       parsed: firstTimeRiderDecision,
       dealerProfile,
-      text: semanticInboundText
+      text: semanticInboundText,
+      ridingHistory: readEnrollmentRidingHistory(conv.lead?.inquiry)
     });
     recordRouteOutcome("live", "first_time_rider_guidance", {
       convId: conv.id,
