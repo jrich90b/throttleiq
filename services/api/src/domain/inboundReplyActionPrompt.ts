@@ -47,6 +47,24 @@ export const INBOUND_REPLY_ACTION_PARSER_JSON_SCHEMA: { [key: string]: unknown }
 };
 
 export const INBOUND_REPLY_ACTION_EXAMPLES: string[] = [
+    // The three misses from Mike Ganley (+15853075478, 2026-08-05): one lead, three different
+    // messages, and the SAME "We're located at 1149 Erie Ave…" draft on all three. The parser
+    // understood every turn correctly and still filed each under dealer_location_question — its
+    // own reason on the third literally said the customer was answering "the dealer's request for
+    // town". `none` hands the turn back to the normal path, which already read the first as
+    // availability at 0.92.
+    `EXAMPLE ON-LOCATION-1
+inbound: "Is the bike on location?"
+history: "out: Mike, here is the quote on the billiard gray with black trim road glide."
+output: {"action":"none","explicit_action":false,"should_reply":true,"normalized_text":"customer asks whether the quoted bike is physically at the store","reason":"Asking if the BIKE is on location is an availability question about the unit, not a request for our address.","scheduling_conflict_open":false,"confidence":0.95}`,
+    `EXAMPLE ON-LOCATION-2
+inbound: "Is there a similar bike on location? I could at least look at today before that one get shipped"
+history: "out: I just checked, this is an incoming order with a estimated ship date of 8/28"
+output: {"action":"none","explicit_action":false,"should_reply":true,"normalized_text":"customer asks whether a similar bike is at the store to look at today","reason":"Availability of a comparable unit on the lot, not a request for the dealership address.","scheduling_conflict_open":false,"confidence":0.95}`,
+    `EXAMPLE ADDRESS-SUPPLIED
+inbound: "5 Timberlake Dr. orchard Park, NY 14127"
+history: "out: Mike, I am putting your name on the order right now and just need to add your info. What town/zip code are you?"
+output: {"action":"none","explicit_action":false,"should_reply":true,"normalized_text":"customer provides their address in reply to our request for it","reason":"The customer is ANSWERING our request for their town/zip. Supplying an address is not asking where we are located.","scheduling_conflict_open":false,"confidence":0.96}`,
     `EXAMPLE A
 inbound: "Hey, can you give me a call?"
 history: "out: What day and time works best to stop in?"
