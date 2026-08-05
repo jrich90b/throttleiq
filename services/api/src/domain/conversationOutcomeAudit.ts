@@ -592,7 +592,13 @@ export function summarizeTurnActions(
   dialogState: string | null;
   handoffMode: string | null;
   cadence: { kind: string | null; status: string | null };
-  activeWatches: Array<{ model: string | null; year: number | null; condition: string | null }>;
+  activeWatches: Array<{
+    model: string | null;
+    year: number | null;
+    condition: string | null;
+    exactness: string | null;
+    yearPinned: boolean;
+  }>;
   openTasks: Array<{ reason: string | null; summary: string | null }>;
   appointment: { status: string | null; booked: boolean; whenText: string | null };
 } {
@@ -600,9 +606,20 @@ export function summarizeTurnActions(
     const s = [x?.year, x?.model ?? x?.description].filter(Boolean).join(" ").trim();
     return s || null;
   };
+  // `exactness` + `yearPinned` are surfaced because the critic reads this blob verbatim and was
+  // previously shown `year: null` with no way to tell a DELIBERATELY year-agnostic `model_only` watch
+  // from a `year_model` watch that merely lost its pin. That ambiguity is what let it grade a correct
+  // model-only watch alert as fabricated availability (+17165104578, 2026-08-04 — see
+  // resolveOpenCriticWatchAlertContext).
   const watches = collectInventoryWatches(conv)
     .filter((w: any) => w && String(w?.status ?? "active").toLowerCase() !== "paused")
-    .map((w: any) => ({ model: w?.model ?? null, year: typeof w?.year === "number" ? w.year : null, condition: w?.condition ?? null }));
+    .map((w: any) => ({
+      model: w?.model ?? null,
+      year: typeof w?.year === "number" ? w.year : null,
+      condition: w?.condition ?? null,
+      exactness: w?.exactness ?? null,
+      yearPinned: typeof w?.year === "number" && w.year > 0
+    }));
   return {
     leadSource: conv?.lead?.source ?? null,
     parsedVehicle: fmtVeh(conv?.lead?.vehicle ?? {}),
@@ -723,15 +740,136 @@ export function isOpenCriticReplyFreshEnough(
   return nowMs - atMs <= maxAgeMs;
 }
 
+/** What `resolveOpenCriticWatchAlertContext` proved about the reply the critic graded. */
+export type OpenCriticWatchAlertContext = {
+  isWatchAlert: boolean;
+  stockId: string | null;
+  model: string | null;
+  watchExactness: string | null;
+  watchYearPinned: boolean;
+  unitVerifiedInFeed: boolean;
+};
+
+/** How long after a watch fire its alert may still be the message that fire produced. Generous on
+ *  purpose: in suggest mode the fire stamps `lastNotifiedAt` and the text waits for staff approval —
+ *  Jason's 2026-08-04 alert went out 68 minutes after its stamp. Widening this can only ever make the
+ *  guard MORE willing to suppress, so it is bounded by the "no other real outbound in between" test
+ *  below, which is what actually makes the correlation exact. */
+export const OPEN_CRITIC_WATCH_ALERT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Did the reply the critic graded come from an inventory-watch fire, and was the unit it named really
+ * in stock?
+ *
+ * WHY (2026-08-05, +17165104578): the open critic is handed the thread, the last agent reply, and the
+ * in-stock model list — but nothing that says "this reply is a WATCH ALERT". Jason's ADF pinned a 2021
+ * Street Glide Special; his watch is `exactness: "model_only"` (deliberately year-agnostic) and duly
+ * fired on an arriving 2019 Street Glide Special, stock U911-19. That unit was in the very snapshot the
+ * critic was given — so its inventory check PASSED and it flagged anyway, re-labelling the finding
+ * `promised_unit_not_in_stock` with the reason "not among the requested model (2021 Street Glide
+ * Special)". That is a different proposition from "we don't have this bike", and it is false: a
+ * model-only watch firing off-year is the designed behaviour, not fabricated availability.
+ * `issueClass` is free-form in the critic's schema, so nothing downstream could catch the swap.
+ *
+ * Deterministic on purpose. This reads OUR OWN records (watch stamps, the inventory feed), never
+ * customer intent — the "comprehend, never regex" law governs the latter (AGENTS.md).
+ *
+ * CORRELATION IS STRUCTURAL, NOT TEXTUAL: a watch whose `lastNotifiedStockId` is set, whose
+ * `lastNotifiedAt` is at/before the reply and inside the window, and with NO other real outbound
+ * message sitting between the stamp and the reply. That last clause is what makes it exact — it means
+ * the graded reply IS the message that fire produced, not merely a later one.
+ *
+ * FAIL DIRECTION: toward FLAGGING, on every axis. Missing conv/reply, an undatable reply, no stamped
+ * watch, an intervening send, an empty inventory feed, or a stock id absent from it all yield
+ * `isWatchAlert:false` / `unitVerifiedInFeed:false`, and the caller then behaves exactly as it does
+ * today. Suppression requires the promised stock id to be PRESENT in the current feed, so a genuine
+ * out-of-stock promise can never be silenced by this.
+ */
+export function resolveOpenCriticWatchAlertContext(
+  conv: any,
+  reply: OutboundAuthorshipMsg | null | undefined,
+  inStockStockIds?: ReadonlySet<string> | null,
+  realOutProviders?: ReadonlySet<string> | null
+): OpenCriticWatchAlertContext {
+  const none: OpenCriticWatchAlertContext = {
+    isWatchAlert: false,
+    stockId: null,
+    model: null,
+    watchExactness: null,
+    watchYearPinned: false,
+    unitVerifiedInFeed: false
+  };
+  const replyAtMs = Date.parse(String(reply?.at ?? ""));
+  if (!reply || !Number.isFinite(replyAtMs)) return none;
+
+  // Any real outbound strictly between the fire stamp and the graded reply means the reply is NOT the
+  // message that fire produced.
+  const providers = realOutProviders ?? new Set(["twilio", "sendgrid", "human"]);
+  const realOutAtMs: number[] = (Array.isArray(conv?.messages) ? conv.messages : [])
+    .filter(
+      (m: any) =>
+        m?.direction === "out" && providers.has(String(m?.provider ?? "")) && String(m?.body ?? "").trim()
+    )
+    .map((m: any) => Date.parse(String(m?.at ?? "")))
+    .filter((t: number) => Number.isFinite(t));
+
+  const normStock = (s: unknown) => String(s ?? "").trim().toUpperCase();
+  let best: OpenCriticWatchAlertContext | null = null;
+  for (const w of collectInventoryWatches(conv) as any[]) {
+    const stockId = normStock(w?.lastNotifiedStockId);
+    const firedAtMs = Date.parse(String(w?.lastNotifiedAt ?? ""));
+    if (!stockId || !Number.isFinite(firedAtMs)) continue;
+    if (replyAtMs < firedAtMs) continue;
+    if (replyAtMs - firedAtMs > OPEN_CRITIC_WATCH_ALERT_WINDOW_MS) continue;
+    if (realOutAtMs.some(t => t > firedAtMs && t < replyAtMs)) continue;
+    const ctx: OpenCriticWatchAlertContext = {
+      isWatchAlert: true,
+      stockId,
+      model: w?.lastNotifiedModel ?? w?.model ?? null,
+      watchExactness: w?.exactness ?? null,
+      watchYearPinned: typeof w?.year === "number" && w.year > 0,
+      unitVerifiedInFeed: !!inStockStockIds && inStockStockIds.has(stockId)
+    };
+    // Prefer a watch we can actually vouch for; otherwise keep the first correlated one (which, being
+    // unverified, leaves the finding flagged).
+    if (!best || (ctx.unitVerifiedInFeed && !best.unitVerifiedInFeed)) best = ctx;
+  }
+  return best ?? none;
+}
+
+/**
+ * Is this free-form `issue_class` a claim that we promised a unit we do not have? Normalised token test
+ * because the critic INVENTS the label — the same thread has produced `promised_unit_not_in_stock`,
+ * `availability_claim_for_unavailable_unit`, and `availability_not_confirmed_before_follow_up`.
+ * Deliberately narrow: `watch_notified_wrong_model`, `watch_set_for_wrong_model`, and every
+ * non-availability class must NOT match, so the guard can only ever quiet the availability question.
+ */
+export function isAvailabilityFabricationIssueClass(issueClass: unknown): boolean {
+  const s = String(issueClass ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "_");
+  return /availab|in_?stock|out_of_stock|not_in_stock|fabricat/.test(s);
+}
+
 export function decideOpenCriticAnomaly(
   finding: OpenCriticFinding,
-  base: { convId: string; leadKey?: string | null }
+  base: { convId: string; leadKey?: string | null },
+  watchAlert?: OpenCriticWatchAlertContext | null
 ): OutcomeAnomaly | null {
   if (!finding?.hasIssue) return null;
   if (String(finding.severity ?? "").toLowerCase() !== "major") return null;
   const conf = typeof finding.confidence === "number" ? finding.confidence : 1;
   if (!(conf >= 0.8)) return null;
   const issueClass = String(finding.issueClass ?? "").trim() || "unspecified";
+  // A verified, un-pinned watch alert is not fabricated availability. All four facts must be positively
+  // proven; anything absent or unknown falls through and flags. See resolveOpenCriticWatchAlertContext.
+  if (
+    watchAlert?.isWatchAlert === true &&
+    watchAlert.unitVerifiedInFeed === true &&
+    watchAlert.watchYearPinned !== true &&
+    String(watchAlert.watchExactness ?? "").toLowerCase() !== "year_model" &&
+    isAvailabilityFabricationIssueClass(issueClass)
+  ) {
+    return null;
+  }
   return {
     convId: String(base.convId ?? ""),
     leadKey: String(base.leadKey ?? ""),
