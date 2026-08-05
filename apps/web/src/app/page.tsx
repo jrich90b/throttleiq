@@ -3625,6 +3625,7 @@ export default function Home() {
     lienHolderResponse: "",
     riderToRiderFinancingEnabled: false,
     ridingAcademyEnabled: false,
+    jumpstartEnabled: false,
     riderCourseName: "",
     riderCoursePrice: "",
     riderCourseUrl: "",
@@ -7661,6 +7662,7 @@ export default function Home() {
             profile?.policies?.firstTimeRider?.enabled === true ||
             !!profile?.policies?.firstTimeRider?.riderCoursePrice ||
             !!profile?.policies?.firstTimeRider?.riderCourseUrl,
+          jumpstartEnabled: profile?.policies?.firstTimeRider?.jumpstartEnabled === true,
           riderCourseName:
             profile?.policies?.firstTimeRider?.riderCourseName ??
             profile?.policies?.firstTimeRider?.trainingCourseName ??
@@ -12618,6 +12620,7 @@ export default function Home() {
             enabled: !!dealerProfileForm.ridingAcademyEnabled,
             ridingAcademyEnabled: !!dealerProfileForm.ridingAcademyEnabled,
             riderCourseEnabled: !!dealerProfileForm.ridingAcademyEnabled,
+            jumpstartEnabled: !!dealerProfileForm.jumpstartEnabled,
             riderCourseName: dealerProfileForm.riderCourseName.trim(),
             riderCoursePrice: dealerProfileForm.riderCoursePrice.trim(),
             riderCourseUrl: dealerProfileForm.riderCourseUrl.trim(),
@@ -18791,6 +18794,25 @@ export default function Home() {
                   </label>
                   <div className="text-xs text-slate-600">
                     Controls replies for course/pricing questions and first-time-rider guidance. If enabled but price is blank, the assistant asks staff to confirm price.
+                  </div>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={!!dealerProfileForm.jumpstartEnabled}
+                      onChange={e =>
+                        setDealerProfileForm({
+                          ...dealerProfileForm,
+                          jumpstartEnabled: e.target.checked
+                        })
+                      }
+                    />
+                    Dealership has a Jumpstart on site
+                  </label>
+                  <div className="text-xs text-slate-600">
+                    The stationary rig a rider can start and shift on the showroom floor. When checked, the
+                    assistant offers a one-on-one Jumpstart session to customers with little or no riding
+                    experience — including on Riding Academy registrations. Leave unchecked and it is never
+                    mentioned.
                   </div>
                 </div>
                 <div className="border border-slate-300 rounded-lg p-3 bg-white text-slate-900 space-y-3">
