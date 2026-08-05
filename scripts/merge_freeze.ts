@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import {
   DEFAULT_MERGE_FREEZE_MAX_AGE_MINUTES,
   describeMergeFreeze,
-  evaluateMergeFreeze,
+  readMergeFreezeStatus,
   type MergeFreezeRecord
 } from "../services/api/src/domain/mergeFreeze.ts";
 
@@ -33,18 +33,10 @@ function arg(name: string, fallback = ""): string {
   return i >= 0 && process.argv[i + 1] ? String(process.argv[i + 1]) : fallback;
 }
 
-function readRecord(): unknown {
-  if (!fs.existsSync(FREEZE_DIR)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(RECORD, "utf8"));
-  } catch {
-    // The directory exists but the record is missing/corrupt. Fail toward ALLOWING merges.
-    return { malformed: true };
-  }
-}
-
 function status() {
-  return evaluateMergeFreeze(readRecord(), { nowMs: Date.now(), maxAgeMinutes: MAX_AGE });
+  // One implementation of "find the record and judge it", shared with act_runner's ship path
+  // (2026-08-04): a second copy there was where a sabotage test walked through the fail-open promise.
+  return readMergeFreezeStatus({ dir: FREEZE_DIR, nowMs: Date.now(), maxAgeMinutes: MAX_AGE });
 }
 
 function main(): void {

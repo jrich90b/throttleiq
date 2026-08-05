@@ -230,7 +230,13 @@ const CEILINGS: Ceiling[] = [
     // proposed 71_166; #541/#543/#544 then ratcheted main to 71_182 underneath it. 71_166 would
     // still have PASSED — the integrated tree is 71_147 — while quietly handing back 19 lines of
     // headroom someone else's un-stacking had just won. A ceiling is a cap, never a budget.
-    max: 71_147,
+    // 71_147 -> 71_142. The last four customer-risk referees. The slice FUNDED ITSELF: four call
+    // sites gained a referee call each, and the write half of the inventory-watch ladder moved out
+    // to applyInventoryWatchDefaults (conversationStore), next to the confirmation apply it feeds.
+    // The ceiling caught the first cut at +33 — the resolve-and-assign was still expanded inline at
+    // all four sites — which is exactly its job. Re-derived on the INTEGRATED tree (main 911aed1b +
+    // the return-day gate fix + the rung-burn un-stacking), per ROUTINE_CONTRACT rule 3.
+    max: 71_142,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

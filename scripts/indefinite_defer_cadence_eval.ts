@@ -23,7 +23,8 @@ import fs from "node:fs";
 
 import {
   decideIndefiniteDeferTurn,
-  INDEFINITE_DEFER_PAUSE_DAYS
+  INDEFINITE_DEFER_PAUSE_DAYS,
+  decideStaffReopenResidue
 } from "../services/api/src/domain/routeStateReducer.ts";
 import {
   DEFER_SOFT_PAUSE_RESUME_DAYS,
@@ -172,11 +173,39 @@ assert.ok(
   "the deferred reason must keep the customer_stepping_back dialogState"
 );
 // Reopening a deferred thread must clear the closeout residue like any other disposition archive.
-const reopenResidue = index.split("const dispositionReasons = new Set([")[1]?.split("]);")[0] ?? "";
-assert.ok(
-  reopenResidue.includes("customer_deferred"),
-  "reopen must clear customer_deferred residue (the Dave Batka zombie-reopen class)"
-);
+// ASKED OF THE REFEREE, NOT OF THE SOURCE TEXT. This used to split index.ts on
+// `const dispositionReasons = new Set([`; that list moved into `decideStaffReopenResidue` when the
+// reopen handler was un-stacked, and the pin then found an empty string and went red on a change
+// that altered nothing. A source pin cannot survive an extraction — ask the decision instead.
+{
+  const deferred = decideStaffReopenResidue({
+    hasCadence: true,
+    cadenceKind: null,
+    cadenceStatus: "stopped",
+    cadenceStopReason: "customer_deferred",
+    followUpReason: "customer_deferred",
+    dialogState: "customer_stepping_back",
+    hasSale: false
+  });
+  assert.ok(
+    deferred.clearDispositionFollowUp,
+    "reopen must clear customer_deferred residue (the Dave Batka zombie-reopen class)"
+  );
+  assert.ok(
+    deferred.reviveDispositionCadence,
+    "…and restart the chase staff archived as deferred, rather than reopening onto a dead one"
+  );
+  // The dialogState half of the same class: defer_no_window keeps `customer_stepping_back`, and the
+  // reopen must recognise THAT too or the thread comes back still claiming the lead stepped away.
+  assert.ok(
+    decideStaffReopenResidue({
+      hasCadence: false,
+      dialogState: "customer_stepping_back",
+      hasSale: false
+    }).resetDispositionDialogState,
+    "reopen must also reset the customer_stepping_back dialogState the deferred reason carries"
+  );
+}
 
 // Wiring: BOTH close paths apply it — the console archive endpoint and the agent's disposition
 // closeout — and BOTH must run it AFTER closeConversation, which clears nextDueAt and would
