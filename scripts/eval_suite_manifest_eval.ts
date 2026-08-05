@@ -58,11 +58,23 @@ const FRONT_LOADED_GLOBAL_GUARDS = [
   "stranger_dealer_test:eval",
   "intro_over_at_live:eval",
   "outbound_echo_guard:eval",
-  "eval_suite_manifest:eval"
+  "eval_suite_manifest:eval",
+  // The 9th member (2026-08-05). Cheapest of the block — one JSON read, no tree walk — and it
+  // guards the chain that runs everything else, so a stale-chain merge is reported before the
+  // suite it silently shortened gets a chance to pass.
+  "ci_eval_chain_guard:eval"
 ];
 // Generous ceiling: the infra/store sanity prefix legitimately runs first, and a new global guard
 // should be able to join the block without a fight. Tight enough that drift back to the tail fails.
-const GUARD_BLOCK_MAX_INDEX = 24;
+//
+// 24 -> 25 (2026-08-05). The block was sitting EXACTLY on 24, so "without a fight" was not true in
+// practice: admitting a 9th guard pushed `eval_suite_manifest` itself to 25 and failed this very
+// assertion — which is how the new guard was caught, and the rule working as intended. Raised by
+// exactly ONE, for exactly one new member appended at the END of the block; nothing already
+// front-loaded moved. The ceiling exists to stop guards DRIFTING BACK TO THE TAIL, and +1 does not
+// weaken that — it is not a cap on how many global guards may exist. Keep it equal to the block
+// size plus the infra prefix; if it ever needs a jump rather than a +1, that IS drift.
+const GUARD_BLOCK_MAX_INDEX = 25;
 for (const guard of FRONT_LOADED_GLOBAL_GUARDS) {
   const idx = ciNames.indexOf(guard);
   assert.ok(idx >= 0, `${guard} must be in ci:eval`);
