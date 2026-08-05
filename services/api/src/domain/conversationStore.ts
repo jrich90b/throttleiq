@@ -63,6 +63,8 @@ import {
   type ReschedulePendingLatchLane,
   type ReschedulePendingLatchDecision,
   decideReschedulePendingClear,
+  decideCadenceAdvance,
+  type CadenceAdvanceLadder,
   type ReschedulePendingClearLane,
   type ReschedulePendingClearDecision,
   type AppointmentBookingLane,
@@ -4540,6 +4542,17 @@ export const LONG_TERM_DAY_OFFSETS = [30, 90, 180];
 export const FINANCE_DECLINED_DAY_OFFSETS = [30, 60, 120];
 export const PRIVATE_PARTY_SELL_DAY_OFFSETS = [30, 60, 90, 120];
 
+/** The six ladders `decideCadenceAdvance` names, in one place. The referee picks the key; the day
+ * counts stay here with the other cadence tables. */
+export const CADENCE_LADDER_DAY_OFFSETS: Record<CadenceAdvanceLadder, readonly number[]> = {
+  post_sale: POST_SALE_DAY_OFFSETS,
+  engaged: ENGAGED_DAY_OFFSETS,
+  finance_declined_long_term: FINANCE_DECLINED_DAY_OFFSETS,
+  private_party_sell_long_term: PRIVATE_PARTY_SELL_DAY_OFFSETS,
+  long_term: LONG_TERM_DAY_OFFSETS,
+  standard: FOLLOW_UP_DAY_OFFSETS
+};
+
 export function computeFollowUpDueAt(anchorAtIso: string, offsetDays: number, timeZone: string) {
   const anchor = new Date(anchorAtIso);
   const anchorParts = getZonedParts(anchor, timeZone);
@@ -6071,72 +6084,43 @@ export function advanceFollowUpCadence(
   opts?: { delivered?: boolean; endSequence?: boolean }
 ) {
   if (!conv.followUpCadence || conv.followUpCadence.status !== "active") return;
-  const delivered = opts?.delivered !== false;
-  const nextStep = conv.followUpCadence.stepIndex + 1;
-  // The count BEFORE this touch — the same number shouldSendDisengagedCloseout was asked, so the
-  // rung that sends the close-out is exactly the rung that ends the ladder (as it was when both
-  // read the pre-increment stepIndex). Comparing the post-increment count would end the sequence
-  // one touch early, i.e. without ever sending the close-out.
-  const deliveredBefore = deliveredCadenceTouches(conv.followUpCadence);
-  if (delivered) {
-    conv.followUpCadence.lastSentAt = nowIso();
-    conv.followUpCadence.lastSentStep = conv.followUpCadence.stepIndex;
-    conv.followUpCadence.deliveredTouches = deliveredBefore + 1;
+  const cadence = conv.followUpCadence;
+  const decision = decideCadenceAdvance({
+    kind: cadence.kind,
+    followUpReason: conv.followUp?.reason,
+    contextTag: cadence.contextTag,
+    deferredMessage: cadence.deferredMessage,
+    stepIndex: cadence.stepIndex,
+    // PRE-increment on purpose — see the referee. The rung that sends the close-out must be the
+    // rung that ends the ladder, or the lead is retired without ever being said goodbye to.
+    deliveredTouchesBefore: deliveredCadenceTouches(cadence),
+    delivered: opts?.delivered,
+    endSequence: opts?.endSequence,
+    customerEngaged: customerEngagedWithCadence(conv),
+    taperAfterTouches: DISENGAGED_TAPER_AFTER_TOUCHES
+  });
+  if (decision.stampDelivered) {
+    cadence.lastSentAt = nowIso();
+    cadence.lastSentStep = cadence.stepIndex;
+    cadence.deliveredTouches = decision.deliveredTouchesAfter;
   }
-  conv.followUpCadence.stepIndex = nextStep;
-  // Disengagement taper: once the close-out touch has gone out to a lead that
-  // never replied, end the cadence instead of running the rest of the schedule.
-  // Only a DELIVERED touch can trip this — the close-out rides out on the send path, so ending
-  // the ladder from a silent gate retired the lead without ever saying goodbye to them.
-  if (
-    (delivered || opts?.endSequence === true) &&
-    conv.followUpCadence.kind !== "post_sale" &&
-    conv.followUpCadence.kind !== "long_term" &&
-    !customerEngagedWithCadence(conv) &&
-    deliveredBefore >= DISENGAGED_TAPER_AFTER_TOUCHES
-  ) {
-    conv.followUpCadence.status = "completed";
-    conv.followUpCadence.stopReason = "disengaged_taper";
-    conv.followUpCadence.nextDueAt = undefined;
+  cadence.stepIndex = decision.nextStepIndex;
+  if (decision.endNow) {
+    cadence.status = "completed";
+    if (decision.endNow.stopReason) cadence.stopReason = decision.endNow.stopReason;
+    cadence.nextDueAt = undefined;
     conv.updatedAt = nowIso();
     scheduleSave();
     return;
   }
-  const isPostSale = conv.followUpCadence.kind === "post_sale";
-  const isEngaged = conv.followUpCadence.kind === "engaged";
-  const isLongTerm = conv.followUpCadence.kind === "long_term";
-  const isFinanceDeclinedLongTerm =
-    isLongTerm && String(conv.followUp?.reason ?? "").trim().toLowerCase() === "financing_declined";
-  const isPrivatePartySellLongTerm =
-    isLongTerm &&
-    (String(conv.followUp?.reason ?? "").trim().toLowerCase() === "private_party_seller" ||
-      String(conv.followUpCadence?.contextTag ?? "").trim().toLowerCase() === "private_party_seller");
-  const isRideChallengeReminder = conv.followUpCadence.deferredMessage === "ride_challenge_final_mileage";
-  if (isLongTerm && isRideChallengeReminder) {
-    conv.followUpCadence.status = "completed";
-    conv.followUpCadence.nextDueAt = undefined;
-    conv.updatedAt = nowIso();
-    scheduleSave();
-    return;
-  }
-  const offsets = isPostSale
-    ? POST_SALE_DAY_OFFSETS
-    : isEngaged
-      ? ENGAGED_DAY_OFFSETS
-      : isLongTerm
-        ? isFinanceDeclinedLongTerm
-          ? FINANCE_DECLINED_DAY_OFFSETS
-          : isPrivatePartySellLongTerm
-            ? PRIVATE_PARTY_SELL_DAY_OFFSETS
-          : LONG_TERM_DAY_OFFSETS
-      : FOLLOW_UP_DAY_OFFSETS;
-  if (nextStep >= offsets.length) {
-    conv.followUpCadence.status = "completed";
-    conv.followUpCadence.nextDueAt = undefined;
+  const offsets = CADENCE_LADDER_DAY_OFFSETS[decision.ladder];
+  if (decision.nextStepIndex >= offsets.length) {
+    cadence.status = "completed";
+    cadence.nextDueAt = undefined;
   } else {
-    conv.followUpCadence.nextDueAt = isPostSale
-      ? computePostSaleDueAt(conv.followUpCadence.anchorAt, offsets[nextStep], timeZone)
-      : computeFollowUpDueAt(conv.followUpCadence.anchorAt, offsets[nextStep], timeZone);
+    cadence.nextDueAt = decision.usesPostSaleDueAt
+      ? computePostSaleDueAt(cadence.anchorAt, offsets[decision.nextStepIndex], timeZone)
+      : computeFollowUpDueAt(cadence.anchorAt, offsets[decision.nextStepIndex], timeZone);
   }
   conv.updatedAt = nowIso();
   scheduleSave();

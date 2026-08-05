@@ -787,7 +787,15 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 // missing one to null, and the suggested-slot autobook records the matched slot where its console
 // siblings do not. MEASURED on the post-change tree with the eval's own `minWrites: 4` scan.
 // RATCHET DOWN ONLY.
-const UNREFEREED_WRITER_BASELINE = 68;
+// 68 -> 67. The RUNG BURN un-stacking (2026-08-05): `advanceFollowUpCadence` was the last
+// unrefereed writer of `followUpCadence` carrying real logic — six ladders behind four `kind`
+// values, the silent-rung rule, and two completely different ways for a ladder to end, all living
+// only inside its own body. It now asks `decideCadenceAdvance`; the day-offset tables stay in the
+// store behind one `CADENCE_LADDER_DAY_OFFSETS` map the referee's ladder key indexes.
+// `followUpCadence` 3 -> 2, and conversationStore drops off its file list entirely.
+// MEASURED on the post-change tree with the eval's own `minWrites: 4` scan.
+// RATCHET DOWN ONLY.
+const UNREFEREED_WRITER_BASELINE = 67;
 
 {
   const sourceFiles: SourceFile[] = [];
