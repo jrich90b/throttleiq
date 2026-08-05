@@ -22,6 +22,7 @@ import {
   resolvePostSaleModelLabel
 } from "./domain/postSaleCadence.js";
 import { stampDraftProvenance } from "./domain/agentCorrectionRate.js";
+import { hasCustomerPositiveExperience } from "./domain/leadInGuards.js";
 import {
   normalizeOutboundText,
   extractComparableCadenceSentences,
@@ -24437,13 +24438,10 @@ function buildPurchaseDeliveryLogisticsReply(args: {
   parsed: PurchaseDeliveryLogisticsParse;
 }): string {
   if (args.parsed.intent === "post_sale_item_pickup") {
-    const text = `${String(args.text ?? "")}\n${String(args.contextText ?? "")}`;
-    const positiveExperience = /\b(thank you|thanks|amazing|smiles?|priceless|great|awesome|love|loved)\b/i.test(
-      text
-    );
-    const prefix = positiveExperience
-      ? "Love hearing that — glad the ride home went great. "
-      : "";
+    // Warmth is earned by the CUSTOMER's own words this turn — never by the surrounding thread,
+    // which carries our own upbeat outbound copy — and it may not assert a ride home nobody
+    // mentioned. See the POST-SALE WARMTH guard in leadInGuards.ts.
+    const prefix = hasCustomerPositiveExperience(args.text) ? "Love hearing that. " : "";
     return `${prefix}${buildPostSaleItemLogisticsReply(args.text)}`;
   }
   if (args.parsed.intent === "delivery_timing") {
