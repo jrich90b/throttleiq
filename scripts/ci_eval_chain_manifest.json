@@ -26,6 +26,7 @@
     "intro_over_at_live:eval",
     "outbound_echo_guard:eval",
     "eval_suite_manifest:eval",
+    "ci_eval_chain_guard:eval",
     "twilio_visit_commitment_routing:eval",
     "scheduling_turn_decision:eval",
     "short_affirmative_acceptance:eval",
@@ -407,7 +408,6 @@
     "photo_question_vision:eval",
     "intent_comprehension:eval",
     "trigger_coverage_net:eval",
-    "draft_accuracy_trio:eval",
-    "ci_eval_chain_guard:eval"
+    "draft_accuracy_trio:eval"
   ]
 }
