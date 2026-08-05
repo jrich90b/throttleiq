@@ -386,5 +386,53 @@
     "expected": {
       "scheduling_conflict_open": false
     }
+  },
+  {
+    "id": "bike_on_location_is_availability_not_address",
+    "text": "Is the bike on location?",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Mike, here is the quote on the billiard gray with black trim road glide. This has all your registration/dmv fees included."
+      }
+    ],
+    "hasActiveInventoryWatch": false,
+    "dialogState": null,
+    "expected": {
+      "action": "none",
+      "should_reply": true
+    }
+  },
+  {
+    "id": "similar_bike_on_location_is_availability_not_address",
+    "text": "Is there a similar bike on location? I could at least look at today before that one get shipped",
+    "history": [
+      {
+        "direction": "out",
+        "body": "I just checked, this is an incoming order with a estimated ship date of 8/28"
+      }
+    ],
+    "hasActiveInventoryWatch": false,
+    "dialogState": null,
+    "expected": {
+      "action": "none",
+      "should_reply": true
+    }
+  },
+  {
+    "id": "customer_supplies_address_after_we_asked",
+    "text": "5 Timberlake Dr. orchard Park, NY 14127",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Mike, I am putting your name on the order right now and just need to add your info. What town/zip code are you?"
+      }
+    ],
+    "hasActiveInventoryWatch": false,
+    "dialogState": null,
+    "expected": {
+      "action": "none",
+      "should_reply": true
+    }
   }
 ]
