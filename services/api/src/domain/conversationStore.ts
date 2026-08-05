@@ -609,6 +609,8 @@ export type LeadProfile = {
   walkInStep?: number;
   walkInCommentCapturedAt?: string;
   walkInCommentUsedAt?: string;
+  /** Dealer-local `YYYY-MM-DD` the walk-in note committed to returning on (parsed slot, not prose). */
+  walkInReturnDayIso?: string;
   vehicle?: {
     stockId?: string;
     vin?: string;

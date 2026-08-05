@@ -609,6 +609,8 @@ import {
 import { referencesPastDatedEvent } from "./domain/pastEventGuard.js";
 import { stripLeadingVinCodes, stripLeadingMakeName, normalizeWatchModelsVin, modelLabelHasVinCode } from "./domain/watchModelVinCodes.js";
 import { trikeClassConflict, isFamilyOnlyModelLabel, referencesFamilyOnlyInText } from "./domain/modelFamily.js";
+import { buildWalkInCommentFollowUp } from "./domain/walkInCommentFollowUp.js";
+import { buildWalkInReturnDayCheckInLine } from "./domain/walkInFollowUpTopic.js";
 import { decideWatchSiblingScopeAsk } from "./domain/watchSiblingScope.js";
 import { applyWatchFieldHygiene, formatWatchYearLabel } from "./domain/watchFieldHygiene.js";
 import { decideWatchPins } from "./domain/watchYearPin.js";
@@ -13161,73 +13163,6 @@ const TEST_RIDE_FOLLOW_UP_MESSAGES = [
   "No rush, {name}. When you're ready for the test ride on{label}, just text me."
 ];
 
-type WalkInCommentFollowUpCtx = {
-  name: string;
-  agent: string;
-  dealerName: string;
-  comment: string;
-  label: string;
-};
-
-const buildWalkInCommentFollowUp = ({
-  name,
-  agent,
-  dealerName,
-  comment,
-  label
-}: WalkInCommentFollowUpCtx) => {
-  const raw = String(comment ?? "")
-    .replace(/\(step\s*\d+\)\s*$/i, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  const lower = raw.toLowerCase();
-  const bike = String(label ?? "").replace(/^the\s+/i, "").trim() || "bike";
-  const bikeWithArticle = /^the\s+/i.test(String(label ?? "")) ? String(label).trim() : `the ${bike}`;
-  const intro = `Hi ${name} — this is ${agent} at ${dealerName}.`;
-
-  const mentionsDepositOrCommitment =
-    /\b(deposit|left\s+\$?\d+|finalize|finalise)\b/.test(lower);
-  if (mentionsDepositOrCommitment) {
-    return `${intro} Let’s get a time set to go over options and next steps on ${bikeWithArticle}. What day works best for you?`;
-  }
-
-  const mentionsOrderPath =
-    /\b(order|dealer trade|get one|find one|locate one|commitment|commit)\b/.test(lower);
-  if (mentionsOrderPath) {
-    return `${intro} Just following up. I can walk you through timing, numbers, and next steps to get ${bikeWithArticle}. Want to pick a time this week to go over options?`;
-  }
-
-  const mentionsWeatherTestRide =
-    /\b(weather|test ride|ride when|when it.*nice|when it.*better)\b/.test(lower);
-  if (mentionsWeatherTestRide) {
-    return `${intro} Sounds good, when the weather turns we can line up a test ride on ${bikeWithArticle}.`;
-  }
-
-  const mentionsWatchRequest =
-    /\b(keep an eye|watch|let me know when|when (you|we) have|coming in|in stock)\b/.test(lower);
-  if (mentionsWatchRequest) {
-    return `${intro} Got it, I'll keep an eye out for ${bikeWithArticle} and text you as soon as one comes in.`;
-  }
-
-  const mentionsFinanceHold =
-    /\b(credit union|bank|financing|finance|loan|approval|cosigner|co-signer|down payment|saving up)\b/.test(
-      lower
-    );
-  if (mentionsFinanceHold) {
-    return `${intro} No problem, whenever you're ready to go over financing on ${bikeWithArticle} I can help with next steps.`;
-  }
-
-  const mentionsDecisionHold =
-    /\b(thinking|sleep on|not ready|hold off|wait|let you know|talk to (my )?(wife|husband|spouse|partner))\b/.test(
-      lower
-    );
-  if (mentionsDecisionHold) {
-    return `${intro} No pressure at all. If you want to revisit ${bikeWithArticle}, just text me and I’ll help from there.`;
-  }
-
-  return `${intro} Just checking back on ${bikeWithArticle}. Want to go over options and next steps? I can help whenever you're ready.`;
-};
-
 const FOLLOW_UP_VARIANTS_WITH_SLOTS: string[] = [
   "Hey {name}, if you want to stop by{labelClause}, I can do {a} or {b}. Which is easier?{extraLine}",
   "{name}, I can set aside {a} or {b} if you want to stop by for a look{labelClause}. Which works best?{extraLine}",
@@ -15710,20 +15645,32 @@ async function buildCadenceRegeneratedDraft(
       labelClause,
       isPostSale: false
     });
-    message = selectNonRepeatingCadenceMessage(
-      conv,
-      message,
-      buildCadenceCheckInFallbacks(firstName, labelClause)
-    );
+    // Parity with the live tick above — regenerate must reach the same sentence on the day the
+    // walk-in note committed to, or a staff regenerate would silently undo the fix.
+    const returnDayCheckIn = buildWalkInReturnDayCheckInLine({
+      name: firstName,
+      returnDayIso: conv.lead?.walkInReturnDayIso,
+      timeZone: (await getSchedulerConfig()).timezone || "America/New_York",
+      asOfIso: now.toISOString()
+    });
+    if (returnDayCheckIn) message = returnDayCheckIn;
+    if (!returnDayCheckIn) {
+      message = selectNonRepeatingCadenceMessage(
+        conv,
+        message,
+        buildCadenceCheckInFallbacks(firstName, labelClause)
+      );
+    }
     const contextLine = getFollowUpContextLine(conv, now);
     if (
       contextLine &&
+      !returnDayCheckIn &&
       !message.toLowerCase().includes(contextLine.toLowerCase()) &&
       !wasCadenceLineUsedRecently(conv, contextLine)
     ) {
       message = `${message} ${contextLine}`.trim();
     }
-    if (!isCadencePreferenceClarifierMessage(message)) {
+    if (!returnDayCheckIn && !isCadencePreferenceClarifierMessage(message)) {
       const personalizationLine = await getCadencePersonalizationLine(conv, cadence, now);
       if (
         personalizationLine &&
@@ -33990,6 +33937,17 @@ async function processDueFollowUpsUnlocked() {
     if (disengagedCloseoutActive) {
       message = buildDisengagedCadenceCloseout(firstName);
     }
+    // ON the committed return day, ask about the visit — last, so it outranks the promotion
+    // override that shipped the wrong sentence to Ed Szulist (+17167255404, 8/4). "" = today.
+    const returnDayCheckIn = isPostSale
+      ? ""
+      : buildWalkInReturnDayCheckInLine({
+          name: firstName,
+          returnDayIso: conv.lead?.walkInReturnDayIso,
+          timeZone: cfg.timezone,
+          asOfIso: now.toISOString()
+        });
+    if (returnDayCheckIn) message = returnDayCheckIn;
 
     const genericCadenceNoRepeatFallbacks = isPostSale
       ? [
@@ -34000,7 +33958,13 @@ async function processDueFollowUpsUnlocked() {
       : [
           ...buildCadenceCheckInFallbacks(firstName, labelClause)
         ];
-    if (!leadUnitAvailabilityOverride && !heldInventoryOverride && !isPostSale && !disengagedCloseoutActive) {
+    if (
+      !leadUnitAvailabilityOverride &&
+      !heldInventoryOverride &&
+      !isPostSale &&
+      !disengagedCloseoutActive &&
+      !returnDayCheckIn
+    ) {
       message = selectNonRepeatingCadenceMessage(
         conv,
         message,
@@ -34012,6 +33976,7 @@ async function processDueFollowUpsUnlocked() {
       !heldInventoryOverride &&
       !isPostSale &&
       !disengagedCloseoutActive &&
+      !returnDayCheckIn &&
       cadence.kind !== "long_term"
     ) {
       const contextLine = getFollowUpContextLine(conv, now);

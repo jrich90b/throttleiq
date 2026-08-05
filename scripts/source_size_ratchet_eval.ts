@@ -204,7 +204,12 @@ const CEILINGS: Ceiling[] = [
     // proposed 71_322, then 71_310 against a 71_333 main; main has since ratcheted to 71_224, so
     // both earlier numbers would have handed back every reduction between. Re-derived on the
     // INTEGRATED tree — the slice is still worth exactly -23.
-    max: 71_201,
+    // 71_201 -> 71_166. The committed-return-day cadence line. index.ts was sitting EXACTLY on the
+    // ceiling again, so the slice funded itself: `buildWalkInCommentFollowUp` — a 66-line regex
+    // ladder over a salesperson's prose, unreachable by any eval down here — moved verbatim to
+    // domain/walkInCommentFollowUp.ts. Net -35 after two import lines and the wiring at both the
+    // live tick and the regenerate path.
+    max: 71_166,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
