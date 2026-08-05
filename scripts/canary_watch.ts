@@ -46,6 +46,8 @@ import {
   decideCanaryVerdict,
   detectRunaway,
   detectStaleStore,
+  detectJudgeStoreMismatch,
+  isPoisonedMeasurement,
   findDeadCounters,
   newestOutboundAtMs,
   typicalPeakOutboundPerHour,
@@ -173,6 +175,42 @@ function loadConversations(): any[] {
   return convs;
 }
 
+/**
+ * Load the store for JUDGING — and refuse if it is not the store this canary was armed against.
+ *
+ * `arm` has had a wrong-store guard since 2026-08-03; judging had none, and judging is where the
+ * store path actually gets lost (the documented `judge`/`status` invocations omitted
+ * CONVERSATIONS_DB_PATH entirely, so they read the repo checkout's May seed store). Slices are
+ * idempotent by index, so each mis-measured slice is burned permanently — see
+ * canaryHealth.detectJudgeStoreMismatch.
+ */
+function loadConversationsForJudging(baseline: BaselineFile): any[] {
+  const conversations = loadConversations();
+  const mismatch = detectJudgeStoreMismatch({
+    currentStoreNewestOutboundMs: newestOutboundAtMs(conversations),
+    currentStoreConversations: conversations.length,
+    baselineStoreNewestOutboundMs: baseline.storeNewestOutboundMs,
+    baselineStoreConversations: baseline.storeConversations,
+    baselineTakenAtMs: baseline.takenAtMs
+  });
+  if (mismatch.wrong) {
+    console.error(
+      `canary_watch: refusing to JUDGE against ${resolvedStorePath}\n` +
+        `  ${mismatch.reason}.\n` +
+        `  ${conversations.length} conversations here; the baseline was armed against ` +
+        `${baseline.storeConversations ?? "(unrecorded)"} at ${baseline.storePath ?? "(unrecorded)"}.\n` +
+        "  Nothing was measured and nothing was recorded — a slice is measured ONCE, so a slice read\n" +
+        "  from the wrong store would be burned forever.\n" +
+        "  Copy the DEALER's store and point CONVERSATIONS_DB_PATH at the copy, e.g.\n" +
+        "    cp <runtime>/<dealer>/data/conversations.json /tmp/canary-src.json\n" +
+        "    CONVERSATIONS_DB_PATH=/tmp/canary-src.json npx tsx scripts/canary_watch.ts judge\n" +
+        "    rm -f /tmp/canary-src.json"
+    );
+    process.exit(2);
+  }
+  return conversations;
+}
+
 function currentSha(): string {
   try {
     return execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
@@ -285,16 +323,16 @@ if (mode === "baseline") {
 function advanceCanary(baseline: BaselineFile): { verdict: CanaryVerdict | null; measurements: CanaryMeasurement[] } {
   const config = baseline.progress ?? DEFAULT_CANARY_PROGRESS;
   const measurements = [...(baseline.measurements ?? [])];
-  const conversations = loadConversations();
+  const conversations = loadConversationsForJudging(baseline);
   const peak = baseline.typicalPeakOutboundPerHour ?? typicalPeakOutboundPerHour(conversations);
 
-  // Measure each fully-elapsed slice we have not recorded yet.
-  for (let i = measurements.length; i < config.count; i++) {
-    const sliceStartMs = baseline.takenAtMs + i * config.intervalMs;
-    const sliceEndMs = sliceStartMs + config.intervalMs;
-    if (nowMs < sliceEndMs) break; // not finished; a partial slice reads as a collapse
-
-    const sliceCounters = computeCanaryCounters(conversations, { startMs: sliceStartMs, endMs: sliceEndMs });
+  const sliceWindow = (i: number) => ({
+    startMs: baseline.takenAtMs + i * config.intervalMs,
+    endMs: baseline.takenAtMs + i * config.intervalMs + config.intervalMs
+  });
+  const measureSlice = (i: number): CanaryMeasurement => {
+    const { startMs, endMs } = sliceWindow(i);
+    const sliceCounters = computeCanaryCounters(conversations, { startMs, endMs });
     const runaway = detectRunaway(sliceCounters.outboundToCustomer, config.intervalMs, peak);
     const m = measureCanarySlice({
       baselineCounters: baseline.counters,
@@ -303,16 +341,41 @@ function advanceCanary(baseline: BaselineFile): { verdict: CanaryVerdict | null;
       sliceWindowMs: config.intervalMs,
       runaway
     });
-    measurements.push({
+    return {
       atMs: nowMs,
-      sliceStartMs,
-      sliceEndMs,
+      sliceStartMs: startMs,
+      sliceEndMs: endMs,
       counters: sliceCounters,
       status: m.status,
       ...(m.fatal ? { fatal: true } : {}),
       reason: m.reason,
       ruleVersion: CANARY_JUDGE_RULE_VERSION
-    });
+    };
+  };
+
+  // HEAL slices that were recorded against a wrong store before the guard above existed: all-zero
+  // and inconclusive, over a window the (now validated) store shows was busy. Re-measured IN PLACE,
+  // never dropped — dropping would shift every later slice onto someone else's window.
+  let healed = 0;
+  for (let i = 0; i < measurements.length; i++) {
+    const { startMs, endMs } = sliceWindow(i);
+    const truthCounters = computeCanaryCounters(conversations, { startMs, endMs });
+    if (!isPoisonedMeasurement({ status: measurements[i].status, counters: measurements[i].counters, truthCounters }))
+      continue;
+    measurements[i] = measureSlice(i);
+    healed++;
+  }
+  if (healed) {
+    console.log(
+      `canary: re-measured ${healed} slice(s) that had recorded ZERO events over a window the store ` +
+        "shows was busy — they were judged against the wrong store, so they were never evidence.\n"
+    );
+  }
+
+  // Measure each fully-elapsed slice we have not recorded yet.
+  for (let i = measurements.length; i < config.count; i++) {
+    if (nowMs < sliceWindow(i).endMs) break; // not finished; a partial slice reads as a collapse
+    measurements.push(measureSlice(i));
   }
 
   const progress = decideCanaryProgress({ measurements, config });
@@ -369,7 +432,7 @@ function judgeBaseline(baseline: BaselineFile): CanaryVerdict | null {
     return null;
   }
 
-  const conversations = loadConversations();
+  const conversations = loadConversationsForJudging(baseline);
   const current = computeCanaryCounters(conversations, {
     startMs: baseline.takenAtMs,
     endMs: watchEndMs
