@@ -514,6 +514,8 @@ import {
   startPostSaleCadence,
   releaseHeldDraft,
   applyAppointmentTeardown,
+  applyStaleBookingReplacement,
+  applyInventoryWatchDefaults,
   applyAppointmentBookingRecord,
   applyReschedulePendingLatch,
   applyReschedulePendingClear,
@@ -770,6 +772,8 @@ import {
   decideTradeQualifierTurn,
   decideCustomerAckConfirmBooking,
   decideManualConfirmPendingAppointment,
+  decideHealthRecoveryPause,
+  decideStaffReopenResidue,
   decideSchedulingDeferralFollowUpTask,
   decideStaffAvailabilityAnswer,
   staffDayOffFromSummaries,
@@ -9348,11 +9352,13 @@ async function resetFollowUpCadenceOnInbound(conv: any, inboundText: string) {
   if (healthRecoveryPaused && !isExplicitReadyAfterHealthRecoveryText(inbound)) {
     const recoveryDays = Math.max(1, Number(process.env.HEALTH_RECOVERY_DELAY_DAYS ?? 21) || 21);
     const fallbackUntil = computeFollowUpDueAt(anchor, recoveryDays, tz);
-    const currentUntil = cadence.pausedUntil ? new Date(cadence.pausedUntil) : null;
-    cadence.pausedUntil =
-      currentUntil && !Number.isNaN(currentUntil.getTime()) && currentUntil > new Date()
-        ? currentUntil.toISOString()
-        : fallbackUntil;
+    // "A pause already standing in the future WINS" — see decideHealthRecoveryPause for why.
+    const recoveryPause = decideHealthRecoveryPause({
+      currentPausedUntil: cadence.pausedUntil,
+      fallbackUntilIso: fallbackUntil,
+      nowMs: Date.now()
+    });
+    cadence.pausedUntil = recoveryPause.pausedUntilIso;
     cadence.pauseReason = "health_recovery_delay";
     cadence.nextDueAt = cadence.pausedUntil;
     setFollowUpMode(conv, "active", "health_recovery_delay");
@@ -41148,35 +41154,25 @@ app.post("/conversations/:id/reopen", (req, res) => {
   if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
   // Staff pressed Reopen — the unconditional arm of decideCloseoutReversal.
   applyCloseoutReversal(conv, { cause: "staff_reopen" });
-  if (conv.sale) {
-    conv.sale = undefined;
-  }
-  if (conv.followUpCadence?.kind === "post_sale") {
-    conv.followUpCadence = undefined;
-  }
-  if (conv.followUp?.reason === "post_sale") {
-    conv.followUp = undefined;
-  }
-  // Reopening a disposition-archived deal must also undo the closeout residue
-  // (Dave Batka 2026-06-11: reopen alone left followUp paused_indefinite /
-  // customer_sell_on_own and the cadence stopped - a zombie reopen).
-  const dispositionReasons = new Set([
-    "customer_sell_on_own",
-    "customer_keep_current_bike",
-    "customer_stepping_back",
-    "customer_deferred"
-  ]);
-  if (dispositionReasons.has(String(conv.followUp?.reason ?? ""))) {
-    conv.followUp = undefined;
-  }
-  if (dispositionReasons.has(String(getDialogState(conv) ?? ""))) {
-    setDialogState(conv, "small_talk");
-  }
-  if (
-    conv.followUpCadence &&
-    conv.followUpCadence.status !== "active" &&
-    dispositionReasons.has(String(conv.followUpCadence.stopReason ?? ""))
-  ) {
+  // What closeout RESIDUE a reopen undoes — five arms that used to live loose in this handler body.
+  // See decideStaffReopenResidue for the zombie-reopen it prevents and the load-bearing order.
+  const reopenResidue = decideStaffReopenResidue({
+    hasCadence: !!conv.followUpCadence,
+    cadenceKind: conv.followUpCadence?.kind ?? null,
+    cadenceStatus: conv.followUpCadence?.status ?? null,
+    cadenceStopReason: conv.followUpCadence?.stopReason ?? null,
+    followUpReason: conv.followUp?.reason ?? null,
+    dialogState: getDialogState(conv) ?? null,
+    hasSale: !!conv.sale
+  });
+  if (reopenResidue.clearSale) conv.sale = undefined;
+  // ORDER IS LOAD-BEARING: blanking a post-sale chase first is what stops the disposition-revive arm
+  // below from resurrecting a delivery-congrats ladder onto a deal whose sale was just un-done.
+  if (reopenResidue.blankPostSaleCadence) conv.followUpCadence = undefined;
+  if (reopenResidue.clearPostSaleFollowUp) conv.followUp = undefined;
+  if (reopenResidue.clearDispositionFollowUp) conv.followUp = undefined;
+  if (reopenResidue.resetDispositionDialogState) setDialogState(conv, "small_talk");
+  if (reopenResidue.reviveDispositionCadence && conv.followUpCadence) {
     conv.followUpCadence = {
       ...conv.followUpCadence,
       status: "active",
@@ -53143,14 +53139,12 @@ app.post("/conversations/:id/send", async (req, res) => {
       const whenUtc = localPartsToUtcDate(schedulerTimezone, requested).toISOString();
       const whenText = formatSlotLocal(whenUtc, schedulerTimezone);
       conv.appointment = conv.appointment ?? { status: "none", updatedAt: nowIso() };
-      if (confirmsPendingAppointmentRequest && existingBookedAppointmentIsPast) {
-        conv.appointment.bookedEventId = null;
-        conv.appointment.bookedEventLink = null;
-        conv.appointment.bookedSalespersonId = null;
-        conv.appointment.bookedSalespersonName = null;
-        conv.appointment.bookedCalendarId = null;
-        conv.appointment.matchedSlot = undefined;
-      }
+      // Which parts of an EXPIRED booking die when a new time replaces them — the referee owns the
+      // list so it cannot drift the way the five old teardown sites did.
+      applyStaleBookingReplacement(conv.appointment, {
+        confirmsPendingRequest: confirmsPendingAppointmentRequest,
+        existingBookedAppointmentIsPast
+      });
       // Same lane as the slot-match branch above: the rep's own send settled the time.
       applyAppointmentConfirmRecord(conv, "salesperson_manual_booking");
       conv.appointment.whenIso = whenUtc;
@@ -61516,13 +61510,15 @@ if (authToken && signature) {
             pref = { action: "set", watch };
           }
           if (pref.action === "set" && pref.watch) {
-            if (!pref.watch.make && leadVehicle.make) pref.watch.make = leadVehicle.make;
-            if (!pref.watch.trim && leadVehicle.trim) pref.watch.trim = leadVehicle.trim;
-            const conditionFromText = normalizeWatchCondition(humanModeTextLower);
-            if (!pref.watch.condition && conditionFromText) pref.watch.condition = conditionFromText;
-            if (!pref.watch.condition && leadVehicle.condition) {
-              pref.watch.condition = normalizeWatchCondition(leadVehicle.condition);
-            }
+            // One owner for the blank-filling ladder (pinned by customer_risk_referees:eval): this state
+            // decides WHICH ARRIVING UNIT TEXTS THIS CUSTOMER, and four lanes each hand-wrote it before.
+            applyInventoryWatchDefaults(pref.watch, {
+              leadMake: leadVehicle.make,
+              leadTrim: leadVehicle.trim,
+              conditionFromText: normalizeWatchCondition(humanModeTextLower) ?? null,
+              semanticCondition: undefined,
+              conditionFromLead: normalizeWatchCondition(leadVehicle.condition) ?? null
+            });
             applyInventoryWatchConfirmation(conv, pref.watch, { scope: "live" });
             recordRouteOutcome("live", "human_mode_inventory_watch_set", {
               convId: conv.id,
@@ -63971,13 +63967,15 @@ if (authToken && signature) {
         pref = { action: "set", watch };
       }
       if (pref.action === "set" && pref.watch) {
-        if (!pref.watch.make && leadVehicle.make) pref.watch.make = leadVehicle.make;
-        if (!pref.watch.trim && leadVehicle.trim) pref.watch.trim = leadVehicle.trim;
-        const conditionFromText = normalizeWatchCondition(textLower);
-        if (!pref.watch.condition && conditionFromText) pref.watch.condition = conditionFromText;
-        if (!pref.watch.condition && leadVehicle.condition) {
-          pref.watch.condition = normalizeWatchCondition(leadVehicle.condition);
-        }
+        // One owner for the blank-filling ladder (pinned by customer_risk_referees:eval): this state
+        // decides WHICH ARRIVING UNIT TEXTS THIS CUSTOMER, and four lanes each hand-wrote it before.
+        applyInventoryWatchDefaults(pref.watch, {
+          leadMake: leadVehicle.make,
+          leadTrim: leadVehicle.trim,
+          conditionFromText: normalizeWatchCondition(textLower) ?? null,
+          semanticCondition: undefined,
+          conditionFromLead: normalizeWatchCondition(leadVehicle.condition) ?? null
+        });
         applyInventoryWatchConfirmation(conv, pref.watch, { scope: "live" });
         watchHandledEarly = true;
         if (!earlyWatchAsSideEffectOnly) {
@@ -67310,13 +67308,15 @@ if (authToken && signature) {
       }
       if (pref.action === "set" && pref.watch) {
         const leadVehicle = conv.lead?.vehicle ?? {};
-        if (!pref.watch.make && leadVehicle.make) pref.watch.make = leadVehicle.make;
-        if (!pref.watch.trim && leadVehicle.trim) pref.watch.trim = leadVehicle.trim;
-        const conditionFromText = normalizeWatchCondition(textLower);
-        if (!pref.watch.condition && conditionFromText) pref.watch.condition = conditionFromText;
-        if (!pref.watch.condition && leadVehicle.condition) {
-          pref.watch.condition = normalizeWatchCondition(leadVehicle.condition);
-        }
+        // One owner for the blank-filling ladder (pinned by customer_risk_referees:eval): this state
+        // decides WHICH ARRIVING UNIT TEXTS THIS CUSTOMER, and four lanes each hand-wrote it before.
+        applyInventoryWatchDefaults(pref.watch, {
+          leadMake: leadVehicle.make,
+          leadTrim: leadVehicle.trim,
+          conditionFromText: normalizeWatchCondition(textLower) ?? null,
+          semanticCondition: undefined,
+          conditionFromLead: normalizeWatchCondition(leadVehicle.condition) ?? null
+        });
         applyInventoryWatchConfirmation(conv, pref.watch, { scope: "live" });
         const reply = buildInventoryWatchConfirmation(pref.watch);
         if (!watchAsSideEffectOnly) {
@@ -68088,21 +68088,16 @@ if (authToken && signature) {
         pref = { action: "set", watch };
       }
       if (pref.action === "set" && pref.watch) {
-        if (!pref.watch.make && leadVehicle.make) pref.watch.make = leadVehicle.make;
-        if (!pref.watch.trim && leadVehicle.trim) pref.watch.trim = leadVehicle.trim;
-        const conditionFromText = normalizeWatchCondition(textLower);
-        if (!pref.watch.condition && conditionFromText) pref.watch.condition = conditionFromText;
-        if (
-          !pref.watch.condition &&
-          semanticWatch?.condition &&
-          semanticWatch.condition !== "unknown" &&
-          semanticWatch.condition !== "any"
-        ) {
-          pref.watch.condition = semanticWatch.condition;
-        }
-        if (!pref.watch.condition && leadVehicle.condition) {
-          pref.watch.condition = normalizeWatchCondition(leadVehicle.condition);
-        }
+        // One owner for the blank-filling ladder (pinned by customer_risk_referees:eval): this state
+        // decides WHICH ARRIVING UNIT TEXTS THIS CUSTOMER, and four lanes each hand-wrote it before.
+        // This lane ALONE passes the parser rung — the preserved divergence (see the referee).
+        applyInventoryWatchDefaults(pref.watch, {
+          leadMake: leadVehicle.make,
+          leadTrim: leadVehicle.trim,
+          conditionFromText: normalizeWatchCondition(textLower) ?? null,
+          semanticCondition: semanticWatch?.condition,
+          conditionFromLead: normalizeWatchCondition(leadVehicle.condition) ?? null
+        });
         applyInventoryWatchConfirmation(conv, pref.watch, { scope: "live" });
         const reply = buildInventoryWatchConfirmation(pref.watch);
         if (!watchAsSideEffectOnly) {

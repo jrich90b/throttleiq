@@ -76,5 +76,8 @@ export {
   resolveInventoryWatchPendingClear,
   resolveNoResponsePolicyDecision,
   resolveRoutingParserDecision,
-  shouldTreatInboundAsTestRideBikeSelection
+  shouldTreatInboundAsTestRideBikeSelection,
+  decideHealthRecoveryPause,
+  decideStaffReopenResidue,
+  resolveInventoryWatchDefaults
 } from "./routeStateReducer.js";
