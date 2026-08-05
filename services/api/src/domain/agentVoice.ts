@@ -699,3 +699,42 @@ export function buildAcquiredVehicleAck(vehicle?: string | null): string {
     "If you ever need anything for it — parts, service, or gear — just text me here."
   );
 }
+
+/**
+ * The three BEGINNER-facing first-time-rider replies, composed in one place.
+ *
+ * Lives here rather than inline in `index.ts` for a reason that cost a sabotage round on
+ * 2026-08-05: while these strings were assembled inline, `jumpstart_invite:eval` could only GREP
+ * for them, and a sabotage that APPENDED the Jumpstart invite instead of substituting it — blowing
+ * the SMS brevity budget and re-asking a question the customer had just answered — passed the eval
+ * clean. Composed here, the eval imports this and runs it, so the substitution is a fact the gate
+ * can check instead of a shape it has to recognise.
+ *
+ * `jumpstartInvite` is "" for a dealer with no Jumpstart, and every branch then returns TODAY'S
+ * exact wording, byte for byte. When it is set it REPLACES the clause it improves on: the generic
+ * "sit on a few bikes" offer, or the "do you have your endorsement?" question we no longer need to
+ * ask (the invite only fires once we have been told they are starting out).
+ */
+export function buildFirstTimeRiderBeginnerReply(args: {
+  branch: "no_endorsement" | "asks_test_ride" | "general";
+  jumpstartInvite: string;
+  requirement?: string;
+  courseText?: string;
+}): string {
+  const invite = String(args.jumpstartInvite ?? "");
+  if (args.branch === "no_endorsement") {
+    const hands =
+      invite || " We can still help you sit on a few bikes and talk through beginner-friendly options.";
+    return `${args.requirement ?? ""}${hands} If you’re still getting started, ${args.courseText ?? ""} is a good next step.`;
+  }
+  if (args.branch === "asks_test_ride") {
+    return (
+      "That’s exciting. For a first ride, I’d want to make sure we match you with something comfortable " +
+      `and manageable before setting up a test ride.${invite || " Do you already have your motorcycle endorsement?"}`
+    );
+  }
+  return (
+    "That’s exciting. For a first bike, I’d focus on comfort, seat height, weight, and confidence." +
+    `${invite || " Do you already have your motorcycle endorsement, or are you still getting started?"}`
+  );
+}

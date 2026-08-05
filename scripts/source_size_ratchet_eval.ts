@@ -250,8 +250,10 @@ const CEILINGS: Ceiling[] = [
     // `policies.firstTimeRider` was being re-read by hand in FIVE places (three here, two in
     // sendgridInbound.ts), each with its own defaults, so a new capability flag would have had to be
     // added to all five. One `readFirstTimeRiderPolicy` in domain/firstTimeRiderPolicy.ts now serves
-    // every caller, and the new invite still lands 17 lines UNDER the old ceiling.
-    max: 71_025,
+    // every caller, and the new invite still lands 12 lines UNDER the old ceiling — the three
+    // beginner reply bodies moved to agentVoice too, so `jumpstart_invite:eval` can RUN them
+    // instead of grepping for them (a sabotage that appended the invite passed the grep version).
+    max: 71_030,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
