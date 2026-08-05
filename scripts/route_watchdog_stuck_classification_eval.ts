@@ -73,9 +73,18 @@ assert.ok(
 // The judged-silence suppression is only honest if the watchdog actually looks the
 // verdict up per turn and over the STUCK ceiling. Reading only the report window
 // would find no verdict for exactly the old rows that need one.
+// The EXACT call shape, not two loose substrings. A guard that only checks the
+// words appear survives renaming the key to `lastInboundJudgedNoResponseUNWIRED`
+// — the option silently stops reaching the classifier while the eval stays green.
+// Measured: that sabotage passed until this assertion was tightened.
 assert.ok(
-  /judgedNoResponseOnInbound/.test(watchdog) && /lastInboundJudgedNoResponse/.test(watchdog),
-  "the watchdog must bind a recorded no-response verdict and pass it to the classifier"
+  /lastInboundJudgedNoResponse:\s*judgedNoResponseOnInbound\(/.test(watchdog),
+  "the watchdog must pass lastInboundJudgedNoResponse: judgedNoResponseOnInbound(...) to the classifier"
+);
+// And it must be bound to THIS inbound, not merely called with the conversation.
+assert.ok(
+  /judgedNoResponseOnInbound\([\s\S]{0,240}?inboundAtMs/.test(watchdog),
+  "the verdict lookup must be bound to the last inbound's timestamp"
 );
 assert.ok(
   /stuckMaxAgeSec\s*\*\s*1000/.test(watchdog),
