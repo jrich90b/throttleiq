@@ -45,7 +45,17 @@ const api = fs.readFileSync("services/api/src/index.ts", "utf8");
 assert.match(api, /async function bookConfirmedAppointmentSlot\(/, "the shared booking helper exists");
 assert.match(api, /const created = await insertEvent\(/, "it inserts a real calendar event");
 assert.match(api, /conv\.appointment\.bookedEventId = eventIdToPersist;/, "it persists bookedEventId");
-assert.match(api, /conv\.appointment\.confirmedBy = "customer";/, "the appointment is customer-confirmed");
+// The customer-confirm now rides the referee, not an inline write. This pin used to match a
+// literal `conv.appointment.confirmedBy = "customer"` — but that literal lived in the SEVEN
+// conversation-turn booking copies elsewhere in the file, not in this helper, so it went stale
+// the moment those joined `applyAppointmentBookingRecord` (2026-08-05). What actually carries
+// the guarantee here is the `customer_confirm_booking` lane of `decideAppointmentConfirmRecord`,
+// which is pinned by behaviour in appointment_confirm_record:eval.
+assert.match(
+  api,
+  /applyAppointmentConfirmRecord\(conv, "customer_confirm_booking"\);/,
+  "the appointment is customer-confirmed, via the referee lane that means exactly that"
+);
 assert.match(api, /onAppointmentBooked\(conv\);\n  return \{ booked: true/, "it finalizes via onAppointmentBooked");
 assert.match(api, /return \{ booked: false, whenText: "", repName: null \};/, "a failed calendar write => booked:false (no fabricated confirm)");
 

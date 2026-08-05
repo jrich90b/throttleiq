@@ -215,7 +215,13 @@ const CEILINGS: Ceiling[] = [
     // 71_371, then 71_331, then 71_222, then 71_199 — #503 (-23) and #512 (-2) each landed under it
     // in turn. Every earlier number would have RAISED the ceiling and silently handed back someone
     // else's reduction. Re-derived on the INTEGRATED tree each time; the slice is worth exactly -2.
-    max: 71_197,
+    // 71_197 -> 71_182. The CONVERSATION-TURN booking un-stacking: seven hand-maintained copies of
+    // the same eleven-field "a real calendar event now holds this lead's time" block, in four
+    // shapes, replaced by four lanes on the existing applier. The applier pattern paid for its own
+    // wiring again — the four new referee knobs live in routeStateReducer, not here.
+    // REBASE NOTE: re-derived on the INTEGRATED tree for the THIRD time (#512 then #492 each landed
+    // -2 under this branch). The slice is worth -15 every time; the ceiling is not.
+    max: 71_182,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

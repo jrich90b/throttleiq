@@ -776,7 +776,18 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 // has eaten a delta whole. MEASURED on the post-change tree with the eval's own `minWrites: 4` scan —
 // a different filter reports different totals, so only this one may be quoted here.
 // RATCHET DOWN ONLY.
-const UNREFEREED_WRITER_BASELINE = 70;
+// 70 -> 68, and `appointment` reaches ZERO — the second Tier-1 field cleared. The CONVERSATION-TURN
+// booking un-stacking (2026-08-05): the seven hand-maintained copies of "a real calendar event now
+// holds this lead's time" that lived inside the inbound handler joined
+// `decideAppointmentBookingRecord` as four new lanes. They were invisible to the queue as seven —
+// `countWriters` collapses one enclosing function to one writer — which is why the previous slice
+// moved the number by 0 and this one moves it by 2. FOUR divergences preserved and named: the
+// matched-slot lane confirms with no fresh hour or attribution, the exact-slot arm alone records
+// whose calendar holds the event, a MOVE keeps the event it already holds where a CREATE clears a
+// missing one to null, and the suggested-slot autobook records the matched slot where its console
+// siblings do not. MEASURED on the post-change tree with the eval's own `minWrites: 4` scan.
+// RATCHET DOWN ONLY.
+const UNREFEREED_WRITER_BASELINE = 68;
 
 {
   const sourceFiles: SourceFile[] = [];

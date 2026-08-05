@@ -62775,16 +62775,14 @@ if (authToken && signature) {
             chosen.end
           );
 
-          conv.appointment.status = "confirmed";
-          conv.appointment.whenText = chosen.startLocal ?? chosen.start;
-          conv.appointment.whenIso = chosen.start;
-          conv.appointment.confirmedBy = "customer";
-          conv.appointment.updatedAt = new Date().toISOString();
-          conv.appointment.acknowledged = true;
-          conv.appointment.bookedEventId = eventObj.id ?? eventId;
-          conv.appointment.bookedEventLink = eventObj.htmlLink ?? conv.appointment.bookedEventLink;
-          conv.appointment.bookedSalespersonId = targetSp.id;
-          conv.appointment.reschedulePending = false;
+          applyAppointmentBookingRecord(conv, {
+            lane: "customer_turn_reschedule_move",
+            whenText: chosen.startLocal ?? chosen.start,
+            whenIso: chosen.start,
+            bookedEventId: eventObj.id ?? eventId,
+            bookedEventLink: eventObj.htmlLink ?? conv.appointment.bookedEventLink,
+            bookedSalespersonId: targetSp.id
+          });
           onAppointmentBooked(conv);
 
           if (conv.scheduler) {
@@ -62874,18 +62872,15 @@ if (authToken && signature) {
             colorId
           );
 
-          conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
-          conv.appointment.status = "confirmed";
-          conv.appointment.whenText = chosen.startLocal ?? chosen.start;
-          conv.appointment.whenIso = chosen.start;
-          conv.appointment.confirmedBy = "customer";
-          conv.appointment.updatedAt = new Date().toISOString();
-          conv.appointment.acknowledged = true;
-          conv.appointment.bookedEventId = created.id ?? null;
-          conv.appointment.bookedEventLink = created.htmlLink ?? null;
-          conv.appointment.bookedSalespersonId = chosen.salespersonId ?? null;
-          conv.appointment.matchedSlot = chosen;
-          conv.appointment.reschedulePending = false;
+          applyAppointmentBookingRecord(conv, {
+            lane: "customer_turn_slot_autobook",
+            whenText: chosen.startLocal ?? chosen.start,
+            whenIso: chosen.start,
+            bookedEventId: created.id ?? null,
+            bookedEventLink: created.htmlLink ?? null,
+            bookedSalespersonId: chosen.salespersonId ?? null,
+            matchedSlot: chosen
+          });
           onAppointmentBooked(conv);
 
           if (conv.scheduler) {
@@ -62901,7 +62896,7 @@ if (authToken && signature) {
             cfg.salespeople?.find(p => p.id === chosen?.salespersonId)?.name ??
             null;
           const repSuffix = repName ? ` with ${repName}` : "";
-          const reply = `Perfect — you’re all set for ${conv.appointment.whenText}${repSuffix}. See you then.`;
+          const reply = `Perfect — you’re all set for ${conv.appointment!.whenText}${repSuffix}. See you then.`;
           return publishLiveTwilioReply(
             reply,
             { turnSchedulingIntent: true },
@@ -62970,18 +62965,15 @@ if (authToken && signature) {
           colorId
         );
 
-        conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
-        conv.appointment.status = "confirmed";
-        conv.appointment.whenText = chosen.startLocal ?? chosen.start;
-        conv.appointment.whenIso = chosen.start;
-        conv.appointment.confirmedBy = "customer";
-        conv.appointment.updatedAt = new Date().toISOString();
-        conv.appointment.acknowledged = true;
-        conv.appointment.bookedEventId = created.id ?? null;
-        conv.appointment.bookedEventLink = created.htmlLink ?? null;
-        conv.appointment.bookedSalespersonId = chosen.salespersonId ?? null;
-        conv.appointment.matchedSlot = chosen;
-        conv.appointment.reschedulePending = false;
+        applyAppointmentBookingRecord(conv, {
+          lane: "customer_turn_slot_autobook",
+          whenText: chosen.startLocal ?? chosen.start,
+          whenIso: chosen.start,
+          bookedEventId: created.id ?? null,
+          bookedEventLink: created.htmlLink ?? null,
+          bookedSalespersonId: chosen.salespersonId ?? null,
+          matchedSlot: chosen
+        });
         onAppointmentBooked(conv);
 
         if (conv.scheduler) {
@@ -62996,7 +62988,7 @@ if (authToken && signature) {
           cfg.salespeople?.find(p => p.id === chosen?.salespersonId)?.name ??
           null;
         const repSuffix = repName ? ` with ${repName}` : "";
-        const reply = `Perfect — you’re all set for ${conv.appointment.whenText}${repSuffix}. See you then.`;
+        const reply = `Perfect — you’re all set for ${conv.appointment!.whenText}${repSuffix}. See you then.`;
         return publishLiveTwilioReply(
           reply,
           { turnSchedulingIntent: true },
@@ -63303,18 +63295,16 @@ if (authToken && signature) {
           exactMatch.exact.end
         );
 
-        conv.appointment.status = "confirmed";
-        conv.appointment.whenText = formatSlotLocal(exactMatch.exact.start, cfg.timezone);
-        conv.appointment.whenIso = exactMatch.exact.start;
-        conv.appointment.confirmedBy = "customer";
-        conv.appointment.updatedAt = new Date().toISOString();
-        conv.appointment.acknowledged = true;
-        conv.appointment.bookedEventId = eventObj.id ?? eventId;
-        conv.appointment.bookedEventLink = eventObj.htmlLink ?? conv.appointment.bookedEventLink;
-        conv.appointment.bookedSalespersonId = exactMatch.sp.id;
-        conv.appointment.bookedSalespersonName = exactMatch.sp.name;
-        conv.appointment.bookedCalendarId = exactMatch.sp.calendarId;
-        conv.appointment.reschedulePending = false;
+        applyAppointmentBookingRecord(conv, {
+          lane: "customer_turn_exact_slot_move",
+          whenText: formatSlotLocal(exactMatch.exact.start, cfg.timezone),
+          whenIso: exactMatch.exact.start,
+          bookedEventId: eventObj.id ?? eventId,
+          bookedEventLink: eventObj.htmlLink ?? conv.appointment.bookedEventLink,
+          bookedSalespersonId: exactMatch.sp.id,
+          bookedSalespersonName: exactMatch.sp.name,
+          bookedCalendarId: exactMatch.sp.calendarId
+        });
         onAppointmentBooked(conv);
 
         const dealerName =
@@ -63456,16 +63446,14 @@ if (authToken && signature) {
         slot.end
       );
 
-      conv.appointment.status = "confirmed";
-      conv.appointment.whenText = formatSlotLocal(slot.start, cfg.timezone);
-      conv.appointment.whenIso = slot.start;
-      conv.appointment.confirmedBy = "customer";
-      conv.appointment.updatedAt = new Date().toISOString();
-      conv.appointment.acknowledged = true;
-      conv.appointment.bookedEventId = eventObj.id ?? conv.appointment.bookedEventId;
-      conv.appointment.bookedEventLink = eventObj.htmlLink ?? conv.appointment.bookedEventLink;
-      conv.appointment.bookedSalespersonId = sp.id;
-      conv.appointment.reschedulePending = false;
+      applyAppointmentBookingRecord(conv, {
+        lane: "customer_turn_reschedule_move",
+        whenText: formatSlotLocal(slot.start, cfg.timezone),
+        whenIso: slot.start,
+        bookedEventId: eventObj.id ?? conv.appointment.bookedEventId,
+        bookedEventLink: eventObj.htmlLink ?? conv.appointment.bookedEventLink,
+        bookedSalespersonId: sp.id
+      });
       onAppointmentBooked(conv);
 
       if (conv.scheduler) {
@@ -63533,13 +63521,13 @@ if (authToken && signature) {
         colorId
       );
 
-      // Mark appointment as truly booked
-      conv.appointment.status = "confirmed";
-      conv.appointment.bookedEventId = eventObj.id ?? null;
-      conv.appointment.bookedEventLink = eventObj.htmlLink ?? null;
-      conv.appointment.bookedSalespersonId = slot.salespersonId ?? null;
-      conv.appointment.acknowledged = true;
-      conv.appointment.reschedulePending = false;
+      // Mark appointment as truly booked — the hour is already on the record (divergence 7).
+      applyAppointmentBookingRecord(conv, {
+        lane: "customer_turn_matched_slot_book",
+        bookedEventId: eventObj.id ?? null,
+        bookedEventLink: eventObj.htmlLink ?? null,
+        bookedSalespersonId: slot.salespersonId ?? null
+      });
       onAppointmentBooked(conv);
       if (appointmentType === "test_ride") {
         setDialogState(conv, "test_ride_booked");
@@ -69044,18 +69032,15 @@ if (authToken && signature) {
               colorId
             );
 
-            conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
-            conv.appointment.status = "confirmed";
-            conv.appointment.whenText = chosen.startLocal ?? chosen.start;
-            conv.appointment.whenIso = chosen.start;
-            conv.appointment.confirmedBy = "customer";
-            conv.appointment.updatedAt = new Date().toISOString();
-            conv.appointment.acknowledged = true;
-            conv.appointment.bookedEventId = created.id ?? null;
-            conv.appointment.bookedEventLink = created.htmlLink ?? null;
-            conv.appointment.bookedSalespersonId = chosen.salespersonId ?? null;
-            conv.appointment.matchedSlot = chosen;
-            conv.appointment.reschedulePending = false;
+            applyAppointmentBookingRecord(conv, {
+              lane: "customer_turn_slot_autobook",
+              whenText: chosen.startLocal ?? chosen.start,
+              whenIso: chosen.start,
+              bookedEventId: created.id ?? null,
+              bookedEventLink: created.htmlLink ?? null,
+              bookedSalespersonId: chosen.salespersonId ?? null,
+              matchedSlot: chosen
+            });
             onAppointmentBooked(conv);
             if (appointmentType === "test_ride") {
               setDialogState(conv, "test_ride_booked");
@@ -69073,7 +69058,7 @@ if (authToken && signature) {
               cfg.salespeople?.find(p => p.id === chosen?.salespersonId)?.name ??
               null;
             const repSuffix = repName ? ` with ${repName}` : "";
-            const confirmText = `Perfect — you’re all set for ${conv.appointment.whenText}${repSuffix}. See you then.`;
+            const confirmText = `Perfect — you’re all set for ${conv.appointment!.whenText}${repSuffix}. See you then.`;
             logRouteTiming("scheduler.deterministic_booked", schedulerStageStartedAt, {
               mode: webhookMode === "suggest" ? "suggest" : "twilio"
             });
