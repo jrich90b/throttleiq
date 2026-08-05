@@ -595,6 +595,7 @@ import {
   vehicleLabelForOfferMatch
 } from "./domain/nationalOffers.js";
 import { sweepCadenceRealigns } from "./domain/cadenceRealignSweep.js";
+import { sweepPendingIncomingNotifyTodos } from "./domain/pendingIncomingArrivalBackfill.js";
 import {
   resolveInterestUnitPriceDrop,
   commitInterestUnitPriceDropFire
@@ -999,7 +1000,6 @@ import {
   addTodo,
   addCallTodoIfMissing,
   upsertPendingIncomingInventoryNotifyTodo,
-  healPendingIncomingNotifyTodosAcross,
   healStaleHeldFlag,
   isSchedulingLeakConversation,
   realignOverEagerEngagedCadence,
@@ -32162,19 +32162,17 @@ async function processDueFollowUpsUnlocked() {
   if (watchInterestFilled > 0) {
     console.log(`[state-reconcile] filled ${watchInterestFilled} placeholder motorcycle-of-interest field(s) from the customer's watch`);
   }
-  // Pending-incoming notify-todo heals (dedup, then re-date onto the expected arrival) — both owned
-  // by healPendingIncomingNotifyTodosAcross so the sweep and the write path share one rulebook.
-  const notifyHeal = healPendingIncomingNotifyTodosAcross(convById, openTodos);
-  for (const h of notifyHeal.dedup) recordRouteOutcome("manual", "pending_incoming_notify_todo_dedup_heal", h);
-  for (const h of notifyHeal.reDated) recordRouteOutcome("manual", "pending_incoming_notify_todo_arrival_date_heal", h);
-  if (notifyHeal.dedup.length > 0) {
-    const retired = notifyHeal.dedup.reduce((n, h) => n + h.retired, 0);
-    console.log(`[state-reconcile] collapsed ${retired} duplicate pending-incoming notify todo(s)`);
-  }
-  if (notifyHeal.reDated.length > 0) {
-    console.log(
-      `[state-reconcile] re-dated ${notifyHeal.reDated.length} pending-incoming notify todo(s) onto the expected arrival`
-    );
+  // Pending-incoming arrival-notify pass (domain/pendingIncomingArrivalBackfill.ts): one-time
+  // arrival backfill for dormant pre-#337 records, then dedup, then re-date onto the arrival — in
+  // that order, because the re-date has nothing to act on until the backfill has run.
+  const notifySweep = await sweepPendingIncomingNotifyTodos({
+    convs, convById, openTodos, timezone: cfg.timezone, nowIso: now.toISOString()
+  });
+  for (const r of notifySweep.backfilled) recordRouteOutcome("manual", "pending_incoming_arrival_backfilled", r);
+  for (const h of notifySweep.dedup) recordRouteOutcome("manual", "pending_incoming_notify_todo_dedup_heal", h);
+  for (const h of notifySweep.reDated) recordRouteOutcome("manual", "pending_incoming_notify_todo_arrival_date_heal", h);
+  if (notifySweep.backfilled.length > 0 || notifySweep.reDated.length > 0) {
+    console.log(`[state-reconcile] arrival-notify: ${notifySweep.backfilled.length} backfilled, ${notifySweep.reDated.length} re-dated, ${notifySweep.dedup.length} deduped`);
   }
   // Ride-challenge cadence realign heal (Joe ruling 2026-07-09, +15857657010): legacy ride-challenge
   // leads classified BEFORE the 6/24 event_promo source inference (aec61b68) are still on an ACTIVE

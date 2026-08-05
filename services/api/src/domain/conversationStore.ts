@@ -782,6 +782,12 @@ export type PendingIncomingInventory = {
   // Both unset when no timing was stated; the task then keeps today's undated behavior.
   expectedArrivalText?: string;
   expectedArrivalAt?: string;
+  /**
+   * When the one-time arrival BACKFILL last tried to read an arrival off `note`
+   * (domain/pendingIncomingArrivalBackfill.ts). Stamped whether or not it found one, so a record
+   * with no stated timing is parsed at most once ever instead of on every reconcile tick.
+   */
+  expectedArrivalCheckedAt?: string;
 };
 
 export type FinanceDocsState = {

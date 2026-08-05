@@ -14,6 +14,7 @@ import {
   resolvePendingIncomingNotifyDueAt,
   shouldHandlePendingIncomingInventoryTurn
 } from "../services/api/src/domain/pendingIncomingInventory.ts";
+import { decidePendingIncomingArrivalBackfill } from "../services/api/src/domain/pendingIncomingArrivalBackfill.ts";
 import fs from "node:fs";
 import { applyPendingIncomingNotifyArrivalDate } from "../services/api/src/domain/conversationStore.ts";
 import type { Conversation, TodoTask } from "../services/api/src/domain/conversationStore.ts";
@@ -478,9 +479,62 @@ assert.ok(
   /needsArrival/.test(idx),
   "the shared applier must capture the arrival independently of needing the purpose"
 );
+// Wiring chain (see the dedup eval for why this is pinned as a chain, not a call site): the
+// reconcile runs the sweep, and the sweep both BACKFILLS a dormant record's arrival and re-dates.
+const backfillMod = fs.readFileSync("services/api/src/domain/pendingIncomingArrivalBackfill.ts", "utf8");
 assert.ok(
-  /healPendingIncomingNotifyTodosAcross\(/.test(idx),
-  "the state-reconcile pass must re-date notify todos that are already sitting on a wrong date"
+  /sweepPendingIncomingNotifyTodos\(/.test(idx),
+  "the state-reconcile pass must run the arrival-notify sweep"
+);
+assert.ok(
+  /healPendingIncomingNotifyTodosAcross\(/.test(backfillMod) &&
+    /sweepPendingIncomingArrivalBackfill\(/.test(backfillMod),
+  "the sweep must backfill the arrival BEFORE the re-date heal, or the heal has nothing to act on"
 );
 
-console.log("PASS pending incoming inventory eval (+ arrival-dated notify task, arrival-is-authority)");
+// ---------------------------------------------------------------------------------------------
+// ARRIVAL BACKFILL eligibility — the gate that makes an LLM call inside a recurring sweep safe.
+//
+// #486 deployed and fixed NONE of the three open arrival-notify tasks: the re-date heal reads
+// pendingIncomingInventory.expectedArrivalAt, and only a TURN could ever set one, so a dormant
+// record (Mohamed Ahmed +17164258647 — silent since 7/29, "I'll stop by when it arrives") stayed
+// broken forever. The backfill reads that arrival off the stored note on the reconcile tick. What
+// keeps it cheap is that it is ONE-SHOT PER RECORD, which is what these rows pin.
+const liveRecord = { note: "the next available Deadwood is scheduled to come in around 8/21" };
+assert.equal(
+  decidePendingIncomingArrivalBackfill(liveRecord, true).backfill,
+  true,
+  "+17164258647: a dormant record with an open notify task and no arrival is eligible"
+);
+assert.equal(
+  decidePendingIncomingArrivalBackfill(liveRecord, false).backfill,
+  false,
+  "no OPEN notify task => not eligible; this is what keeps the sweep off the whole store"
+);
+for (const [field, label] of [
+  ["expectedArrivalText", "the live path already comprehended an arrival"],
+  ["expectedArrivalAt", "the live path already resolved an arrival"],
+  ["expectedArrivalCheckedAt", "we already spent our one attempt (SELF-EXTINGUISHING)"]
+] as const) {
+  assert.equal(
+    decidePendingIncomingArrivalBackfill({ ...liveRecord, [field]: "2026-08-21" }, true).backfill,
+    false,
+    `not eligible once ${field} is set — ${label}`
+  );
+}
+assert.equal(
+  decidePendingIncomingArrivalBackfill({ note: "   " }, true).backfill,
+  false,
+  "no seed text => nothing to comprehend, so no call is spent"
+);
+assert.equal(decidePendingIncomingArrivalBackfill(null, true).backfill, false, "no pending record => not eligible");
+// The one that matters for cost: a record whose note states NO timing is marked checked anyway, so
+// a permanent miss can never become a per-tick LLM bill.
+const missRecord: any = { note: "customer will stop by sometime", expectedArrivalCheckedAt: "2026-08-03T19:00:00.000Z" };
+assert.equal(
+  decidePendingIncomingArrivalBackfill(missRecord, true).backfill,
+  false,
+  "a record that was READ but yielded no date is never re-read"
+);
+
+console.log("PASS pending incoming inventory eval (+ arrival-dated notify task, arrival-is-authority, backfill gate)");

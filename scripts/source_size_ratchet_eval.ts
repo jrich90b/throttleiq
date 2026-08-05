@@ -207,12 +207,15 @@ const CEILINGS: Ceiling[] = [
     // 71_201 -> 71_199. The post-sale warmth prefix paid for its own import: the inline
     // positivity regex + ternary became hasCustomerPositiveExperience (domain/leadInGuards.ts),
     // next to the two fabricated-frame guards it belongs with.
-    // REBASE NOTE (ROUTINE_CONTRACT rule 3, the #418 trap): authored against a 71_333 main and
-    // proposed 71_329, then 71_222 against a 71_224 main, and #503 landed -23 under it after that.
-    // Any of those earlier numbers would have silently handed back someone else's reduction — this
-    // branch has now been re-derived on the INTEGRATED tree three times, and the slice is worth
-    // exactly -2 every time.
-    max: 71_199,
+    // 71_199 -> 71_197. The arrival BACKFILL sweep (dormant pre-#337 records could never learn an
+    // arrival, so #486's re-date heal had nothing to act on) went into
+    // domain/pendingIncomingArrivalBackfill.ts, and its sweepPendingIncomingNotifyTodos swallowed
+    // the heal block index.ts was already carrying. Net -2 WITH the new sweep included.
+    // REBASE NOTE (ROUTINE_CONTRACT rule 3, the #418 trap): authored against 71_373 and proposed
+    // 71_371, then 71_331, then 71_222, then 71_199 — #503 (-23) and #512 (-2) each landed under it
+    // in turn. Every earlier number would have RAISED the ceiling and silently handed back someone
+    // else's reduction. Re-derived on the INTEGRATED tree each time; the slice is worth exactly -2.
+    max: 71_197,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

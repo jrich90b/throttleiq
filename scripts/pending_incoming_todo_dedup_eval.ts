@@ -45,17 +45,22 @@ assert.ok(
   /upsertPendingIncomingInventoryNotifyTodo\(\s*conv,\s*\n\s*buildPendingIncomingInventoryTaskSummary/.test(index),
   "applyPendingIncomingInventoryState must upsert the notify task (not bare addTodo)"
 );
-// The maintenance reconcile tick must heal any pre-existing duplicate pile. The dedup CALL moved
-// out of index.ts into healPendingIncomingNotifyTodosAcross (conversationStore) when the arrival
-// re-dating heal joined it on the same scan — so pin the sweep the reconcile invokes, and pin that
-// the sweep still performs the dedup, rather than a line of index.ts that no longer exists.
+// The maintenance reconcile tick must heal any pre-existing duplicate pile. This is a WIRING claim,
+// so it is pinned as a CHAIN rather than as one call site — the call has now moved twice (index.ts ->
+// healPendingIncomingNotifyTodosAcross -> sweepPendingIncomingNotifyTodos) and a pin on any single
+// hop false-fails on the next extraction while proving nothing extra.
+const backfillSweep = fs.readFileSync("services/api/src/domain/pendingIncomingArrivalBackfill.ts", "utf8");
 assert.ok(
-  /healPendingIncomingNotifyTodosAcross\(convById, openTodos\)/.test(index),
-  "the maintenance reconcile must run the notify-todo heal sweep"
+  /sweepPendingIncomingNotifyTodos\(/.test(index),
+  "the maintenance reconcile must run the arrival-notify sweep"
+);
+assert.ok(
+  /healPendingIncomingNotifyTodosAcross\(/.test(backfillSweep),
+  "that sweep must invoke the dedup+re-date heal"
 );
 assert.ok(
   /healPendingIncomingNotifyTodoDuplicates\(conv\)/.test(store),
-  "the sweep must still collapse duplicate notify todos"
+  "and the heal must still collapse duplicate notify todos"
 );
 
 // --- 2) Pure predicate coverage. ---
