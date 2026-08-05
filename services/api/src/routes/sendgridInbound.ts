@@ -64,6 +64,7 @@ import {
 import type { InventoryWatch } from "../domain/conversationStore.js";
 import { isSuppressed } from "../domain/suppressionStore.js";
 import { isOptOutKeywordInbound } from "../domain/scoringExclusions.js";
+import { readFirstTimeRiderPolicy, hasRiderCoursePublicInfo } from "../domain/firstTimeRiderPolicy.js";
 import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildRidingAcademyEnrollmentAck, shouldIntroduceOnAdfTouch, stripAgentIntroPhraseForDealer, stripLeadingAgentGreeting, hasCustomerReceivedOutbound, GENERIC_AGENT_DISPLAY_NAME, GENERIC_DEALER_DISPLAY_NAME, resolveDealerAgentName, greetingFirstName } from "../domain/agentVoice.js";
 import { buildAdfResubmissionAck, detectAdfFormResubmission } from "../domain/adfResubmission.js";
 import { buildMarketplaceRelayFirstTouchReply, buildMarketplaceRelayTaskSummary } from "../domain/marketplaceRelay.js";
@@ -1430,21 +1431,10 @@ function buildInitialAdfRiderCourseInfoReply(
   dealerProfile: any,
   inquiryText?: string | null
 ): string {
-  const policies = dealerProfile?.policies ?? {};
-  const firstTimePolicy =
-    policies?.firstTimeRider && typeof policies.firstTimeRider === "object"
-      ? policies.firstTimeRider
-      : {};
-  const courseName =
-    String(firstTimePolicy.riderCourseName ?? "").trim() ||
-    String(firstTimePolicy.trainingCourseName ?? "").trim() ||
-    "Riding Academy course";
-  const coursePrice =
-    String(firstTimePolicy.riderCoursePrice ?? "").trim() ||
-    String(firstTimePolicy.trainingCoursePrice ?? "").trim();
-  const courseUrl =
-    String(firstTimePolicy.riderCourseUrl ?? "").trim() ||
-    String(firstTimePolicy.trainingCourseUrl ?? "").trim();
+  const policy = readFirstTimeRiderPolicy(dealerProfile);
+  const courseName = policy.courseName || "Riding Academy course";
+  const coursePrice = policy.coursePrice;
+  const courseUrl = policy.courseUrl;
   const isAmbiguous = hasAmbiguousRiderCourseInfoText(inquiryText);
   const ambiguousPriceLine = coursePrice
     ? `the current price is ${coursePrice}.`
@@ -1464,17 +1454,7 @@ function buildInitialAdfRiderCourseInfoReply(
 }
 
 function hasRiderCourseCustomerFacingInfo(dealerProfile: any): boolean {
-  const policies = dealerProfile?.policies ?? {};
-  const firstTimePolicy =
-    policies?.firstTimeRider && typeof policies.firstTimeRider === "object"
-      ? policies.firstTimeRider
-      : {};
-  return !!(
-    String(firstTimePolicy.riderCoursePrice ?? "").trim() ||
-    String(firstTimePolicy.trainingCoursePrice ?? "").trim() ||
-    String(firstTimePolicy.riderCourseUrl ?? "").trim() ||
-    String(firstTimePolicy.trainingCourseUrl ?? "").trim()
-  );
+  return hasRiderCoursePublicInfo(dealerProfile);
 }
 
 function buildBookingUrlForLead(baseUrl: string | undefined | null, conv: any): string | null {

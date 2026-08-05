@@ -20,6 +20,7 @@ export {
   decideNonBuyerSurveyTurn,
   decideDealerLeadSurveyTurn,
   decideRidingAcademyTurn,
+  decideJumpstartInviteTurn,
   decideFinancePricingTurn,
   decideFinanceDeclinedCadence,
   decideBusinessManagerFinanceOutcomePrompt,

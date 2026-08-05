@@ -553,6 +553,23 @@ export function buildWatchSiblingScopeAsk(args: {
  * self-declared non-buyer. Leaves the door open without pressure. Pinned by
  * `non_buyer_survey_ack:eval`.
  */
+/**
+ * The JUMPSTART 1-on-1 invite (Joe, 2026-08-05) — one sentence, woven into the first-time-rider
+ * reply when `decideJumpstartInviteTurn` says this store HAS a Jumpstart and this customer has
+ * no-to-little riding experience.
+ *
+ * May say: what the Jumpstart is (a real bike on a stationary stand), that it needs no license, and
+ * an offer of one-on-one time on it. Must NOT say, because none of it is this sentence's to
+ * promise: a price, a test ride or road ride, a specific day or time (the scheduler owns booking),
+ * or any suggestion that it replaces training or a license. Pinned by `jumpstart_invite:eval`.
+ */
+export function buildJumpstartOneOnOneInvite(): string {
+  return (
+    " We also have a Jumpstart here — a real bike on a stand where you can start it up and work the " +
+    "clutch and gears, no license needed. Want me to set up one-on-one time on it for you?"
+  );
+}
+
 export function buildNonBuyerSurveyAck(
   firstName: string | null | undefined,
   agentName: string,
