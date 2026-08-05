@@ -7113,6 +7113,86 @@ export type InventoryWatchExactnessDecision = {
   why: string;
 };
 
+// ---------------------------------------------------------------------------
+// Voicemail -> staff follow-up task
+//
+// Operator report 2026-07-31 (+15416478489, Mark Griffin): "there is a watch on this. it should
+// not have a task." The lead asked for a used 2023 Fat Bob, we armed an inventory watch, and the
+// chase was DELIBERATELY stopped because of that watch (followUp.mode=holding_inventory,
+// cadence stopped with reason inventory_watch). A later outbound call hit voicemail and the
+// generic 2nd-attempt arm minted a "Call customer (follow-up)" task anyway — a lead in the staff
+// inbox with nothing for staff to do. It then escalated, and the operator closed it four seconds
+// after filing the report.
+//
+// The three voicemail arms in /webhooks/twilio/voice/recording each hand-answered "does this mint
+// a task"; this is the one referee they now ask.
+//
+// FAIL DIRECTION — this suppression can lose work, so it fails toward KEEPING the task. After the
+// task is suppressed the watch fire is the only remaining touch (the cadence is stopped and
+// decideCadenceHoldTtlResume refuses to resume it), so a loose predicate silently buries leads.
+// Hence the four-clause conjunction below. Measured against the live store: of the 16 voicemail
+// 2nd-attempt tasks ever minted it suppresses exactly one — the reported lead. The two near-misses
+// it must spare are why each clause is load-bearing:
+//   - +17162458986 has an active watch from April but followUp.mode="active" — a stale watch on an
+//     otherwise normal lead. A watch-only predicate would wrongly bury it.
+//   - +15856048591 is holding_inventory/inventory_watch with ZERO watch records — held for a watch
+//     that no longer exists, so the call task is the only thing keeping it alive. A mode-only
+//     predicate would wrongly bury it (twice).
+//
+// NARROWED 2026-08-04 by Joe's ruling on the same operator report, verbatim: "Suppress when there
+// is a callback voicemail on a watch unless it is an additional lead or the customer shows interest
+// in something else." Being parked is necessary but NOT sufficient — the watch only owns the
+// follow-up while the watch is the whole story. Two more clauses carry the "unless":
+//   - customerContactSinceWatchArmed = "an additional lead". Anything the customer has said since
+//     we started watching is by definition not covered by the watch.
+//   - openWorkBeyondWatch = "interest in something else". Another open task, or a booked
+//     appointment, is work the watch does not own.
+// Both read state we already comprehended upstream, so this gate never re-reads the customer's
+// words and cannot decay into a keyword test.
+//
+// These are not theoretical. Measured against the live store on 2026-08-04: 47 conversations are
+// parked on a live watch, and 11 of them (23%) hit one of the two carve-outs — including
+// +12399612259 asking an unanswered question ("remind me again what address is this at?"),
+// +17164819192 saying "it's a bit high mileage for me. I am considering something new as of
+// recent", and three leads with an appointment already on the books. Without these clauses a
+// voicemail to any of those 11 would leave the watch as the lead's only remaining touch.
+// ---------------------------------------------------------------------------
+
+export type VoicemailFollowUpTaskLane =
+  /** The CUSTOMER called us and left a voicemail. */
+  | "inbound_voicemail"
+  /** Outbound call to a manual finance handoff — also restarts the finance cadence. */
+  | "outbound_finance_handoff"
+  /** Outbound call to any other conversation (Joe-approved 2026-07-02, 2nd-attempt task). */
+  | "outbound_generic";
+
+export type VoicemailFollowUpTaskInput = {
+  lane: VoicemailFollowUpTaskLane;
+  /** An open followup/call todo already covers this lead. */
+  hasOpenFollowUpTask: boolean;
+  /** Count of ACTIVE inventory watches on the lead. */
+  activeInventoryWatchCount: number;
+  /** conv.followUp?.mode */
+  followUpMode: string | null | undefined;
+  /** conv.followUp?.reason */
+  followUpReason: string | null | undefined;
+  /** Joe's "an additional lead": any inbound from the customer since the newest watch was armed. */
+  customerContactSinceWatchArmed: boolean;
+  /** Joe's "interest in something else": another open task, or a booked appointment. */
+  openWorkBeyondWatch: boolean;
+};
+
+export type VoicemailFollowUpTaskDecision = {
+  create: boolean;
+  reason:
+    | "created"
+    | "existing_open_task"
+    | "parked_on_inventory_watch"
+    | "additional_lead"
+    | "interest_beyond_watch";
+  why: string;
+};
+
 /** Pure. */
 export function resolveInventoryWatchExactness(
   input: InventoryWatchExactnessInput
@@ -7206,5 +7286,55 @@ export function resolveInventoryWatchListNormalization(
       listLength === null
         ? "legacy record: only the singular exists — read it and backfill the list"
         : "an explicitly EMPTY list stands; read the singular this turn but do not resurrect it into the list"
+  };
+}
+
+/** Pure. */
+export function decideVoicemailFollowUpTask(
+  input: VoicemailFollowUpTaskInput
+): VoicemailFollowUpTaskDecision {
+  if (input.hasOpenFollowUpTask) {
+    return {
+      create: false,
+      reason: "existing_open_task",
+      why: `${input.lane}: an open followup/call task already covers this lead`
+    };
+  }
+  // Only the generic outbound arm parks. The inbound lane is the CUSTOMER reaching out — that
+  // always earns a callback task. The finance handoff arm restarts the finance cadence in the same
+  // breath, so its task is the cadence's own next step, not a duplicate of a watch.
+  const parked =
+    input.lane === "outbound_generic" &&
+    Number(input.activeInventoryWatchCount) > 0 &&
+    input.followUpMode === "holding_inventory" &&
+    String(input.followUpReason || "").includes("inventory_watch");
+  if (parked) {
+    // Joe 2026-08-04, the two "unless" clauses. Being parked is necessary, not sufficient: the
+    // watch only owns the follow-up while the watch is the WHOLE story. Checked in this order so
+    // the recorded reason names the thing that actually saved the task.
+    if (input.customerContactSinceWatchArmed) {
+      return {
+        create: true,
+        reason: "additional_lead",
+        why: `${input.lane}: parked on a watch, but the customer has been in touch since it was armed — that is an additional lead the watch does not cover`
+      };
+    }
+    if (input.openWorkBeyondWatch) {
+      return {
+        create: true,
+        reason: "interest_beyond_watch",
+        why: `${input.lane}: parked on a watch, but another open task or a booked appointment is work the watch does not own`
+      };
+    }
+    return {
+      create: false,
+      reason: "parked_on_inventory_watch",
+      why: `${input.lane}: the lead is parked on an active inventory watch and the chase is stopped for that reason — the watch fire is the intended next touch`
+    };
+  }
+  return {
+    create: true,
+    reason: "created",
+    why: `${input.lane}: no open task and the lead is not parked on a watch — mint the follow-up`
   };
 }

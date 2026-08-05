@@ -45,6 +45,9 @@ import {
   decideFinanceOutcomeNotifyState,
   type FinanceOutcomeNotifyLane,
   type FinanceOutcomeNotifyDecision,
+  decideVoicemailFollowUpTask,
+  type VoicemailFollowUpTaskLane,
+  type VoicemailFollowUpTaskDecision,
   decideScheduleInviteBudget,
   decideCadenceLifecycle,
   decideAppointmentAttribution,
@@ -5754,6 +5757,77 @@ export function applyInventoryWatchDisarm(
   if (decision.followUpMode) setFollowUpMode(conv, decision.followUpMode, input.reason ?? "inventory_watch_clear");
   if (decision.stopCadence) stopFollowUpCadence(conv, input.reason ?? "inventory_watch_clear");
   if (decision.stepDialogBack) input.stepDialogBack?.(conv);
+  return decision;
+}
+
+// The one writer of "this voicemail mints a staff follow-up task". See the fail-direction note on
+// `decideVoicemailFollowUpTask` in routeStateReducer.ts — the suppression clause is deliberately
+// four-way, because after it fires the watch is the lead's ONLY remaining touch.
+//
+// PRESERVED DIVERGENCE: the inbound lane's duplicate check looks at `reason === "call"` only,
+// while the two outbound lanes also count `taskClass === "followup"`. That difference predates
+// this referee and is kept exactly; centralizing it is a separate question from the operator's.
+export function applyVoicemailFollowUpTask(
+  conv: Conversation,
+  input: {
+    lane: VoicemailFollowUpTaskLane;
+    summary: string;
+    sourceMessageId?: string;
+    schedule?: TodoScheduleOptions;
+  }
+): VoicemailFollowUpTaskDecision {
+  const countsFollowUpClass = input.lane !== "inbound_voicemail";
+  const hasOpenFollowUpTask = listOpenTodos().some(
+    t =>
+      t.convId === conv.id &&
+      t.status === "open" &&
+      (t.reason === "call" || (countsFollowUpClass && t.taskClass === "followup"))
+  );
+  // Same "active watch" test the fire engine and the watchdog use (watchFireMiss.ts:116,
+  // index.ts:7125): an absent status means active, only "paused" is not. Merged with the legacy
+  // singular field so a lead written before `inventoryWatches` existed still reads as parked.
+  const mergedWatches = [
+    ...(Array.isArray(conv.inventoryWatches) ? conv.inventoryWatches : []),
+    ...(conv.inventoryWatch ? [conv.inventoryWatch] : [])
+  ];
+  const liveWatches = mergedWatches.filter(w => w && w.model && w.status !== "paused");
+  const activeInventoryWatchCount = liveWatches.length;
+  // Joe's two "unless" clauses (2026-08-04). Both are built to fail toward KEEPING the task: an
+  // unreadable watch or message timestamp reads as customer contact rather than silence.
+  const armedMs = liveWatches.reduce((newest, w) => {
+    const t = Date.parse(String(w.createdAt ?? ""));
+    return Number.isFinite(t) && t > newest ? t : newest;
+  }, Number.NEGATIVE_INFINITY);
+  const customerContactSinceWatchArmed = !Number.isFinite(armedMs)
+    ? activeInventoryWatchCount > 0
+    : (conv.messages ?? []).some((m: any) => {
+        if (m?.direction !== "in") return false;
+        const t = Date.parse(String(m?.at ?? ""));
+        return !Number.isFinite(t) || t > armedMs;
+      });
+  const openWorkBeyondWatch =
+    listOpenTodos().some(
+      t => t.convId === conv.id && t.status === "open" && t.reason !== "call" && t.taskClass !== "followup"
+    ) || Boolean(conv.appointment?.bookedEventId);
+  const decision = decideVoicemailFollowUpTask({
+    lane: input.lane,
+    hasOpenFollowUpTask,
+    activeInventoryWatchCount,
+    followUpMode: conv.followUp?.mode,
+    followUpReason: conv.followUp?.reason,
+    customerContactSinceWatchArmed,
+    openWorkBeyondWatch
+  });
+  if (!decision.create) return decision;
+  addTodo(
+    conv,
+    "call",
+    input.summary,
+    input.sourceMessageId,
+    undefined,
+    input.schedule,
+    input.lane === "inbound_voicemail" ? undefined : "followup"
+  );
   return decision;
 }
 

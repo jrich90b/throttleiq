@@ -791,6 +791,39 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     }, ["resolveInventoryWatchPendingClear"]);
   }
 
+  // Added 2026-08-04 with the voicemail follow-up-task un-stacking (operator report +15416478489:
+  // "there is a watch on this. it should not have a task"). Sampled once PER LANE and once for the
+  // watch-parked shape, because the whole point of the referee is that ONLY the generic outbound
+  // lane parks — a single sample would hide exactly that. PROBE: `hasOpenFollowUpTask:false` is
+  // held fixed so the sample reads the park arbitration rather than the duplicate check.
+  // EXTENDED 2026-08-04 with Joe's two "unless" clauses: the parked shape is now sampled three
+  // ways (clean park, an additional lead, other open work), because those are the arms that decide
+  // whether a PARKED lead still keeps its task — sampling only the clean park would hide both
+  // carve-outs, which is the same blindness the per-lane split exists to prevent.
+  const VOICEMAIL_PARK_PROBES = [
+    { key: "plain", parked: false, contact: false, otherWork: false },
+    { key: "watch_parked", parked: true, contact: false, otherWork: false },
+    { key: "watch_parked_additional_lead", parked: true, contact: true, otherWork: false },
+    { key: "watch_parked_other_work", parked: true, contact: false, otherWork: true }
+  ] as const;
+  for (const lane of ["inbound_voicemail", "outbound_finance_handoff", "outbound_generic"] as const) {
+    for (const probe of VOICEMAIL_PARK_PROBES) {
+      add(`voicemailFollowUpTask:${lane}:${probe.key}`, () => {
+        if (typeof reducer.decideVoicemailFollowUpTask !== "function") return undefined;
+        const decision = reducer.decideVoicemailFollowUpTask({
+          lane,
+          hasOpenFollowUpTask: false, // PROBE
+          activeInventoryWatchCount: probe.parked ? 1 : 0, // PROBE
+          followUpMode: probe.parked ? "holding_inventory" : "active", // PROBE
+          followUpReason: probe.parked ? "inventory_watch" : "engaged", // PROBE
+          customerContactSinceWatchArmed: probe.contact, // PROBE
+          openWorkBeyondWatch: probe.otherWork // PROBE
+        });
+        return { create: decision.create, reason: decision.reason };
+      }, ["decideVoicemailFollowUpTask"]);
+    }
+  }
+
   // Added 2026-08-02 with the appointment-CONFIRM un-stacking. Sampled once PER LANE, because the
   // whole point of this referee is that the slot-match lane answers `acknowledged` and the
   // reschedule latch differently from the two booked lanes — a single sample would hide exactly
