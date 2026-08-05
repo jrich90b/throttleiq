@@ -154,6 +154,78 @@ export function formatWalkInFamilyLabel(familyKey: string | null | undefined): s
   return labels[key] ?? "";
 }
 
+/**
+ * The dealer-local `YYYY-MM-DD` for an already-resolved return day, or "" when it did not resolve.
+ *
+ * Stored on the lead at ADF ingest so the CADENCE — which runs days later, in another process,
+ * with no parser result in hand — can honour a day the parser already read. Deliberately a plain
+ * calendar day and not an instant: the promise is "he said he'd come in on the 4th", and comparing
+ * calendar days in the dealer's timezone is the only comparison that means that.
+ */
+export function formatWalkInReturnDayIso(
+  parts: { year: number; month: number; day: number } | null | undefined
+): string {
+  if (!parts) return "";
+  const { year, month, day } = parts;
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return "";
+  if (month < 1 || month > 12 || day < 1 || day > 31) return "";
+  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+/**
+ * ON the day a walk-in customer said he'd come back, ask about THAT — not about photos and payments.
+ *
+ * Ed Szulist (+17167255404), operator-reported 2026-08-04T13:02Z: *"it says he's going come back
+ * today, so the follow up may say something like just checking to see if we are still good for
+ * today."* His Traffic Log Pro note (8/1) read "COMING BACK NXT WEEK TUESDAY AUGUST 4TH TO TEST RIDE
+ * A FEW DIFFERENT SPORTSTERS". The FIRST touch got it right — `buildWalkInReturnVisitTail` above
+ * said the day back and asked for a time. Then on Tuesday the 4th at 13:00:26 the cadence went out
+ * as "Hey Ed, just checking back on the Softail Slim. Want me to send photos or price and payment
+ * numbers?" — a cold generic check-in on the exact day he'd named. Staff rewrote it by hand three
+ * minutes later ("Are we still good today to come in for some test rides?") and again at 14:13.
+ *
+ * WHY the cadence was blind, precisely: `inferCadencePersonalizationFallback` reads only INBOUND
+ * CUSTOMER MESSAGES, and Ed never texted — his commitment lives in the walk-in note. The note lane
+ * is separately one-shot (`walkInCommentUsedAt`), and the copy it produces is a prose regex ladder
+ * with no arm for a named day (see `walkInCommentFollowUp.ts`). Whatever it produced was then
+ * overwritten anyway by `buildEarlyCadencePromotionOverride`, which is the sentence that shipped.
+ *
+ * Same law as its siblings: built ONLY from the parsed `return_visit` / `return_day_text` slots,
+ * resolved to a calendar day at ingest and stored — never from the note prose, and never re-read
+ * from it here. This module owns copy, not clocks, so the day and "now" are both handed in.
+ *
+ * FAIL DIRECTION: returns "" for a missing day, an unparseable day, and any day that is not TODAY
+ * in the dealer's timezone — and "" is byte-for-byte today's behaviour. It promises nothing (no
+ * booking, no hold, no callback); it asks the one question the salesperson would ask. The caller is
+ * responsible for the "he already booked" case, which the cadence loop already refuses to run past.
+ */
+export function buildWalkInReturnDayCheckInLine(input: {
+  name: string;
+  returnDayIso?: string | null;
+  timeZone: string;
+  asOfIso: string;
+  familyLabel?: string | null;
+  testRide?: boolean | null;
+}): string {
+  const day = String(input.returnDayIso ?? "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return "";
+  const today = localDateParts(input.asOfIso, input.timeZone);
+  if (!today) return "";
+  const todayIso = formatWalkInReturnDayIso(today);
+  if (!todayIso || todayIso !== day) return "";
+  const name = String(input.name ?? "").trim();
+  const greeting = name ? `Hey ${name}, ` : "";
+  const family = String(input.familyLabel ?? "").trim();
+  // "What time works best" is the wording the sibling tail already uses — clean against the
+  // banned-phrase and voice-charter guards. A second phrasing for the same ask would just be a new
+  // surface for them to police.
+  const close =
+    family && input.testRide
+      ? `I'll have a few ${family} ready for you.`
+      : "I'll make sure we're ready for you.";
+  return `${greeting}just making sure we're still on for today. What time works best? ${close}`;
+}
+
 export function buildWalkInReturnVisitTail(input: {
   ackSentence: string;
   returnVisit: string;

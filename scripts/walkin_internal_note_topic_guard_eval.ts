@@ -13,11 +13,14 @@ import {
   isInternalNoteFollowUpTopic,
   buildWalkInSpecRecapClause,
   buildWalkInReturnVisitTail,
+  buildWalkInReturnDayCheckInLine,
   formatWalkInReturnDayLabel,
+  formatWalkInReturnDayIso,
   formatWalkInFamilyLabel,
   describeWalkInNoteProvenance,
   resolveWalkInFollowUpSubject
 } from "../services/api/src/domain/walkInFollowUpTopic.ts";
+import { buildWalkInCommentFollowUp } from "../services/api/src/domain/walkInCommentFollowUp.ts";
 import { referencesFamilyOnlyInText } from "../services/api/src/domain/modelFamily.ts";
 import { parseRequestedDateOnly } from "../services/api/src/domain/conversationStore.ts";
 import { buildIntentJudgePrompt } from "./intent_handled_audit.ts";
@@ -503,6 +506,108 @@ assert.equal(
   formatWalkInReturnDayLabel({ year: 2026, month: 8, day: 1 }, ED_TZ, ED_ASOF),
   "Saturday, Aug 1",
   "today itself still counts as a return day"
+);
+
+// --- THE RETURN DAY ITSELF (Ed Szulist +17167255404, operator-reported 2026-08-04T13:02Z) -------
+// The first touch above got the day right on 8/1. Then ON Tuesday the 4th at 13:00:26 the CADENCE
+// went out as "Hey Ed, just checking back on the Softail Slim. Want me to send photos or price and
+// payment numbers?" — a cold generic check-in on the exact day he'd named. Joe: "it says he's going
+// come back today, so the follow up may say something like just checking to see if we are still
+// good for today." Staff rewrote it by hand three minutes later, and again at 14:13.
+const ED_RETURN_DAY_ISO = "2026-08-04";
+const ED_RETURN_MORNING = "2026-08-04T13:00:26.599Z"; // the production send, 9:00am dealer-local
+const ED_RETURN_DAY_LINE =
+  "Hey Ed, just making sure we're still on for today. What time works best? I'll make sure we're ready for you.";
+
+// The day survives the trip from the parser slot to the lead record as a plain calendar day.
+assert.equal(
+  formatWalkInReturnDayIso(parseRequestedDateOnly("Tuesday August 4th", ED_TZ)),
+  ED_RETURN_DAY_ISO,
+  "the committed day is stored as a dealer-local calendar day, not an instant"
+);
+assert.equal(formatWalkInReturnDayIso(null), "", "an unresolvable day stores nothing");
+assert.equal(formatWalkInReturnDayIso({ year: 2026, month: 13, day: 4 }), "", "an impossible month stores nothing");
+
+// THE PRODUCTION TURN: what the 8/4 cadence touch should have said.
+const edReturnDayArgs = { name: "Ed", returnDayIso: ED_RETURN_DAY_ISO, timeZone: ED_TZ, asOfIso: ED_RETURN_MORNING };
+assert.equal(
+  buildWalkInReturnDayCheckInLine(edReturnDayArgs),
+  ED_RETURN_DAY_LINE,
+  "+17167255404: on the committed day the touch asks about the visit"
+);
+// Pin the SHIPPED sentence as the defect. That string is what buildEarlyCadencePromotionOverride
+// produced, and it must never be what a lead who told us he was coming in today receives.
+assert.notEqual(
+  buildWalkInReturnDayCheckInLine(edReturnDayArgs),
+  "Hey Ed, just checking back on the Softail Slim. Want me to send photos or price and payment numbers?",
+  "the generic promotion override is the bug, not the fallback for a committed return day"
+);
+// The family phrase rides along only when the note asked for a test ride — same rule as the tail.
+assert.equal(
+  buildWalkInReturnDayCheckInLine({
+    ...edReturnDayArgs,
+    familyLabel: formatWalkInFamilyLabel(referencesFamilyOnlyInText(ED_TLP_NOTE.toLowerCase())),
+    testRide: true
+  }),
+  "Hey Ed, just making sure we're still on for today. What time works best? I'll have a few Sportsters ready for you.",
+  "the catalog-resolved family rides along when the note asked for a test ride"
+);
+
+// FAIL-CLOSED MATRIX — every one of these returns "", which is byte-for-byte today's behavior.
+for (const [label, args] of [
+  ["no stored day", { returnDayIso: "" }],
+  ["a day that never resolved", { returnDayIso: null }],
+  ["a non-date string", { returnDayIso: "next Tuesday" }],
+  ["the day BEFORE — the visit is not due yet", { asOfIso: "2026-08-03T13:00:00.000Z" }],
+  ["the day AFTER — he either came in or he did not", { asOfIso: "2026-08-05T13:00:00.000Z" }],
+  ["a week later", { asOfIso: "2026-08-11T13:00:00.000Z" }]
+] as [string, { [k: string]: unknown }][]) {
+  assert.equal(
+    buildWalkInReturnDayCheckInLine({ ...edReturnDayArgs, ...args }),
+    "",
+    `${label} => the cadence composes exactly as it does today`
+  );
+}
+// THE TIMEZONE IS THE COMPARISON. 8/5 01:30 UTC is still 8/4 in the dealer's evening, and a touch
+// composed then is still "today" to Ed — reading the day in UTC would silently skip his evening.
+assert.equal(
+  buildWalkInReturnDayCheckInLine({ ...edReturnDayArgs, asOfIso: "2026-08-05T01:30:00.000Z" }),
+  ED_RETURN_DAY_LINE,
+  "the day is compared in the DEALER's timezone, not UTC"
+);
+// The line obeys the law of the module it lives in.
+assert.equal(
+  isInternalNoteFollowUpTopic(ED_RETURN_DAY_LINE),
+  false,
+  "the return-day line passes the internal-note guard"
+);
+
+// BOTH PATHS, OR IT IS NOT WIRED. The live tick and the regenerate path must reach the same
+// sentence — a staff regenerate falling back to the generic touch would undo the fix in one click.
+const indexSrc = fs.readFileSync("services/api/src/index.ts", "utf8");
+assert.equal(
+  indexSrc.split("buildWalkInReturnDayCheckInLine({").length - 1,
+  2,
+  "the committed-return-day line is composed in BOTH the live cadence tick and regenerate"
+);
+// The prose regex ladder left index.ts; it must not grow a return-day arm of its own down there.
+assert.doesNotMatch(
+  indexSrc,
+  /const buildWalkInCommentFollowUp = \(\{/,
+  "buildWalkInCommentFollowUp lives in domain/walkInCommentFollowUp.ts, where an eval can reach it"
+);
+// It is still BYTE-FOR-BYTE the ladder that shipped — the move funded the size ceiling, it did not
+// change behavior. Its weather arm is what swallowed Ed's note, and that stays true here.
+assert.equal(
+  buildWalkInCommentFollowUp({
+    name: "Ed",
+    agent: "Stone",
+    dealerName: "American Harley-Davidson",
+    comment: ED_TLP_NOTE,
+    label: "the Softail Slim"
+  }),
+  "Hi Ed — this is Stone at American Harley-Davidson. Sounds good, when the weather turns we can line up a test ride on the Softail Slim.",
+  "the moved ladder is unchanged: 'TEST RIDE' still trips its weather arm, which is why the slot lane exists"
 );
 
 // THE FAMILY FALLBACK IS THE EXISTING CATALOG RESOLVER, NOT A NEW REGEX. This is the whole reason

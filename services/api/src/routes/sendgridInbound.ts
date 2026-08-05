@@ -158,6 +158,7 @@ import {
   buildWalkInSpecRecapClause,
   buildWalkInReturnVisitTail,
   formatWalkInReturnDayLabel,
+  formatWalkInReturnDayIso,
   formatWalkInFamilyLabel,
   resolveWalkInFollowUpSubject
 } from "../domain/walkInFollowUpTopic.js";
@@ -7906,6 +7907,28 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     // carries its own confidence for exactly this reason (walkInInventoryWant.ts).
     const walkInReturnVisit = llmWalkInOutcome?.returnVisit ?? "none";
     const walkInReturnDayText = String(llmWalkInOutcome?.returnDayText ?? "").trim();
+    const walkInReturnTimeZone = (await getSchedulerConfig()).timezone || "America/New_York";
+    const walkInReturnDayParts =
+      walkInReturnVisit === "committed_day" && walkInReturnDayText
+        ? parseRequestedDateOnly(walkInReturnDayText, walkInReturnTimeZone)
+        : null;
+    const walkInReturnDayLabel = formatWalkInReturnDayLabel(
+      walkInReturnDayParts,
+      walkInReturnTimeZone,
+      new Date().toISOString()
+    );
+    // Keep the committed day on the LEAD, not just in this turn's copy. The cadence fires days
+    // later in another process with no parser result in hand, and that is exactly when the day
+    // matters most — Ed Szulist's 8/4 touch asked about photos and payments on the morning he had
+    // said he was coming in (see buildWalkInReturnDayCheckInLine). Gated on the label so the same
+    // past/too-far-out window applies: a day that is not worth saying is not worth storing.
+    const walkInReturnDayIso = walkInReturnDayLabel
+      ? formatWalkInReturnDayIso(walkInReturnDayParts)
+      : "";
+    if (walkInReturnDayIso) {
+      conv.lead = conv.lead ?? {};
+      conv.lead.walkInReturnDayIso = walkInReturnDayIso;
+    }
     const returnVisitTail =
       walkInReturnVisit === "committed_day" && walkInReturnDayText
         ? buildWalkInReturnVisitTail({
@@ -7913,14 +7936,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
             returnVisit: walkInReturnVisit,
             confidence: llmWalkInOutcome?.returnVisitConfidence,
             confidenceMin: Number(process.env.WALKIN_RETURN_VISIT_CONFIDENCE_MIN ?? 0.8),
-            dayLabel: formatWalkInReturnDayLabel(
-              parseRequestedDateOnly(
-                walkInReturnDayText,
-                (await getSchedulerConfig()).timezone || "America/New_York"
-              ),
-              (await getSchedulerConfig()).timezone || "America/New_York",
-              new Date().toISOString()
-            ),
+            dayLabel: walkInReturnDayLabel,
             familyLabel: formatWalkInFamilyLabel(referencesFamilyOnlyInText(walkInCleanedComment)),
             testRide: !!llmWalkInOutcome?.testRideRequested
           })
