@@ -764,6 +764,18 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 // both sites now write through `applyInventoryWatchPendingClear`, which asks
 // `resolveInventoryWatchPendingClear`. MEASURED on the post-change tree.
 // RATCHET DOWN ONLY.
+// 70 -> 70, UNCHANGED, and the zero is the finding. The rebook-latch SETTLEMENT un-stacking
+// (2026-08-05): the three places that took `appointment.reschedulePending` off WITHOUT a new booking
+// — a stale reschedule slot, a settled past appointment, and a staff note recording the customer as
+// showed-up — now ask `decideReschedulePendingClear` through `applyReschedulePendingClear`. That is
+// the last unowned half of the latch; the booking referees already owned clearing it when a new time
+// goes on the calendar. Three inline writers went away and the number did not move: refereeing the
+// inbound-handler site UN-COLLAPSED the auto-reschedule booking block a few lines below
+// (index.ts ~62781), one of SEVEN hand-maintained copies of `decideAppointmentBookingRecord`'s
+// question, which is the next slice. EIGHTH sighting of the collapse artifact, and the first time it
+// has eaten a delta whole. MEASURED on the post-change tree with the eval's own `minWrites: 4` scan —
+// a different filter reports different totals, so only this one may be quoted here.
+// RATCHET DOWN ONLY.
 const UNREFEREED_WRITER_BASELINE = 70;
 
 {

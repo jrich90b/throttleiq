@@ -62,6 +62,9 @@ import {
   decideReschedulePendingLatch,
   type ReschedulePendingLatchLane,
   type ReschedulePendingLatchDecision,
+  decideReschedulePendingClear,
+  type ReschedulePendingClearLane,
+  type ReschedulePendingClearDecision,
   type AppointmentBookingLane,
   type AppointmentBookingRecordDecision,
   type AppointmentConfirmLane,
@@ -5458,6 +5461,28 @@ export function applyReschedulePendingLatch(
   }
   conv.appointment.reschedulePending = true;
   conv.appointment.updatedAt = nowIso();
+  return decision;
+}
+
+// The ONE place that SETTLES `appointment.reschedulePending` without a new booking — the other half
+// of the latch. Three callers cleared it inline on three different preconditions; they now ask
+// `decideReschedulePendingClear` (see that referee for the preserved `updatedAt` divergence, and for
+// why none of the three may mint an appointment record just to write `false` onto it).
+//
+// Deliberately does NOT touch `scheduler.pendingSlot`, the cadence or the staff-notify record: each
+// caller answers those its own way, and pulling them in here would change behavior, not centralize it.
+export function applyReschedulePendingClear(
+  conv: Conversation,
+  input: { lane: ReschedulePendingClearLane | string }
+): ReschedulePendingClearDecision {
+  const decision = decideReschedulePendingClear({
+    lane: input.lane,
+    hasAppointmentRecord: !!conv?.appointment,
+    reschedulePending: conv?.appointment?.reschedulePending ?? null
+  });
+  if (!conv?.appointment || !decision.clear) return decision;
+  conv.appointment.reschedulePending = false;
+  if (decision.stampUpdatedAt) conv.appointment.updatedAt = nowIso();
   return decision;
 }
 

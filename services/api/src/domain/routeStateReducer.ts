@@ -5805,6 +5805,118 @@ export function decideReschedulePendingLatch(
 }
 
 // ===================================================================================================
+// THE REBOOK DEBT IS SETTLED — "who may take `appointment.reschedulePending` OFF?"
+//
+// The SETTLEMENT half of the latch, and the last unowned half of it. The booking referees
+// (`decideAppointmentBookingRecord` / `decideAppointmentConfirmRecord`) already clear the latch when a
+// new time is put on the calendar — that is "we booked them again", a different event. Nobody owned
+// the case where the debt simply STOPS being owed without a new booking, so three places answered it
+// inline, on three different preconditions:
+//
+//   stale_pending_reschedule_slot  the scheduler is holding a reschedule slot for an appointment that
+//                                  is no longer bookable-for-reschedule at all (index.ts ~62727)
+//   settled_past_appointment       the appointment is in the past AND settled — the customer showed,
+//                                  or the outcome says so — so the latch is stuck (index.ts ~62731)
+//   staff_outcome_showed_up        a staff context note recorded the outcome as SHOWED UP
+//                                  (applyAppointmentStateFromContextNote, index.ts ~25371)
+//
+// WHY IT MATTERS AS MUCH AS ARMING. Same routing switch as the arm half: `pendingRescheduleCarriesTurn
+// Intent` reads the lead's NEXT message as "they want to move their appointment" while the latch
+// stands. Failing to clear it is the fail-UNSAFE direction here — it keeps answering a customer about
+// moving an appointment they already kept — which is why two downstream guards carry hand-written
+// armor against a "confirmed AND reschedule-pending" record.
+//
+// THE ONE DISAGREEMENT — does taking the latch off stamp `updatedAt`?
+//   `settled_past_appointment` clears the latch AND stamps `appointment.updatedAt`. The other two
+//   clear it and leave the stamp alone (the staff-outcome lane's caller stamps `updatedAt` a few
+//   lines earlier for the OUTCOME record, whether or not the latch moved; the stale-slot lane stamps
+//   nothing at all). PRESERVED and named. `updatedAt` is a freshness input, not a decision — but a
+//   cleanup does not get to start or stop refreshing one, because "when did this record last change"
+//   is read by staleness checks and would move under us.
+//
+// AND ONE PLACE THEY AGREE, worth stating so a later tidy-up cannot quietly break it: NONE of the
+// three mints an appointment record. With nothing on file there is no debt to settle, and inventing a
+// `{ status: "none" }` stub just to write `false` onto it would hand the arm half's staff lanes a
+// phantom record to reason about later.
+//
+// FAIL DIRECTION for an unrecognized lane: REFUSE to clear. Leaving a latch standing costs a
+// mis-routed turn that a human can correct; clearing one we should have kept silently drops a rebook
+// the customer asked for. Note this is the OPPOSITE default to the arm half, and deliberately: each
+// half refuses to ACT, so an unknown lane changes nothing in either direction.
+//
+// PURE + CLOCK-FREE: this says whether to clear and whether that clear carries a stamp; the applier
+// reads the clock.
+// ===================================================================================================
+
+export type ReschedulePendingClearLane =
+  | "stale_pending_reschedule_slot" // a reschedule slot with no appointment left to reschedule
+  | "settled_past_appointment" // the appointment is past and settled — the latch is stuck
+  | "staff_outcome_showed_up"; // a staff note recorded the customer as having shown up
+
+/** The lane that couples the clear to an `updatedAt` stamp. See the divergence above. */
+const RESCHEDULE_CLEAR_STAMPING_LANES = new Set<string>(["settled_past_appointment"]);
+
+/**
+ * The lane that acts only on a latch that is actually STANDING. The other two write `false` over
+ * whatever is there — a no-op when it is already false, which is why the distinction only shows up in
+ * the stamp above.
+ */
+const RESCHEDULE_CLEAR_STANDING_LATCH_LANES = new Set<string>(["settled_past_appointment"]);
+
+export type ReschedulePendingClearInput = {
+  lane: ReschedulePendingClearLane | string;
+  /** Does this conversation carry an appointment record right now? */
+  hasAppointmentRecord: boolean;
+  /** The stored latch, exactly as it stands. */
+  reschedulePending?: boolean | null;
+};
+
+export type ReschedulePendingClearDecision = {
+  /** Take the latch off. False means the caller must not write anything. */
+  clear: boolean;
+  /** Stamp `appointment.updatedAt` as part of taking it off. */
+  stampUpdatedAt: boolean;
+  /** Names the preserved disagreement when this lane is the odd one out for THIS input. */
+  divergence: string | null;
+  why: string;
+};
+
+export function decideReschedulePendingClear(
+  input: ReschedulePendingClearInput
+): ReschedulePendingClearDecision {
+  const lane = String(input.lane ?? "").trim();
+  const recognized =
+    RESCHEDULE_CLEAR_STAMPING_LANES.has(lane) ||
+    lane === "stale_pending_reschedule_slot" ||
+    lane === "staff_outcome_showed_up";
+  const hasRecord = input.hasAppointmentRecord === true;
+  const standing = input.reschedulePending === true;
+  const needsStandingLatch = RESCHEDULE_CLEAR_STANDING_LATCH_LANES.has(lane);
+  const stamps = RESCHEDULE_CLEAR_STAMPING_LANES.has(lane);
+
+  const clear = recognized && hasRecord && (!needsStandingLatch || standing);
+
+  return {
+    clear,
+    stampUpdatedAt: clear && stamps,
+    divergence: !clear
+      ? null
+      : stamps
+        ? "settled_past_appointment_stamps_updated_at_when_it_clears_the_latch"
+        : "stale_slot_and_staff_outcome_lanes_clear_the_latch_without_stamping_updated_at",
+    why: !recognized
+      ? `unrecognized reschedule-clear lane "${lane}" — refused, the latch stays as it is`
+      : !hasRecord
+        ? `${lane}: no appointment record, so there is no rebook debt to settle — nothing written`
+        : needsStandingLatch && !standing
+          ? `${lane}: the latch is not standing, so there is nothing stuck to heal`
+          : `${lane}: this lead no longer owes us a rebook — latch cleared${
+              stamps ? " and the record stamped" : ""
+            }`
+  };
+}
+
+// ===================================================================================================
 // THE INVENTORY RECORD THAT CLOSED THIS LEAD IS GONE — "does the conversation REOPEN?"
 //
 // One question, three causes, and it writes THREE Tier-1 fields at once (`hold`/`sale`, `status`,
