@@ -13828,6 +13828,11 @@ export default function Home() {
             <SideNavIcon name="kpi" />
           </button>
         ) : null}
+        {!isDepartmentUser && authUser?.role === "manager" ? (
+          <a className={sideNavButtonClass(false)} title="Copilot" href="/copilot">
+            <SideNavIcon name="bolt" />
+          </a>
+        ) : null}
         {!isDepartmentUser ? (
           <button
             className={sideNavButtonClass(section === "pipeline")}
