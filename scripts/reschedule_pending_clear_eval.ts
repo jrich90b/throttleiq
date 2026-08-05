@@ -366,10 +366,10 @@ const STAMP = "2026-01-01T00:00:00.000Z";
   // restored inline write within 40 lines of ANY applier call that touches the same field reads as
   // refereed. Both of those sites sit near one. So ratchet the RAW count instead — every remaining
   // raw clear in index.ts belongs to one of the seven hand-maintained booking blocks (the
-  // "a real calendar event now holds this lead's time" question, which `decideAppointmentBooking
-  // Record` owns and which is the next slice). Re-inlining any settlement lane makes it eight.
-  // DOWN ONLY: when the booking copies are refereed this becomes 0.
-  const INDEX_RAW_CLEAR_CEILING = 7;
+  // "a real calendar event now holds this lead's time" question. RATCHETED 7 -> 0 on 2026-08-05
+  // when those seven copies joined `applyAppointmentBookingRecord`: index.ts now settles the latch
+  // nowhere on its own, so ANY raw clear appearing there is an un-wiring. DOWN ONLY.
+  const INDEX_RAW_CLEAR_CEILING = 0;
   const indexRawClears = (appointment?.writeSites ?? []).filter(
     (site: any) =>
       String(site.file ?? "").endsWith("index.ts") &&

@@ -5414,6 +5414,9 @@ export function applyAppointmentBookingRecord(
     bookedEventId?: string | null;
     bookedEventLink?: string | null;
     bookedSalespersonId?: string | null;
+    /** The two extra breadcrumbs only the exact-slot move arm carries. See divergence 8. */
+    bookedSalespersonName?: string | null;
+    bookedCalendarId?: string | null;
     matchedSlot?: NonNullable<Conversation["appointment"]>["matchedSlot"] | null;
   }
 ): AppointmentBookingRecordDecision {
@@ -5426,8 +5429,8 @@ export function applyAppointmentBookingRecord(
   if (!conv || !decision.record) return decision;
   conv.appointment = conv.appointment ?? { status: "none", updatedAt: nowIso() };
   const appt = conv.appointment;
+  if (decision.stampStatus) appt.status = decision.status;
   if (decision.stampBookedTime) {
-    appt.status = decision.status;
     appt.whenText = input.whenText as string;
     appt.whenIso = input.whenIso as string;
   }
@@ -5435,9 +5438,19 @@ export function applyAppointmentBookingRecord(
   appt.updatedAt = nowIso();
   if (decision.stampAcknowledged) appt.acknowledged = decision.acknowledged;
   if (decision.stampBookedEvent) {
-    appt.bookedEventId = input.bookedEventId ?? null;
-    appt.bookedEventLink = input.bookedEventLink ?? null;
+    // A CREATE that came back empty must leave nothing stale behind; a MOVE writes through what the
+    // caller resolved, which already falls back to the event it holds. See divergence 9.
+    appt.bookedEventId = decision.clearMissingBookedEvent
+      ? (input.bookedEventId ?? null)
+      : (input.bookedEventId as string);
+    appt.bookedEventLink = decision.clearMissingBookedEvent
+      ? (input.bookedEventLink ?? null)
+      : (input.bookedEventLink as string);
     appt.bookedSalespersonId = input.bookedSalespersonId ?? null;
+  }
+  if (decision.stampBookedSalespersonIdentity) {
+    appt.bookedSalespersonName = input.bookedSalespersonName as string;
+    appt.bookedCalendarId = input.bookedCalendarId as string;
   }
   if (decision.recordMatchedSlot && input.matchedSlot) appt.matchedSlot = input.matchedSlot;
   if (decision.clearReschedulePending) appt.reschedulePending = false;

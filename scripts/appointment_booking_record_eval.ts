@@ -94,6 +94,23 @@ const ALL_LANES = [...CUSTOMER_LANES, STAFF_LANE] as const;
 const CREATING_LANES = [...ALL_LANES, MANUAL_OUTBOUND_LANE] as const;
 const EVERY_LANE = [...CREATING_LANES, EDIT_LANE] as const;
 
+/**
+ * The four CONVERSATION-TURN lanes, joined 2026-08-05 — the seven hand-maintained copies that lived
+ * inside the inbound handler. Deliberately kept OUT of `EVERY_LANE`/`CREATING_LANES`: those loops
+ * are the guarantee that the five original lanes' answers did not move, and one of the new lanes
+ * (the matched-slot book) legitimately breaks the "a creating lane always stamps a time" rule.
+ */
+const TURN_MOVE_LANE = "customer_turn_reschedule_move";
+const TURN_EXACT_MOVE_LANE = "customer_turn_exact_slot_move";
+const TURN_AUTOBOOK_LANE = "customer_turn_slot_autobook";
+const TURN_MATCHED_SLOT_LANE = "customer_turn_matched_slot_book";
+const CONVERSATION_TURN_LANES = [
+  TURN_MOVE_LANE,
+  TURN_EXACT_MOVE_LANE,
+  TURN_AUTOBOOK_LANE,
+  TURN_MATCHED_SLOT_LANE
+] as const;
+
 const SLOT = {
   salespersonId: "sp_1",
   salespersonName: "Stone",
@@ -506,6 +523,334 @@ for (const lane of EVERY_LANE) {
     customerProjection?.divergence,
     "customer_lane_booking_does_not_record_the_matched_slot",
     "the customer-lane sample carries the surviving divergence into the fingerprint"
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// 9. THE FOUR CONVERSATION-TURN LANES (2026-08-05) — the LOAD-BEARING original-rules table.
+//
+// Seven hand-maintained copies inside the inbound handler, in four shapes. decision_equivalence
+// cannot carry this proof: a brand-new lane has no baseline to be identical to, so the rules those
+// seven blocks applied are re-encoded here and the referee must match every one of them.
+//
+//   customer_turn_reschedule_move    (2 copies) MOVE the existing event to a time the customer just
+//                                    confirmed. Preserve the event on a null return.
+//   customer_turn_exact_slot_move    (1) the same, plus the calendar owner's name and id.
+//   customer_turn_slot_autobook      (3, byte-identical) CREATE an event on a slot we suggested and
+//                                    the customer picked; record the slot; clear a missing id.
+//   customer_turn_matched_slot_book  (1) turn a slot already on the record into a real event: NO
+//                                    fresh time, NO attribution, just the booking.
+// ---------------------------------------------------------------------------------------------
+const TURN_LANE_RULES: Array<{
+  lane: string;
+  stampStatus: boolean;
+  stampBookedTime: boolean;
+  stampConfirmedBy: boolean;
+  stampAcknowledged: boolean;
+  stampBookedEvent: boolean;
+  stampBookedSalespersonIdentity: boolean;
+  clearMissingBookedEvent: boolean;
+  recordMatchedSlot: boolean;
+  clearReschedulePending: boolean;
+}> = [
+  {
+    lane: TURN_MOVE_LANE,
+    stampStatus: true,
+    stampBookedTime: true,
+    stampConfirmedBy: true,
+    stampAcknowledged: true,
+    stampBookedEvent: true,
+    stampBookedSalespersonIdentity: false,
+    clearMissingBookedEvent: false,
+    recordMatchedSlot: false,
+    clearReschedulePending: true
+  },
+  {
+    lane: TURN_EXACT_MOVE_LANE,
+    stampStatus: true,
+    stampBookedTime: true,
+    stampConfirmedBy: true,
+    stampAcknowledged: true,
+    stampBookedEvent: true,
+    stampBookedSalespersonIdentity: true,
+    clearMissingBookedEvent: false,
+    recordMatchedSlot: false,
+    clearReschedulePending: true
+  },
+  {
+    lane: TURN_AUTOBOOK_LANE,
+    stampStatus: true,
+    stampBookedTime: true,
+    stampConfirmedBy: true,
+    stampAcknowledged: true,
+    stampBookedEvent: true,
+    stampBookedSalespersonIdentity: false,
+    clearMissingBookedEvent: true,
+    recordMatchedSlot: true,
+    clearReschedulePending: true
+  },
+  {
+    lane: TURN_MATCHED_SLOT_LANE,
+    stampStatus: true,
+    stampBookedTime: false,
+    stampConfirmedBy: false,
+    stampAcknowledged: true,
+    stampBookedEvent: true,
+    stampBookedSalespersonIdentity: false,
+    clearMissingBookedEvent: true,
+    recordMatchedSlot: false,
+    clearReschedulePending: true
+  }
+];
+
+for (const rule of TURN_LANE_RULES) {
+  // hasBookedTime is sampled BOTH ways: the matched-slot lane must confirm without one, and the
+  // other three must be unmoved by it (only the staff edit lane reads that input).
+  for (const hasBookedTime of [true, false]) {
+    const d = decideAppointmentBookingRecord({
+      lane: rule.lane,
+      reschedulePending: true,
+      hasMatchedSlot: rule.recordMatchedSlot,
+      hasBookedTime
+    });
+    ok(d.record === true, `${rule.lane}: a recognized conversation-turn lane must record`);
+    eq(d.status, "confirmed", `${rule.lane}: a booked calendar event is confirmed`);
+    eq(d.confirmedBy, "customer", `${rule.lane}: the booking rode out of the customer's own turn`);
+    for (const key of [
+      "stampStatus",
+      "stampBookedTime",
+      "stampConfirmedBy",
+      "stampAcknowledged",
+      "stampBookedEvent",
+      "stampBookedSalespersonIdentity",
+      "clearMissingBookedEvent",
+      "recordMatchedSlot",
+      "clearReschedulePending"
+    ] as const) {
+      eq(
+        (d as any)[key],
+        (rule as any)[key],
+        `${rule.lane} (hasBookedTime=${hasBookedTime}): the original inline block ` +
+          `${(rule as any)[key] ? "did" : "did NOT"} write ${key}`
+      );
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// 10. THE PRESERVED DIVERGENCES, each named by ITS OWN name. The matched-slot lane sits in the
+//     keep-confirmedBy set for a completely different reason than the console lanes do, so letting
+//     it borrow their divergence string would misreport why it is there.
+// ---------------------------------------------------------------------------------------------
+{
+  const named = (lane: string, hasMatchedSlot: boolean) =>
+    decideAppointmentBookingRecord({ lane, reschedulePending: false, hasMatchedSlot }).divergence;
+  eq(
+    named(TURN_MATCHED_SLOT_LANE, false),
+    "matched_slot_lane_confirms_the_booking_without_writing_a_fresh_time_or_attribution",
+    "the matched-slot lane names its own divergence, not the console lanes'"
+  );
+  eq(
+    named(TURN_EXACT_MOVE_LANE, false),
+    "exact_slot_move_is_the_only_lane_that_records_whose_calendar_holds_the_event",
+    "the exact-slot move arm names the two extra breadcrumbs it alone writes"
+  );
+  eq(
+    named(TURN_MOVE_LANE, false),
+    "move_lanes_keep_the_event_they_already_hold_when_the_calendar_returns_nothing",
+    "the move lane names the null policy that separates a move from a create"
+  );
+  eq(
+    named(TURN_AUTOBOOK_LANE, true),
+    "suggested_slot_autobook_records_the_matched_slot_where_the_console_customer_lanes_do_not",
+    "the autobook lane names the slot it records where its console siblings do not"
+  );
+  // ...and the five ORIGINAL lanes' divergence strings must not have moved.
+  eq(
+    named("public_link_booking", true),
+    "customer_lane_booking_does_not_record_the_matched_slot",
+    "the console customer lane keeps the divergence string it already had"
+  );
+  eq(
+    named(MANUAL_OUTBOUND_LANE, true),
+    "manual_outbound_booking_leaves_confirmedBy_to_the_attribution_writer",
+    "the manual-outbound lane keeps the divergence string it already had"
+  );
+  eq(
+    named(EDIT_LANE, true),
+    "staff_calendar_edit_does_not_refresh_the_customers_acknowledgement_of_the_new_time",
+    "the staff calendar edit keeps the divergence string it already had"
+  );
+  eq(named(STAFF_LANE, true), null, "the staff console lane still names nothing");
+}
+
+// ---------------------------------------------------------------------------------------------
+// 11. THE WRAPPER WRITES WHAT EACH NEW LANE DECIDED — against real conversation objects, because
+//     that is the only thing that catches a call site being unwired from the applier.
+// ---------------------------------------------------------------------------------------------
+{
+  // MOVE: keeps the event it already holds when the calendar hands back nothing.
+  const conv: any = {
+    id: "turn_move",
+    appointment: {
+      status: "confirmed",
+      whenIso: "2026-08-01T18:00:00.000Z",
+      bookedEventId: "evt_old",
+      bookedEventLink: "https://calendar.google.com/evt_old",
+      reschedulePending: true
+    }
+  };
+  applyAppointmentBookingRecord(conv, {
+    lane: TURN_MOVE_LANE,
+    whenText: SLOT.startLocal,
+    whenIso: SLOT.start,
+    // exactly what the call site computes: the new id, falling back to the one it already has
+    bookedEventId: undefined ?? conv.appointment.bookedEventId,
+    bookedEventLink: undefined ?? conv.appointment.bookedEventLink,
+    bookedSalespersonId: SLOT.salespersonId
+  });
+  eq(conv.appointment.bookedEventId, "evt_old", "a MOVE keeps the event it already holds");
+  eq(
+    conv.appointment.bookedEventLink,
+    "https://calendar.google.com/evt_old",
+    "...and the link with it — nulling it would lose the booking we just moved"
+  );
+  eq(conv.appointment.whenIso, SLOT.start, "the moved hour is written");
+  eq(conv.appointment.confirmedBy, "customer", "the customer confirmed the new time");
+  eq(conv.appointment.acknowledged, true, "their word is on file, so no 24h YES/NO re-ask");
+  eq(conv.appointment.reschedulePending, false, "the rebook debt is settled by the move");
+  ok(conv.appointment.matchedSlot === undefined, "a move records no matched slot");
+  ok(
+    conv.appointment.bookedSalespersonName === undefined,
+    "only the exact-slot arm records the calendar owner"
+  );
+}
+{
+  // CREATE: a failed create must leave nothing stale behind.
+  const conv: any = { id: "turn_autobook", appointment: { status: "none", bookedEventId: "evt_stale" } };
+  applyAppointmentBookingRecord(conv, {
+    lane: TURN_AUTOBOOK_LANE,
+    whenText: SLOT.startLocal,
+    whenIso: SLOT.start,
+    bookedEventId: null,
+    bookedEventLink: null,
+    bookedSalespersonId: SLOT.salespersonId,
+    matchedSlot: SLOT
+  });
+  eq(conv.appointment.bookedEventId, null, "a CREATE that came back empty clears the stale event");
+  eq(conv.appointment.matchedSlot, SLOT, "the suggested slot the customer picked is recorded");
+  eq(conv.appointment.status, "confirmed", "the booking is confirmed");
+}
+{
+  // EXACT-SLOT MOVE: the only lane that records whose calendar holds it.
+  const conv: any = { id: "turn_exact", appointment: { status: "none", bookedEventId: "evt_old" } };
+  applyAppointmentBookingRecord(conv, {
+    lane: TURN_EXACT_MOVE_LANE,
+    whenText: SLOT.startLocal,
+    whenIso: SLOT.start,
+    bookedEventId: "evt_new",
+    bookedEventLink: "https://calendar.google.com/evt_new",
+    bookedSalespersonId: SLOT.salespersonId,
+    bookedSalespersonName: SLOT.salespersonName,
+    bookedCalendarId: SLOT.calendarId
+  });
+  eq(conv.appointment.bookedSalespersonName, SLOT.salespersonName, "the calendar owner's name lands");
+  eq(conv.appointment.bookedCalendarId, SLOT.calendarId, "...and which calendar holds the event");
+}
+{
+  // MATCHED-SLOT BOOK: confirms without touching the hour or the attribution already on file.
+  const conv: any = {
+    id: "turn_matched",
+    appointment: {
+      status: "none",
+      whenText: "Saturday at 2:00 PM",
+      whenIso: "2026-08-08T18:00:00.000Z",
+      confirmedBy: "salesperson",
+      matchedSlot: SLOT,
+      reschedulePending: true
+    }
+  };
+  applyAppointmentBookingRecord(conv, {
+    lane: TURN_MATCHED_SLOT_LANE,
+    bookedEventId: "evt_new",
+    bookedEventLink: "https://calendar.google.com/evt_new",
+    bookedSalespersonId: SLOT.salespersonId
+  });
+  eq(conv.appointment.status, "confirmed", "it confirms the booking even with no fresh hour");
+  eq(conv.appointment.whenText, "Saturday at 2:00 PM", "the hour already on the record is untouched");
+  eq(conv.appointment.whenIso, "2026-08-08T18:00:00.000Z", "...including the machine-readable one");
+  eq(
+    conv.appointment.confirmedBy,
+    "salesperson",
+    "and the attribution already on file is left exactly as it was"
+  );
+  eq(conv.appointment.acknowledged, true, "the customer's word is still put on file");
+  eq(conv.appointment.reschedulePending, false, "the rebook debt is settled by the booking");
+}
+
+// ---------------------------------------------------------------------------------------------
+// 12. THE REGISTRY SAMPLES THE FOUR NEW LANES TOO.
+// ---------------------------------------------------------------------------------------------
+{
+  const reducer = await import("../services/api/src/domain/routeStateReducer.ts");
+  const registry = buildDecisionRegistry(reducer);
+  for (const lane of CONVERSATION_TURN_LANES) {
+    ok(
+      registry.some((entry: any) => entry.name === `appointmentBookingRecord:turn:${lane}`),
+      `the registry samples the ${lane} lane by name — a lane nobody fingerprints ships with no ` +
+        'evidence behind its "IDENTICAL" verdict'
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// 13. NOBODY STAMPS A BOOKING BEHIND THE REFEREE'S BACK — the un-wiring ratchet.
+//
+// The contention queue cannot carry this: a restored inline write within 40 lines of ANY applier
+// call reads as refereed, and re-inlining one of these seven blocks lands right next to the others.
+// So ratchet the RAW count instead. `index.ts` should now hold ZERO raw writes of
+// `appointment.status = "confirmed"` — every one of them goes through an applier. DOWN ONLY.
+// ---------------------------------------------------------------------------------------------
+{
+  const fs = await import("node:fs");
+  const nodePath = await import("node:path");
+  const { rankContention } = await import(
+    "../services/api/src/domain/stateWriterContention.ts"
+  );
+  const root = nodePath.resolve("services/api/src");
+  const files: { path: string; text: string }[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = nodePath.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name !== "node_modules") walk(full);
+      } else if (entry.name.endsWith(".ts")) {
+        files.push({ path: nodePath.relative(process.cwd(), full), text: fs.readFileSync(full, "utf8") });
+      }
+    }
+  };
+  walk(root);
+  const appointment: any = rankContention(files as any, { minRawWrites: 1 }).find(
+    (entry: any) => entry.field === "appointment"
+  );
+  // Assert the analyzer can still SEE the field first, or this whole section is vacuous while
+  // still reporting green.
+  ok(
+    (appointment?.writeSites ?? []).length > 0,
+    "the contention analyzer must still see raw writes of `appointment`"
+  );
+  const INDEX_RAW_CONFIRMED_CEILING = 0;
+  const rawConfirms = (appointment?.writeSites ?? []).filter(
+    (site: any) =>
+      String(site.file ?? "").endsWith("index.ts") &&
+      /status\s*=\s*"confirmed"/.test(String(site.snippet ?? ""))
+  );
+  ok(
+    rawConfirms.length <= INDEX_RAW_CONFIRMED_CEILING,
+    `index.ts carries ${rawConfirms.length} raw \`appointment.status = "confirmed"\` writes, ` +
+      `ceiling ${INDEX_RAW_CONFIRMED_CEILING}. A booking lane was un-wired from ` +
+      "applyAppointmentBookingRecord. Sites: " +
+      rawConfirms.map((site: any) => `${site.file}:${site.line}`).join(", ")
   );
 }
 

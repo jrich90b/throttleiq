@@ -930,6 +930,44 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     }
   }
 
+  // Added 2026-08-05 with the four CONVERSATION-TURN lanes (the seven copies that lived inside the
+  // inbound handler). A THIRD projection rather than widening either group above, for the same
+  // reason that group gave: a widened projection reads as a decision CHANGE on every lead and
+  // drowns the signal. These lanes' whole disagreement is in the "does this lane stamp it at all"
+  // switches, so those are what gets projected. PROBE: the lane is held fixed per sample and
+  // hasMatchedSlot is pinned true so the autobook lane's divergence stays live in the fingerprint.
+  for (const lane of [
+    "customer_turn_reschedule_move",
+    "customer_turn_exact_slot_move",
+    "customer_turn_slot_autobook",
+    "customer_turn_matched_slot_book"
+  ] as const) {
+    add(`appointmentBookingRecord:turn:${lane}`, conv => {
+      if (!conv?.appointment || typeof reducer.decideAppointmentBookingRecord !== "function") {
+        return undefined;
+      }
+      const decision = reducer.decideAppointmentBookingRecord({
+        lane, // PROBE
+        reschedulePending: conv.appointment?.reschedulePending,
+        hasMatchedSlot: true // PROBE — caller-side, never stored state
+      });
+      return {
+        record: decision.record,
+        confirmedBy: decision.confirmedBy,
+        stampStatus: decision.stampStatus,
+        stampBookedTime: decision.stampBookedTime,
+        stampConfirmedBy: decision.stampConfirmedBy,
+        stampAcknowledged: decision.stampAcknowledged,
+        stampBookedEvent: decision.stampBookedEvent,
+        stampBookedSalespersonIdentity: decision.stampBookedSalespersonIdentity,
+        clearMissingBookedEvent: decision.clearMissingBookedEvent,
+        recordMatchedSlot: decision.recordMatchedSlot,
+        clearReschedulePending: decision.clearReschedulePending,
+        divergence: decision.divergence
+      };
+    }, ["decideAppointmentBookingRecord"]);
+  }
+
   // Sampled once PER LANE, because the whole disagreement this referee owns is between lanes: the
   // customer-speech lane may mint an appointment record to latch on and the two staff-inference
   // lanes may not, so a single sample would hide exactly that. PROBE: the lane is held fixed per
