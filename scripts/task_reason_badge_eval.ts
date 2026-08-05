@@ -8,7 +8,7 @@ import fs from "node:fs";
  * reason + derived action label, not raw customer text. Deterministic; no LLM.
  */
 
-const { salesCriticalKind } = await import("../apps/web/src/app/lib/taskReason.ts");
+const { salesCriticalKind, isApprovalTodo } = await import("../apps/web/src/app/lib/taskReason.ts");
 
 const cases: Array<[any, string | null]> = [
   // pricing
@@ -203,4 +203,65 @@ assert.equal(
 );
 assert.equal(hasDeliveredQuote(quoteLead([])), false, "no outbound quote => not delivered");
 
-console.log("task_reason_badge:eval ok (incl. salesTopicHint fallback + quote-answered expiry)");
+// ---------------------------------------------------------------------------------------
+// isApprovalTodo — which tasks demand a FINANCE disposition ("Close" becomes "Outcome" and
+// opens the "Resolve Finance To Do" modal). Unlike the badge above this changes what the
+// button DOES, so it must never read the backend-DERIVED `action` label as evidence.
+// Curran Terblanche +13105956498, operator-reported 2026-08-04: "This creates a finance
+// outcome when it was not a finance lead" — no finance signal anywhere on that lead.
+// ---------------------------------------------------------------------------------------
+const CURRAN_AVAILABILITY_TASK = {
+  reason: "other",
+  taskClass: "reminder",
+  summary: "Promised over text: check current availability, pricing, and similar options",
+  // deriveTodoActionLabel's inventory arm tests `check stock`/`inventory`/`verify`, so
+  // "check current availability" misses it and falls through to the pricing arm. This is
+  // the label production actually derived for this task.
+  action: "Provide pricing or payment details."
+};
+assert.equal(
+  isApprovalTodo(CURRAN_AVAILABILITY_TASK),
+  false,
+  "+13105956498: an availability reminder must not demand a finance disposition — the only " +
+    "'payment' on it is the action label WE derived"
+);
+// The laundering path in isolation: a task whose ONLY finance word lives in the derived
+// action is not a finance task, whatever that action says.
+assert.equal(
+  isApprovalTodo({ reason: "other", summary: "Send the customer a walkaround video", action: "Provide pricing or payment details." }),
+  false,
+  "a derived action label alone must never make a task a finance task"
+);
+
+const approvalCases: Array<[string, any, boolean]> = [
+  // Structured reasons ARE finance tasks — unconditional, unchanged.
+  ["reason approval", { reason: "approval" }, true],
+  ["reason payments", { reason: "payments" }, true],
+  ["reason pricing", { reason: "pricing" }, true],
+  ["reason manager", { reason: "manager" }, true],
+  // A real finance signal in the task's OWN summary still opens the finance outcome.
+  ["credit app in summary", { reason: "other", summary: "Customer wants to run a credit app" }, true],
+  ["financing in summary", { reason: "call", summary: "Call to review financing options" }, true],
+  ["payment in summary", { reason: "call", summary: "Customer asked about payment on the Road Glide" }, true],
+  // Parity with deriveTodoActionLabel's own call-arm finance test (`apr`, `monthly`), which
+  // used to reach this predicate laundered through the action label.
+  ["apr in summary", { reason: "call", summary: "Quote him the APR on 60 months" }, true],
+  ["monthly in summary", { reason: "call", summary: "He asked what the monthly would be" }, true],
+  // Ordinary tasks stay ordinary.
+  ["plain follow-up", { reason: "other", summary: "Follow up on the Street Glide" }, false],
+  ["service task", { reason: "service", summary: "Service department follow-up and scheduling" }, false],
+  ["booking task", { reason: "call", summary: "Schedule the visit — a time was discussed but nothing is booked" }, false],
+  ["internal note", { reason: "note", summary: "Update for the desk" }, false],
+  ["empty task", {}, false]
+];
+for (const [label, todo, expected] of approvalCases) {
+  assert.equal(
+    isApprovalTodo(todo),
+    expected,
+    `isApprovalTodo: ${label} => ${isApprovalTodo(todo)}, expected ${expected}`
+  );
+}
+
+console.log(
+  "task_reason_badge:eval ok (incl. salesTopicHint fallback + quote-answered expiry + isApprovalTodo)"
+);
