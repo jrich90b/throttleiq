@@ -434,8 +434,12 @@ const ED_ASOF = "2026-08-01T18:20:05.402Z"; // the production turn's clock, inje
 const ED_TZ = "America/New_York";
 
 // The day resolves through the SAME parser the scheduling lane uses, and renders as a label.
+// ED_ASOF GOES TO THE PARSER TOO, not just the formatter. "TUESDAY AUGUST 4TH" carries no year, so
+// the parser rolls it forward relative to whatever clock it is handed — on Aug 4 that is 2026, and
+// one day later it is 2027. Pinning only the formatter is what made this eval go red at midnight on
+// 2026-08-05 with no code change behind it.
 assert.equal(
-  formatWalkInReturnDayLabel(parseRequestedDateOnly("Tuesday August 4th", ED_TZ), ED_TZ, ED_ASOF),
+  formatWalkInReturnDayLabel(parseRequestedDateOnly("Tuesday August 4th", ED_TZ, ED_ASOF), ED_TZ, ED_ASOF),
   "Tuesday, Aug 4",
   "Ed's logged return day resolves and renders"
 );
@@ -492,7 +496,11 @@ assert.equal(
 // THE DATE WINDOW. parseRequestedDateOnly ROLLS A BARE DATE FORWARD, so re-reading "August 4th"
 // in September resolves to next year — a draft must never invite someone to a visit 11 months out.
 assert.equal(
-  formatWalkInReturnDayLabel(parseRequestedDateOnly("August 4th", ED_TZ), ED_TZ, "2026-09-01T12:00:00.000Z"),
+  formatWalkInReturnDayLabel(
+    parseRequestedDateOnly("August 4th", ED_TZ, "2026-09-01T12:00:00.000Z"),
+    ED_TZ,
+    "2026-09-01T12:00:00.000Z"
+  ),
   "",
   "a rolled-forward date beyond the window renders nothing"
 );
@@ -521,9 +529,27 @@ const ED_RETURN_DAY_LINE =
 
 // The day survives the trip from the parser slot to the lead record as a plain calendar day.
 assert.equal(
-  formatWalkInReturnDayIso(parseRequestedDateOnly("Tuesday August 4th", ED_TZ)),
+  formatWalkInReturnDayIso(parseRequestedDateOnly("Tuesday August 4th", ED_TZ, ED_ASOF)),
   ED_RETURN_DAY_ISO,
   "the committed day is stored as a dealer-local calendar day, not an instant"
+);
+// THE GUARD THAT KEEPS THIS EVAL FROM ROTTING. A pinned clock must FULLY determine the answer, so
+// the same call at two clocks a year apart still resolves Ed's turn the way production resolved it.
+// Without this, the assertions above pass or fail depending on the day the build runs — which is
+// how a green suite turned red overnight and blocked every routine's merge.
+for (const pinned of ["2026-08-01T18:20:05.402Z", "2027-03-14T05:00:00.000Z"]) {
+  assert.equal(
+    formatWalkInReturnDayIso(parseRequestedDateOnly("Tuesday August 4th", ED_TZ, ED_ASOF)),
+    ED_RETURN_DAY_ISO,
+    `the pinned turn clock, not the wall clock, decides the day (real clock irrelevant; probe ${pinned})`
+  );
+}
+// And the roll-forward itself is a function of the PINNED clock: read a year later, the same bare
+// date is next year's. This is the rule that broke; it now has an assertion instead of a comment.
+assert.equal(
+  formatWalkInReturnDayIso(parseRequestedDateOnly("August 4th", ED_TZ, "2026-09-01T12:00:00.000Z")),
+  "2027-08-04",
+  "a bare date already past the pinned clock rolls forward a year — deterministically"
 );
 assert.equal(formatWalkInReturnDayIso(null), "", "an unresolvable day stores nothing");
 assert.equal(formatWalkInReturnDayIso({ year: 2026, month: 13, day: 4 }), "", "an impossible month stores nothing");

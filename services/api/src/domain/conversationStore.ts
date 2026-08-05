@@ -6688,11 +6688,25 @@ export function mentionsUnresolvedTimeframe(text: string | null | undefined): bo
   );
 }
 
+// EVERY relative date in here is relative to SOMETHING, and until now that something was always
+// `Date.now()` — the moment the code happened to run, not the moment the customer or the staff note
+// spoke. That is the same class of bug as a replay finding stamped with the sweep's clock: it makes
+// the function unreplayable, and it made `walkin_internal_note_topic_guard:eval` go red at midnight
+// on 2026-08-05 with nothing changed. Ed's note said "TUESDAY AUGUST 4TH" and carried no year; on
+// Aug 4 that rolled forward to 2026, and one day later to 2027.
+//
+// `asOfIso` is the turn's clock. It DEFAULTS to now, so every existing caller is unchanged — this
+// only gives replays and evals a way to ask the question the way production asked it.
 export function parseRequestedDateOnly(
   text: string,
-  timeZone: string
+  timeZone: string,
+  asOfIso?: string | null
 ): { year: number; month: number; day: number; dayOfWeek: string } | null {
   const t = String(text ?? "").toLowerCase();
+  // An unparseable asOf falls back to now rather than throwing or producing Invalid Date parts: a
+  // bad clock must never turn a real requested date into no date at all (fail toward resolving).
+  const asOfMs = asOfIso ? new Date(String(asOfIso)).getTime() : Number.NaN;
+  const nowDate = (): Date => (Number.isFinite(asOfMs) ? new Date(asOfMs) : new Date());
   const explicitDate = parseExplicitDate(t);
   if (explicitDate) {
     // Must mirror parseExplicitDate's year groups EXACTLY. When these two disagree, the roll-forward
@@ -6710,7 +6724,7 @@ export function parseRequestedDateOnly(
       );
     let year = explicitDate.year;
     if (!explicitYearProvided) {
-      const now = new Date();
+      const now = nowDate();
       const nowParts = getZonedParts(now, timeZone);
       if (
         explicitDate.month < nowParts.month ||
@@ -6735,7 +6749,7 @@ export function parseRequestedDateOnly(
   // (the earliest day the promise could be due); "in a couple weeks" to Monday after. Deterministic
   // date-word extraction, not comprehension.
   if (/\bnext week\b/.test(t) || /\bin a (?:week|few days)\b/.test(t) || /\bcouple (?:of )?weeks\b/.test(t)) {
-    const now = new Date();
+    const now = nowDate();
     const nowParts = getZonedParts(now, timeZone);
     const todayIdx = weekdayIndex((nowParts.weekday ?? "").slice(0, 3));
     const daysToNextMonday = ((8 - todayIdx) % 7) || 7;
@@ -6765,7 +6779,7 @@ export function parseRequestedDateOnly(
   {
     const days = resolveRelativeTimeframeDays(t);
     if (days != null) {
-      const nowParts = getZonedParts(new Date(), timeZone);
+      const nowParts = getZonedParts(nowDate(), timeZone);
       const base = new Date(Date.UTC(nowParts.year, nowParts.month - 1, nowParts.day, 12, 0));
       base.setUTCDate(base.getUTCDate() + days);
       const parts = getZonedParts(base, timeZone);
@@ -6781,7 +6795,7 @@ export function parseRequestedDateOnly(
   const dayToken = parseDayToken(t);
   if (!dayToken) return null;
 
-  const now = new Date();
+  const now = nowDate();
   const nowParts = getZonedParts(now, timeZone);
   const todayIdx = weekdayIndex((nowParts.weekday ?? "").slice(0, 3));
   let base = new Date(Date.UTC(nowParts.year, nowParts.month - 1, nowParts.day, 12, 0));
