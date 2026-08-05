@@ -85,11 +85,6 @@ const SINGLE_PATH_BASELINE: Record<string, { path: "live" | "regen"; reason: str
     reason:
       "event-promo ADFs are handled at ADF intake (live lane outside the twilio handler); regen re-derives for redraws (verify on touch)"
   },
-  decideNonBuyerSurveyTurn: {
-    path: "regen",
-    reason:
-      "non-buyer survey acks are ADF-intake behavior (live lane outside the twilio handler) (verify on touch)"
-  },
   parseCadenceRegenerateContextWithLLM: {
     path: "regen",
     reason: "regenerate-only by definition: rebuilds context for a cadence redraft (by design)"

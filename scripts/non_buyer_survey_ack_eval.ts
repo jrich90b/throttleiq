@@ -109,7 +109,7 @@ const adfFirstTouch = fs.readFileSync("services/api/src/domain/ridingAcademy.ts"
 assert.ok(
   /resolveAdfFirstTouchAckKind\(\{/.test(index) &&
     /buildAdfFirstTouchAck\(/.test(index) &&
-    /regenIsAdfFirstTouchNonBuyer/.test(index),
+    /recordRouteOutcome\("regen", regenAdfFirstTouch\.kind/.test(index),
   "the regen path must divert a self-declared non-buyer first touch to the ack via the shared resolver"
 );
 assert.ok(
@@ -117,7 +117,8 @@ assert.ok(
   "the shared first-touch resolver must read the non-buyer signal and build the non-buyer ack"
 );
 assert.ok(
-  /isAdfFirstTouchRegen\(\{ provider: event\.provider, messages: conv\.messages \}\)/.test(index) &&
+  /provider: event\.provider,\s*\n\s*messages: conv\.messages,/.test(index) &&
+    /isAdfFirstTouchRegen\(\{ provider: input\.provider, messages: input\.messages \}\)/.test(adfFirstTouch) &&
     /!== "sendgrid_adf"\) return false/.test(adfFirstTouch) &&
     /m\?\.provider \?\? ""\)\.toLowerCase\(\) === "twilio"/.test(adfFirstTouch),
   "the regen gate must require an ADF first touch with no customer SMS reply yet"

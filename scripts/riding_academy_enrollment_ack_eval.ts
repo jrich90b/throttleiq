@@ -178,9 +178,9 @@ assert.ok(
 // of index.ts), so the wiring is asserted across BOTH files, by exact call shape in each.
 const adfFirstTouch = fs.readFileSync("services/api/src/domain/ridingAcademy.ts", "utf8");
 assert.ok(
-  /const regenAdfFirstTouchKind = resolveAdfFirstTouchAckKind\(\{[\s\S]{0,240}leadSource: conv\.lead\?\.source,[\s\S]{0,240}\}\);/.test(
+  /const regenAdfFirstTouch = resolveAdfFirstTouchAckKind\(\{[\s\S]{0,400}leadSource: conv\.lead\?\.source,[\s\S]{0,240}\}\);/.test(
     index
-  ) && /const regenIsRidingAcademyEnrollment = regenAdfFirstTouchKind === "riding_academy_enrollment_ack";/.test(index),
+  ) && /if \(regenAdfFirstTouch\.kind !== "none"\) \{/.test(index),
   "the regen path must resolve the enrollment ack through the shared first-touch resolver"
 );
 assert.ok(
@@ -195,13 +195,14 @@ assert.ok(
   "the enrollment ack must be resolved ahead of the non-buyer survey ack"
 );
 assert.ok(
-  /isAdfFirstTouchRegen\(\{ provider: event\.provider, messages: conv\.messages \}\)/.test(index) &&
+  /provider: event\.provider,\s*\n\s*messages: conv\.messages,/.test(index) &&
+    /isAdfFirstTouchRegen\(\{ provider: input\.provider, messages: input\.messages \}\)/.test(adfFirstTouch) &&
     /!== "sendgrid_adf"\) return false/.test(adfFirstTouch) &&
     /m\?\.provider \?\? ""\)\.toLowerCase\(\) === "twilio"/.test(adfFirstTouch),
   "the regen gate must require an ADF first touch with no customer SMS reply yet"
 );
 assert.ok(
-  /recordRouteOutcome\("regen", regenAdfFirstTouchKind/.test(index),
+  /recordRouteOutcome\("regen", regenAdfFirstTouch\.kind/.test(index),
   "the regen branch must record its route outcome under the resolved ack kind"
 );
 // The cadence cap lives in the ONE referee, not a fresh inline writer.

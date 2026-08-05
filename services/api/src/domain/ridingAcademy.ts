@@ -51,25 +51,30 @@ export function isAdfFirstTouchRegen(input: {
  * routes normally.
  */
 export function resolveAdfFirstTouchAckKind(input: {
-  isAdfFirstTouch: boolean;
+  provider?: string | null;
+  messages?: unknown;
+  eventPromoKind?: string | null;
   leadSource?: string | null;
   inquiry?: string | null;
   purchaseTimeframe?: string | null;
-}): AdfFirstTouchAckKind {
-  if (!input.isAdfFirstTouch) return "none";
+}): { isAdfFirstTouch: boolean; kind: AdfFirstTouchAckKind } {
+  const isAdfFirstTouch =
+    isAdfFirstTouchRegen({ provider: input.provider, messages: input.messages }) &&
+    String(input.eventPromoKind ?? "") !== "event_promo_ack";
+  if (!isAdfFirstTouch) return { isAdfFirstTouch, kind: "none" };
   if (
     decideRidingAcademyTurn({ leadSource: input.leadSource, inquiry: input.inquiry }).kind ===
     "riding_academy_enrollment_ack"
   ) {
-    return "riding_academy_enrollment_ack";
+    return { isAdfFirstTouch, kind: "riding_academy_enrollment_ack" };
   }
   if (
     decideNonBuyerSurveyTurn({ purchaseTimeframe: input.purchaseTimeframe }).kind ===
     "non_buyer_survey_ack"
   ) {
-    return "non_buyer_survey_ack";
+    return { isAdfFirstTouch, kind: "non_buyer_survey_ack" };
   }
-  return "none";
+  return { isAdfFirstTouch, kind: "none" };
 }
 
 /** The approved copy for a resolved first-touch ack kind. */
