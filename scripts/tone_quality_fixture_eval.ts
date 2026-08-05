@@ -215,6 +215,46 @@ const FIXTURES: Fixture[] = [
     expect: { mustIncludeIssues: ["adf_direct_ask_unanswered"] }
   },
   {
+    // Riding Academy "Enrolled" ADF (Savannah Niver +13155211619, 2026-08-04).
+    // The whole Inquiry body is the enrollment RECORD — no customer prose at all
+    // — and two of its machine tokens ("Payment Status: Failed" and "within the
+    // last 12 months") each manufacture a pricing ask on their own. The reply
+    // links the page that carries the course pricing, so this must score clean;
+    // it scored 70 and was the whole open tone-quality P1.
+    id: "adf_riding_academy_enrollment_record_is_not_a_pricing_ask",
+    inboundText:
+      "WEB LEAD (ADF)\nSource: Riding Academy - Enrolled\nRef: 11734\nName: Savannah Niver\nEmail: savannahsummers21@gmail.com\nPhone: 3155211619\nYear: 2026\nVehicle: Harley-Davidson Full Line\n\nInquiry:\nEnrollment Status: Enrolled-Course: New Rider Course - eCourse + Range-Class Start Date: 8/15/2026-Gender: Female-Motivation: Obtain a license-Motorcycle Riding History: I have operated an on-road motorcycle within the last 12 months-Training Experience: No-Payment Status: Failed-Future Motorcycle Purchase Expectation: Yes in 1-3 years-Future Motorcycle Purchase Brand: Honda-Accepted Terms and Conditions: true-Brand of Bike Owned:Honda",
+    outboundText:
+      "Hey Savannah, it's Alexandra over at American Harley-Davidson. Thanks for asking about our Riding Academy course. Course details and pricing are here: https://americanharley-davidson.com/news-article/42851/riding-academy Reply STOP to opt out.",
+    expect: {
+      minScore: 85,
+      mustNotIncludeIssues: ["adf_direct_ask_unanswered", "intent_mismatch", "question_not_answered_first"]
+    }
+  },
+  {
+    // Same block, the other Payment Status wording (Donald Rawson
+    // +17165344986) — pins that the cut is the block header, not either token.
+    id: "adf_riding_academy_enrollment_awaiting_payment_is_not_a_pricing_ask",
+    inboundText:
+      "WEB LEAD (ADF)\nSource: Riding Academy - Enrolled\nRef: 11736\nName: Donald Rawson\nEmail: goatdr450@gmail.com\nPhone: 7165344986\nYear: 2026\nVehicle: Harley-Davidson Full Line\n\nInquiry:\nEnrollment Status: Enrolled-Course: New Rider Course - eCourse + Range-Class Start Date: 8/15/2026-Gender: Male-Motivation: Skills refresher-Motorcycle Riding History: I have operated an on-road motorcycle within the last 12 months-Training Experience: Yes, State Operated Course-Payment Status: Awaiting Payment at Dealer-Future Motorcycle Purchase Expectation: No-Future Motorcycle Purchase Brand: None-Accepted Terms and Conditions: true-Brand of Bike Owned:Aprilia",
+    outboundText:
+      "Hey Donald, it's Alexandra over at American Harley-Davidson. Thanks for asking about our Riding Academy course. Course details and pricing are here: https://americanharley-davidson.com/news-article/42851/riding-academy Reply STOP to opt out.",
+    expect: {
+      minScore: 85,
+      mustNotIncludeIssues: ["adf_direct_ask_unanswered", "intent_mismatch", "question_not_answered_first"]
+    }
+  },
+  {
+    // Guard the other direction: a REAL question typed ahead of the enrollment
+    // record is still caught — the cut is at the block header, not the body.
+    id: "adf_real_ask_before_enrollment_record_still_caught",
+    inboundText:
+      "WEB LEAD (ADF)\nSource: Riding Academy - Enrolled\nRef: 11740\nName: Pat Rider\nEmail: pat@example.com\nPhone: 7160000009\nYear: 2026\nVehicle: Harley-Davidson Full Line\n\nInquiry:\nHow much does the course cost?\nEnrollment Status: Enrolled-Course: New Rider Course - eCourse + Range-Class Start Date: 8/15/2026-Payment Status: Failed-Brand of Bike Owned:Honda",
+    outboundText:
+      "Hey Pat, it's Alexandra over at American Harley-Davidson. Thanks for reaching out — what day works for you to stop in?",
+    expect: { mustIncludeIssues: ["adf_direct_ask_unanswered"] }
+  },
+  {
     id: "adf_genuine_specials_ask_still_pricing",
     inboundText:
       "WEB LEAD (ADF)\nSource: Website contact form\nRef: 20003\nName: Deal Hunter\nYear: 2026\nVehicle: Harley-Davidson Road Glide\n\nInquiry:\nAny specials or deals running on a Road Glide right now?",

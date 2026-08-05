@@ -305,26 +305,55 @@ export function isAdfInboundText(text: string): boolean {
 const ADF_DEALER_QUESTIONNAIRE_MARKER = /\bmarketing questions:\s*/i;
 
 /**
- * Drop the dealer questionnaire from an ADF body before ANY tone judgement, so
- * the store's own survey prompts can't set the turn's intent either. The lead
- * header ("Year: / Vehicle: / Trade-In:") is kept, so model/trade signal is
- * untouched — only the post-"Marketing Questions:" block goes.
+ * Second fingerprint, same class (2026-08-05): the Riding Academy "Enrolled"
+ * ADF's whole Inquiry body is the enrollment RECORD, not customer prose —
+ * "Enrollment Status: Enrolled-Course: New Rider Course-Class Start Date:
+ * 8/15/2026-Gender: …-Payment Status: Failed-…". Two of its machine tokens
+ * manufacture a pricing ask on their own ("Payment Status:" and "within the
+ * last 12 months"), so Savannah Niver (+13155211619) and Donald Rawson
+ * (+17165344986) both scored 70 / `adf_direct_ask_unanswered: pricing` on a
+ * reply that DOES link the course pricing — the whole open tone-quality P1.
+ * A customer never types "Enrollment Status:".
+ */
+const ADF_ENROLLMENT_RECORD_MARKER = /\benrollment status:\s*/i;
+
+const ADF_MACHINE_BLOCK_MARKERS = [
+  ADF_DEALER_QUESTIONNAIRE_MARKER,
+  ADF_ENROLLMENT_RECORD_MARKER
+];
+
+/** Index of the earliest machine-authored block header in `text`, or -1. */
+function findAdfMachineBlockIndex(text: string): number {
+  let earliest = -1;
+  for (const marker of ADF_MACHINE_BLOCK_MARKERS) {
+    const hit = text.match(marker);
+    if (!hit || hit.index == null) continue;
+    if (earliest === -1 || hit.index < earliest) earliest = hit.index;
+  }
+  return earliest;
+}
+
+/**
+ * Drop the dealer-authored / machine-authored block from an ADF body before ANY
+ * tone judgement, so the store's own survey prompts and the Riding Academy
+ * enrollment record can't set the turn's intent either. The lead header
+ * ("Year: / Vehicle: / Trade-In:") is kept, so model/trade signal is untouched —
+ * only the block goes.
  */
 export function stripAdfDealerQuestionnaire(text: string): string {
   const raw = String(text ?? "");
   if (!isAdfInboundText(raw)) return raw;
-  const questionnaire = raw.match(ADF_DEALER_QUESTIONNAIRE_MARKER);
-  if (!questionnaire || questionnaire.index == null) return raw;
-  return raw.slice(0, questionnaire.index);
+  const cut = findAdfMachineBlockIndex(raw);
+  if (cut < 0) return raw;
+  return raw.slice(0, cut);
 }
 
 function extractAdfCustomerText(text: string): string {
   const raw = String(text ?? "");
   const marker = raw.match(/(?:^|\n)\s*(?:inquiry|your inquiry|customer comments?|comments?):\s*/i);
   const body = marker && marker.index != null ? raw.slice(marker.index + marker[0].length) : raw;
-  const questionnaire = body.match(ADF_DEALER_QUESTIONNAIRE_MARKER);
-  const customerOnly =
-    questionnaire && questionnaire.index != null ? body.slice(0, questionnaire.index) : body;
+  const cut = findAdfMachineBlockIndex(body);
+  const customerOnly = cut >= 0 ? body.slice(0, cut) : body;
   return normalizeText(customerOnly);
 }
 
