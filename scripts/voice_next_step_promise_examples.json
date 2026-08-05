@@ -1,0 +1,37 @@
+[
+  {
+    "id": "conditional_buy_offer_promise_mints_task",
+    "note": "James Bernsdorf +17167964264, call 2026-07-25. Rep: 'So you got a 2017 Ultra Limited. If we're interested in buying it, I will call you.' Nothing tracked it; the lead was taper-retired 2026-08-04 with the promise unkept.",
+    "summary": "Customer has a Ultra Limited with 6,900 miles and wants to sell it (not buy another bike). Dealer may contact him if interested in purchasing; no asking price listed and no sale or appointment was scheduled.",
+    "expectOwner": "staff",
+    "expectDecisionKind": "staff_task"
+  },
+  {
+    "id": "conditional_manager_check_promise_mints_task",
+    "note": "Same shape, different words: the condition is the STORE's to resolve, so the customer is waiting on us.",
+    "summary": "Customer asked what the dealer would give him for his 2018 Fat Bob. Rep said he would check with his manager and get back to him if they can make an offer work. No number was given on the call.",
+    "expectOwner": "staff",
+    "expectDecisionKind": "staff_task"
+  },
+  {
+    "id": "pleasantry_stays_none",
+    "note": "Over-trigger guard: a contentless sign-off must not mint a staff task.",
+    "summary": "Rep reached the customer and confirmed he is still thinking about it. No unit, price, or plan was discussed; both sides said they would be in touch.",
+    "expectOwner": "none",
+    "expectDecisionKind": "breather_only"
+  },
+  {
+    "id": "customer_owned_condition_stays_none",
+    "note": "Over-trigger guard: the condition is entirely the CUSTOMER's, so nobody at the store owes a move.",
+    "summary": "Customer said he is not ready yet and will call the store if he decides to sell his bike. Rep did not promise anything.",
+    "expectOwner": "none",
+    "expectDecisionKind": "breather_only"
+  },
+  {
+    "id": "dated_customer_visit_unchanged",
+    "note": "The customer-owned visit arm must be untouched by the conditional-promise guidance.",
+    "summary": "Customer asked prices for a Harley Breakout (pre-owned) and was quoted $14,995 asking price; with new plates, taxes, and fees the total was quoted as $16,534. He said he will come by Saturday to look at it in person.",
+    "expectOwner": "customer",
+    "expectDecisionKind": "customer_visit_task"
+  }
+]
