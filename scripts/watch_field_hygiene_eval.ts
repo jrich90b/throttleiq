@@ -144,6 +144,32 @@ assert.equal(
 assert.equal(formatWatchYearLabel({ yearMin: null, yearMax: 2022 }), "", "…either side");
 assert.equal(formatWatchYearLabel({}), "", "no year constraint, no label");
 
+// --- Year label: a PLACEHOLDER year is not a year (production draft, 2026-08-04) --------------
+// `year: 0` is how the watch-creation paths spell "the customer named no year", but `String(0)` is
+// a non-empty string, so the old non-blank test printed it. Joshua Ricksgers (+17162512324) was
+// drafted "I'll keep an eye out for 0 Street Glide Special in silver flux/black fuse" off a watch
+// whose own exactness read `model_only` — the record said no-year while the sentence claimed one.
+assert.equal(
+  formatWatchYearLabel({ year: 0 }),
+  "",
+  "year 0 is the no-year placeholder, never a label — the production defect (+17162512324, msg at 2026-08-04T17:15:25.890Z)"
+);
+assert.equal(formatWatchYearLabel({ year: "0" }), "", "…string-typed placeholder too");
+assert.equal(formatWatchYearLabel({ year: NaN }), "", "NaN is not a year");
+assert.equal(formatWatchYearLabel({ year: "unknown" }), "", "…nor is unparseable prose");
+assert.equal(formatWatchYearLabel({ year: 1899 }), "", "…nor a number below the plausible floor");
+assert.equal(formatWatchYearLabel({ year: 20261 }), "", "…nor a mistyped/overlong year");
+// The placeholder must not poison a range the watch legitimately carries.
+assert.equal(
+  formatWatchYearLabel({ year: 0, yearMin: 2019, yearMax: 2021 }),
+  "2019-2021",
+  "a placeholder single-year falls THROUGH to the real range instead of printing '0'"
+);
+assert.equal(formatWatchYearLabel({ yearMin: 0, yearMax: 2021 }), "", "a placeholder bound makes the range half-open ⇒ unlabelled");
+// Guard the guard: real years must be untouched by the plausibility check.
+assert.equal(formatWatchYearLabel({ year: 1903 }), "1903", "the floor is loose on purpose — a real old year still labels");
+assert.equal(formatWatchYearLabel({ year: "2026" }), "2026", "…and the ordinary string-typed year is unchanged");
+
 // --- Wiring: no customer-facing path may hand-roll the range again ---------------------------
 assert.doesNotMatch(
   idx,

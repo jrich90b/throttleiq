@@ -514,6 +514,8 @@ import {
   startPostSaleCadence,
   releaseHeldDraft,
   applyAppointmentTeardown,
+  applyStaleBookingReplacement,
+  applyInventoryWatchDefaults,
   applyAppointmentBookingRecord,
   applyReschedulePendingLatch,
   applyReschedulePendingClear,
@@ -770,6 +772,8 @@ import {
   decideTradeQualifierTurn,
   decideCustomerAckConfirmBooking,
   decideManualConfirmPendingAppointment,
+  decideHealthRecoveryPause,
+  decideStaffReopenResidue,
   decideSchedulingDeferralFollowUpTask,
   decideStaffAvailabilityAnswer,
   staffDayOffFromSummaries,
@@ -954,6 +958,7 @@ import {
   isParserSoftVisitCommitment,
   isParserTimedVisitCommitment
 } from "./domain/softVisitSignal.js";
+import { buildScheduleContextStatusUpdateReply } from "./domain/scheduleStatusReply.js";
 import { collectRecentStaffCorrections } from "./domain/feedbackSteering.js";
 
 import {
@@ -9348,11 +9353,13 @@ async function resetFollowUpCadenceOnInbound(conv: any, inboundText: string) {
   if (healthRecoveryPaused && !isExplicitReadyAfterHealthRecoveryText(inbound)) {
     const recoveryDays = Math.max(1, Number(process.env.HEALTH_RECOVERY_DELAY_DAYS ?? 21) || 21);
     const fallbackUntil = computeFollowUpDueAt(anchor, recoveryDays, tz);
-    const currentUntil = cadence.pausedUntil ? new Date(cadence.pausedUntil) : null;
-    cadence.pausedUntil =
-      currentUntil && !Number.isNaN(currentUntil.getTime()) && currentUntil > new Date()
-        ? currentUntil.toISOString()
-        : fallbackUntil;
+    // "A pause already standing in the future WINS" — see decideHealthRecoveryPause for why.
+    const recoveryPause = decideHealthRecoveryPause({
+      currentPausedUntil: cadence.pausedUntil,
+      fallbackUntilIso: fallbackUntil,
+      nowMs: Date.now()
+    });
+    cadence.pausedUntil = recoveryPause.pausedUntilIso;
     cadence.pauseReason = "health_recovery_delay";
     cadence.nextDueAt = cadence.pausedUntil;
     setFollowUpMode(conv, "active", "health_recovery_delay");
@@ -23592,65 +23599,6 @@ function hasScheduleOfferContext(lastOutboundText: string, dialogState: DialogSt
   );
 }
 
-const SCHEDULE_MONTH_LABELS: Record<string, string> = {
-  jan: "January", feb: "February", mar: "March", apr: "April", may: "May", jun: "June",
-  jul: "July", aug: "August", sep: "September", sept: "September", oct: "October",
-  nov: "November", dec: "December"
-};
-
-function extractScheduleDayLabelFromContext(...texts: string[]): string {
-  // Earlier texts win: a date in the customer's latest turn must beat a
-  // weekday mentioned in our older outbound (Dominik 2026-06-11: "the June
-  // 20th event so it'll be that day" lost to a generic day re-ask).
-  for (const text of texts) {
-    const t = String(text ?? "").toLowerCase();
-    if (!t.trim()) continue;
-    const monthDate = t.match(
-      /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+(\d{1,2})(st|nd|rd|th)?\b/
-    );
-    if (monthDate) {
-      const monthKey = monthDate[1].slice(0, 4) === "sept" ? "sept" : monthDate[1].slice(0, 3);
-      const month = SCHEDULE_MONTH_LABELS[monthKey] ?? monthDate[1];
-      return `${month} ${monthDate[2]}${monthDate[3] ?? ""}`;
-    }
-    const slashDate = t.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(?:\d{2}|\d{4}))?\b/);
-    if (slashDate) return `${slashDate[1]}/${slashDate[2]}`;
-    const weekday = t.match(
-      /\b(today|tomorrow|monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|thurs|friday|fri|saturday|sat|sunday|sun)\b/
-    );
-    if (weekday) {
-      const label = scheduleWeekdayLabel(weekday[1]);
-      if (label) return label;
-    }
-  }
-  return "";
-}
-
-function scheduleWeekdayLabel(raw: string): string {
-  const labels: Record<string, string> = {
-    today: "today",
-    tomorrow: "tomorrow",
-    monday: "Monday",
-    mon: "Monday",
-    tuesday: "Tuesday",
-    tue: "Tuesday",
-    tues: "Tuesday",
-    wednesday: "Wednesday",
-    wed: "Wednesday",
-    thursday: "Thursday",
-    thu: "Thursday",
-    thur: "Thursday",
-    thurs: "Thursday",
-    friday: "Friday",
-    fri: "Friday",
-    saturday: "Saturday",
-    sat: "Saturday",
-    sunday: "Sunday",
-    sun: "Sunday"
-  };
-  return labels[raw] ?? "";
-}
-
 function resolveUpcomingDateFromDayLabel(label: string, now: Date = new Date()): Date | null {
   const t = String(label ?? "").trim().toLowerCase();
   if (!t) return null;
@@ -23710,48 +23658,6 @@ function reanchorCadenceForCommittedDay(conv: any, dayLabel: string, now: Date =
   cadence.pausedUntil = undefined;
   cadence.pauseReason = undefined;
   return true;
-}
-
-const SCHEDULE_EVENT_COMMIT_RE = /\b(event|demo days?|open house|bike night|signed up)\b/i;
-const SCHEDULE_DAY_COMMIT_RE =
-  /\b(it'?ll be|that day|that date|i'?ll (?:be|come|stop|swing)|works for me|that works|see you)\b/i;
-
-function buildScheduleContextStatusUpdateReply(
-  inboundText: string,
-  lastOutboundText: string,
-  options: { parserVisitCommitment?: boolean } = {}
-): { reply: string; dayLabel: string; dayCommitted: boolean; eventCommitted: boolean } {
-  const inboundDay = extractScheduleDayLabelFromContext(inboundText);
-  const dayLabel = inboundDay || extractScheduleDayLabelFromContext(lastOutboundText);
-  const eventCommitted = !!inboundDay && SCHEDULE_EVENT_COMMIT_RE.test(inboundText);
-  // Parser-first commitment (AGENTS.md "comprehend, never regex"): when the
-  // inbound_reply_action parser recognized this turn as a visit/schedule-status
-  // commitment and the customer named a day, the day is committed — regardless of
-  // the event's name and without keyword-matching the commitment phrasing. This
-  // replaces SCHEDULE_DAY_COMMIT_RE as the comprehension driver; the regex stays
-  // only as a fallback for non-parser callers (e.g. the future-timeframe path).
-  const parserCommitment = !!options.parserVisitCommitment && !!inboundDay;
-  const dayCommitted =
-    eventCommitted || parserCommitment || (!!inboundDay && SCHEDULE_DAY_COMMIT_RE.test(inboundText));
-  if (eventCommitted || parserCommitment) {
-    return {
-      reply: `Perfect, you're set for ${inboundDay}! Come find us when you get here and we'll get you taken care of. If you want a set time that day, just text me one.`,
-      dayLabel: inboundDay,
-      dayCommitted,
-      eventCommitted
-    };
-  }
-  if (dayCommitted) {
-    return {
-      reply: `Perfect, ${inboundDay} it is. What time works best?`,
-      dayLabel: inboundDay,
-      dayCommitted,
-      eventCommitted
-    };
-  }
-  const timeQuestion = dayLabel ? `what time ${dayLabel} works best?` : "what day and time works best?";
-  const prefix = /\b(?:sorry|my bad)\b/i.test(inboundText) ? "No worries" : "Sounds good";
-  return { reply: `${prefix}, ${timeQuestion}`, dayLabel, dayCommitted, eventCommitted };
 }
 
 function buildDealerLocationReply(conv: any, dealerProfile: any): string {
@@ -41148,35 +41054,25 @@ app.post("/conversations/:id/reopen", (req, res) => {
   if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
   // Staff pressed Reopen — the unconditional arm of decideCloseoutReversal.
   applyCloseoutReversal(conv, { cause: "staff_reopen" });
-  if (conv.sale) {
-    conv.sale = undefined;
-  }
-  if (conv.followUpCadence?.kind === "post_sale") {
-    conv.followUpCadence = undefined;
-  }
-  if (conv.followUp?.reason === "post_sale") {
-    conv.followUp = undefined;
-  }
-  // Reopening a disposition-archived deal must also undo the closeout residue
-  // (Dave Batka 2026-06-11: reopen alone left followUp paused_indefinite /
-  // customer_sell_on_own and the cadence stopped - a zombie reopen).
-  const dispositionReasons = new Set([
-    "customer_sell_on_own",
-    "customer_keep_current_bike",
-    "customer_stepping_back",
-    "customer_deferred"
-  ]);
-  if (dispositionReasons.has(String(conv.followUp?.reason ?? ""))) {
-    conv.followUp = undefined;
-  }
-  if (dispositionReasons.has(String(getDialogState(conv) ?? ""))) {
-    setDialogState(conv, "small_talk");
-  }
-  if (
-    conv.followUpCadence &&
-    conv.followUpCadence.status !== "active" &&
-    dispositionReasons.has(String(conv.followUpCadence.stopReason ?? ""))
-  ) {
+  // What closeout RESIDUE a reopen undoes — five arms that used to live loose in this handler body.
+  // See decideStaffReopenResidue for the zombie-reopen it prevents and the load-bearing order.
+  const reopenResidue = decideStaffReopenResidue({
+    hasCadence: !!conv.followUpCadence,
+    cadenceKind: conv.followUpCadence?.kind ?? null,
+    cadenceStatus: conv.followUpCadence?.status ?? null,
+    cadenceStopReason: conv.followUpCadence?.stopReason ?? null,
+    followUpReason: conv.followUp?.reason ?? null,
+    dialogState: getDialogState(conv) ?? null,
+    hasSale: !!conv.sale
+  });
+  if (reopenResidue.clearSale) conv.sale = undefined;
+  // ORDER IS LOAD-BEARING: blanking a post-sale chase first is what stops the disposition-revive arm
+  // below from resurrecting a delivery-congrats ladder onto a deal whose sale was just un-done.
+  if (reopenResidue.blankPostSaleCadence) conv.followUpCadence = undefined;
+  if (reopenResidue.clearPostSaleFollowUp) conv.followUp = undefined;
+  if (reopenResidue.clearDispositionFollowUp) conv.followUp = undefined;
+  if (reopenResidue.resetDispositionDialogState) setDialogState(conv, "small_talk");
+  if (reopenResidue.reviveDispositionCadence && conv.followUpCadence) {
     conv.followUpCadence = {
       ...conv.followUpCadence,
       status: "active",
@@ -53143,14 +53039,12 @@ app.post("/conversations/:id/send", async (req, res) => {
       const whenUtc = localPartsToUtcDate(schedulerTimezone, requested).toISOString();
       const whenText = formatSlotLocal(whenUtc, schedulerTimezone);
       conv.appointment = conv.appointment ?? { status: "none", updatedAt: nowIso() };
-      if (confirmsPendingAppointmentRequest && existingBookedAppointmentIsPast) {
-        conv.appointment.bookedEventId = null;
-        conv.appointment.bookedEventLink = null;
-        conv.appointment.bookedSalespersonId = null;
-        conv.appointment.bookedSalespersonName = null;
-        conv.appointment.bookedCalendarId = null;
-        conv.appointment.matchedSlot = undefined;
-      }
+      // Which parts of an EXPIRED booking die when a new time replaces them — the referee owns the
+      // list so it cannot drift the way the five old teardown sites did.
+      applyStaleBookingReplacement(conv.appointment, {
+        confirmsPendingRequest: confirmsPendingAppointmentRequest,
+        existingBookedAppointmentIsPast
+      });
       // Same lane as the slot-match branch above: the rep's own send settled the time.
       applyAppointmentConfirmRecord(conv, "salesperson_manual_booking");
       conv.appointment.whenIso = whenUtc;
@@ -57174,7 +57068,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const statusUpdate = buildScheduleContextStatusUpdateReply(
       String(event.body ?? ""),
       regenLastOutboundForActionText,
-      { parserVisitCommitment: regenParserScheduleStatusUpdate || isParserSoftVisitCommitment(regenAppointmentTimingParse) }
+      { parserVisitCommitment: regenParserScheduleStatusUpdate || isParserSoftVisitCommitment(regenAppointmentTimingParse), parserDay: regenAppointmentTimingParse?.requested?.day ?? regenCustomerAckActionParse?.requested?.day }
     );
     // Booked-same-day reflection + dated staff task — regen parity with the live arm
     // (Joe ruling 2026-07-19, shared helpers so the twins can't drift).
@@ -61516,13 +61410,15 @@ if (authToken && signature) {
             pref = { action: "set", watch };
           }
           if (pref.action === "set" && pref.watch) {
-            if (!pref.watch.make && leadVehicle.make) pref.watch.make = leadVehicle.make;
-            if (!pref.watch.trim && leadVehicle.trim) pref.watch.trim = leadVehicle.trim;
-            const conditionFromText = normalizeWatchCondition(humanModeTextLower);
-            if (!pref.watch.condition && conditionFromText) pref.watch.condition = conditionFromText;
-            if (!pref.watch.condition && leadVehicle.condition) {
-              pref.watch.condition = normalizeWatchCondition(leadVehicle.condition);
-            }
+            // One owner for the blank-filling ladder (pinned by customer_risk_referees:eval): this state
+            // decides WHICH ARRIVING UNIT TEXTS THIS CUSTOMER, and four lanes each hand-wrote it before.
+            applyInventoryWatchDefaults(pref.watch, {
+              leadMake: leadVehicle.make,
+              leadTrim: leadVehicle.trim,
+              conditionFromText: normalizeWatchCondition(humanModeTextLower) ?? null,
+              semanticCondition: undefined,
+              conditionFromLead: normalizeWatchCondition(leadVehicle.condition) ?? null
+            });
             applyInventoryWatchConfirmation(conv, pref.watch, { scope: "live" });
             recordRouteOutcome("live", "human_mode_inventory_watch_set", {
               convId: conv.id,
@@ -63971,13 +63867,15 @@ if (authToken && signature) {
         pref = { action: "set", watch };
       }
       if (pref.action === "set" && pref.watch) {
-        if (!pref.watch.make && leadVehicle.make) pref.watch.make = leadVehicle.make;
-        if (!pref.watch.trim && leadVehicle.trim) pref.watch.trim = leadVehicle.trim;
-        const conditionFromText = normalizeWatchCondition(textLower);
-        if (!pref.watch.condition && conditionFromText) pref.watch.condition = conditionFromText;
-        if (!pref.watch.condition && leadVehicle.condition) {
-          pref.watch.condition = normalizeWatchCondition(leadVehicle.condition);
-        }
+        // One owner for the blank-filling ladder (pinned by customer_risk_referees:eval): this state
+        // decides WHICH ARRIVING UNIT TEXTS THIS CUSTOMER, and four lanes each hand-wrote it before.
+        applyInventoryWatchDefaults(pref.watch, {
+          leadMake: leadVehicle.make,
+          leadTrim: leadVehicle.trim,
+          conditionFromText: normalizeWatchCondition(textLower) ?? null,
+          semanticCondition: undefined,
+          conditionFromLead: normalizeWatchCondition(leadVehicle.condition) ?? null
+        });
         applyInventoryWatchConfirmation(conv, pref.watch, { scope: "live" });
         watchHandledEarly = true;
         if (!earlyWatchAsSideEffectOnly) {
@@ -65905,7 +65803,7 @@ if (authToken && signature) {
     const statusUpdate = buildScheduleContextStatusUpdateReply(
       String(event.body ?? ""),
       lastOutboundText,
-      { parserVisitCommitment: inboundParserScheduleStatusUpdate || dayOnlySoftVisitCommitment }
+      { parserVisitCommitment: inboundParserScheduleStatusUpdate || dayOnlySoftVisitCommitment, parserDay: appointmentTimingParse?.requested?.day ?? customerAckActionParse?.requested?.day }
     );
     // Booked-same-day reflection (Joe ruling 2026-07-19): "see you Monday" over an existing
     // Monday booking gets "you're all set for {booked time}", never a fresh time ask.
@@ -67310,13 +67208,15 @@ if (authToken && signature) {
       }
       if (pref.action === "set" && pref.watch) {
         const leadVehicle = conv.lead?.vehicle ?? {};
-        if (!pref.watch.make && leadVehicle.make) pref.watch.make = leadVehicle.make;
-        if (!pref.watch.trim && leadVehicle.trim) pref.watch.trim = leadVehicle.trim;
-        const conditionFromText = normalizeWatchCondition(textLower);
-        if (!pref.watch.condition && conditionFromText) pref.watch.condition = conditionFromText;
-        if (!pref.watch.condition && leadVehicle.condition) {
-          pref.watch.condition = normalizeWatchCondition(leadVehicle.condition);
-        }
+        // One owner for the blank-filling ladder (pinned by customer_risk_referees:eval): this state
+        // decides WHICH ARRIVING UNIT TEXTS THIS CUSTOMER, and four lanes each hand-wrote it before.
+        applyInventoryWatchDefaults(pref.watch, {
+          leadMake: leadVehicle.make,
+          leadTrim: leadVehicle.trim,
+          conditionFromText: normalizeWatchCondition(textLower) ?? null,
+          semanticCondition: undefined,
+          conditionFromLead: normalizeWatchCondition(leadVehicle.condition) ?? null
+        });
         applyInventoryWatchConfirmation(conv, pref.watch, { scope: "live" });
         const reply = buildInventoryWatchConfirmation(pref.watch);
         if (!watchAsSideEffectOnly) {
@@ -68088,21 +67988,16 @@ if (authToken && signature) {
         pref = { action: "set", watch };
       }
       if (pref.action === "set" && pref.watch) {
-        if (!pref.watch.make && leadVehicle.make) pref.watch.make = leadVehicle.make;
-        if (!pref.watch.trim && leadVehicle.trim) pref.watch.trim = leadVehicle.trim;
-        const conditionFromText = normalizeWatchCondition(textLower);
-        if (!pref.watch.condition && conditionFromText) pref.watch.condition = conditionFromText;
-        if (
-          !pref.watch.condition &&
-          semanticWatch?.condition &&
-          semanticWatch.condition !== "unknown" &&
-          semanticWatch.condition !== "any"
-        ) {
-          pref.watch.condition = semanticWatch.condition;
-        }
-        if (!pref.watch.condition && leadVehicle.condition) {
-          pref.watch.condition = normalizeWatchCondition(leadVehicle.condition);
-        }
+        // One owner for the blank-filling ladder (pinned by customer_risk_referees:eval): this state
+        // decides WHICH ARRIVING UNIT TEXTS THIS CUSTOMER, and four lanes each hand-wrote it before.
+        // This lane ALONE passes the parser rung — the preserved divergence (see the referee).
+        applyInventoryWatchDefaults(pref.watch, {
+          leadMake: leadVehicle.make,
+          leadTrim: leadVehicle.trim,
+          conditionFromText: normalizeWatchCondition(textLower) ?? null,
+          semanticCondition: semanticWatch?.condition,
+          conditionFromLead: normalizeWatchCondition(leadVehicle.condition) ?? null
+        });
         applyInventoryWatchConfirmation(conv, pref.watch, { scope: "live" });
         const reply = buildInventoryWatchConfirmation(pref.watch);
         if (!watchAsSideEffectOnly) {

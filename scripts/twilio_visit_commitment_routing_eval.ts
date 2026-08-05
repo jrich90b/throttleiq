@@ -21,6 +21,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 
 import { checkMessage } from "./voice_charter_audit.ts";
+import { buildScheduleContextStatusUpdateReply } from "../services/api/src/domain/scheduleStatusReply.ts";
 import { scheduleStatusCommitmentOutranksArrivalAck } from "../services/api/src/domain/workflowRegressionGuards.ts";
 
 const TODD_INBOUND = "Ok I will be there for the taste of country pre party on Saturday 👍";
@@ -107,22 +108,28 @@ assert.match(
   /parserVisitCommitment: regenParserScheduleStatusUpdate \|\| isParserSoftVisitCommitment\(regenAppointmentTimingParse\)/,
   "regen schedule-status reply must pass the parser commitment (incl. day-only) so it confirms the day"
 );
+// Both paths must also hand over the day the parser read, so the confirmation can never
+// assert a day lifted out of the customer's raw prose (Scott Hartrich +17167130279,
+// 2026-08-01 — a thank-you's "today" became a visit day; see schedule_day_capture:eval).
 assert.match(
   apiSource,
-  /Perfect, you're set for \$\{inboundDay\}!/,
-  "a recognized visit commitment gets a day confirmation, never a re-ask or arrival ack"
+  /parserDay: appointmentTimingParse\?\.requested\?\.day/,
+  "live path must pass the parsed day as the day authority"
+);
+assert.match(
+  apiSource,
+  /parserDay: regenAppointmentTimingParse\?\.requested\?\.day/,
+  "regen path must pass the parsed day as the day authority"
 );
 
-// Behavioral copy of buildScheduleContextStatusUpdateReply's parser-commitment
-// branch (pure logic mirrored from index.ts; the literal is pinned above). For
-// Todd's turn the parser commitment + the named day "Saturday" confirms the day;
-// the event regex never fires on "taste of country pre party" and we never want it
-// to — recognition is the parser's, not a keyword's.
+// The real builder, not a copy of it. For Todd's turn the parser commitment + the parsed
+// day "Saturday" confirms the day; the event regex never fires on "taste of country pre
+// party" and we never want it to — recognition is the parser's, not a keyword's.
 const ARRIVAL_ACK = "Sounds good — I’ll check that time and follow up.";
-function confirmationReplyFor(day: string): string {
-  return `Perfect, you're set for ${day}! Come find us when you get here and we'll get you taken care of. If you want a set time that day, just text me one.`;
-}
-const toddReply = confirmationReplyFor("Saturday");
+const toddReply = buildScheduleContextStatusUpdateReply(TODD_INBOUND, "", {
+  parserVisitCommitment: true,
+  parserDay: "saturday"
+}).reply;
 assert.notEqual(toddReply, ARRIVAL_ACK, "Todd must not receive the vague arrival ack");
 assert.match(toddReply, /you're set for Saturday/, "Todd's committed day (Saturday) is confirmed");
 assert.deepEqual(
