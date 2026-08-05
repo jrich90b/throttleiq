@@ -257,7 +257,14 @@ eq(decideOpenCriticAnomaly({ hasIssue: true, severity: "major", confidence: 0.5 
   eq(a.route, { bucket: "inventory_interest", cta: "check_availability" }, "route captured");
   eq(a.handoffMode, "manual_handoff", "handoff mode captured");
   eq(a.cadence, { kind: "standard", status: "active" }, "cadence captured");
-  eq(a.activeWatches, [{ model: "Road Glide", year: 2025, condition: null }], "only ACTIVE watches (paused excluded), with model");
+  // `exactness` + `yearPinned` ride along so the critic can tell a deliberately year-agnostic
+  // `model_only` watch from a year-pinned one — the ambiguity that produced the +17165104578 phantom
+  // (see open_critic_watch_alert_scope:eval).
+  eq(
+    a.activeWatches,
+    [{ model: "Road Glide", year: 2025, condition: null, exactness: null, yearPinned: true }],
+    "only ACTIVE watches (paused excluded), with model + year-pin provenance"
+  );
   eq(a.appointment, { status: "confirmed", booked: true, whenText: "Sat 1pm" }, "appointment captured (booked=true)");
   eq(a.openTasks, [{ reason: "pricing", summary: "Confirm OTD price" }], "open tasks captured");
 }

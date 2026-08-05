@@ -30,20 +30,27 @@ const openTodos: any[] = (Array.isArray(raw?.todos) ? raw.todos : []).filter((t:
 // Inventory enrichment: the dealer's current in-stock model list (from the on-disk snapshot beside the
 // store) so the critic can catch fabricated availability ("promised a bike we don't have"). Empty/missing
 // → the critic skips the inventory check (never assumes out-of-stock). Deduped, by model.
-const inStockModels: string[] = (() => {
+// STOCK IDS are collected alongside the labels: a watch fire records the exact `lastNotifiedStockId` it
+// alerted on, so the id (not a fuzzy year+model string) is what proves the promised unit is really in the
+// feed. Empty/missing snapshot => empty set => nothing is ever vouched for, and every finding flags.
+const inventorySnapshot: { models: string[]; stockIds: Set<string> } = (() => {
   try {
     const snap = JSON.parse(fs.readFileSync(path.join(path.dirname(dbPath), "inventory_snapshot.json"), "utf8"));
     const items: any[] = Array.isArray(snap?.items) ? snap.items : Array.isArray(snap) ? snap : [];
     const set = new Set<string>();
+    const stockIds = new Set<string>();
     for (const it of items) {
       const label = [it?.year, it?.model ?? it?.description].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
       if (label) set.add(label);
+      const sid = String(it?.stockId ?? it?.stock_id ?? it?.stockNumber ?? "").trim().toUpperCase();
+      if (sid) stockIds.add(sid);
     }
-    return [...set];
+    return { models: [...set], stockIds };
   } catch {
-    return [];
+    return { models: [], stockIds: new Set<string>() };
   }
 })();
+const inStockModels: string[] = inventorySnapshot.models;
 
 const MAX = Number(process.env.OPEN_CRITIC_MAX ?? 40);
 const WINDOW_DAYS = Number(process.env.OPEN_CRITIC_WINDOW_DAYS ?? 2);
@@ -62,9 +69,12 @@ const lastAt = (c: any) => {
   return Number.isFinite(t) ? t : 0;
 };
 
-const { decideOpenCriticAnomaly, summarizeTurnActions, selectOpenCriticAgentReply } = await import(
-  "../services/api/src/domain/conversationOutcomeAudit.ts"
-);
+const {
+  decideOpenCriticAnomaly,
+  summarizeTurnActions,
+  selectOpenCriticAgentReply,
+  resolveOpenCriticWatchAlertContext
+} = await import("../services/api/src/domain/conversationOutcomeAudit.ts");
 
 // Prefilter (deterministic, no LLM): recent, open, with a customer message AND a real AGENT-authored
 // reply to judge. A conversation whose latest real outbound was typed/edited by a human (manual
@@ -120,7 +130,11 @@ for (const c of candidates) {
   }
   if (!finding) continue;
   judged += 1;
-  const anomaly = decideOpenCriticAnomaly(finding, { convId: String(c?.id ?? ""), leadKey: String(c?.leadKey ?? "") });
+  const anomaly = decideOpenCriticAnomaly(
+    finding,
+    { convId: String(c?.id ?? ""), leadKey: String(c?.leadKey ?? "") },
+    resolveOpenCriticWatchAlertContext(c, lastReply, inventorySnapshot.stockIds, REAL_OUT)
+  );
   if (anomaly) {
     anomalies.push(anomaly);
     flagged += 1;
