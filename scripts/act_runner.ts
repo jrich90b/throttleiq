@@ -43,6 +43,48 @@ import {
 } from "../services/api/src/domain/dispositionLedger.ts";
 import { isReportGradeStale, refreshSupersededGrades } from "../services/api/src/domain/anomalyClassifier.ts";
 import { readLoopPrLedger } from "./loopPrLedger.ts";
+import os from "node:os";
+import {
+  DEFAULT_MERGE_FREEZE_MAX_AGE_MINUTES,
+  describeMergeFreeze,
+  readMergeFreezeStatus,
+  type MergeFreezeStatus
+} from "../services/api/src/domain/mergeFreeze.ts";
+
+/** `--ship` was told to merge, but a release gate holds the freeze. The PR stays OPEN. */
+export const ACT_EXIT_MERGE_FROZEN = 6;
+
+/**
+ * THE MERGE FREEZE, ENFORCED WHERE MERGES ACTUALLY HAPPEN.
+ *
+ * On 2026-08-04 a release gate held the freeze, spent 45 minutes proving `2395262b`, and failed at
+ * the deploy step because PR #537 had landed underneath it — merged two seconds after it was
+ * opened, by the loop-runner, through THIS function. The freeze rule existed; it lived only as
+ * prose in ROUTINE_CONTRACT.md, and NOT ONE routine's SKILL.md so much as mentioned `merge_freeze`.
+ * A rule that every run has to remember is a rule that eventually nobody runs.
+ *
+ * So the check moves to the one line that does the merging. Every routine that ships through
+ * `act_runner review --ship` now respects the freeze for free, whatever its own instructions say.
+ *
+ * FAIL-DIRECTION, and it is the same asymmetry the freeze module itself is built on: this can only
+ * ever STOP a merge by positively reading "frozen". A missing record, a corrupt one, an expired
+ * one, or ANY error at all reads as NOT frozen and the merge proceeds. A stuck freeze that silently
+ * halted every routine's ability to land work would be far worse than one deploy shipping on a
+ * slightly-moved main.
+ */
+function currentMergeFreeze(): MergeFreezeStatus {
+  return readMergeFreezeStatus({
+    dir: process.env.MERGE_FREEZE_DIR || path.join(os.tmpdir(), "throttleiq-merge-freeze"),
+    nowMs: Date.now(),
+    maxAgeMinutes: Number(
+      process.env.MERGE_FREEZE_MAX_AGE_MIN ?? DEFAULT_MERGE_FREEZE_MAX_AGE_MINUTES
+    )
+  });
+}
+
+function isMergeFrozen(): boolean {
+  return currentMergeFreeze().frozen === true;
+}
 
 const argv = process.argv.slice(2);
 const sub = argv[0];
@@ -626,6 +668,18 @@ if (sub === "review") {
       console.log(`Notification email failed (non-fatal): ${err?.message ?? String(err)}`);
     }
   };
+
+  if (gate.ship && isMergeFrozen()) {
+    // A release gate is mid-proof. The PR is built, reviewed and green — it just does not land
+    // now. Leaving it OPEN is the whole point: the next tick merges it against a settled main.
+    console.log(
+      `\nHELD BY MERGE FREEZE — not merged.\n` +
+        `  ${describeMergeFreeze(currentMergeFreeze())}\n` +
+        `  The PR is open and reviewed: ${url}\n` +
+        `  Nothing is lost; a later run merges it once the gate releases.`
+    );
+    process.exit(ACT_EXIT_MERGE_FROZEN);
+  }
 
   if (gate.ship) {
     execFileSync("gh", ["pr", "merge", "--squash", "--delete-branch", url], { stdio: "inherit" });
