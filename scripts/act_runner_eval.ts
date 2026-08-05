@@ -277,4 +277,130 @@ assert.match(src, /process\.exit\(3\)/, "a duplicate-skip uses a distinct exit c
   assert.ok(/Building anyway/.test(src), "...and still builds (never drop a fix we can't prove is covered)");
 }
 
+// ---------------------------------------------------------------------------
+// THE MERGE FREEZE IS ENFORCED WHERE MERGES HAPPEN (2026-08-04).
+//
+// A release gate held the freeze, spent 45 minutes proving `2395262b`, and failed at the deploy
+// step because PR #537 landed underneath it — opened and merged two seconds apart, by the
+// loop-runner, through THIS runner's `--ship` path. The rule existed only as prose in
+// ROUTINE_CONTRACT.md and not one routine's SKILL.md even mentioned `merge_freeze`.
+//
+// These assertions are about the DECISION and the CONTRACT, not the prose: the runner must consult
+// the freeze before merging, must fail OPEN on anything that is not an explicit freeze, and must
+// leave the PR open rather than dropping the work.
+// ---------------------------------------------------------------------------
+{
+  const { evaluateMergeFreeze, readMergeFreezeStatus } = await import(
+    "../services/api/src/domain/mergeFreeze.ts"
+  );
+  const now = Date.parse("2026-08-04T23:01:00.000Z");
+  const fresh = (over: Record<string, unknown> = {}) => ({
+    owner: "release-gate",
+    at: "2026-08-04T22:55:00.000Z",
+    reason: "full release gate + golden corpus",
+    ...over
+  });
+
+  // THE INCIDENT: a live gate freeze must stop the merge.
+  assert.equal(
+    evaluateMergeFreeze(fresh(), { nowMs: now }).frozen,
+    true,
+    "a freeze taken 6 minutes ago is live — this is the #537 moment, and the merge must not happen"
+  );
+
+  // FAIL OPEN on everything that is not an explicit, live freeze. Each of these must MERGE.
+  for (const [label, raw] of [
+    ["no freeze record at all", null],
+    ["undefined record", undefined],
+    ["a non-object record", "frozen!"],
+    ["a record with no owner", fresh({ owner: "" })],
+    ["a record with an unreadable timestamp", fresh({ at: "not-a-date" })],
+    ["an EXPIRED freeze (91 minutes old)", fresh({ at: "2026-08-04T21:30:00.000Z" })]
+  ] as const) {
+    assert.equal(
+      evaluateMergeFreeze(raw as unknown, { nowMs: now }).frozen,
+      false,
+      `fail-open: ${label} must NOT block a merge — a stuck freeze halting every routine is the worse failure`
+    );
+  }
+
+
+  // THE READ ITSELF, not just the judgement. An earlier cut of this eval tested only
+  // `evaluateMergeFreeze` while the fail-open promise lived in a wrapper around it — a sabotage
+  // that made a MISSING record read as FROZEN sailed straight through. Drive the real reader.
+  {
+    const live = readMergeFreezeStatus({
+      dir: "/anything",
+      nowMs: now,
+      exists: () => true,
+      readFile: () => JSON.stringify(fresh())
+    });
+    assert.equal(live.frozen, true, "the reader reports a live freeze from disk");
+
+    for (const [label, opts] of [
+      ["the freeze directory/file does not exist", { exists: () => false, readFile: () => "" }],
+      ["the record is corrupt JSON", { exists: () => true, readFile: () => "{not json" }],
+      ["the record is empty", { exists: () => true, readFile: () => "" }],
+      [
+        "reading it throws (permissions, races)",
+        {
+          exists: () => true,
+          readFile: () => {
+            throw new Error("EACCES");
+          }
+        }
+      ],
+      [
+        "the existence check itself throws",
+        {
+          exists: () => {
+            throw new Error("EACCES");
+          },
+          readFile: () => ""
+        }
+      ],
+      [
+        "the freeze has expired",
+        { exists: () => true, readFile: () => JSON.stringify(fresh({ at: "2026-08-04T21:30:00.000Z" })) }
+      ]
+    ] as const) {
+      assert.equal(
+        readMergeFreezeStatus({ dir: "/anything", nowMs: now, ...(opts as any) }).frozen,
+        false,
+        `reader fails OPEN: ${label} must not block a merge`
+      );
+    }
+  }
+
+  // The runner must actually consult it at the merge, and hold the PR open rather than drop it.
+  const src = fs.readFileSync(new URL("./act_runner.ts", import.meta.url), "utf8");
+  assert.ok(
+    /if \(gate\.ship && isMergeFrozen\(\)\)/.test(src),
+    "the freeze is checked on the ship path, BEFORE the merge"
+  );
+  const shipIdx = src.indexOf("gate.ship && isMergeFrozen()");
+  const mergeIdx = src.indexOf('execFileSync("gh", ["pr", "merge"');
+  assert.ok(
+    shipIdx > 0 && mergeIdx > shipIdx,
+    "the check must come BEFORE the merge call, not after it"
+  );
+  assert.ok(
+    /HELD BY MERGE FREEZE/.test(src) && /process\.exit\(ACT_EXIT_MERGE_FROZEN\)/.test(src),
+    "a frozen ship reports itself and exits on its own code, so a caller can tell it apart from a failure"
+  );
+  // Read from source, never imported: act_runner.ts runs its CLI on import (no entry guard).
+  const exitCode = /export const ACT_EXIT_MERGE_FROZEN = (\d+);/.exec(src)?.[1];
+  assert.equal(exitCode, "6", "the held-by-freeze exit code is stable for callers");
+  assert.ok(
+    !/pr", "merge"[\s\S]{0,400}isMergeFrozen/.test(src),
+    "there is no second, unchecked merge path"
+  );
+  // Only ONE place merges — if a second one appears it must be checked too.
+  assert.equal(
+    (src.match(/"pr", "merge"/g) ?? []).length,
+    1,
+    "exactly one merge call site; a new one needs its own freeze check"
+  );
+}
+
 console.log("PASS act runner eval — PR-only (never merges), refuses main, gate-enforced; prep brief carries the parser-first contract; cross-routine PR dedup (marker + skip, and an unverifiable ledger reports UNKNOWN instead of a false NONE); NS citation resolves the bounded North-star section and buys no gate relief; list/prep run.");

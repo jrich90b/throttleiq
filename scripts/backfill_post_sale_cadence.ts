@@ -4,6 +4,11 @@ import {
   computePostSaleDueAt,
   POST_SALE_DAY_OFFSETS
 } from "../services/api/src/domain/conversationStore.ts";
+import {
+  decidePostSaleCadenceBackfill,
+  POST_SALE_BACKFILL_MAX_AGE_DAYS
+} from "../services/api/src/domain/postSaleCadence.ts";
+import { isCadenceCloseSoldReason } from "../services/api/src/domain/routeStateReducer.ts";
 
 type AnyObj = Record<string, any>;
 
@@ -68,6 +73,22 @@ function run() {
   const write = isWriteMode();
   const targetLeadRef = String(process.env.TARGET_LEAD_REF || getArg("lead-ref")).trim();
   const targetPhone = normalizePhone(process.env.TARGET_PHONE || getArg("phone"));
+  const maxAgeDays = Number(process.env.MAX_AGE_DAYS || getArg("max-age-days")) ||
+    POST_SALE_BACKFILL_MAX_AGE_DAYS;
+
+  // THE TARGETING FLAG USED TO FAIL OPEN. `getArg` reads `--name=value` only, so the natural
+  // `--phone 7168614216` (space) yielded "" — and an empty target meant "no filter, match
+  // EVERYTHING". Caught 2026-08-05 one step short of a `--write` that would have texted 14
+  // customers whose sales were up to four months old. A destructive default must be asked for out
+  // loud: writing with no target now requires `--all`, and a mistyped flag is a loud stop, not a
+  // silent bulk run.
+  if (write && !targetLeadRef && !targetPhone && !process.argv.includes("--all")) {
+    console.error(
+      "refusing to --write with no target. Use --phone=<digits> or --lead-ref=<ref> " +
+        "(EQUALS SIGN — `--phone 555` is parsed as no target), or pass --all deliberately."
+    );
+    process.exit(2);
+  }
 
   if (!fs.existsSync(filePath)) {
     console.error(`conversations.json not found: ${filePath}`);
@@ -77,11 +98,37 @@ function run() {
   const { root, conversations } = readStore(filePath);
   const nowIso = new Date().toISOString();
   const fixed: AnyObj[] = [];
+  const skipped: AnyObj[] = [];
 
   for (const conv of conversations) {
     if (!isSoldLead(conv)) continue;
     if (hasActivePostSaleCadence(conv)) continue;
     if (!targetMatches(conv, targetLeadRef, targetPhone)) continue;
+
+    // Ask the referee that owns the rule, not a second copy of it. A lead stopped for a reason
+    // that was CORRECT (customer_stepping_back, purchase_delivery, inventory_watch …) is not a
+    // victim of the sold-close bug, and re-arming it would be a fresh defect aimed at the customer
+    // least willing to hear from us.
+    const decision = decidePostSaleCadenceBackfill({
+      stopReason: conv?.followUpCadence?.stopReason,
+      followUpMode: conv?.followUp?.mode,
+      soldAtIso: conv?.sale?.soldAt,
+      asOfIso: nowIso,
+      maxAgeDays,
+      isSoldCloseReason: isCadenceCloseSoldReason
+    });
+    if (!decision.heal) {
+      // Say what was passed over. A run that matched nothing must never read like a run with
+      // nothing to do.
+      skipped.push({
+        leadKey: conv?.leadKey,
+        skipReason: decision.skipReason,
+        stopReason: conv?.followUpCadence?.stopReason ?? null,
+        followUpMode: conv?.followUp?.mode ?? null,
+        soldAt: conv?.sale?.soldAt ?? null
+      });
+      continue;
+    }
 
     const anchorAt = String(conv?.sale?.soldAt || conv?.closedAt || conv?.updatedAt || nowIso);
     const nextDueAt = computePostSaleDueAt(anchorAt, POST_SALE_DAY_OFFSETS[0], timezone);
@@ -133,9 +180,12 @@ function run() {
         timezone,
         targetLeadRef: targetLeadRef || null,
         targetPhone: targetPhone || null,
+        maxAgeDays,
         scanned: conversations.length,
         fixedCount: fixed.length,
-        fixed
+        skippedCount: skipped.length,
+        fixed,
+        skipped
       },
       null,
       2

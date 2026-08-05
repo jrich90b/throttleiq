@@ -9,7 +9,9 @@ import {
 } from "../services/api/src/domain/scoringExclusions.ts";
 import {
   classifyStuckTurn,
+  judgedNoResponseOnInbound,
   STUCK_MAX_AGE_SEC_DEFAULT,
+  type RouteOutcomeRowLike,
   type StuckSuppressionReason
 } from "../services/api/src/domain/routeWatchdogClassification.ts";
 
@@ -161,7 +163,8 @@ function collectStuckTurns(
   olderThanSec: number,
   maxAgeSec: number,
   nowMs: number,
-  openCallTaskConvIds: Set<string>
+  openCallTaskConvIds: Set<string>,
+  silenceOutcomeRows: RouteOutcomeRowLike[]
 ) {
   return conversations
     .map(conv => {
@@ -195,7 +198,12 @@ function collectStuckTurns(
         ageSec,
         maxAgeSec,
         hasOpenCallTask: openCallTaskConvIds.has(String(conv?.id ?? "")),
-        lastInboundIsReactionOnly: isBareReactionOnlyInbound(lastInbound?.body)
+        lastInboundIsReactionOnly: isBareReactionOnlyInbound(lastInbound?.body),
+        lastInboundJudgedNoResponse: judgedNoResponseOnInbound(silenceOutcomeRows, {
+          convId: String(conv?.id ?? ""),
+          leadKey: String(conv?.leadKey ?? ""),
+          inboundAtMs
+        })
       });
 
       return {
@@ -232,12 +240,22 @@ function main() {
   const raw = JSON.parse(fs.readFileSync(parsed.conversationsPath, "utf8"));
   const conversations = toConversations(raw);
 
+  // The outcome log is read over the STUCK ceiling, not the report window. A stall
+  // may be up to `stuckMaxAgeSec` (7d) old, so the verdict that settled it can sit
+  // days behind `sinceMs` — reading only the report window would find no verdict for
+  // exactly the old rows that need one, and the phantom would survive the fix.
+  const outcomeWindowStartMs = Math.min(sinceMs, nowMs - parsed.stuckMaxAgeSec * 1000);
+  const allOutcomeRows = dateStampsSince(outcomeWindowStartMs, nowMs)
+    .map(stamp => path.join(parsed.routeAuditDir, `route_outcomes_${stamp}.jsonl`))
+    .flatMap(readJsonl);
+
   const matchedStuck = collectStuckTurns(
     conversations,
     parsed.stuckOlderSec,
     parsed.stuckMaxAgeSec,
     nowMs,
-    collectOpenCallTaskConvIds(raw)
+    collectOpenCallTaskConvIds(raw),
+    allOutcomeRows
   );
   // Surface only genuinely-actionable stalls (recent, unsuppressed) as the
   // headline count; keep the benign-suppressed rows for transparency. A closed
@@ -257,10 +275,14 @@ function main() {
   })();
   const stuckRows = actionableStuck.slice(0, parsed.limit);
 
+  // Same rows the classifier used, narrowed back to the report window — the
+  // outcome counts below are a "what happened in the last N minutes" measure and
+  // must not widen just because the stuck lookup did. `outcomeFiles` stays scoped
+  // to the report window too: it is reported as `fileCount` beside those counts.
   const outcomeFiles = dateStampsSince(sinceMs, nowMs).map(stamp =>
     path.join(parsed.routeAuditDir, `route_outcomes_${stamp}.jsonl`)
   );
-  const outcomeRows = outcomeFiles.flatMap(readJsonl).filter(r => {
+  const outcomeRows = allOutcomeRows.filter(r => {
     const tsMs = toMs(String(r?.ts ?? ""));
     return Number.isFinite(tsMs) && tsMs >= sinceMs;
   });
