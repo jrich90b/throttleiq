@@ -8,22 +8,24 @@ import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
+import {
+  SCHEDULE_EVENT_COMMIT_RE,
+  SCHEDULE_MONTH_LABELS,
+  buildScheduleContextStatusUpdateReply,
+  extractScheduleDayLabelFromContext
+} from "../services/api/src/domain/scheduleStatusReply.ts";
 import { checkMessage } from "./voice_charter_audit.ts";
 
 const apiSource = await fs.readFile(path.resolve("services/api/src/index.ts"), "utf8");
 
-// Source pins: calendar-date extraction, inbound priority, event/day commit
-// branches, and soft-appointment todos at BOTH call sites.
-assert.match(apiSource, /SCHEDULE_MONTH_LABELS/, "month-name date extraction must exist");
+// The builder + day extractor now live in a pure domain module, so these are BEHAVIOUR
+// assertions against production code rather than source pins over a hand-copy (the copy
+// had drifted: its weekday list carried 6 of the 20 words production matches).
+assert.equal(SCHEDULE_MONTH_LABELS.jun, "June", "month-name date extraction must exist");
+assert.ok(SCHEDULE_EVENT_COMMIT_RE.test("I signed up for the open house"), "event commitment detection must exist");
 assert.match(
-  apiSource,
-  /Earlier texts win: a date in the customer's latest turn/,
-  "inbound text must take priority over older outbound context"
-);
-assert.match(apiSource, /SCHEDULE_EVENT_COMMIT_RE/, "event commitment detection must exist");
-assert.match(
-  apiSource,
-  /Perfect, you're set for \$\{inboundDay\}!/,
+  buildScheduleContextStatusUpdateReply("I signed up for the June 20th event", "").reply,
+  /Perfect, you're set for June 20th!/,
   "event-day commitments get a confirmation, never a re-ask"
 );
 // The soft-appointment todo is consolidated into ONE shared helper (addSoftVisitStaffTask,
@@ -52,30 +54,8 @@ assert.equal(
 const NICHOLAS_TEXT = "I signed up on the Harley website for the June 20th thing";
 assert.match(NICHOLAS_TEXT, /\b(event|demo days?|open house|bike night|signed up)\b/i, "event commit cue");
 
-// Behavioral copies (pure logic mirrored from index.ts; pinned above).
-const MONTHS: Record<string, string> = {
-  jan: "January", feb: "February", mar: "March", apr: "April", may: "May", jun: "June",
-  jul: "July", aug: "August", sep: "September", sept: "September", oct: "October",
-  nov: "November", dec: "December"
-};
-function extractDay(...texts: string[]): string {
-  for (const text of texts) {
-    const t = String(text ?? "").toLowerCase();
-    if (!t.trim()) continue;
-    const monthDate = t.match(
-      /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+(\d{1,2})(st|nd|rd|th)?\b/
-    );
-    if (monthDate) {
-      const monthKey = monthDate[1].slice(0, 4) === "sept" ? "sept" : monthDate[1].slice(0, 3);
-      return `${MONTHS[monthKey] ?? monthDate[1]} ${monthDate[2]}${monthDate[3] ?? ""}`;
-    }
-    const slashDate = t.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(?:\d{2}|\d{4}))?\b/);
-    if (slashDate) return `${slashDate[1]}/${slashDate[2]}`;
-    const weekday = t.match(/\b(today|tomorrow|monday|friday|saturday|sunday)\b/);
-    if (weekday) return weekday[1][0].toUpperCase() + weekday[1].slice(1);
-  }
-  return "";
-}
+// The production extractor itself — no copy to drift.
+const extractDay = extractScheduleDayLabelFromContext;
 
 assert.equal(
   extractDay("I signed up online for the June 20th event so it'll be that day"),
@@ -90,6 +70,57 @@ assert.equal(
   "inbound date beats outbound weekday"
 );
 assert.equal(extractDay("just checking in"), "");
+
+// THE DAY IS A PARSED SLOT — Scott Hartrich +17167130279, Ref 11718, 2026-08-01.
+// "Thank you for you help today Stone. ... I will be in next week to sit down with you and
+// go over numbers" was answered "Perfect, you're set for today!": the word "today" was
+// lifted out of the GRATITUDE clause while the appointment-timing parser had already read
+// requested.day = "next week". The reply asserted a day he never named and never offered a
+// time for the one he did. The parsed day is now the only day the assert branches may use.
+const SCOTT_INBOUND =
+  "Thank you for you help today Stone. I am really loving that street glide solo. I will be in next week to sit down with you and go over numbers";
+const SCOTT_LAST_OUTBOUND =
+  "Hi Scott — this is Stone at American Harley-Davidson. Thanks again for sitting down with me. I'll follow up with the numbers we discussed and next steps. Just so I've got it right, you're looking for a new Street Glide.";
+assert.equal(
+  extractDay(SCOTT_INBOUND),
+  "today",
+  "the raw-prose read is what went wrong: a thank-you supplies a visit day"
+);
+const scott = buildScheduleContextStatusUpdateReply(SCOTT_INBOUND, SCOTT_LAST_OUTBOUND, {
+  parserVisitCommitment: true,
+  parserDay: "next week"
+});
+assert.doesNotMatch(scott.reply, /you're set for/, "a vague parsed timeframe must never be asserted as a visit day");
+assert.doesNotMatch(scott.reply, /today/, "the gratitude clause's 'today' must not reach the customer");
+assert.equal(scott.dayLabel, "", "no day is committed, so the dated staff task and cadence re-anchor stay off");
+assert.equal(scott.dayCommitted, false);
+assert.match(scott.reply, /what day and time works best/, "an unresolvable day falls to the time ask");
+assert.deepEqual(
+  checkMessage(scott.reply, { firstOutbound: false, smsLike: true, staffHasSent: false }),
+  [],
+  "the ask must be charter-clean"
+);
+
+// Non-regression: a parsed day the formatter CAN resolve still confirms (Todd Herian
+// +15673079691, "I will be there ... on Saturday"), and a turn whose parser returned NO
+// day at all is byte-identical to the pre-fix lexical read (Dominik's event commitment).
+const todd = buildScheduleContextStatusUpdateReply(
+  "Ok I will be there for the taste of country pre party on Saturday",
+  "",
+  { parserVisitCommitment: true, parserDay: "saturday" }
+);
+assert.match(todd.reply, /Perfect, you're set for Saturday!/, "a resolvable parsed day still confirms");
+assert.equal(todd.dayCommitted, true);
+const dominik = buildScheduleContextStatusUpdateReply(
+  "I signed up online for the June 20th event so it'll be that day",
+  "",
+  { parserVisitCommitment: true, parserDay: "" }
+);
+assert.match(
+  dominik.reply,
+  /Perfect, you're set for June 20th!/,
+  "no parsed day at all leaves the lexical read untouched (fail-safe)"
+);
 
 // The event confirmation reply must be charter-clean.
 const eventReply =
