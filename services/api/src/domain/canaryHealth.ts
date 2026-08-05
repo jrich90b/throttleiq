@@ -250,6 +250,90 @@ export function typicalPeakOutboundPerHour(conversations: any[]): number {
 /** How far above the median a "typical busy hour" may sit before we treat it as an outlier. */
 const MEDIAN_PEAK_CAP_MULTIPLE = 8;
 
+const HOUR_MS = 3_600_000;
+
+/**
+ * How many fractional hours of each hour-of-day a window covers. 24 buckets, UTC.
+ *
+ * UTC on purpose: the baseline profile and the slice are bucketed the SAME way, so the shape lines
+ * up without anyone configuring a timezone. Nothing here ever names an hour ("the store shuts at
+ * 7") — the quiet hours are whatever this dealer's own history says they are, which is what makes
+ * the projection portable to dealer #2 unchanged.
+ */
+function hourOfDayCoverage(window: CanaryWindow): number[] {
+  const cover = new Array(24).fill(0);
+  const start = Number(window.startMs);
+  const end = Number(window.endMs);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return cover;
+  const firstBlock = Math.floor(start / HOUR_MS);
+  const lastBlock = Math.ceil(end / HOUR_MS);
+  for (let block = firstBlock; block < lastBlock; block++) {
+    const overlap = Math.min(end, (block + 1) * HOUR_MS) - Math.max(start, block * HOUR_MS);
+    if (overlap <= 0) continue;
+    cover[((block % 24) + 24) % 24] += overlap / HOUR_MS;
+  }
+  return cover;
+}
+
+/** Customer-facing events per hour-of-day across a window: inbound + sends + drafts, UTC buckets. */
+function hourOfDayEvents(conversations: any[], window: CanaryWindow): number[] {
+  const events = new Array(24).fill(0);
+  for (const conv of conversations ?? []) {
+    for (const m of Array.isArray(conv?.messages) ? conv.messages : []) {
+      const t = ms(m?.at);
+      if (!inWindow(t, window)) continue;
+      const provider = String(m?.provider ?? "").toLowerCase();
+      if (LOG_ONLY_PROVIDERS.has(provider)) continue;
+      const counted =
+        m?.direction === "in" || (m?.direction === "out" && (provider === DRAFT_PROVIDER || SEND_PROVIDERS.has(provider)));
+      if (!counted) continue;
+      events[((Math.floor(t / HOUR_MS) % 24) + 24) % 24] += 1;
+    }
+  }
+  return events;
+}
+
+/**
+ * What FRACTION of the baseline's activity this slice's clock hours should have carried — the
+ * dealership's own daily rhythm instead of a flat "8h is one sixth of 48h".
+ *
+ * THE BUG THIS EXISTS TO KILL. A canary slice landing 7:33pm-3:33am scored `fail — replies
+ * collapsed 20.16 -> 1, the agent went quiet`. The store was SHUT. Flat scaling expected ~20 replies
+ * from a closed dealership, and since roughly one slice in three lands overnight against a
+ * failureLimit of 2, a perfectly healthy deploy trended toward REGRESSED — `judge --act` would have
+ * reverted a good commit, which is exactly the false red this file's header warns teaches everyone
+ * to ignore the alarm.
+ *
+ * Returns null when the profile cannot be trusted — a baseline shorter than a full day has never
+ * seen some hours at all, and guessing at them is how you get the opposite bug. The caller then
+ * falls back to flat scaling, which is the behaviour that shipped before this.
+ */
+export function hourOfDayExpectedShare(input: {
+  conversations: any[];
+  baselineWindow: CanaryWindow;
+  sliceWindow: CanaryWindow;
+}): number | null {
+  const baselineCover = hourOfDayCoverage(input.baselineWindow);
+  // Every hour-of-day must have actually been observed, or there is no rate to project for it.
+  //
+  // Belt and braces, deliberately: an unobserved bucket also divides 0 by 0 below, so the
+  // !Number.isFinite fallback at the end already returns null on its own — a sabotage that deletes
+  // THIS line alone changes nothing today. Keep both. The explicit test states the intent, and it is
+  // the one that survives a future refactor that stops summing over empty buckets.
+  if (baselineCover.some(h => h <= 0)) return null;
+
+  const events = hourOfDayEvents(input.conversations, input.baselineWindow);
+  const total = events.reduce((a, b) => a + b, 0);
+  if (!(total > 0)) return null;
+
+  const sliceCover = hourOfDayCoverage(input.sliceWindow);
+  let expected = 0;
+  for (let h = 0; h < 24; h++) expected += (events[h] / baselineCover[h]) * sliceCover[h];
+
+  const share = expected / total;
+  return Number.isFinite(share) && share >= 0 ? share : null;
+}
+
 /**
  * THE FIX FOR THE BUG THAT BIT THIS FILE. A counter that reads zero across the ENTIRE store is
  * almost certainly not wired to the real data shape — that is how `kind`-based counters shipped
@@ -688,8 +772,12 @@ export type CanaryMeasurement = {
  * `judge --act` would have reverted a healthy deploy on evidence we already knew was wrong.
  *
  * v1 -> v2 (PR #504): `draftsProduced` now counts a send that began life as an approved draft.
+ * v2 -> v3: a slice is projected against the store's own hour-of-day rhythm, not flat across the
+ *   clock (`hourOfDayExpectedShare`). Same counters, different EXPECTATION, so overnight verdicts
+ *   recorded under v2 measured a closed dealership against a working-day baseline and are not
+ *   evidence. The live `66e072eb` canary carried exactly one such phantom `fail`.
  */
-export const CANARY_JUDGE_RULE_VERSION = 2;
+export const CANARY_JUDGE_RULE_VERSION = 3;
 
 export type CanaryProgressConfig = {
   /** How long each measured slice is. */
@@ -754,6 +842,11 @@ export function measureCanarySlice(input: {
   runaway?: { runaway: boolean; perHour: number; limit: number };
   /** Scaled-baseline sends below which a slice cannot conclude. */
   minSliceOutbound?: number;
+  /**
+   * Fraction of the baseline's activity this slice's clock hours should have carried
+   * (`hourOfDayExpectedShare`). Omitted or null = flat scaling, the pre-existing behaviour.
+   */
+  hourOfDayShare?: number | null;
 }): { status: CanaryMeasurementStatus; fatal: boolean; verdict: CanaryVerdict; reason: string } {
   const thresholds = input.thresholds ?? DEFAULT_CANARY_THRESHOLDS;
   const minSlice = input.minSliceOutbound ?? 3;
@@ -769,11 +862,25 @@ export function measureCanarySlice(input: {
     };
   }
 
-  const factor =
+  const flatFactor =
     Number(input.baselineWindowMs) > 0 ? Number(input.sliceWindowMs) / Number(input.baselineWindowMs) : 0;
+
+  // ONE-DIRECTIONAL ON PURPOSE. The daily-rhythm projection may only LOWER what we expect of a
+  // slice, never raise it. Lowering fixes the overnight false red (see hourOfDayExpectedShare);
+  // raising it would make a slow-but-open afternoon fail a collapse floor it passes today — trading
+  // one false red for another. Clamped this way the change can only ever abstain MORE, and per
+  // AGENTS.md fail-direction an abstention costs a delayed verdict while a false fail reverts a good
+  // deploy.
+  const share = input.hourOfDayShare;
+  const factor =
+    typeof share === "number" && Number.isFinite(share) && share >= 0 ? Math.min(flatFactor, share) : flatFactor;
   const scaled = scaleCounters(input.baselineCounters, factor);
 
   if (scaled.outboundToCustomer < minSlice) {
+    // Name the reason the expectation is small, so a quiet-hours abstention is not read as a
+    // broken baseline by whoever is staring at the canary log.
+    const quietHours = factor < flatFactor;
+    const why = quietHours ? "these are quiet hours for this store" : "this slice is too small to support a ratio";
     return {
       status: "inconclusive",
       fatal: false,
@@ -781,9 +888,11 @@ export function measureCanarySlice(input: {
         status: "unknown",
         breaches: [],
         blockers: [`slice expects only ${scaled.outboundToCustomer.toFixed(1)} send(s) (need ${minSlice})`],
-        reason: "this slice is too small to support a ratio"
+        reason: why
       },
-      reason: `slice too small: expected ~${scaled.outboundToCustomer.toFixed(1)} sends (need ${minSlice})`
+      reason:
+        `slice too small: expected ~${scaled.outboundToCustomer.toFixed(1)} sends (need ${minSlice})` +
+        (quietHours ? " — quiet hours for this store" : "")
     };
   }
 
