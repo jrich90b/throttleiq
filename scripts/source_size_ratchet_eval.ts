@@ -236,7 +236,17 @@ const CEILINGS: Ceiling[] = [
     // The ceiling caught the first cut at +33 — the resolve-and-assign was still expanded inline at
     // all four sites — which is exactly its job. Re-derived on the INTEGRATED tree (main 911aed1b +
     // the return-day gate fix + the rung-burn un-stacking), per ROUTINE_CONTRACT rule 3.
-    max: 71_142,
+    // 71_147 -> 71_047. The parsed-day authority for the visit-commitment reply (+17167130279).
+    // index.ts was sitting EXACTLY on the ceiling for the third time running, so the slice funded
+    // itself: the schedule-status reply builder + its day-label extractor moved verbatim to
+    // domain/scheduleStatusReply.ts. Net -100 after the one-line import. The extraction is the point, not
+    // the payment — two evals were pinning that builder's SOURCE and hand-copying its logic (the
+    // copy's weekday list had already drifted to 6 of 20 words), and both now call the real thing.
+    // REBASE NOTE (ROUTINE_CONTRACT rule 3, the #418 trap): this branch proposed 71_047, derived
+    // against an older main. Main has since ratcheted to 71_142 and the INTEGRATED tree measures
+    // 71_042 — so 71_047 would have PASSED while handing back 5 lines someone else's un-stacking
+    // had already won. Re-derived on the integrated tree; a ceiling is a cap, never a budget.
+    max: 71_042,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
