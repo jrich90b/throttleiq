@@ -1139,6 +1139,7 @@ import {
   removeSuppression
 } from "./domain/suppressionStore.js";
 import { buildKpiOverview } from "./domain/kpiAnalytics.js";
+import { copilotInsightsHandler, copilotAskHandler } from "./routes/copilot.js";
 import { isPhoneLogConversation } from "./domain/phoneLogLead.js";
 import {
   tlpLogCustomerContact,
@@ -40219,6 +40220,9 @@ app.get("/analytics/kpi", async (req, res) => {
     overview
   });
 });
+
+app.get("/copilot/insights", copilotInsightsHandler);
+app.post("/copilot/ask", copilotAskHandler);
 
 app.post("/conversations/compose", (req, res) => {
   const rawPhone = String(req.body?.phone ?? "").trim();
