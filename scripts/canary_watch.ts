@@ -54,6 +54,7 @@ import {
   buildRevertPlan,
   decideCanaryGate,
   measureCanarySlice,
+  hourOfDayExpectedShare,
   decideCanaryProgress,
   DEFAULT_CANARY_THRESHOLDS,
   DEFAULT_CANARY_PROGRESS,
@@ -339,7 +340,14 @@ function advanceCanary(baseline: BaselineFile): { verdict: CanaryVerdict | null;
       baselineWindowMs: baseline.windowMs,
       sliceCounters,
       sliceWindowMs: config.intervalMs,
-      runaway
+      runaway,
+      // Project against this dealer's own daily rhythm so an overnight slice is not asked to match
+      // a working-day baseline. Never raises the expectation — see measureCanarySlice.
+      hourOfDayShare: hourOfDayExpectedShare({
+        conversations,
+        baselineWindow: { startMs: baseline.takenAtMs - baseline.windowMs, endMs: baseline.takenAtMs },
+        sliceWindow: { startMs, endMs }
+      })
     });
     return {
       atMs: nowMs,

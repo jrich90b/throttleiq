@@ -43,6 +43,7 @@ import {
   buildRevertPlan,
   decideCanaryGate,
   measureCanarySlice,
+  hourOfDayExpectedShare,
   decideCanaryProgress,
   detectJudgeStoreMismatch,
   isPoisonedMeasurement,
@@ -1123,6 +1124,243 @@ ok(DEFAULT_CANARY_THRESHOLDS.runawayMinPerHour > 0, "and an absolute runaway flo
         "and it certainly never reports HEALTHY off a store frozen in May"
       );
     }
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// -------------------------------------------------------------------------------------------------
+// THE OVERNIGHT FALSE RED. A slice landing 7:33pm-3:33am scored `fail — replies collapsed 20.16 -> 1,
+// the agent went quiet`. The dealership was SHUT. Flat scaling expected ~20 replies from a closed
+// store, and since about one slice in three lands overnight against a failureLimit of 2, a healthy
+// deploy trended toward REGRESSED — `judge --act` would have reverted a good commit.
+//
+// What is pinned here is BEHAVIOUR in both directions: the quiet window abstains, and every way the
+// canary is supposed to still bite (a real daytime collapse, a runaway) still bites.
+// -------------------------------------------------------------------------------------------------
+{
+  const HOUR = 3_600_000;
+  const armMs = Date.parse("2026-08-04T23:00:00Z");
+  const baselineWindow = { startMs: armMs - 48 * HOUR, endMs: armMs };
+  // A store open 13:00-23:00Z and shut the rest of the clock — the shape the live dealership has.
+  const baselineMsgs: any[] = [];
+  for (let h = 0; h < 48; h++) {
+    const t = baselineWindow.startMs + h * HOUR;
+    const hod = new Date(t).getUTCHours();
+    if (!(hod >= 13 && hod < 23)) continue;
+    for (let i = 0; i < 5; i++) baselineMsgs.push({ at: new Date(t + i * 60_000).toISOString(), direction: "out", provider: "twilio" });
+    baselineMsgs.push({ at: new Date(t + 30_000).toISOString(), direction: "out", provider: "draft_ai" });
+    for (let i = 0; i < 3; i++) baselineMsgs.push({ at: new Date(t + i * 60_000 + 45_000).toISOString(), direction: "in", provider: "twilio" });
+  }
+  const overnightWindow = { startMs: armMs, endMs: armMs + 8 * HOUR }; // 23:00 -> 07:00Z, store shut
+  const openWindow = { startMs: armMs + 16 * HOUR, endMs: armMs + 24 * HOUR }; // 15:00 -> 23:00Z
+
+  // Exactly the live shape: two people texted in overnight, one draft, nothing sent.
+  const quietStore = [
+    {
+      id: "c1",
+      messages: [
+        ...baselineMsgs,
+        { at: new Date(armMs + 2 * HOUR).toISOString(), direction: "in", provider: "twilio" },
+        { at: new Date(armMs + 3 * HOUR).toISOString(), direction: "in", provider: "twilio" },
+        { at: new Date(armMs + 3 * HOUR + 60_000).toISOString(), direction: "out", provider: "draft_ai" }
+      ]
+    }
+  ];
+  const baseCounters = computeCanaryCounters(quietStore, baselineWindow);
+
+  const shareOvernight = hourOfDayExpectedShare({ conversations: quietStore, baselineWindow, sliceWindow: overnightWindow });
+  const shareOpen = hourOfDayExpectedShare({ conversations: quietStore, baselineWindow, sliceWindow: openWindow });
+  const flat = 8 / 48;
+
+  ok(shareOvernight !== null && shareOvernight < 0.01, `a shut-store window expects ~none of the baseline (got ${shareOvernight})`);
+  ok(shareOpen !== null && shareOpen > flat, `a fully-open window expects MORE than flat (got ${shareOpen} vs ${flat})`);
+  eq(
+    hourOfDayExpectedShare({
+      conversations: quietStore,
+      baselineWindow: { startMs: armMs - 6 * HOUR, endMs: armMs },
+      sliceWindow: overnightWindow
+    }),
+    null,
+    "a baseline shorter than a full day has never seen most hours — it must decline, not guess"
+  );
+
+  const measure = (sliceWindow: { startMs: number; endMs: number }, store: any[], extra: Record<string, unknown> = {}) =>
+    measureCanarySlice({
+      baselineCounters: baseCounters,
+      baselineWindowMs: 48 * HOUR,
+      sliceCounters: computeCanaryCounters(store, sliceWindow),
+      sliceWindowMs: 8 * HOUR,
+      hourOfDayShare: hourOfDayExpectedShare({ conversations: store, baselineWindow, sliceWindow }),
+      ...extra
+    });
+
+  // THE BUG ITSELF.
+  const overnight = measure(overnightWindow, quietStore);
+  eq(overnight.status, "inconclusive", "a slice over a shut dealership abstains — it is not a collapse");
+  ok(/quiet hours/.test(overnight.reason), `and it says WHY it abstained — got: ${overnight.reason}`);
+  eq(
+    measureCanarySlice({
+      baselineCounters: baseCounters,
+      baselineWindowMs: 48 * HOUR,
+      sliceCounters: computeCanaryCounters(quietStore, overnightWindow),
+      sliceWindowMs: 8 * HOUR
+    }).status,
+    "fail",
+    "REGRESSION PIN: without the hour-of-day projection this very slice reads as `fail` — that was the bug"
+  );
+
+  // ...AND EVERY WAY IT MUST STILL BITE.
+  const collapseStore = [
+    {
+      id: "c1",
+      messages: [
+        ...baselineMsgs,
+        // Open hours, customers writing in, agent silent. A real collapse.
+        ...Array.from({ length: 24 }, (_, i) => ({
+          at: new Date(openWindow.startMs + Math.floor(i / 3) * HOUR + (i % 3) * 60_000).toISOString(),
+          direction: "in",
+          provider: "twilio"
+        }))
+      ]
+    }
+  ];
+  const daytimeCollapse = measure(openWindow, collapseStore);
+  eq(daytimeCollapse.status, "fail", "a REAL collapse during open hours still fails — detection is not traded away");
+  ok(/went quiet/.test(daytimeCollapse.reason), `and still names the collapse — got: ${daytimeCollapse.reason}`);
+
+  const runaway = measure(overnightWindow, quietStore, { runaway: { runaway: true, perHour: 99, limit: 12 } });
+  eq(runaway.status, "fail", "a runaway is terminal even in the quietest window");
+  eq(runaway.fatal, true, "...and stays fatal — quiet hours never soften a flood");
+
+  // THE CLAMP. The projection may only ever LOWER the expectation; raising it would fail a
+  // slow-but-open afternoon that passes today, trading one false red for another.
+  const openSlice = computeCanaryCounters(quietStore, openWindow);
+  const clamped = measureCanarySlice({
+    baselineCounters: BASE,
+    baselineWindowMs: 48 * HOUR,
+    sliceCounters: openSlice,
+    sliceWindowMs: 8 * HOUR,
+    hourOfDayShare: shareOpen
+  });
+  const flatOnly = measureCanarySlice({
+    baselineCounters: BASE,
+    baselineWindowMs: 48 * HOUR,
+    sliceCounters: openSlice,
+    sliceWindowMs: 8 * HOUR
+  });
+  eq(clamped.status, flatOnly.status, "an open-hours slice is judged EXACTLY as before — the share never raises the bar");
+  eq(clamped.reason, flatOnly.reason, "...right down to the reason it gives");
+
+  // A share the caller could not compute falls back to the shipped behaviour rather than to zero.
+  eq(
+    measureCanarySlice({
+      baselineCounters: BASE,
+      baselineWindowMs: 48 * HOUR,
+      sliceCounters: openSlice,
+      sliceWindowMs: 8 * HOUR,
+      hourOfDayShare: null
+    }).status,
+    flatOnly.status,
+    "a null share means flat scaling, not an abstention"
+  );
+
+  // THE RULE VERSION. Overnight verdicts recorded under v2 measured a shut store against a working
+  // day; they must stop being scored, which is what neutralises the phantom on the live canary.
+  ok(CANARY_JUDGE_RULE_VERSION >= 3, "the hour-of-day projection changed what a slice MEANS — the rule version must be bumped");
+  const stalePhantom: CanaryMeasurement[] = [
+    {
+      atMs: armMs,
+      sliceStartMs: armMs,
+      sliceEndMs: armMs + 8 * HOUR,
+      counters: BASE,
+      status: "fail",
+      reason: "the agent went quiet",
+      ruleVersion: 2
+    }
+  ];
+  eq(
+    decideCanaryProgress({ measurements: stalePhantom }).failures,
+    0,
+    "a `fail` recorded under the old projection is no longer counted against the deploy"
+  );
+  eq(
+    decideCanaryProgress({ measurements: stalePhantom }).inconclusive,
+    1,
+    "...it is downgraded to inconclusive, not dropped — the slice still occupies its own window"
+  );
+}
+
+// -------------------------------------------------------------------------------------------------
+// ...AND THE WIRING. A pure-function assertion cannot prove canary_watch.ts actually PASSES the
+// projection in — `hourOfDayShare` could be deleted from the call and every check above would stay
+// green. This runs `canary_watch.ts judge` end to end over an overnight slice against a store that
+// was shut, and fails if the recorded verdict is anything but an abstention.
+// -------------------------------------------------------------------------------------------------
+{
+  const HOUR = 3_600_000;
+  const armMs = Date.parse("2026-08-04T23:00:00Z");
+  const judgeAtIso = "2026-08-05T07:30:00Z"; // slice 0 (23:00->07:00Z) elapsed, nothing else
+  const conversations: any[] = [];
+  for (let c = 0; c < 12; c++) {
+    const msgs: any[] = [];
+    for (let h = 0; h < 48; h++) {
+      const t = armMs - 48 * HOUR + h * HOUR;
+      const hod = new Date(t).getUTCHours();
+      if (!(hod >= 13 && hod < 23)) continue; // shut outside 13:00-23:00Z
+      msgs.push({ id: `m_${id_counter++}`, direction: "out", provider: "twilio", at: new Date(t).toISOString(), body: "x" });
+      msgs.push({ id: `m_${id_counter++}`, direction: "in", provider: "twilio", at: new Date(t + 60_000).toISOString(), body: "y" });
+    }
+    conversations.push({ id: `+1555111${String(1000 + c)}`, phone: `+1555111${String(1000 + c)}`, messages: msgs });
+  }
+  // The overnight slice: two customers wrote in, one draft, nothing sent — the live shape.
+  conversations[0].messages.push(
+    { id: `m_${id_counter++}`, direction: "in", provider: "twilio", at: new Date(armMs + 2 * HOUR).toISOString(), body: "night" },
+    { id: `m_${id_counter++}`, direction: "in", provider: "twilio", at: new Date(armMs + 3 * HOUR).toISOString(), body: "night" },
+    { id: `m_${id_counter++}`, direction: "out", provider: "draft_ai", at: new Date(armMs + 3 * HOUR + 60_000).toISOString(), body: "draft" }
+  );
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "canary-overnight-eval-"));
+  try {
+    const storePath = path.join(tmp, "store.json");
+    fs.writeFileSync(storePath, JSON.stringify({ conversations }));
+    const reportRoot = path.join(tmp, "reports");
+    fs.mkdirSync(path.join(reportRoot, "canary"), { recursive: true });
+    fs.writeFileSync(
+      path.join(reportRoot, "canary", "pending.json"),
+      JSON.stringify(
+        {
+          takenAtMs: armMs,
+          windowMs: 48 * HOUR,
+          deployedSha: "cafebabecafebabecafebabecafebabecafebabe",
+          counters: computeCanaryCounters(conversations, { startMs: armMs - 48 * HOUR, endMs: armMs }),
+          typicalPeakOutboundPerHour: 30,
+          storePath,
+          storeConversations: conversations.length,
+          storeNewestOutboundMs: newestOutboundAtMs(conversations),
+          progress: { intervalMs: 8 * HOUR, count: 9, failureLimit: 2, consecutiveSuccessLimit: 3 },
+          measurements: []
+        },
+        null,
+        2
+      )
+    );
+    const r = spawnSync("npx", ["tsx", "scripts/canary_watch.ts", "judge", "--now", judgeAtIso], {
+      encoding: "utf8",
+      env: { ...process.env, REPORT_ROOT: reportRoot, CONVERSATIONS_DB_PATH: storePath },
+      cwd: path.resolve(new URL("..", import.meta.url).pathname)
+    });
+    const out = `${r.stdout ?? ""}${r.stderr ?? ""}`;
+    const after = JSON.parse(fs.readFileSync(path.join(reportRoot, "canary", "pending.json"), "utf8"));
+    eq(after.measurements.length, 1, `the elapsed overnight slice was recorded — got: ${out.slice(0, 400)}`);
+    eq(
+      after.measurements[0].status,
+      "inconclusive",
+      "canary_watch must pass the hour-of-day projection in, so a shut dealership abstains — got " +
+        `${after.measurements[0]?.status}: ${after.measurements[0]?.reason}`
+    );
+    eq(after.measurements[0].ruleVersion, CANARY_JUDGE_RULE_VERSION, "and stamps the rule that judged it");
+    ok(!/REGRESSED/.test(out), `an overnight window never reports REGRESSED — got: ${out.slice(0, 400)}`);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
