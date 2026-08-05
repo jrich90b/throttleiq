@@ -88,6 +88,7 @@ for (const fn of [
   "decideDeptWidgetIntakeTurn",
   "decideNonBuyerSurveyTurn",
   "decideDealerLeadSurveyTurn",
+  "decideRidingAcademyTurn",
   "decideReservationHandoffTurn",
   "decideStockNumberInterestTurn",
   "decidePriceAnswerAnchor",

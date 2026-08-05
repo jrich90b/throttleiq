@@ -19,6 +19,7 @@ export {
   type DeptWidgetIntakeTurnKind,
   decideNonBuyerSurveyTurn,
   decideDealerLeadSurveyTurn,
+  decideRidingAcademyTurn,
   decideFinancePricingTurn,
   decideFinanceDeclinedCadence,
   decideBusinessManagerFinanceOutcomePrompt,

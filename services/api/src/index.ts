@@ -15,7 +15,8 @@ import { google } from "googleapis";
 import sharp from "sharp";
 import { orchestrateInbound, evaluateTestRideInventoryGate, buildBlockedTestRideInventoryDraft } from "./domain/orchestrator.js";
 import { resolveWatchOptOutOutcome } from "./domain/watchOptOutTurn.js";
-import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildWatchAvailableReply, buildCholoWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, resolveIntroducedOwnerFirstName, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, hasCustomerReceivedOutbound, hasRecentDeliveredHumanOutbound } from "./domain/agentVoice.js";
+import { isAdfFirstTouchRegen, resolveAdfFirstTouchAckKind, buildAdfFirstTouchAck } from "./domain/ridingAcademy.js";
+import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildRidingAcademyEnrollmentAck, buildWatchAvailableReply, buildCholoWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, resolveIntroducedOwnerFirstName, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, hasCustomerReceivedOutbound, hasRecentDeliveredHumanOutbound } from "./domain/agentVoice.js";
 import {
   postSaleVehicleIsNew,
   postSaleAccessoryOrEnjoyMessage,
@@ -55281,29 +55282,34 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       turnFinanceIntent: false
     });
   }
-  // Non-buyer / passenger survey lead (Elizabeth Klapa, 2026-06-25) — regen twin of the live
-  // ADF intake override. A Dealer Lead App survey whose STRUCTURED purchase-timeframe says the
-  // person is explicitly NOT a buyer ("I am not interested in purchasing at this time") must
-  // not be re-pitched on the FIRST touch ("Which bike are you asking about?" / photos+pricing).
-  // Gated to the initial ADF first-touch (the regen target is the ADF submission AND no customer
-  // SMS reply exists yet) so a later genuine sales question still routes normally. Placed before
-  // the sales-oriented ADF branches so it short-circuits them. event_promo keeps its own handling.
-  const regenIsAdfFirstTouchNonBuyer =
-    event.provider === "sendgrid_adf" &&
-    !(Array.isArray(conv.messages) &&
-      conv.messages.some((m: any) => m?.direction === "in" && String(m?.provider ?? "").toLowerCase() === "twilio")) &&
+  // Initial-ADF first-touch overrides: riding-academy ENROLLMENT (Joe, 2026-08-05) and the
+  // non-buyer survey ack (Elizabeth Klapa, 2026-06-25) — regen twins of the live intake overrides.
+  // Both are gated to the ADF submission with no customer SMS reply yet, so a later genuine sales
+  // question routes normally; event_promo keeps its own handling. Rationale, fail direction, the
+  // shared first-touch predicate and the reply choice all live in domain/ridingAcademy.ts.
+  const regenIsAdfFirstTouch =
+    isAdfFirstTouchRegen({ provider: event.provider, messages: conv.messages }) &&
     decideEventPromoTurn({
       classificationBucket: conv.classification?.bucket,
       classificationCta: conv.classification?.cta
-    }).kind !== "event_promo_ack" &&
-    decideNonBuyerSurveyTurn({ purchaseTimeframe: conv.lead?.purchaseTimeframe }).kind ===
-      "non_buyer_survey_ack";
-  if (regenIsAdfFirstTouchNonBuyer) {
-    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const agentName = resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile));
-    const firstName = normalizeDisplayCase(conv.lead?.firstName) || (String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null);
-    const reply = buildNonBuyerSurveyAck(firstName, agentName, dealerName);
-    recordRouteOutcome("regen", "non_buyer_survey_ack", {
+    }).kind !== "event_promo_ack";
+  const regenAdfFirstTouchKind = resolveAdfFirstTouchAckKind({
+    isAdfFirstTouch: regenIsAdfFirstTouch,
+    leadSource: conv.lead?.source,
+    inquiry: conv.lead?.inquiry ?? event.body ?? "",
+    purchaseTimeframe: conv.lead?.purchaseTimeframe
+  });
+  const regenIsRidingAcademyEnrollment = regenAdfFirstTouchKind === "riding_academy_enrollment_ack";
+  const regenIsAdfFirstTouchNonBuyer = regenAdfFirstTouchKind === "non_buyer_survey_ack";
+  if (regenAdfFirstTouchKind !== "none") {
+    const reply = buildAdfFirstTouchAck(regenAdfFirstTouchKind, {
+      firstName:
+        normalizeDisplayCase(conv.lead?.firstName) ||
+        (String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null),
+      agentName: resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile)),
+      dealerName: dealerProfile?.dealerName ?? "American Harley-Davidson"
+    });
+    recordRouteOutcome("regen", regenAdfFirstTouchKind, {
       convId: conv.id,
       leadKey: conv.leadKey
     });
@@ -55324,15 +55330,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   // <model>" (held by the context-fidelity gate). Gated to the ADF FIRST touch (no customer SMS reply
   // yet); event_promo and the explicit non-buyer ack (above) win. The hint pre-filter gates the LLM.
   const regenIsAdfFirstTouchSurveyEligible =
-    event.provider === "sendgrid_adf" &&
-    !(Array.isArray(conv.messages) &&
-      conv.messages.some((m: any) => m?.direction === "in" && String(m?.provider ?? "").toLowerCase() === "twilio")) &&
-    decideEventPromoTurn({
-      classificationBucket: conv.classification?.bucket,
-      classificationCta: conv.classification?.cta
-    }).kind !== "event_promo_ack" &&
-    decideNonBuyerSurveyTurn({ purchaseTimeframe: conv.lead?.purchaseTimeframe }).kind !==
-      "non_buyer_survey_ack" &&
+    regenIsAdfFirstTouch &&
+    !regenIsRidingAcademyEnrollment &&
+    !regenIsAdfFirstTouchNonBuyer &&
     hasDealerLeadSurveyHint(event.body ?? "");
   const regenDealerSurveyParse = regenIsAdfFirstTouchSurveyEligible
     ? await safeLlmParse("regen_dealer_lead_survey_parser", () =>

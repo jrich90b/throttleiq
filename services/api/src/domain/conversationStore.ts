@@ -4670,9 +4670,17 @@ export function startFollowUpCadence(
 export function resolveInitialAdfCadencePlan(input: {
   purchaseTimeframe?: string | null;
   purchaseTimeframeMonthsStart?: number | null;
+  leadSource?: string | null;
 }): "standard" | "long_term" | "suppress" {
   const label = String(input.purchaseTimeframe ?? "").toLowerCase();
   if (label.includes("not interested")) return "suppress";
+  // Riding Academy ENROLLMENT (Joe, 2026-08-05): a course REGISTRATION is not a bike shopper.
+  // Donald Rawson (+17165344986) enrolled with "Future Motorcycle Purchase Expectation: No" and
+  // his timeframe field ("No") matched none of the branches below, so he landed on the aggressive
+  // day-1 sales ramp — right behind an opener promising help with his COURSE. Cap this lane at the
+  // gentle nurture. Placed AFTER the suppress branch so an explicit non-buyer still wins with the
+  // quieter answer; fail direction is strictly FEWER touches than today.
+  if (/riding academy/i.test(String(input.leadSource ?? ""))) return "long_term";
   if (label.includes("year")) return "long_term";
   const monthsStart = Number(input.purchaseTimeframeMonthsStart);
   // 4+ months out is NOT a hot buyer — soft-invite in the opener, then the gentle long_term
@@ -4692,12 +4700,17 @@ export function resolveInitialAdfCadencePlan(input: {
 // timeframe→tempo boundary has ONE source of truth. ("not interested" resolves to suppress, not
 // long_term, so it returns false here and stays on its own paused_indefinite path.)
 export function cadenceTempoCappedToLongTerm(
-  lead?: { purchaseTimeframe?: string | null; purchaseTimeframeMonthsStart?: number | null } | null
+  lead?: {
+    purchaseTimeframe?: string | null;
+    purchaseTimeframeMonthsStart?: number | null;
+    source?: string | null;
+  } | null
 ): boolean {
   return (
     resolveInitialAdfCadencePlan({
       purchaseTimeframe: lead?.purchaseTimeframe,
-      purchaseTimeframeMonthsStart: lead?.purchaseTimeframeMonthsStart
+      purchaseTimeframeMonthsStart: lead?.purchaseTimeframeMonthsStart,
+      leadSource: lead?.source
     }) === "long_term"
   );
 }
@@ -4735,7 +4748,8 @@ export function applyMetaPromoInitialCadence(conv: Conversation, timeZone: strin
   }
   const cadencePlan = resolveInitialAdfCadencePlan({
     purchaseTimeframe: conv.lead?.purchaseTimeframe,
-    purchaseTimeframeMonthsStart: conv.lead?.purchaseTimeframeMonthsStart
+    purchaseTimeframeMonthsStart: conv.lead?.purchaseTimeframeMonthsStart,
+    leadSource: conv.lead?.source
   });
   if (cadencePlan === "suppress") {
     setFollowUpMode(conv, "paused_indefinite", "meta_not_interested_at_this_time");
@@ -4772,7 +4786,8 @@ export function realignMisdeferredLongTermCadence(
   if (conv.followUp?.reason === "inventory_watch" || conv.inventoryWatch) return false;
   const plan = resolveInitialAdfCadencePlan({
     purchaseTimeframe: conv.lead?.purchaseTimeframe,
-    purchaseTimeframeMonthsStart: conv.lead?.purchaseTimeframeMonthsStart
+    purchaseTimeframeMonthsStart: conv.lead?.purchaseTimeframeMonthsStart,
+    leadSource: conv.lead?.source
   });
   if (plan !== "standard") return false; // genuinely far-out (4+/multi-year) — leave it deferred
   const anchorAtIso = now.toISOString();

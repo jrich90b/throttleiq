@@ -64,12 +64,12 @@ import {
 import type { InventoryWatch } from "../domain/conversationStore.js";
 import { isSuppressed } from "../domain/suppressionStore.js";
 import { isOptOutKeywordInbound } from "../domain/scoringExclusions.js";
-import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, shouldIntroduceOnAdfTouch, stripAgentIntroPhraseForDealer, stripLeadingAgentGreeting, hasCustomerReceivedOutbound, GENERIC_AGENT_DISPLAY_NAME, GENERIC_DEALER_DISPLAY_NAME, resolveDealerAgentName, greetingFirstName } from "../domain/agentVoice.js";
+import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildRidingAcademyEnrollmentAck, shouldIntroduceOnAdfTouch, stripAgentIntroPhraseForDealer, stripLeadingAgentGreeting, hasCustomerReceivedOutbound, GENERIC_AGENT_DISPLAY_NAME, GENERIC_DEALER_DISPLAY_NAME, resolveDealerAgentName, greetingFirstName } from "../domain/agentVoice.js";
 import { buildAdfResubmissionAck, detectAdfFormResubmission } from "../domain/adfResubmission.js";
 import { buildMarketplaceRelayFirstTouchReply, buildMarketplaceRelayTaskSummary } from "../domain/marketplaceRelay.js";
 import { isHtmlClientNoticeOnly } from "../domain/inboundMailActionability.js";
 import { buildTradeAdfAck } from "../domain/tradeAdfReply.js";
-import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn, shouldCloseEventPromoLeadOnIntake, resolveRideChallengeEventTouch, decideIncomingInventoryPurpose, decideWalkInInventoryWatchTurn } from "../domain/routeStateReducer.js";
+import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn, decideRidingAcademyTurn, shouldCloseEventPromoLeadOnIntake, resolveRideChallengeEventTouch, decideIncomingInventoryPurpose, decideWalkInInventoryWatchTurn } from "../domain/routeStateReducer.js";
 import { buildLongTermTimelineMessage } from "../domain/longTermMessage.js";
 import { orchestrateInbound } from "../domain/orchestrator.js";
 import { collectRecentStaffCorrections } from "../domain/feedbackSteering.js";
@@ -9779,15 +9779,35 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     draft = buildDemoRideEventSoftInvite(drFirstName, drAgentName, drDealerName, drBikeLabel);
   }
 
-  // Non-buyer / passenger survey lead (Elizabeth Klapa, 2026-06-25): a Dealer Lead App survey
-  // whose STRUCTURED purchase-timeframe field says they are explicitly NOT a buyer ("I am not
-  // interested in purchasing at this time") was getting a sales pitch ("Which bike are you
-  // asking about?" / "want me to send photos or price and payment numbers?") on the first
-  // touch. Override that opener with a warm, no-pressure acknowledgement (the reply-side twin
-  // of resolveInitialAdfCadencePlan's "suppress", which already silences the nagging
-  // follow-ups). INITIAL ADF only — once the customer engages with a real question, normal
-  // routing answers it. event_promo wins if both somehow match (handled above first).
+  // Riding Academy ENROLLMENT lead (Joe, 2026-08-05): the rider-training school files an ADF when
+  // someone REGISTERS for a course. They already signed up, so the generic opener quoted course
+  // pricing back at them. Joe's ruling: send an introduction, thank them, and say the agent is here
+  // for anything about the course. Most specific of the initial-ADF overrides, so it is checked
+  // FIRST; event_promo still wins. INITIAL ADF only — once they text back, normal routing answers.
   if (
+    isInitialAdf &&
+    decideEventPromoTurn({
+      classificationBucket: conv.classification?.bucket,
+      classificationCta: conv.classification?.cta
+    }).kind !== "event_promo_ack" &&
+    decideRidingAcademyTurn({
+      leadSource: conv.lead?.source,
+      inquiry: effectiveInquiry
+    }).kind === "riding_academy_enrollment_ack"
+  ) {
+    const raAgentName = String(dealerProfile?.agentName ?? "").trim() || "Sales Team";
+    const raDealerName = String(dealerProfile?.dealerName ?? "").trim() || "American Harley-Davidson";
+    const raFirstName = String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null;
+    draft = buildRidingAcademyEnrollmentAck(raFirstName, raAgentName, raDealerName);
+  } else if (
+    // Non-buyer / passenger survey lead (Elizabeth Klapa, 2026-06-25): a Dealer Lead App survey
+    // whose STRUCTURED purchase-timeframe field says they are explicitly NOT a buyer ("I am not
+    // interested in purchasing at this time") was getting a sales pitch ("Which bike are you
+    // asking about?" / "want me to send photos or price and payment numbers?") on the first
+    // touch. Override that opener with a warm, no-pressure acknowledgement (the reply-side twin
+    // of resolveInitialAdfCadencePlan's "suppress", which already silences the nagging
+    // follow-ups). INITIAL ADF only — once the customer engages with a real question, normal
+    // routing answers it. event_promo wins if both somehow match (handled above first).
     isInitialAdf &&
     decideEventPromoTurn({
       classificationBucket: conv.classification?.bucket,
@@ -9918,7 +9938,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   // rule already powered the Meta path, so this just unifies all ADF sources onto one policy.
   const cadencePlan = resolveInitialAdfCadencePlan({
     purchaseTimeframe: conv.lead?.purchaseTimeframe,
-    purchaseTimeframeMonthsStart: Number.isFinite(monthsStart) ? monthsStart : null
+    purchaseTimeframeMonthsStart: Number.isFinite(monthsStart) ? monthsStart : null,
+    leadSource: conv.lead?.source
   });
   const hasLongTermTimeframe = cadencePlan === "long_term";
   // Horizon for the deferred long-term nurture message: the lead's own start-month when known,
