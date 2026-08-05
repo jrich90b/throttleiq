@@ -26,6 +26,12 @@
  * Run: npx tsx scripts/canary_auto_revert_eval.ts
  */
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+
+let id_counter = 0;
 import {
   computeCanaryCounters,
   decideCanaryVerdict,
@@ -38,6 +44,8 @@ import {
   decideCanaryGate,
   measureCanarySlice,
   decideCanaryProgress,
+  detectJudgeStoreMismatch,
+  isPoisonedMeasurement,
   CANARY_JUDGE_RULE_VERSION,
   scaleCounters,
   DEFAULT_CANARY_THRESHOLDS,
@@ -819,6 +827,305 @@ ok(DEFAULT_CANARY_THRESHOLDS.runawayMinPerHour > 0, "and an absolute runaway flo
     "regressed",
     "wrongful closes are NOT excused by a busy day — normalisation applies to sends only"
   );
+}
+
+// -------------------------------------------------------------------------------------------------
+// THE JUDGE-SIDE WRONG-STORE GUARD (2026-08-05).
+//
+// Arming has been guarded since 2026-08-03; JUDGING had no guard, and judging is where the store
+// path was actually being lost — the documented `judge` invocation omitted CONVERSATIONS_DB_PATH,
+// so it read the repo checkout's May seed store and every slice measured zero. Slices are
+// idempotent by index, so each one was burned permanently and the canary could never promote.
+// -------------------------------------------------------------------------------------------------
+{
+  const ARMED_AT = Date.parse("2026-08-04T23:33:00Z");
+  const DEALER_NEWEST = Date.parse("2026-08-05T16:09:00Z");
+  const SEED_STORE_NEWEST = Date.parse("2026-05-23T01:11:00Z");
+
+  eq(
+    detectJudgeStoreMismatch({
+      currentStoreNewestOutboundMs: SEED_STORE_NEWEST,
+      currentStoreConversations: 12,
+      baselineStoreNewestOutboundMs: DEALER_NEWEST,
+      baselineStoreConversations: 810,
+      baselineTakenAtMs: ARMED_AT
+    }).wrong,
+    true,
+    "the repo seed store is caught: a store cannot travel backwards from the one we armed against"
+  );
+
+  eq(
+    detectJudgeStoreMismatch({
+      currentStoreNewestOutboundMs: DEALER_NEWEST,
+      currentStoreConversations: 814,
+      baselineStoreNewestOutboundMs: DEALER_NEWEST - 3_600_000,
+      baselineStoreConversations: 810,
+      baselineTakenAtMs: ARMED_AT
+    }).wrong,
+    false,
+    "the real store, read later with a few more conversations, judges normally"
+  );
+
+  eq(
+    detectJudgeStoreMismatch({
+      currentStoreNewestOutboundMs: SEED_STORE_NEWEST,
+      currentStoreConversations: 12,
+      baselineTakenAtMs: ARMED_AT
+    }).wrong,
+    true,
+    "a LEGACY baseline with no store provenance still catches a store older than the arming moment"
+  );
+
+  // ISOLATE the backwards-in-time test: same conversation count, so the size rule below cannot be
+  // the thing catching it. Without this the size rule alone kept the eval green while the
+  // travelled-backwards branch was deleted.
+  eq(
+    detectJudgeStoreMismatch({
+      currentStoreNewestOutboundMs: DEALER_NEWEST - 72 * 3_600_000,
+      currentStoreConversations: 810,
+      baselineStoreNewestOutboundMs: DEALER_NEWEST,
+      baselineStoreConversations: 810,
+      baselineTakenAtMs: ARMED_AT
+    }).wrong,
+    true,
+    "a store the same SIZE but three days behind is still a different file — the time test stands alone"
+  );
+
+  eq(
+    detectJudgeStoreMismatch({
+      currentStoreNewestOutboundMs: DEALER_NEWEST,
+      currentStoreConversations: 401,
+      baselineStoreNewestOutboundMs: DEALER_NEWEST,
+      baselineStoreConversations: 810,
+      baselineTakenAtMs: ARMED_AT
+    }).wrong,
+    true,
+    "a store that lost half its conversations is a different file — conversations do not disappear"
+  );
+
+  eq(
+    detectJudgeStoreMismatch({
+      currentStoreNewestOutboundMs: null,
+      currentStoreConversations: 810,
+      baselineStoreNewestOutboundMs: DEALER_NEWEST,
+      baselineStoreConversations: 810,
+      baselineTakenAtMs: ARMED_AT
+    }).wrong,
+    true,
+    "a store with no dated outbound at all can never judge a deploy"
+  );
+
+  // HEALING a burned slice — and the one row that must NEVER be overwritten.
+  const zeroCounters: CanaryCounters = {
+    outboundToCustomer: 0,
+    inboundFromCustomer: 0,
+    draftsProduced: 0,
+    conversationsClosed: 0,
+    draftsHeld: 0,
+    activeConversations: 0
+  };
+  const busyTruth: CanaryCounters = { ...zeroCounters, inboundFromCustomer: 23, outboundToCustomer: 36, activeConversations: 15 };
+
+  eq(
+    isPoisonedMeasurement({ status: "inconclusive", counters: zeroCounters, truthCounters: busyTruth }),
+    true,
+    "an inconclusive all-zero slice over a window the real store shows was busy is a mis-measurement"
+  );
+  eq(
+    isPoisonedMeasurement({ status: "fail", counters: zeroCounters, truthCounters: busyTruth }),
+    false,
+    "a COLLAPSE fail is all-zero too and is real evidence — healing must never overwrite it"
+  );
+  eq(
+    isPoisonedMeasurement({ status: "inconclusive", counters: zeroCounters, truthCounters: zeroCounters }),
+    false,
+    "a genuinely quiet night stays inconclusive — nothing to heal"
+  );
+  eq(
+    isPoisonedMeasurement({
+      status: "inconclusive",
+      counters: { ...zeroCounters, inboundFromCustomer: 2 },
+      truthCounters: busyTruth
+    }),
+    false,
+    "a slice that measured SOMETHING was reading the right store — only all-zero rows are healed"
+  );
+}
+
+// -------------------------------------------------------------------------------------------------
+// AND THE SCRIPT ITSELF STILL RUNS. `tsc` does not cover scripts/, and a pure-function assertion
+// cannot prove canary_watch.ts still wires these in — a guard can be written and never called. This
+// EXECUTES `canary_watch.ts judge` end to end against a synthetic store and a synthetic pending
+// canary, once from the wrong store and once from the right one.
+// -------------------------------------------------------------------------------------------------
+{
+  const armedAtMs = Date.parse("2026-08-04T00:00:00Z");
+  const sliceMs = 8 * 3_600_000;
+  const judgeAtIso = "2026-08-04T16:00:00Z"; // two slices elapsed
+  const iso = (t: number) => new Date(t).toISOString();
+
+  const conv = (id: string, msgs: any[]) => ({ id, phone: id, messages: msgs });
+  const msg = (dir: "in" | "out", provider: string, atMs: number, i: number) => ({
+    id: `m_${id_counter++}`,
+    direction: dir,
+    from: dir === "in" ? "+15550001111" : "+15550002222",
+    to: dir === "in" ? "+15550002222" : "+15550001111",
+    body: `synthetic ${i}`,
+    at: iso(atMs),
+    provider
+  });
+
+  // A store busy across the baseline lookback AND across both elapsed slices.
+  const conversations: any[] = [];
+  for (let c = 0; c < 30; c++) {
+    const msgs: any[] = [];
+    for (let k = 0; k < 8; k++) {
+      msgs.push(msg("in", "twilio", armedAtMs - (k + 1) * 3_600_000, k));
+      msgs.push(msg("out", "twilio", armedAtMs - (k + 1) * 3_600_000 + 60_000, k));
+    }
+    // inside slice 0 and slice 1
+    msgs.push(msg("in", "twilio", armedAtMs + 2 * 3_600_000, 100));
+    msgs.push(msg("out", "twilio", armedAtMs + 2 * 3_600_000 + 60_000, 101));
+    msgs.push(msg("in", "twilio", armedAtMs + sliceMs + 2 * 3_600_000, 102));
+    msgs.push(msg("out", "twilio", armedAtMs + sliceMs + 2 * 3_600_000 + 60_000, 103));
+    conversations.push(conv(`+1555000${String(1000 + c)}`, msgs));
+  }
+  const goodStore = { conversations };
+
+  // The wrong store: same SHAPE, non-empty, plenty of lifetime traffic — and frozen months ago.
+  const stale: any[] = [];
+  for (let c = 0; c < 8; c++) {
+    const msgs: any[] = [];
+    for (let k = 0; k < 20; k++) {
+      msgs.push(msg("in", "twilio", Date.parse("2026-05-23T01:11:00Z") - k * 3_600_000, k));
+      msgs.push(msg("out", "twilio", Date.parse("2026-05-23T01:11:00Z") - k * 3_600_000 + 60_000, k));
+    }
+    stale.push(conv(`+1555999${String(1000 + c)}`, msgs));
+  }
+  const staleStore = { conversations: stale };
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "canary-judge-eval-"));
+  try {
+    const goodPath = path.join(tmp, "good.json");
+    const stalePath = path.join(tmp, "stale.json");
+    fs.writeFileSync(goodPath, JSON.stringify(goodStore));
+    fs.writeFileSync(stalePath, JSON.stringify(staleStore));
+
+    const baselineCounters = computeCanaryCounters(conversations, {
+      startMs: armedAtMs - 48 * 3_600_000,
+      endMs: armedAtMs
+    });
+    const pending = {
+      takenAtMs: armedAtMs,
+      windowMs: 48 * 3_600_000,
+      deployedSha: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      counters: baselineCounters,
+      typicalPeakOutboundPerHour: 30,
+      storePath: goodPath,
+      storeConversations: conversations.length,
+      storeNewestOutboundMs: newestOutboundAtMs(conversations),
+      progress: { intervalMs: sliceMs, count: 9, failureLimit: 2, consecutiveSuccessLimit: 3 },
+      // Slice 0 already recorded — burned against the wrong store, exactly like the live canary.
+      measurements: [
+        {
+          atMs: armedAtMs + sliceMs,
+          sliceStartMs: armedAtMs,
+          sliceEndMs: armedAtMs + sliceMs,
+          counters: {
+            outboundToCustomer: 0,
+            inboundFromCustomer: 0,
+            draftsProduced: 0,
+            conversationsClosed: 0,
+            draftsHeld: 0,
+            activeConversations: 0
+          },
+          status: "inconclusive",
+          reason: "slice too quiet to judge: 0 customer event(s) in the window"
+        }
+      ]
+    };
+
+    const runJudge = (storePath: string, reportRoot: string) => {
+      fs.mkdirSync(path.join(reportRoot, "canary"), { recursive: true });
+      fs.writeFileSync(path.join(reportRoot, "canary", "pending.json"), JSON.stringify(pending, null, 2));
+      const r = spawnSync(
+        "npx",
+        ["tsx", "scripts/canary_watch.ts", "judge", "--now", judgeAtIso],
+        {
+          encoding: "utf8",
+          env: { ...process.env, REPORT_ROOT: reportRoot, CONVERSATIONS_DB_PATH: storePath },
+          cwd: path.resolve(new URL("..", import.meta.url).pathname)
+        }
+      );
+      const after = JSON.parse(fs.readFileSync(path.join(reportRoot, "canary", "pending.json"), "utf8"));
+      return { status: r.status, out: `${r.stdout ?? ""}${r.stderr ?? ""}`, after };
+    };
+
+    // 1. THE WRONG STORE: refuses, and records NOTHING — the burned slice is not compounded.
+    const wrong = runJudge(stalePath, path.join(tmp, "reports-wrong"));
+    ok(wrong.status !== 0, "judging against the wrong store must not exit 0");
+    ok(
+      /refusing to JUDGE/.test(wrong.out),
+      `the wrong store is refused by name, not silently measured — got: ${wrong.out.slice(0, 400)}`
+    );
+    eq(wrong.after.measurements.length, 1, "and no new slice was recorded from the wrong store");
+    eq(
+      wrong.after.measurements[0].counters.inboundFromCustomer,
+      0,
+      "the pre-existing burned slice is left exactly as it was"
+    );
+
+    // 2. THE RIGHT STORE: measures the elapsed slice AND heals the burned one.
+    const right = runJudge(goodPath, path.join(tmp, "reports-right"));
+    eq(right.after.measurements.length, 2, "both elapsed slices are recorded against the real store");
+    ok(
+      right.after.measurements[0].counters.inboundFromCustomer > 0,
+      "the burned slice 0 was re-measured in place once a valid store was supplied"
+    );
+    ok(
+      right.after.measurements[1].counters.inboundFromCustomer > 0,
+      "and the newly elapsed slice 1 measured real traffic"
+    );
+    eq(
+      right.after.measurements[0].sliceStartMs,
+      armedAtMs,
+      "healing re-measures IN PLACE — slice 0 still covers slice 0's window"
+    );
+    ok(
+      /re-measured 1 slice/.test(right.out),
+      `the heal is reported, not silent — got: ${right.out.slice(0, 400)}`
+    );
+
+    // 3. THE LEGACY one-shot path (a canary armed before progressive slices) is guarded too. It
+    // takes a different branch entirely — `judgeBaseline`, not `advanceCanary` — so guarding only
+    // the progressive path leaves a live canary judged against whatever store happens to be there.
+    {
+      const legacyRoot = path.join(tmp, "reports-legacy");
+      fs.mkdirSync(path.join(legacyRoot, "canary"), { recursive: true });
+      const { measurements: _dropped, progress: _alsoDropped, ...legacyPending } = pending as any;
+      fs.writeFileSync(
+        path.join(legacyRoot, "canary", "pending.json"),
+        JSON.stringify({ ...legacyPending, windowMs: 8 * 3_600_000 }, null, 2)
+      );
+      const r = spawnSync("npx", ["tsx", "scripts/canary_watch.ts", "judge", "--now", judgeAtIso], {
+        encoding: "utf8",
+        env: { ...process.env, REPORT_ROOT: legacyRoot, CONVERSATIONS_DB_PATH: stalePath },
+        cwd: path.resolve(new URL("..", import.meta.url).pathname)
+      });
+      const out = `${r.stdout ?? ""}${r.stderr ?? ""}`;
+      ok(r.status !== 0, "the legacy one-shot judge must not exit 0 against the wrong store");
+      ok(
+        /refusing to JUDGE/.test(out),
+        `the legacy path refuses the wrong store by name too — got: ${out.slice(0, 400)}`
+      );
+      ok(
+        !/canary: HEALTHY/.test(out),
+        "and it certainly never reports HEALTHY off a store frozen in May"
+      );
+    }
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 console.log(`PASS canary auto-revert — abstains rather than false-greens (${checks} checks)`);

@@ -993,3 +993,107 @@ export function newestOutboundAtMs(conversations: any[]): number | null {
   }
   return newest > 0 ? newest : null;
 }
+
+/**
+ * THE WRONG-STORE GUARD, ON THE JUDGING SIDE (2026-08-05).
+ *
+ * `detectStaleStore` above guards ARMING only. Judging had no guard at all, and judging is where
+ * the store path is easiest to lose: `arm` is documented to copy the dealer store to /tmp and pass
+ * CONVERSATIONS_DB_PATH, while `judge`/`status` were routinely run WITHOUT it — so judge fell
+ * through to the repo checkout's seed store (`services/api/data/conversations.json`, 48 KB, frozen
+ * since May). Non-empty, so `loadConversations` was happy; it just contains nothing from this
+ * decade of the canary's life, so every slice measured 0 events and recorded `inconclusive`.
+ *
+ * That is worse than it sounds, because slices are IDEMPOTENT BY INDEX: a slice measured once is
+ * never measured again. Two slices of a nine-slice canary were burned this way on 2026-08-04/05,
+ * and a canary judged like this can never reach three consecutive clean slices — so it can never
+ * promote, and every behaviour deploy queues behind a verdict that will never arrive.
+ *
+ * THE TELL, and why it has no false positives: a store can only move FORWARD in time. Re-reading
+ * the same store later can never show an OLDER newest-outbound than the baseline recorded, and can
+ * never hold materially fewer conversations. Either one means a different file.
+ *
+ * FAIL DIRECTION: a mismatch refuses to measure anything and exits loudly. It can never turn a bad
+ * deploy into a clean slice — the only thing it can cost is a delayed verdict, which is exactly the
+ * direction a safety control should fail in.
+ */
+export function detectJudgeStoreMismatch(input: {
+  /** Newest outbound in the store being read RIGHT NOW. */
+  currentStoreNewestOutboundMs: number | null;
+  currentStoreConversations: number;
+  /** What `arm` recorded about the store it measured the baseline against. */
+  baselineStoreNewestOutboundMs?: number | null;
+  baselineStoreConversations?: number;
+  /** When the canary was armed — the fallback when a legacy baseline recorded no provenance. */
+  baselineTakenAtMs: number;
+}): { wrong: boolean; reason: string } {
+  const current = Number(input.currentStoreNewestOutboundMs ?? 0);
+  if (!Number.isFinite(current) || current <= 0) {
+    return { wrong: true, reason: "the store being judged has no dated outbound messages at all" };
+  }
+
+  const baselineNewest = Number(input.baselineStoreNewestOutboundMs ?? 0);
+  if (Number.isFinite(baselineNewest) && baselineNewest > 0) {
+    if (current < baselineNewest) {
+      const behindH = Math.floor((baselineNewest - current) / 3_600_000);
+      return {
+        wrong: true,
+        reason:
+          `the store being judged is ${behindH}h BEHIND the one this canary was armed against ` +
+          `(newest outbound ${new Date(current).toISOString()} vs ${new Date(baselineNewest).toISOString()}) — ` +
+          "a store cannot travel backwards, so this is a different file"
+      };
+    }
+  } else if (current < Number(input.baselineTakenAtMs)) {
+    // Legacy baseline with no provenance: the weaker but still decisive test.
+    const ageH = Math.floor((Number(input.baselineTakenAtMs) - current) / 3_600_000);
+    return {
+      wrong: true,
+      reason:
+        `the store's newest outbound is ${ageH}h older than the moment this canary was armed — ` +
+        "nothing it contains can say anything about the deploy being watched"
+    };
+  }
+
+  const baselineConvs = Number(input.baselineStoreConversations ?? 0);
+  if (baselineConvs > 0 && Number(input.currentStoreConversations) < baselineConvs * 0.9) {
+    return {
+      wrong: true,
+      reason:
+        `the store being judged holds ${input.currentStoreConversations} conversations, far fewer than the ` +
+        `${baselineConvs} this canary was armed against — conversations do not disappear, so this is a different file`
+    };
+  }
+
+  return { wrong: false, reason: "the store being judged is the one this canary was armed against" };
+}
+
+/**
+ * A recorded slice that measured NOTHING while the real store shows the window was busy is not
+ * evidence — it is the wrong-store bug above, fossilised. Because slices are idempotent by index it
+ * would otherwise sit there forever, so the judge re-measures these IN PLACE (never dropping them,
+ * which would shift every later slice onto the wrong window).
+ *
+ * ONLY `inconclusive` rows qualify. A genuine collapse FAIL is also all-zero and is real evidence
+ * about a bad deploy — overwriting one would be a false green, the exact failure this whole file
+ * exists to prevent.
+ */
+export function isPoisonedMeasurement(input: {
+  status: CanaryMeasurementStatus;
+  counters: CanaryCounters;
+  /** The same window re-counted against the store we have now validated. */
+  truthCounters: CanaryCounters;
+}): boolean {
+  if (input.status !== "inconclusive") return false;
+  const recorded = input.counters;
+  const recordedIsAllZero =
+    !recorded.inboundFromCustomer &&
+    !recorded.outboundToCustomer &&
+    !recorded.draftsProduced &&
+    !recorded.conversationsClosed &&
+    !recorded.draftsHeld &&
+    !recorded.activeConversations;
+  if (!recordedIsAllZero) return false;
+  const truth = input.truthCounters;
+  return truth.inboundFromCustomer + truth.outboundToCustomer + truth.draftsProduced > 0;
+}
