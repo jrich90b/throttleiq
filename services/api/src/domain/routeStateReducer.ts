@@ -6382,6 +6382,21 @@ const CADENCE_PROTECTED_KINDS = new Set<string>(["post_sale", "long_term"]);
  */
 const CADENCE_CLOSE_SOLD_REASONS = new Set<string>(["sold", "sold_walkin_note"]);
 
+/**
+ * The same authority, for the BACKFILL that repairs records this referee froze before it existed.
+ *
+ * #519 is forward-only, so every lead already stopped this way stays stopped. The heal must select
+ * on EXACTLY what the referee now protects, or the two drift — and the drift is not symmetric: a
+ * heal with its own private list would either miss victims or, far worse, re-arm an owner sequence
+ * on a lead stopped for a real reason. Measured 2026-08-05 on the live store: of 15 stranded sold
+ * leads only 3 carried a sold-close reason; the other 12 stopped for `customer_stepping_back`,
+ * `purchase_delivery`, `in_process_deal`, `inventory_watch` and friends. Texting those would have
+ * been a fresh defect, not a repair. Exported as a predicate, not the Set, so no caller can mutate it.
+ */
+export function isCadenceCloseSoldReason(reason?: string | null): boolean {
+  return CADENCE_CLOSE_SOLD_REASONS.has(String(reason ?? "").trim());
+}
+
 export type CadenceLifecycleInput = {
   verb: CadenceLifecycleVerb | string;
   /**

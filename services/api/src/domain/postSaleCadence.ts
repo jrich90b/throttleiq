@@ -126,3 +126,75 @@ export function postSaleAccessoryOrEnjoyMessage(args: {
   }
   return `${intro}Hope you're enjoying the ${bikeModel}! If there's anything you need for it, just let me know.`;
 }
+
+/**
+ * WHICH stranded sold leads a post-sale backfill may re-arm — and, far more often, may not.
+ *
+ * #519 taught the cadence referee that closing a lead BECAUSE IT SOLD must not kill the owner
+ * sequence the sale just armed. It is forward-only: records already frozen stay frozen. This
+ * decides which of those the repair script may touch, and it is deliberately the narrowest rule
+ * that still fixes the reported defect.
+ *
+ * WHY IT IS THIS NARROW (measured on the live store, 2026-08-05). The naive selector — "sold, and
+ * no active post-sale chase" — matched 15 leads. Only 3 of them were stranded by the bug at all.
+ * The rest had stopped for reasons that were entirely correct: `customer_stepping_back` (×4 — the
+ * customer ASKED us to back off), `purchase_delivery` (×3), `in_process_deal`, `inventory_watch`,
+ * `pending_incoming_inventory`. Re-arming those is not a repair, it is a new defect, and one aimed
+ * at the customer least willing to hear from us. So selection asks the referee itself
+ * (`isCadenceCloseSoldReason`) rather than carrying a second list that could drift from it.
+ *
+ * AND WHY AGE MATTERS. Of the 3 genuine victims, one (Charles Desalvo +17168614216, sold 8/3) was
+ * two days old and was healed by hand on Joe's approval; the other two are 74 and 89 days old. A
+ * "congratulations on the new bike" text three months after the sale reads as a system that has
+ * lost track of the customer — worse than the silence it replaces. The ceiling exists so nobody
+ * has to re-derive that judgement under time pressure with a `--write` flag already typed.
+ *
+ * FAIL DIRECTION: every uncertainty returns `heal: false` — no sale date, an unparseable date, a
+ * future date, an unknown stop reason. `heal: false` is silence, which is exactly today's
+ * behaviour for these records, so the worst case of a wrong answer here is that a human repairs one
+ * lead by hand. The opposite mistake texts a real customer. `skipReason` is always populated so the
+ * caller can SAY what it passed over — a heal that silently matched nothing must not read the same
+ * as a heal that had nothing to do.
+ */
+export const POST_SALE_BACKFILL_MAX_AGE_DAYS = 14;
+
+/** Follow-up modes that mean a human deliberately parked this thread. Never auto-resume one. */
+const POST_SALE_BACKFILL_PARKED_MODES = new Set<string>(["paused_indefinite", "holding_inventory"]);
+
+export type PostSaleBackfillDecision = { heal: boolean; skipReason: string | null };
+
+export function decidePostSaleCadenceBackfill(input: {
+  /** `followUpCadence.stopReason`, exactly as stored. */
+  stopReason?: string | null;
+  /** `followUp.mode`, exactly as stored. */
+  followUpMode?: string | null;
+  /** `sale.soldAt` — the anchor the owner sequence would run from. */
+  soldAtIso?: string | null;
+  /** "now", injected so an eval can pin a production record instead of racing the clock. */
+  asOfIso: string;
+  maxAgeDays?: number;
+  isSoldCloseReason: (reason?: string | null) => boolean;
+}): PostSaleBackfillDecision {
+  if (!input.isSoldCloseReason(input.stopReason)) {
+    const reason = String(input.stopReason ?? "").trim();
+    return { heal: false, skipReason: `not_a_sold_close:${reason || "unknown"}` };
+  }
+  const mode = String(input.followUpMode ?? "").trim();
+  if (POST_SALE_BACKFILL_PARKED_MODES.has(mode)) {
+    return { heal: false, skipReason: `deliberately_parked:${mode}` };
+  }
+  const soldAtMs = Date.parse(String(input.soldAtIso ?? ""));
+  const asOfMs = Date.parse(String(input.asOfIso ?? ""));
+  if (!Number.isFinite(soldAtMs) || !Number.isFinite(asOfMs)) {
+    return { heal: false, skipReason: "no_sale_date" };
+  }
+  const ageDays = (asOfMs - soldAtMs) / 86_400_000;
+  if (ageDays < 0) return { heal: false, skipReason: "sale_date_in_future" };
+  const ceiling = Number.isFinite(input.maxAgeDays as number)
+    ? (input.maxAgeDays as number)
+    : POST_SALE_BACKFILL_MAX_AGE_DAYS;
+  if (ageDays > ceiling) {
+    return { heal: false, skipReason: `too_old:${Math.floor(ageDays)}d>${ceiling}d` };
+  }
+  return { heal: true, skipReason: null };
+}
