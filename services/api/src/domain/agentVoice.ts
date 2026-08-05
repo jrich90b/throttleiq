@@ -553,6 +553,23 @@ export function buildWatchSiblingScopeAsk(args: {
  * self-declared non-buyer. Leaves the door open without pressure. Pinned by
  * `non_buyer_survey_ack:eval`.
  */
+/**
+ * The JUMPSTART 1-on-1 invite (Joe, 2026-08-05) — one sentence, woven into the first-time-rider
+ * reply when `decideJumpstartInviteTurn` says this store HAS a Jumpstart and this customer has
+ * no-to-little riding experience.
+ *
+ * May say: what the Jumpstart is (a real bike on a stationary stand), that it needs no license, and
+ * an offer of one-on-one time on it. Must NOT say, because none of it is this sentence's to
+ * promise: a price, a test ride or road ride, a specific day or time (the scheduler owns booking),
+ * or any suggestion that it replaces training or a license. Pinned by `jumpstart_invite:eval`.
+ */
+export function buildJumpstartOneOnOneInvite(): string {
+  return (
+    " We also have a Jumpstart here — a real bike on a stand where you can start it up and work the " +
+    "clutch and gears, no license needed. Want me to set up one-on-one time on it for you?"
+  );
+}
+
 export function buildNonBuyerSurveyAck(
   firstName: string | null | undefined,
   agentName: string,
@@ -583,12 +600,35 @@ export function buildNonBuyerSurveyAck(
 export function buildRidingAcademyEnrollmentAck(
   firstName: string | null | undefined,
   agentName: string,
-  dealerName: string
+  dealerName: string,
+  extras: { registrationNote?: string; unpaidSeatLine?: string; jumpstartInvite?: string } | string = {}
 ): string {
-  return (
-    `${buildAgentIntro(firstName, agentName, dealerName)}` +
-    "Thanks for signing up for the Riding Academy — glad to have you in the class. I'm your contact here for anything to do with the course, so if a question comes up, just text me and I'll take care of it."
-  );
+  // Back-compat: earlier callers passed the Jumpstart invite as a bare 4th string.
+  const e = typeof extras === "string" ? { jumpstartInvite: extras } : extras;
+  const note = String(e.registrationNote ?? "").trim();
+  const unpaid = String(e.unpaidSeatLine ?? "").trim();
+  const jumpstart = String(e.jumpstartInvite ?? "").trim();
+  const intro = buildAgentIntro(firstName, agentName, dealerName);
+
+  // Joe's ruling stack for this one message (2026-08-05), in priority order:
+  //   1. intro + thanks + "I'm your contact" — always;
+  //   2. the dealer's own registration note (the e-course link sentence) — always, when written;
+  //   3. EITHER the unpaid-seat line OR the Jumpstart offer — never both.
+  //
+  // Why never both: measured against the real SMS brevity budget, all four run to 501 characters
+  // across five sentences and stop reading like a text. The unpaid seat wins because it has a
+  // DEADLINE (the class date) and the Jumpstart is an invitation that can wait for any later turn.
+  const tail = unpaid || jumpstart;
+  if (!note && !tail) {
+    // Nothing configured and nothing to flag — the plain intro Joe approved, byte for byte.
+    return (
+      `${intro}Thanks for signing up for the Riding Academy — glad to have you in the class. ` +
+      "I'm your contact here for anything to do with the course, so if a question comes up, just text me and I'll take care of it."
+    );
+  }
+  const contact =
+    "Thanks for signing up for the Riding Academy — I'm your contact here for anything to do with the course.";
+  return `${intro}${contact}${note ? ` ${note}` : ""}${tail ? ` ${tail}` : ""}`;
 }
 
 /**
@@ -681,4 +721,69 @@ export function buildAcquiredVehicleAck(vehicle?: string | null): string {
     `${congrats} Thanks for letting me know — I'll take you off the alert list. ` +
     "If you ever need anything for it — parts, service, or gear — just text me here."
   );
+}
+
+/**
+ * The three BEGINNER-facing first-time-rider replies, composed in one place.
+ *
+ * Lives here rather than inline in `index.ts` for a reason that cost a sabotage round on
+ * 2026-08-05: while these strings were assembled inline, `jumpstart_invite:eval` could only GREP
+ * for them, and a sabotage that APPENDED the Jumpstart invite instead of substituting it — blowing
+ * the SMS brevity budget and re-asking a question the customer had just answered — passed the eval
+ * clean. Composed here, the eval imports this and runs it, so the substitution is a fact the gate
+ * can check instead of a shape it has to recognise.
+ *
+ * `jumpstartInvite` is "" for a dealer with no Jumpstart, and every branch then returns TODAY'S
+ * exact wording, byte for byte. When it is set it REPLACES the clause it improves on: the generic
+ * "sit on a few bikes" offer, or the "do you have your endorsement?" question we no longer need to
+ * ask (the invite only fires once we have been told they are starting out).
+ */
+export function buildFirstTimeRiderBeginnerReply(args: {
+  branch: "no_endorsement" | "asks_test_ride" | "general";
+  jumpstartInvite: string;
+  requirement?: string;
+  courseText?: string;
+}): string {
+  const invite = String(args.jumpstartInvite ?? "");
+  if (args.branch === "no_endorsement") {
+    const hands =
+      invite || " We can still help you sit on a few bikes and talk through beginner-friendly options.";
+    return `${args.requirement ?? ""}${hands} If you’re still getting started, ${args.courseText ?? ""} is a good next step.`;
+  }
+  if (args.branch === "asks_test_ride") {
+    return (
+      "That’s exciting. For a first ride, I’d want to make sure we match you with something comfortable " +
+      `and manageable before setting up a test ride.${invite || " Do you already have your motorcycle endorsement?"}`
+    );
+  }
+  return (
+    "That’s exciting. For a first bike, I’d focus on comfort, seat height, weight, and confidence." +
+    `${invite || " Do you already have your motorcycle endorsement, or are you still getting started?"}`
+  );
+}
+
+/**
+ * The UNPAID-SEAT line for a course registration (Joe, 2026-08-05: *"Unpaid seats can be paid at
+ * the dealer or over the phone if the payment fails."*).
+ *
+ * `paymentMethods` is the dealer's own words from their profile ("at the dealership or over the
+ * phone"); blank ⇒ "" ⇒ the agent never raises payment. States that the seat is not settled and
+ * WHERE to settle it — never HOW MUCH, and never a due date we would have to be right about. The
+ * wording works for both statuses seen live ("Failed" and "Awaiting Payment at Dealer"): "isn't
+ * showing as paid yet" is true of both, where "your payment failed" would be wrong for the second.
+ * Pinned by `riding_academy_enrollment_ack:eval`.
+ */
+export function buildUnpaidSeatLine(paymentMethods: string): string {
+  const methods = String(paymentMethods ?? "").trim();
+  if (!methods) return "";
+  return `One thing to flag: your seat isn't showing as paid yet — you can take care of that ${methods}.`;
+}
+
+/**
+ * The SHORT Jumpstart offer used inside a course registration, where the message is already
+ * carrying an intro and the dealer's e-course note. The full `buildJumpstartOneOnOneInvite` wording
+ * pushes the registration reply to five sentences; this one keeps it at four.
+ */
+export function buildJumpstartRegistrationInvite(): string {
+  return "We've also got a Jumpstart here you can try before class — want me to set up one-on-one time on it?";
 }

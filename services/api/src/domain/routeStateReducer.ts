@@ -3272,6 +3272,97 @@ export function decideRidingAcademyTurn(input: RidingAcademyTurnInput): RidingAc
   return { kind: "riding_academy_enrollment_ack" };
 }
 
+// JUMPSTART 1-on-1 invite (Joe, 2026-08-05). The H-D Jumpstart is a real bike locked onto a
+// stationary rig — you work the clutch, throttle and gears and feel the bike running without ever
+// leaving the showroom or needing an endorsement. Joe's rule: *if the dealer HAS one (noted in the
+// profile) and the customer has no-to-little riding experience, invite them in for a 1-on-1 ride on
+// it.* Until now the agent only ever mentioned the Jumpstart when the CUSTOMER raised it first, and
+// it never checked whether the store owned one at all.
+//
+// This is the reply-side rule for an EXISTING parser lane: the experience read comes from the typed
+// `first_time_rider_guidance` parser (`parseFirstTimeRiderGuidanceWithLLM`) — comprehension stays in
+// the parser, this decision is pure — with one extra STRUCTURED source, the rider-training school's
+// enrollment record (`Motorcycle Riding History: …`), which is a machine enum, not prose.
+//
+// TWO FAIL DIRECTIONS, both deliberate:
+//  1. NEVER offer equipment the store does not have. `dealerHasJumpstart` must be an explicit true;
+//     absent/unknown profile ⇒ no invite. This is the one that would embarrass a new dealer.
+//  2. NEVER call an experienced rider a beginner. Only an EXPLICIT inexperience signal invites —
+//     the parser saying first-time/no-endorsement, or a riding-history field that says in so many
+//     words that they have not ridden. "unknown" is not "beginner": a missed invite costs an
+//     opportunity, a wrong one insults a customer who has ridden for thirty years.
+// Also one-shot: `alreadyOffered` suppresses a repeat, so the invite never turns into nagging.
+export type JumpstartInviteTurnKind = "jumpstart_one_on_one_invite" | "none";
+
+export type RiderExperienceLevel = "none_or_little" | "experienced" | "unknown";
+
+export type JumpstartInviteTurnInput = {
+  dealerHasJumpstart?: boolean | null;
+  /** From the typed first_time_rider_guidance parse. */
+  riderIntent?: string | null;
+  hasEndorsement?: boolean | null;
+  /** The rider-training enrollment record's machine fields, when this lead carries one. */
+  ridingHistory?: string | null;
+  enrolledCourse?: string | null;
+  alreadyOffered?: boolean | null;
+};
+
+export type JumpstartInviteTurnDecision = { kind: JumpstartInviteTurnKind };
+
+/**
+ * How much riding has this customer actually done? Reads the typed parse first, then the enrollment
+ * record's structured history field. Anything we cannot read plainly stays `unknown`.
+ */
+export function resolveRiderExperienceLevel(input: {
+  riderIntent?: string | null;
+  hasEndorsement?: boolean | null;
+  ridingHistory?: string | null;
+  enrolledCourse?: string | null;
+}): RiderExperienceLevel {
+  // An endorsement in hand is the strongest "not a beginner" signal we get, and it outranks the
+  // intent label: someone endorsed asking a beginner-bike question is a rider, not a novice.
+  if (input.hasEndorsement === true) return "experienced";
+  // Signing up for a LEARN-TO-RIDE course is a plain statement of little experience, and it
+  // outranks the riding-history field below (Joe, 2026-08-05, asking for the offer in the
+  // registration reply). Both real enrollees say they have "operated an on-road motorcycle within
+  // the last 12 months" — which could be a parking lot on a friend's bike — while paying to be
+  // taught the basics. The course they CHOSE is the better evidence of the two. An advanced or
+  // returning-rider course does not match, so those students are not handed a beginner rig.
+  const course = String(input.enrolledCourse ?? "").toLowerCase();
+  if (course && /\b(new rider|basic rider|beginner|learn(ing)? to ride)\b/.test(course)) {
+    return "none_or_little";
+  }
+  const intent = String(input.riderIntent ?? "").toLowerCase();
+  if (intent === "first_time_rider" || intent === "no_motorcycle_endorsement") return "none_or_little";
+  if (input.hasEndorsement === false) return "none_or_little";
+  // The enrollment record's own enum. Only the plainly-negative wordings count; the value we have
+  // seen in live data ("I have operated an on-road motorcycle within the last 12 months") is a
+  // rider, and every unrecognised wording stays unknown rather than being guessed at.
+  const history = String(input.ridingHistory ?? "").toLowerCase();
+  if (history) {
+    if (/\b(never|not)\b[^.]*\boperated\b/.test(history) || /\bno riding experience\b/.test(history)) {
+      return "none_or_little";
+    }
+    if (/\boperated\b/.test(history)) return "experienced";
+  }
+  return "unknown";
+}
+
+export function decideJumpstartInviteTurn(
+  input: JumpstartInviteTurnInput
+): JumpstartInviteTurnDecision {
+  if (input.dealerHasJumpstart !== true) return { kind: "none" };
+  if (input.alreadyOffered === true) return { kind: "none" };
+  const level = resolveRiderExperienceLevel({
+    riderIntent: input.riderIntent,
+    hasEndorsement: input.hasEndorsement,
+    ridingHistory: input.ridingHistory,
+    enrolledCourse: input.enrolledCourse
+  });
+  if (level !== "none_or_little") return { kind: "none" };
+  return { kind: "jumpstart_one_on_one_invite" };
+}
+
 // Dealer Lead App MARKETING SURVEY lead (the Tim Williams class, +17163741119, 2026-06-24) — the
 // buyer-side twin of decideNonBuyerSurveyTurn. Where that keys on the STRUCTURED purchase-timeframe
 // field, many DLA surveys embed the whole Q&A in the free-text Customer Comments (ownership history +
