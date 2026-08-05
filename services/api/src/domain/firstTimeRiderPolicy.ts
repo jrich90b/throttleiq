@@ -73,3 +73,13 @@ export function readEnrollmentRidingHistory(inquiry?: string | null): string {
   );
   return hit?.[1] ? hit[1].trim() : "";
 }
+
+/**
+ * The enrollment record's `Course:` field — which course they signed up for. Same machine record,
+ * same field-boundary rule as the riding-history read (values contain hyphens: "New Rider Course -
+ * eCourse + Range").
+ */
+export function readEnrollmentCourseName(inquiry?: string | null): string {
+  const hit = String(inquiry ?? "").match(/\bcourse:\s*(.+?)(?=-[A-Z][A-Za-z /]*:|\n|$)/i);
+  return hit?.[1] ? hit[1].trim() : "";
+}

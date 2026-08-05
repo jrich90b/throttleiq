@@ -3301,8 +3301,9 @@ export type JumpstartInviteTurnInput = {
   /** From the typed first_time_rider_guidance parse. */
   riderIntent?: string | null;
   hasEndorsement?: boolean | null;
-  /** The rider-training enrollment record's machine field, when this lead carries one. */
+  /** The rider-training enrollment record's machine fields, when this lead carries one. */
   ridingHistory?: string | null;
+  enrolledCourse?: string | null;
   alreadyOffered?: boolean | null;
 };
 
@@ -3316,10 +3317,21 @@ export function resolveRiderExperienceLevel(input: {
   riderIntent?: string | null;
   hasEndorsement?: boolean | null;
   ridingHistory?: string | null;
+  enrolledCourse?: string | null;
 }): RiderExperienceLevel {
   // An endorsement in hand is the strongest "not a beginner" signal we get, and it outranks the
   // intent label: someone endorsed asking a beginner-bike question is a rider, not a novice.
   if (input.hasEndorsement === true) return "experienced";
+  // Signing up for a LEARN-TO-RIDE course is a plain statement of little experience, and it
+  // outranks the riding-history field below (Joe, 2026-08-05, asking for the offer in the
+  // registration reply). Both real enrollees say they have "operated an on-road motorcycle within
+  // the last 12 months" — which could be a parking lot on a friend's bike — while paying to be
+  // taught the basics. The course they CHOSE is the better evidence of the two. An advanced or
+  // returning-rider course does not match, so those students are not handed a beginner rig.
+  const course = String(input.enrolledCourse ?? "").toLowerCase();
+  if (course && /\b(new rider|basic rider|beginner|learn(ing)? to ride)\b/.test(course)) {
+    return "none_or_little";
+  }
   const intent = String(input.riderIntent ?? "").toLowerCase();
   if (intent === "first_time_rider" || intent === "no_motorcycle_endorsement") return "none_or_little";
   if (input.hasEndorsement === false) return "none_or_little";
@@ -3344,7 +3356,8 @@ export function decideJumpstartInviteTurn(
   const level = resolveRiderExperienceLevel({
     riderIntent: input.riderIntent,
     hasEndorsement: input.hasEndorsement,
-    ridingHistory: input.ridingHistory
+    ridingHistory: input.ridingHistory,
+    enrolledCourse: input.enrolledCourse
   });
   if (level !== "none_or_little") return { kind: "none" };
   return { kind: "jumpstart_one_on_one_invite" };

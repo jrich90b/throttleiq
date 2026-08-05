@@ -37,8 +37,10 @@ import {
 } from "../services/api/src/domain/agentVoice.ts";
 import {
   readFirstTimeRiderPolicy,
-  readEnrollmentRidingHistory
+  readEnrollmentRidingHistory,
+  readEnrollmentCourseName
 } from "../services/api/src/domain/firstTimeRiderPolicy.ts";
+import { resolveEnrollmentJumpstartInvite } from "../services/api/src/domain/ridingAcademy.ts";
 
 const BEGINNER = { riderIntent: "first_time_rider", hasEndorsement: null };
 
@@ -72,6 +74,7 @@ type ExpRow = {
   riderIntent?: string | null;
   hasEndorsement?: boolean | null;
   ridingHistory?: string | null;
+  enrolledCourse?: string | null;
   level: "none_or_little" | "experienced" | "unknown";
 };
 const expRows: ExpRow[] = [
@@ -103,14 +106,42 @@ const expRows: ExpRow[] = [
     level: "none_or_little"
   },
   // A wording we have never seen is NOT a guess.
-  { id: "enrollment_unrecognised_wording", ridingHistory: "Prefer not to say", level: "unknown" }
+  { id: "enrollment_unrecognised_wording", ridingHistory: "Prefer not to say", level: "unknown" },
+  // The COURSE they signed up for (Joe, 2026-08-05 — the offer belongs in the registration reply).
+  // Paying to be taught the basics outranks a vague "have operated a motorcycle in 12 months",
+  // which is why both real enrollees qualify despite that field.
+  {
+    id: "new_rider_course_outranks_riding_history",
+    enrolledCourse: "New Rider Course - eCourse + Range",
+    ridingHistory: "I have operated an on-road motorcycle within the last 12 months",
+    level: "none_or_little"
+  },
+  { id: "basic_rider_course", enrolledCourse: "Basic Rider Course", level: "none_or_little" },
+  { id: "learn_to_ride_course", enrolledCourse: "Learn To Ride — Weekend", level: "none_or_little" },
+  // An advanced / returning-rider course is NOT a beginner signal; it falls through to the
+  // history field, so those students are never handed a beginner rig.
+  {
+    id: "advanced_course_falls_through_to_history",
+    enrolledCourse: "Advanced Rider Course",
+    ridingHistory: "I have operated an on-road motorcycle within the last 12 months",
+    level: "experienced"
+  },
+  { id: "returning_rider_course_alone_is_unknown", enrolledCourse: "Returning Rider Course", level: "unknown" },
+  // An endorsement still outranks everything, course included.
+  {
+    id: "endorsed_beats_new_rider_course",
+    enrolledCourse: "New Rider Course - eCourse + Range",
+    hasEndorsement: true,
+    level: "experienced"
+  }
 ];
 for (const r of expRows) {
   assert.equal(
     resolveRiderExperienceLevel({
       riderIntent: r.riderIntent ?? null,
       hasEndorsement: r.hasEndorsement ?? null,
-      ridingHistory: r.ridingHistory ?? null
+      ridingHistory: r.ridingHistory ?? null,
+      enrolledCourse: r.enrolledCourse ?? null
     }),
     r.level,
     `resolveRiderExperienceLevel[${r.id}]`
@@ -120,7 +151,8 @@ for (const r of expRows) {
       dealerHasJumpstart: true,
       riderIntent: r.riderIntent ?? null,
       hasEndorsement: r.hasEndorsement ?? null,
-      ridingHistory: r.ridingHistory ?? null
+      ridingHistory: r.ridingHistory ?? null,
+      enrolledCourse: r.enrolledCourse ?? null
     }).kind === "jumpstart_one_on_one_invite",
     r.level === "none_or_little",
     `decideJumpstartInviteTurn[${r.id}] must invite only an explicit beginner`
@@ -149,6 +181,38 @@ assert.equal(
   "a student who has ridden within 12 months is not offered a beginner rig on that field alone"
 );
 assert.equal(readEnrollmentRidingHistory("Interested in a Street Glide"), "", "a lead with no enrollment record reads empty");
+assert.equal(
+  readEnrollmentCourseName(SAVANNAH),
+  "New Rider Course - eCourse + Range",
+  "the course field is read to the next FIELD boundary, keeping its internal hyphen"
+);
+
+// END TO END on the REGISTRATION reply (Joe, 2026-08-05): the whole record, through the one
+// resolver both the live intake and the regen path call.
+assert.ok(
+  resolveEnrollmentJumpstartInvite({ policies: { firstTimeRider: { jumpstartEnabled: true } } }, SAVANNAH).includes(
+    "Jumpstart"
+  ),
+  "a New Rider Course registration at a Jumpstart dealer must carry the offer"
+);
+assert.equal(
+  resolveEnrollmentJumpstartInvite({ policies: { firstTimeRider: {} } }, SAVANNAH),
+  "",
+  "the same registration at a dealer with no Jumpstart must carry nothing"
+);
+assert.equal(
+  resolveEnrollmentJumpstartInvite(
+    { policies: { firstTimeRider: { jumpstartEnabled: true } } },
+    "Enrollment Status: Enrolled-Course: Advanced Rider Course-Motorcycle Riding History: I have operated an on-road motorcycle within the last 12 months"
+  ),
+  "",
+  "an ADVANCED-course student at a Jumpstart dealer is not offered a beginner rig"
+);
+assert.equal(
+  resolveEnrollmentJumpstartInvite({ policies: { firstTimeRider: { jumpstartEnabled: true } } }, "Interested in a Street Glide"),
+  "",
+  "an ordinary sales lead is not an enrollment and gets nothing"
+);
 
 // --- 3) Copy safety. ---
 const invite = buildJumpstartOneOnOneInvite();

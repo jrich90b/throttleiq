@@ -16,8 +16,21 @@
  *
  * Pinned by `riding_academy_enrollment_ack:eval`.
  */
-import { decideRidingAcademyTurn, decideNonBuyerSurveyTurn } from "./routeStateReducer.js";
-import { buildRidingAcademyEnrollmentAck, buildNonBuyerSurveyAck } from "./agentVoice.js";
+import {
+  decideRidingAcademyTurn,
+  decideNonBuyerSurveyTurn,
+  decideJumpstartInviteTurn
+} from "./routeStateReducer.js";
+import {
+  buildRidingAcademyEnrollmentAck,
+  buildNonBuyerSurveyAck,
+  buildJumpstartOneOnOneInvite
+} from "./agentVoice.js";
+import {
+  readFirstTimeRiderPolicy,
+  readEnrollmentCourseName,
+  readEnrollmentRidingHistory
+} from "./firstTimeRiderPolicy.js";
 
 /** Which approved first-touch ack (if any) replaces the generic sales opener on an ADF lead. */
 export type AdfFirstTouchAckKind =
@@ -80,9 +93,33 @@ export function resolveAdfFirstTouchAckKind(input: {
 /** The approved copy for a resolved first-touch ack kind. */
 export function buildAdfFirstTouchAck(
   kind: Exclude<AdfFirstTouchAckKind, "none">,
-  args: { firstName: string | null; agentName: string; dealerName: string }
+  args: { firstName: string | null; agentName: string; dealerName: string; jumpstartInvite?: string }
 ): string {
   return kind === "riding_academy_enrollment_ack"
-    ? buildRidingAcademyEnrollmentAck(args.firstName, args.agentName, args.dealerName)
+    ? buildRidingAcademyEnrollmentAck(
+        args.firstName,
+        args.agentName,
+        args.dealerName,
+        args.jumpstartInvite ?? ""
+      )
     : buildNonBuyerSurveyAck(args.firstName, args.agentName, args.dealerName);
+}
+
+/**
+ * The Jumpstart offer for a RIDING ACADEMY REGISTRATION, or "" when it does not apply (Joe,
+ * 2026-08-05). One place, so the live intake and the regen path cannot drift: read the store's
+ * capability and the enrollment record's own course/history fields, ask the reducer, and return
+ * either the approved sentence or nothing.
+ *
+ * FAIL DIRECTION unchanged from the reducer: no Jumpstart in the profile, or no plain beginner
+ * signal, ⇒ "" ⇒ the registration reply is exactly the intro Joe approved, byte for byte.
+ */
+export function resolveEnrollmentJumpstartInvite(dealerProfile: any, inquiry?: string | null): string {
+  const policy = readFirstTimeRiderPolicy(dealerProfile);
+  const decision = decideJumpstartInviteTurn({
+    dealerHasJumpstart: policy.jumpstartEnabled,
+    enrolledCourse: readEnrollmentCourseName(inquiry),
+    ridingHistory: readEnrollmentRidingHistory(inquiry)
+  });
+  return decision.kind === "jumpstart_one_on_one_invite" ? buildJumpstartOneOnOneInvite() : "";
 }

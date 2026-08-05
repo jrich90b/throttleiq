@@ -600,11 +600,24 @@ export function buildNonBuyerSurveyAck(
 export function buildRidingAcademyEnrollmentAck(
   firstName: string | null | undefined,
   agentName: string,
-  dealerName: string
+  dealerName: string,
+  jumpstartInvite: string = ""
 ): string {
+  const intro = buildAgentIntro(firstName, agentName, dealerName);
+  // Joe, 2026-08-05 (second ruling): a store WITH a Jumpstart offers it right here, in the
+  // registration reply — these are people who signed up to learn to ride. The offer takes the
+  // place of the generic "text me if a question comes up" tail rather than being bolted on: it is
+  // the concrete version of the same promise, and appending both runs past the SMS brevity budget.
+  // Empty invite (no Jumpstart at this store) ⇒ today's wording, byte for byte.
+  if (!jumpstartInvite) {
+    return (
+      `${intro}Thanks for signing up for the Riding Academy — glad to have you in the class. ` +
+      "I'm your contact here for anything to do with the course, so if a question comes up, just text me and I'll take care of it."
+    );
+  }
   return (
-    `${buildAgentIntro(firstName, agentName, dealerName)}` +
-    "Thanks for signing up for the Riding Academy — glad to have you in the class. I'm your contact here for anything to do with the course, so if a question comes up, just text me and I'll take care of it."
+    `${intro}Thanks for signing up for the Riding Academy — I'm your contact here for anything to ` +
+    `do with the course.${jumpstartInvite}`
   );
 }
 

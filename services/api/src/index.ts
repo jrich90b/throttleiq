@@ -15,7 +15,7 @@ import { google } from "googleapis";
 import sharp from "sharp";
 import { orchestrateInbound, evaluateTestRideInventoryGate, buildBlockedTestRideInventoryDraft } from "./domain/orchestrator.js";
 import { resolveWatchOptOutOutcome } from "./domain/watchOptOutTurn.js";
-import { resolveAdfFirstTouchAckKind, buildAdfFirstTouchAck } from "./domain/ridingAcademy.js";
+import { resolveAdfFirstTouchAckKind, buildAdfFirstTouchAck, resolveEnrollmentJumpstartInvite } from "./domain/ridingAcademy.js";
 import { readFirstTimeRiderPolicy, hasRiderCoursePublicInfo, readEnrollmentRidingHistory } from "./domain/firstTimeRiderPolicy.js";
 import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildRidingAcademyEnrollmentAck, buildJumpstartOneOnOneInvite, buildFirstTimeRiderBeginnerReply, buildWatchAvailableReply, buildCholoWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, resolveIntroducedOwnerFirstName, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, hasCustomerReceivedOutbound, hasRecentDeliveredHumanOutbound } from "./domain/agentVoice.js";
 import {
@@ -55285,6 +55285,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   });
   if (regenAdfFirstTouch.kind !== "none") {
     const reply = buildAdfFirstTouchAck(regenAdfFirstTouch.kind, {
+      jumpstartInvite: resolveEnrollmentJumpstartInvite(dealerProfile, conv.lead?.inquiry ?? event.body ?? ""),
       firstName:
         normalizeDisplayCase(conv.lead?.firstName) ||
         (String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null),

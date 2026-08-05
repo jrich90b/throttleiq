@@ -37,6 +37,7 @@ import fs from "node:fs";
 
 import { decideRidingAcademyTurn } from "../services/api/src/domain/routeStateReducer.ts";
 import { buildRidingAcademyEnrollmentAck } from "../services/api/src/domain/agentVoice.ts";
+import { resolveEnrollmentJumpstartInvite } from "../services/api/src/domain/ridingAcademy.ts";
 import { resolveInitialAdfCadencePlan } from "../services/api/src/domain/conversationStore.ts";
 
 // The two real enrollment bodies, byte-for-byte from the americanharley store (2026-08-04).
@@ -149,6 +150,52 @@ for (const b of BANNED) {
 }
 const ackNoName = buildRidingAcademyEnrollmentAck(null, "Alexandra", "American Harley-Davidson");
 assert.ok(!/undefined|null/.test(ackNoName), "ack must handle a missing first name cleanly");
+// The JUMPSTART variant (Joe, 2026-08-05, second ruling): a store with a Jumpstart offers it right
+// here in the registration reply. Same guarantees as the plain intro — nothing about price or
+// payment, no bike pitch — plus: the plain reply must be untouched when the store has none.
+process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "eval-no-live-key";
+const { exceedsSmsBrevityBudget } = await import("../services/api/src/domain/llmDraft.ts");
+const jumpstartOffer = resolveEnrollmentJumpstartInvite(
+  { policies: { firstTimeRider: { jumpstartEnabled: true } } },
+  SAVANNAH_INQUIRY
+);
+assert.ok(jumpstartOffer, "the fixture dealer has a Jumpstart, so the offer must resolve");
+const ackWithJumpstart = buildRidingAcademyEnrollmentAck(
+  "Savannah",
+  "Alexandra",
+  "American Harley-Davidson",
+  jumpstartOffer
+);
+assert.ok(/Jumpstart/.test(ackWithJumpstart), "a Jumpstart dealer's registration reply must offer it");
+assert.ok(
+  /one-on-one|1-on-1/i.test(ackWithJumpstart),
+  "the registration reply must offer 1-on-1 time, which is the whole point of the offer"
+);
+for (const b of BANNED) {
+  assert.ok(!b.re.test(ackWithJumpstart), `the Jumpstart registration reply must not contain a ${b.label}`);
+}
+assert.equal(
+  exceedsSmsBrevityBudget(ackWithJumpstart),
+  false,
+  `the registration reply carrying the offer must stay inside the SMS brevity budget: "${ackWithJumpstart}"`
+);
+assert.ok(
+  (ackWithJumpstart.match(/\?/g) ?? []).length <= 1,
+  "the registration reply must not ask two questions at once"
+);
+// The offer REPLACES the generic tail rather than being appended.
+assert.ok(
+  !ackWithJumpstart.includes("just text me and I'll take care of it"),
+  "the offer must replace the generic tail, not be bolted onto it"
+);
+// A dealer with no Jumpstart keeps the reply Joe approved, byte for byte.
+assert.equal(
+  buildRidingAcademyEnrollmentAck("Savannah", "Alexandra", "American Harley-Davidson", ""),
+  ack,
+  "no Jumpstart at this store ⇒ the registration reply is unchanged, byte for byte"
+);
+assert.ok(!/Jumpstart/.test(ack), "the plain registration reply must not mention a Jumpstart");
+
 // Portability: the copy itself must not hard-code this dealer (dealer #2 readiness).
 const ackOtherDealer = buildRidingAcademyEnrollmentAck("Pat", "Sales Team", "Queen City Harley-Davidson");
 assert.ok(
@@ -186,7 +233,7 @@ assert.ok(
 assert.ok(
   /decideRidingAcademyTurn\(\{ leadSource: input\.leadSource, inquiry: input\.inquiry \}\)\.kind ===\s*"riding_academy_enrollment_ack"/.test(
     adfFirstTouch
-  ) && /buildRidingAcademyEnrollmentAck\(args\.firstName, args\.agentName, args\.dealerName\)/.test(adfFirstTouch),
+  ) && /buildRidingAcademyEnrollmentAck\(\s*args\.firstName,\s*args\.agentName,\s*args\.dealerName,\s*args\.jumpstartInvite \?\? ""\s*\)/.test(adfFirstTouch),
   "the shared resolver must decide from the reducer and build the approved enrollment copy"
 );
 // Precedence: the enrollment ack is checked BEFORE the non-buyer survey ack.
