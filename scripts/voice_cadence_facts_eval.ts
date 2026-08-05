@@ -170,8 +170,21 @@ assert.equal(
   3,
   "all three cadence personalization sites must append the voice facts line"
 );
+// The few-shot corpus moved out of llmDraft.ts into its own prompt module under
+// source_size_ratchet:eval (same shape as inboundReplyActionPrompt.ts). Pin BOTH halves —
+// the fixture in the module, and llmDraft.ts still importing it — or the surface can be
+// orphaned without anything going red.
 const llmSource = await fs.readFile(path.resolve("services/api/src/domain/llmDraft.ts"), "utf8");
-assert.match(llmSource, /was quoted \$14,995 asking price/, "parser few-shots pin the production fixture");
+assert.match(
+  llmSource,
+  /VOICE_DURABLE_FACTS_EXAMPLES\s*\n?\s*}?\s*from "\.\/voiceDurableFactsPrompt\.js"|VOICE_DURABLE_FACTS_EXAMPLES/,
+  "the voice parser must still consume the extracted prompt module"
+);
+const voicePromptSource = await fs.readFile(
+  path.resolve("services/api/src/domain/voiceDurableFactsPrompt.ts"),
+  "utf8"
+);
+assert.match(voicePromptSource, /was quoted \$14,995 asking price/, "parser few-shots pin the production fixture");
 
 // ── Fill-only-when-empty motorcycle-of-interest write-back (Joe, 2026-07-15) ──
 const baseFacts = {
@@ -256,11 +269,20 @@ assert.match(
   "the live voice-summary ingestion site must attempt the motorcycle-of-interest fill"
 );
 // Parser pin: the discussed_unit slot must exist with the trade/sell exclusion rule.
-assert.match(llmSource, /discussed_unit/, "voice facts schema must carry discussed_unit");
+// Reads the extracted prompt module — the schema and guideline block live there now.
+assert.match(voicePromptSource, /discussed_unit/, "voice facts schema must carry discussed_unit");
 assert.match(
-  llmSource,
+  voicePromptSource,
   /NEVER the bike they own, are trading in, or want to sell/,
   "discussed_unit prompt must exclude the trade/sell bike"
+);
+// A dealership promise conditional on something the STORE decides is still staff-owed:
+// below the next-step confidence gate it mints no task at all (James Bernsdorf
+// +17167964264, 2026-07-25 — see voice_next_step_promise:eval for the behavior fixture).
+assert.match(
+  voicePromptSource,
+  /CONDITIONAL on something the STORE decides/,
+  "conditional staff promises must stay staff-owned in the prompt"
 );
 
 console.log("PASS voice cadence facts eval");
