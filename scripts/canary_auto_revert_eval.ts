@@ -876,6 +876,21 @@ ok(DEFAULT_CANARY_THRESHOLDS.runawayMinPerHour > 0, "and an absolute runaway flo
     "a LEGACY baseline with no store provenance still catches a store older than the arming moment"
   );
 
+  // ISOLATE the backwards-in-time test: same conversation count, so the size rule below cannot be
+  // the thing catching it. Without this the size rule alone kept the eval green while the
+  // travelled-backwards branch was deleted.
+  eq(
+    detectJudgeStoreMismatch({
+      currentStoreNewestOutboundMs: DEALER_NEWEST - 72 * 3_600_000,
+      currentStoreConversations: 810,
+      baselineStoreNewestOutboundMs: DEALER_NEWEST,
+      baselineStoreConversations: 810,
+      baselineTakenAtMs: ARMED_AT
+    }).wrong,
+    true,
+    "a store the same SIZE but three days behind is still a different file — the time test stands alone"
+  );
+
   eq(
     detectJudgeStoreMismatch({
       currentStoreNewestOutboundMs: DEALER_NEWEST,
@@ -1080,6 +1095,34 @@ ok(DEFAULT_CANARY_THRESHOLDS.runawayMinPerHour > 0, "and an absolute runaway flo
       /re-measured 1 slice/.test(right.out),
       `the heal is reported, not silent — got: ${right.out.slice(0, 400)}`
     );
+
+    // 3. THE LEGACY one-shot path (a canary armed before progressive slices) is guarded too. It
+    // takes a different branch entirely — `judgeBaseline`, not `advanceCanary` — so guarding only
+    // the progressive path leaves a live canary judged against whatever store happens to be there.
+    {
+      const legacyRoot = path.join(tmp, "reports-legacy");
+      fs.mkdirSync(path.join(legacyRoot, "canary"), { recursive: true });
+      const { measurements: _dropped, progress: _alsoDropped, ...legacyPending } = pending as any;
+      fs.writeFileSync(
+        path.join(legacyRoot, "canary", "pending.json"),
+        JSON.stringify({ ...legacyPending, windowMs: 8 * 3_600_000 }, null, 2)
+      );
+      const r = spawnSync("npx", ["tsx", "scripts/canary_watch.ts", "judge", "--now", judgeAtIso], {
+        encoding: "utf8",
+        env: { ...process.env, REPORT_ROOT: legacyRoot, CONVERSATIONS_DB_PATH: stalePath },
+        cwd: path.resolve(new URL("..", import.meta.url).pathname)
+      });
+      const out = `${r.stdout ?? ""}${r.stderr ?? ""}`;
+      ok(r.status !== 0, "the legacy one-shot judge must not exit 0 against the wrong store");
+      ok(
+        /refusing to JUDGE/.test(out),
+        `the legacy path refuses the wrong store by name too — got: ${out.slice(0, 400)}`
+      );
+      ok(
+        !/canary: HEALTHY/.test(out),
+        "and it certainly never reports HEALTHY off a store frozen in May"
+      );
+    }
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
