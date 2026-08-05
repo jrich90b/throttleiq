@@ -565,6 +565,33 @@ export function buildNonBuyerSurveyAck(
 }
 
 /**
+ * Approved first touch for a RIDING ACADEMY ENROLLMENT lead (Joe, 2026-08-05). The rider-training
+ * school files an ADF when someone REGISTERS for a course; the person has already signed up and
+ * paid (or owes the store), so the generic ADF opener — "Thanks for asking about our Riding Academy
+ * course. Course details and pricing are here: <link>" — quoted the price back at two customers who
+ * had already bought a seat. Used when `decideRidingAcademyTurn` returns
+ * `riding_academy_enrollment_ack`.
+ *
+ * JOE'S SPEC, and the whole content of this message: an introduction, a thank-you, and that the
+ * agent is here to help with anything about the course. Deliberately contains NO price or payment
+ * reference (Payment Status is on the record — raising an unpaid seat over SMS is Joe's call, not
+ * the agent's), NO bike pitch, availability claim or "which model?" ask, NO stop-in push, and NO
+ * claim about the class date or what to bring (we assert nothing we would have to be right about).
+ * It also says nothing about being new to riding — this lane carries skills-refresher students too.
+ * Pinned by `riding_academy_enrollment_ack:eval`.
+ */
+export function buildRidingAcademyEnrollmentAck(
+  firstName: string | null | undefined,
+  agentName: string,
+  dealerName: string
+): string {
+  return (
+    `${buildAgentIntro(firstName, agentName, dealerName)}` +
+    "Thanks for signing up for the Riding Academy — glad to have you in the class. I'm your contact here for anything to do with the course, so if a question comes up, just text me and I'll take care of it."
+  );
+}
+
+/**
  * Approved acknowledgement for a BUYER-side Dealer Lead App marketing-survey lead (the Tim
  * Williams class, +17163741119, 2026-06-24) — the twin of `buildNonBuyerSurveyAck`. A structured
  * "Marketing Questions: Dealer Lead App" survey (purchase timeframe + "which model are you

@@ -64,12 +64,12 @@ import {
 import type { InventoryWatch } from "../domain/conversationStore.js";
 import { isSuppressed } from "../domain/suppressionStore.js";
 import { isOptOutKeywordInbound } from "../domain/scoringExclusions.js";
-import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, shouldIntroduceOnAdfTouch, stripAgentIntroPhraseForDealer, stripLeadingAgentGreeting, hasCustomerReceivedOutbound, GENERIC_AGENT_DISPLAY_NAME, GENERIC_DEALER_DISPLAY_NAME, resolveDealerAgentName, greetingFirstName } from "../domain/agentVoice.js";
+import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildRidingAcademyEnrollmentAck, shouldIntroduceOnAdfTouch, stripAgentIntroPhraseForDealer, stripLeadingAgentGreeting, hasCustomerReceivedOutbound, GENERIC_AGENT_DISPLAY_NAME, GENERIC_DEALER_DISPLAY_NAME, resolveDealerAgentName, greetingFirstName } from "../domain/agentVoice.js";
 import { buildAdfResubmissionAck, detectAdfFormResubmission } from "../domain/adfResubmission.js";
 import { buildMarketplaceRelayFirstTouchReply, buildMarketplaceRelayTaskSummary } from "../domain/marketplaceRelay.js";
 import { isHtmlClientNoticeOnly } from "../domain/inboundMailActionability.js";
 import { buildTradeAdfAck } from "../domain/tradeAdfReply.js";
-import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn, shouldCloseEventPromoLeadOnIntake, resolveRideChallengeEventTouch, decideIncomingInventoryPurpose, decideWalkInInventoryWatchTurn } from "../domain/routeStateReducer.js";
+import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn, decideRidingAcademyTurn, shouldCloseEventPromoLeadOnIntake, resolveRideChallengeEventTouch, decideIncomingInventoryPurpose, decideWalkInInventoryWatchTurn } from "../domain/routeStateReducer.js";
 import { buildLongTermTimelineMessage } from "../domain/longTermMessage.js";
 import { orchestrateInbound } from "../domain/orchestrator.js";
 import { collectRecentStaffCorrections } from "../domain/feedbackSteering.js";
@@ -9779,15 +9779,40 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     draft = buildDemoRideEventSoftInvite(drFirstName, drAgentName, drDealerName, drBikeLabel);
   }
 
-  // Non-buyer / passenger survey lead (Elizabeth Klapa, 2026-06-25): a Dealer Lead App survey
-  // whose STRUCTURED purchase-timeframe field says they are explicitly NOT a buyer ("I am not
-  // interested in purchasing at this time") was getting a sales pitch ("Which bike are you
-  // asking about?" / "want me to send photos or price and payment numbers?") on the first
-  // touch. Override that opener with a warm, no-pressure acknowledgement (the reply-side twin
-  // of resolveInitialAdfCadencePlan's "suppress", which already silences the nagging
-  // follow-ups). INITIAL ADF only — once the customer engages with a real question, normal
-  // routing answers it. event_promo wins if both somehow match (handled above first).
+  // Sender/lead names for the initial-ADF ack overrides below. Hoisted so the three branches share
+  // ONE fallback pair instead of each repeating it — the dealer-name default was written out three
+  // times, which is three AH literals against the portability ratchet for one behaviour. Values are
+  // unchanged; only the duplication is gone.
+  const adfAckDealerFallback = "American Harley-Davidson";
+  const adfAckAgentName = () => String(dealerProfile?.agentName ?? "").trim() || "Sales Team";
+  const adfAckDealerName = () => String(dealerProfile?.dealerName ?? "").trim() || adfAckDealerFallback;
+  const adfAckFirstName = () => String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null;
+  // Riding Academy ENROLLMENT lead (Joe, 2026-08-05): the rider-training school files an ADF when
+  // someone REGISTERS for a course. They already signed up, so the generic opener quoted course
+  // pricing back at them. Joe's ruling: send an introduction, thank them, and say the agent is here
+  // for anything about the course. Most specific of the initial-ADF overrides, so it is checked
+  // FIRST; event_promo still wins. INITIAL ADF only — once they text back, normal routing answers.
   if (
+    isInitialAdf &&
+    decideEventPromoTurn({
+      classificationBucket: conv.classification?.bucket,
+      classificationCta: conv.classification?.cta
+    }).kind !== "event_promo_ack" &&
+    decideRidingAcademyTurn({
+      leadSource: conv.lead?.source,
+      inquiry: effectiveInquiry
+    }).kind === "riding_academy_enrollment_ack"
+  ) {
+    draft = buildRidingAcademyEnrollmentAck(adfAckFirstName(), adfAckAgentName(), adfAckDealerName());
+  } else if (
+    // Non-buyer / passenger survey lead (Elizabeth Klapa, 2026-06-25): a Dealer Lead App survey
+    // whose STRUCTURED purchase-timeframe field says they are explicitly NOT a buyer ("I am not
+    // interested in purchasing at this time") was getting a sales pitch ("Which bike are you
+    // asking about?" / "want me to send photos or price and payment numbers?") on the first
+    // touch. Override that opener with a warm, no-pressure acknowledgement (the reply-side twin
+    // of resolveInitialAdfCadencePlan's "suppress", which already silences the nagging
+    // follow-ups). INITIAL ADF only — once the customer engages with a real question, normal
+    // routing answers it. event_promo wins if both somehow match (handled above first).
     isInitialAdf &&
     decideEventPromoTurn({
       classificationBucket: conv.classification?.bucket,
@@ -9796,10 +9821,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     decideNonBuyerSurveyTurn({ purchaseTimeframe: conv.lead?.purchaseTimeframe }).kind ===
       "non_buyer_survey_ack"
   ) {
-    const nbAgentName = String(dealerProfile?.agentName ?? "").trim() || "Sales Team";
-    const nbDealerName = String(dealerProfile?.dealerName ?? "").trim() || "American Harley-Davidson";
-    const nbFirstName = String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null;
-    draft = buildNonBuyerSurveyAck(nbFirstName, nbAgentName, nbDealerName);
+    draft = buildNonBuyerSurveyAck(adfAckFirstName(), adfAckAgentName(), adfAckDealerName());
   } else if (
     // Dealer Lead App MARKETING SURVEY lead (Tim Williams, +17163741119, 2026-06-24) — the
     // buyer-side twin of the non-buyer branch above. The survey Q&A lives in the free-text
@@ -9824,13 +9846,15 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       confidence: dlsParse?.confidence ?? null
     });
     if (dlsDecision.kind !== "none") {
-      const dlsAgentName = String(dealerProfile?.agentName ?? "").trim() || "Sales Team";
-      const dlsDealerName = String(dealerProfile?.dealerName ?? "").trim() || "American Harley-Davidson";
-      const dlsFirstName = String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null;
       draft =
         dlsDecision.kind === "buyer_survey_ack"
-          ? buildBuyerSurveyAck(dlsFirstName, dlsAgentName, dlsDealerName, dlsParse?.interestedModel ?? null)
-          : buildNonBuyerSurveyAck(dlsFirstName, dlsAgentName, dlsDealerName);
+          ? buildBuyerSurveyAck(
+              adfAckFirstName(),
+              adfAckAgentName(),
+              adfAckDealerName(),
+              dlsParse?.interestedModel ?? null
+            )
+          : buildNonBuyerSurveyAck(adfAckFirstName(), adfAckAgentName(), adfAckDealerName());
     }
   }
 
@@ -9918,7 +9942,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   // rule already powered the Meta path, so this just unifies all ADF sources onto one policy.
   const cadencePlan = resolveInitialAdfCadencePlan({
     purchaseTimeframe: conv.lead?.purchaseTimeframe,
-    purchaseTimeframeMonthsStart: Number.isFinite(monthsStart) ? monthsStart : null
+    purchaseTimeframeMonthsStart: Number.isFinite(monthsStart) ? monthsStart : null,
+    leadSource: conv.lead?.source
   });
   const hasLongTermTimeframe = cadencePlan === "long_term";
   // Horizon for the deferred long-term nurture message: the lead's own start-month when known,

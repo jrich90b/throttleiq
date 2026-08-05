@@ -3217,6 +3217,61 @@ export function decideNonBuyerSurveyTurn(input: NonBuyerSurveyTurnInput): NonBuy
   return { kind: "none" };
 }
 
+// Riding Academy ENROLLMENT lead (Joe, 2026-08-05; Savannah Niver +13155211619 and Donald Rawson
+// +17165344986, the first two on this source, both 2026-08-04). The rider-training school files an
+// ADF when someone REGISTERS for a course: `Source: Riding Academy - Enrolled` plus a machine
+// enrollment record ("Enrollment Status: Enrolled-Course: …-Class Start Date: …-Payment Status: …").
+// It is not a sales inquiry and it is not prose — nobody typed it. The generic ADF path answered
+// both with "Thanks for asking about our Riding Academy course. Course details and pricing are
+// here: <link>" — quoting the price to two people who had already paid to sign up — and Donald,
+// whose record says he expects to buy nothing, was queued for the standard day-1 sales ramp behind
+// it.
+//
+// JOE'S RULING (2026-08-05, verbatim intent): on an enrollment the agent "sends an introduction,
+// thanking the customer and letting them know the agent is there to assist with anything regarding
+// the course." So: warm intro, no selling, and deliberately NO mention of Payment Status — whether
+// an unpaid seat is ever raised over SMS is a money decision that stays with Joe.
+//
+// Like decideNonBuyerSurveyTurn and decideEventPromoTurn this keys ONLY on fixed ADF enum fields
+// (the lead source + the enrollment record's status), so it is STRUCTURED ROUTING, not free-text
+// comprehension — there is no customer prose on this lead to comprehend. Applied at the INITIAL ADF
+// draft only (both paths); once the person actually texts back, normal routing answers them.
+//
+// STRICT ON PURPOSE: only a status that reads `enrolled` diverts. A "Riding Academy" lead with any
+// other status (a completion, a cancellation, a waitlist) returns `none` and routes normally —
+// course COMPLETIONS have their own copy still to be written and none has ever arrived, so guessing
+// a fingerprint we have never seen is worse than leaving it alone. FAIL DIRECTION: a false negative
+// keeps today's behaviour; a false positive costs one over-warm opener that makes no availability
+// claim, no price claim and no close.
+export type RidingAcademyTurnKind = "riding_academy_enrollment_ack" | "none";
+
+export type RidingAcademyTurnInput = {
+  leadSource?: string | null;
+  inquiry?: string | null;
+};
+
+export type RidingAcademyTurnDecision = { kind: RidingAcademyTurnKind };
+
+/** The enrollment record's own status field — a machine enum, never customer prose. */
+function readRidingAcademyStatus(input: RidingAcademyTurnInput): string {
+  const inquiry = String(input.inquiry ?? "");
+  const recorded = inquiry.match(/\benrollment status:\s*([^-\n]+)/i);
+  if (recorded?.[1]) return recorded[1].trim().toLowerCase();
+  // Fall back to the source suffix ("Riding Academy - Enrolled") when the body carries no record.
+  const suffix = String(input.leadSource ?? "").match(/\briding academy\s*[-–]\s*(.+)$/i);
+  return suffix?.[1] ? suffix[1].trim().toLowerCase() : "";
+}
+
+export function decideRidingAcademyTurn(input: RidingAcademyTurnInput): RidingAcademyTurnDecision {
+  const source = String(input.leadSource ?? "").toLowerCase();
+  const hasEnrollmentRecord = /\benrollment status:\s*/i.test(String(input.inquiry ?? ""));
+  // Must be THIS lane: the rider-training source, or the school's enrollment record in the body.
+  if (!source.includes("riding academy") && !hasEnrollmentRecord) return { kind: "none" };
+  const status = readRidingAcademyStatus(input);
+  if (!status.startsWith("enrolled")) return { kind: "none" };
+  return { kind: "riding_academy_enrollment_ack" };
+}
+
 // Dealer Lead App MARKETING SURVEY lead (the Tim Williams class, +17163741119, 2026-06-24) — the
 // buyer-side twin of decideNonBuyerSurveyTurn. Where that keys on the STRUCTURED purchase-timeframe
 // field, many DLA surveys embed the whole Q&A in the free-text Customer Comments (ownership history +

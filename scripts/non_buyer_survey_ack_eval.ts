@@ -100,13 +100,27 @@ assert.ok(
   /decideNonBuyerSurveyTurn/.test(sendgrid) && /buildNonBuyerSurveyAck/.test(sendgrid) && /isInitialAdf/.test(sendgrid),
   "the initial-ADF draft (live) must divert a self-declared non-buyer to the ack, gated to the first touch"
 );
-// Regen: gated to the first touch (no customer SMS reply) and overrides the sales draft.
+// Regen: gated to the first touch (no customer SMS reply) and overrides the sales draft. The gate
+// and the reply choice moved into domain/ridingAcademy.ts on 2026-08-05 (the source-size ratchet
+// keeps new logic out of index.ts), so the wiring is now asserted across BOTH files — same
+// strength, new home: index must go through the shared resolver, and the resolver must still be
+// what reads the non-buyer signal, builds the non-buyer ack, and demands an ADF-only first touch.
+const adfFirstTouch = fs.readFileSync("services/api/src/domain/ridingAcademy.ts", "utf8");
 assert.ok(
-  /decideNonBuyerSurveyTurn/.test(index) && /buildNonBuyerSurveyAck/.test(index),
-  "the regen path must divert a self-declared non-buyer first touch to the ack"
+  /resolveAdfFirstTouchAckKind\(\{/.test(index) &&
+    /buildAdfFirstTouchAck\(/.test(index) &&
+    /recordRouteOutcome\("regen", regenAdfFirstTouch\.kind/.test(index),
+  "the regen path must divert a self-declared non-buyer first touch to the ack via the shared resolver"
 );
 assert.ok(
-  /regenIsAdfFirstTouchNonBuyer/.test(index) && /m\?\.provider \?\? ""\)\.toLowerCase\(\) === "twilio"/.test(index),
+  /decideNonBuyerSurveyTurn/.test(adfFirstTouch) && /buildNonBuyerSurveyAck/.test(adfFirstTouch),
+  "the shared first-touch resolver must read the non-buyer signal and build the non-buyer ack"
+);
+assert.ok(
+  /provider: event\.provider,\s*\n\s*messages: conv\.messages,/.test(index) &&
+    /isAdfFirstTouchRegen\(\{ provider: input\.provider, messages: input\.messages \}\)/.test(adfFirstTouch) &&
+    /!== "sendgrid_adf"\) return false/.test(adfFirstTouch) &&
+    /m\?\.provider \?\? ""\)\.toLowerCase\(\) === "twilio"/.test(adfFirstTouch),
   "the regen gate must require an ADF first touch with no customer SMS reply yet"
 );
 
