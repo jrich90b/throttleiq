@@ -16,6 +16,10 @@ import {
   type LeadCloseoutLane,
   type LeadCloseoutDecision,
   decideAppointmentTeardown,
+  decideStaleBookingReplacement,
+  type StaleBookingReplacementInput,
+  resolveInventoryWatchDefaults,
+  type InventoryWatchDefaultsInput,
   decideManualCadenceRestart,
   isRealReplyProvider,
   decideBurnedCadenceLadderRealign,
@@ -5407,6 +5411,50 @@ export function applyAppointmentTeardown(
   if (decision.clearMatchedSlot) appt.matchedSlot = undefined;
   appt.reschedulePending = decision.reschedulePending;
   if (decision.clearStaffPromptState) clearAppointmentStaffPromptState(appt);
+  return decision;
+}
+
+// Wiping the dead half of an EXPIRED booking that a new time is about to replace. Sibling of
+// applyAppointmentTeardown, and deliberately NOT the same call: a teardown un-books the appointment
+// (status "none", the time cleared, reschedule pending); this one keeps the appointment alive and
+// only drops the calendar identity, because the caller overwrites whenIso/whenText on the next line
+// and `applyAppointmentConfirmRecord` owns the status.
+// The watch blank-filling ladder, applied. Four lanes fill a half-specified watch from what we
+// already know, and each hand-wrote the ladder before this — see `resolveInventoryWatchDefaults` for
+// the rungs, the fail direction, and the ONE preserved divergence between the lanes.
+export function applyInventoryWatchDefaults(
+  watch: any,
+  input: Omit<InventoryWatchDefaultsInput, "watchMake" | "watchTrim" | "watchCondition">
+): ReturnType<typeof resolveInventoryWatchDefaults> {
+  const decision = resolveInventoryWatchDefaults({
+    watchMake: watch?.make ?? null,
+    watchTrim: watch?.trim ?? null,
+    watchCondition: watch?.condition ?? null,
+    ...input
+  });
+  if (!watch) return decision;
+  if (decision.make !== undefined) watch.make = decision.make;
+  if (decision.trim !== undefined) watch.trim = decision.trim;
+  if (decision.condition !== undefined) watch.condition = decision.condition;
+  return decision;
+}
+
+export function applyStaleBookingReplacement(
+  appt: any,
+  input: StaleBookingReplacementInput
+): ReturnType<typeof decideStaleBookingReplacement> {
+  const decision = decideStaleBookingReplacement(input);
+  if (!appt) return decision;
+  if (decision.clearBookedEvent) {
+    appt.bookedEventId = null;
+    appt.bookedEventLink = null;
+    appt.bookedCalendarId = null;
+  }
+  if (decision.clearBookedSalesperson) {
+    appt.bookedSalespersonId = null;
+    appt.bookedSalespersonName = null;
+  }
+  if (decision.clearMatchedSlot) appt.matchedSlot = undefined;
   return decision;
 }
 
