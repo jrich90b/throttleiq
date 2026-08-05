@@ -104,19 +104,43 @@ export function foldModelWordTrimIntoModel(input: {
  * every fire path are byte-for-byte unchanged. A degenerate range collapses to the single year it
  * always meant; an inverted one is ordered rather than printed backwards.
  *
+ * A year slot can also arrive carrying a NON-year — `year: 0` is the shape the watch-creation paths
+ * use for "no year was stated", and `String(0)` is a non-empty string, so the old truthiness test
+ * printed it. Joshua Ricksgers (+17162512324, 2026-08-04T17:15:25Z) was drafted *"I'll keep an eye
+ * out for 0 Street Glide Special in silver flux/black fuse"* off a watch whose own `exactness` read
+ * `model_only` — the record already said there was no year constraint while the label claimed one.
+ * So every year the label reads is checked for PLAUSIBILITY, not merely for being non-blank.
+ *
  * FAIL DIRECTION: worst case this drops a year word from a label the customer reads, never a
- * constraint the matcher applies — it cannot widen a watch, close a lead, or suppress a send.
- * Pinned by `watch_field_hygiene:eval`.
+ * constraint the matcher applies — it cannot widen a watch, close a lead, or suppress a send. The
+ * stored `year`/`yearMin`/`yearMax` are untouched, so matching, `exactness` and every fire path stay
+ * byte-for-byte identical; an implausible year degrades to the model-only sentence the watch always
+ * meant. Pinned by `watch_field_hygiene:eval`.
  */
+// A watchable model year, not an arbitrary number. Bounds are deliberately loose — this exists to
+// reject placeholders and junk (0, NaN, a VIN fragment, a stock number), never to referee whether a
+// real year is one we happen to stock.
+const PLAUSIBLE_WATCH_YEAR_MIN = 1900;
+const PLAUSIBLE_WATCH_YEAR_MAX = 2100;
+
+function plausibleWatchYearText(value: number | string | null | undefined): string {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const n = Number(raw);
+  if (!Number.isInteger(n)) return ""; // NaN, 20.5, "" → not a year
+  if (n < PLAUSIBLE_WATCH_YEAR_MIN || n > PLAUSIBLE_WATCH_YEAR_MAX) return "";
+  return raw;
+}
+
 export function formatWatchYearLabel(watch: {
   year?: number | string | null;
   yearMin?: number | string | null;
   yearMax?: number | string | null;
 }): string {
-  const single = String(watch.year ?? "").trim();
+  const single = plausibleWatchYearText(watch.year);
   if (single) return single;
-  const min = String(watch.yearMin ?? "").trim();
-  const max = String(watch.yearMax ?? "").trim();
+  const min = plausibleWatchYearText(watch.yearMin);
+  const max = plausibleWatchYearText(watch.yearMax);
   // A half-open bound ("2019 or newer") is deliberately unlabelled: printing the one end we have
   // reads to the customer as an EXACT year, which is a stronger claim than the watch makes.
   if (!min || !max) return "";

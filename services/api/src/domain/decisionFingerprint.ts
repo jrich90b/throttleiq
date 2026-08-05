@@ -1020,6 +1020,116 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     }, ["decideReschedulePendingClear"]);
   }
 
+  // The rung burn, sampled BOTH ways on `delivered` — that flag is the input which decides whether
+  // this rung counts against the give-up threshold, so one sample would hide the silent-rung rule.
+  // PROBE: `delivered` is held fixed per sample and `customerEngaged` is pinned false (the taper's
+  // interesting side); everything else is the lead's real stored chase — kind, reason, context tag,
+  // deferred message, rung and touch count, which is exactly what the six ladders disagree about.
+  for (const delivered of [true, false] as const) {
+    add(`cadenceAdvance:${delivered ? "delivered" : "silent"}`, conv => {
+      const cadence = (conv as any)?.followUpCadence;
+      if (!cadence || typeof reducer.decideCadenceAdvance !== "function") return undefined;
+      const tracked = Number(cadence.deliveredTouches);
+      const legacy = Number(cadence.lastSentStep);
+      const deliveredTouchesBefore = Number.isFinite(tracked) && tracked >= 0
+        ? Math.floor(tracked)
+        : Number.isFinite(legacy) && legacy >= 0
+          ? Math.floor(legacy) + 1
+          : 0;
+      const decision = reducer.decideCadenceAdvance({
+        kind: cadence.kind,
+        followUpReason: (conv as any)?.followUp?.reason,
+        contextTag: cadence.contextTag,
+        deferredMessage: cadence.deferredMessage,
+        stepIndex: cadence.stepIndex,
+        deliveredTouchesBefore,
+        delivered, // PROBE
+        customerEngaged: false, // PROBE — caller-side, and the taper's interesting side
+        taperAfterTouches: 9
+      });
+      return {
+        stampDelivered: decision.stampDelivered,
+        nextStepIndex: decision.nextStepIndex,
+        endNow: decision.endNow,
+        ladder: decision.ladder,
+        usesPostSaleDueAt: decision.usesPostSaleDueAt
+      };
+    }, ["decideCadenceAdvance"]);
+  }
+
+  // ── The last four customer-risk referees (2026-08-05) ──────────────────────────────────────
+  // Staff Reopen. Every arm reads only stored state, so no probe is needed — this is the lead's real
+  // cadence kind / status / stopReason, follow-up reason and dialog state.
+  add("staffReopenResidue", conv => {
+    if (!conv || typeof reducer.decideStaffReopenResidue !== "function") return undefined;
+    const cadence = (conv as any)?.followUpCadence;
+    return reducer.decideStaffReopenResidue({
+      hasCadence: !!cadence,
+      cadenceKind: cadence?.kind ?? null,
+      cadenceStatus: cadence?.status ?? null,
+      cadenceStopReason: cadence?.stopReason ?? null,
+      followUpReason: (conv as any)?.followUp?.reason ?? null,
+      dialogState: (conv as any)?.dialogState ?? null,
+      hasSale: !!(conv as any)?.sale
+    });
+  }, ["decideStaffReopenResidue"]);
+
+  // The recovery pause. PROBE: the fallback is a fixed offset off the PINNED clock rather than the
+  // caller's timezone-resolved due date — the question being sampled is which of the two wins, not
+  // how the fallback is computed. `currentPausedUntil` is the lead's real stored pause.
+  add("healthRecoveryPause", (conv, clock) => {
+    const cadence = (conv as any)?.followUpCadence;
+    if (!cadence || typeof reducer.decideHealthRecoveryPause !== "function") return undefined;
+    return reducer.decideHealthRecoveryPause({
+      currentPausedUntil: cadence.pausedUntil ?? null,
+      fallbackUntilIso: new Date(clock.nowMs + 21 * 86_400_000).toISOString(), // PROBE
+      nowMs: clock.nowMs
+    });
+  }, ["decideHealthRecoveryPause"]);
+
+  // The stale-booking wipe, sampled BOTH ways on `confirmsPendingRequest`: that flag is caller-side
+  // (it comes from the rep's text, not the record), so one sample would only ever show the no-op arm
+  // on a lead whose booking is live. `existingBookedAppointmentIsPast` IS derived from stored state.
+  for (const confirms of [true, false] as const) {
+    add(`staleBookingReplacement:${confirms ? "confirms" : "noconfirm"}`, (conv, clock) => {
+      const appt = (conv as any)?.appointment;
+      if (!appt || typeof reducer.decideStaleBookingReplacement !== "function") return undefined;
+      const whenMs = new Date(String(appt.whenIso ?? "")).getTime();
+      const hasBookedEvent = String(appt.bookedEventId ?? "").trim().length > 0;
+      return reducer.decideStaleBookingReplacement({
+        confirmsPendingRequest: confirms, // PROBE
+        existingBookedAppointmentIsPast:
+          hasBookedEvent && Number.isFinite(whenMs) && whenMs < clock.nowMs - 60 * 60_000
+      });
+    }, ["decideStaleBookingReplacement"]);
+  }
+
+  // The watch blank-filling ladder, sampled BOTH ways on the parser rung — that rung IS the preserved
+  // divergence (three lanes pass nothing, one passes the parser's reading), so sampling only one side
+  // would hide exactly the disagreement this referee was built to make visible.
+  for (const withParser of [true, false] as const) {
+    add(`inventoryWatchDefaults:${withParser ? "parser" : "legacy"}`, conv => {
+      const w = (conv as any)?.inventoryWatch;
+      const lead = (conv as any)?.lead?.vehicle;
+      if (!w || typeof reducer.resolveInventoryWatchDefaults !== "function") return undefined;
+      return reducer.resolveInventoryWatchDefaults({
+        watchMake: w.make ?? null,
+        watchTrim: w.trim ?? null,
+        watchCondition: w.condition ?? null,
+        leadMake: lead?.make ?? null,
+        leadTrim: lead?.trim ?? null,
+        conditionFromText: null, // PROBE — caller-side, read off this turn's text
+        semanticCondition: withParser ? (w.condition ?? "used") : undefined, // PROBE
+        conditionFromLead:
+          String(lead?.condition ?? "").toLowerCase() === "new"
+            ? "new"
+            : String(lead?.condition ?? "").toLowerCase() === "used"
+              ? "used"
+              : null
+      });
+    }, ["resolveInventoryWatchDefaults"]);
+  }
+
   // Sampled once PER CAUSE. The whole question is whether a lead we CLOSED against a bike comes back
   // open, and the three causes answer it differently on the same lead — so one sample would hide the
   // divergences the un-stacking preserved. PROBE: the cause is held fixed per sample; everything else

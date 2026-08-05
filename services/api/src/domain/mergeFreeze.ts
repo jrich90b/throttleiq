@@ -27,6 +27,8 @@
  * Pure decision logic here; the CLI (`scripts/merge_freeze.ts`) owns the filesystem and the clock.
  */
 
+import nodeFs from "node:fs";
+
 export type MergeFreezeRecord = {
   /** Routine or person that took it. */
   owner: string;
@@ -84,5 +86,38 @@ export function describeMergeFreeze(status: MergeFreezeStatus): string {
       return `stale merge freeze from ${status.owner} (${status.ageMinutes}m old) IGNORED — merging is allowed`;
     case "malformed":
       return `unreadable merge freeze (${status.detail}) IGNORED — merging is allowed`;
+  }
+}
+
+/**
+ * The freeze as read FROM DISK — the form every caller actually needs, and the one place the
+ * fail-open promise is kept. `evaluateMergeFreeze` above judges a record; this finds it.
+ *
+ * Extracted 2026-08-04 because act_runner grew its own copy of the read and a sabotage test walked
+ * straight through it: the eval was checking `evaluateMergeFreeze` while the BUG lived in the
+ * wrapper. One readable implementation, one thing to test.
+ *
+ * FAIL OPEN on everything that is not an explicit, live freeze — absent dir, absent file, corrupt
+ * JSON, unreadable permissions, any throw at all. A stuck freeze silently halting every routine's
+ * ability to land work is far worse than one deploy shipping on a slightly-moved main.
+ */
+export function readMergeFreezeStatus(args: {
+  dir: string;
+  nowMs: number;
+  maxAgeMinutes?: number;
+  readFile?: (p: string) => string;
+  exists?: (p: string) => boolean;
+}): MergeFreezeStatus {
+  try {
+    const record = `${args.dir.replace(/\/+$/, "")}/freeze.json`;
+    const exists = args.exists ?? ((p: string) => nodeFs.existsSync(p));
+    if (!exists(record)) return { frozen: false, reason: "absent" };
+    const readFile = args.readFile ?? ((p: string) => nodeFs.readFileSync(p, "utf8"));
+    return evaluateMergeFreeze(JSON.parse(readFile(record)), {
+      nowMs: args.nowMs,
+      maxAgeMinutes: args.maxAgeMinutes
+    });
+  } catch {
+    return { frozen: false, reason: "malformed", detail: "unreadable — failing open" };
   }
 }

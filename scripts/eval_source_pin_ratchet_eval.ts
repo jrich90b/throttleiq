@@ -36,7 +36,12 @@ import path from "node:path";
 // exactly its job: those break on any refactor and a sloppy re-pin passes while guarding nothing.
 // Replaced by `selectScoreableEvalItems` — a pure selector the eval CALLS with fixtures, so the
 // same rule is pinned by behaviour and the runner cannot drift away from it silently.
-const BASELINE = 316;
+// 316 -> 315. schedule_day_capture:eval and twilio_visit_commitment_routing:eval both pinned the
+// schedule-status reply builder's SOURCE (the `Perfect, you're set for ${inboundDay}!` literal) and
+// then re-implemented its logic by hand to test it. The builder moved to a pure domain module
+// (scheduleStatusReply.ts), so both evals now CALL it — which is also what let the +17167130279
+// parsed-day fix be pinned by behaviour instead of a fourth grep.
+const BASELINE = 315;
 
 const SIGNATURE = /assert\.(?:match|ok).*\\\(/;
 

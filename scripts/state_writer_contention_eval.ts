@@ -787,7 +787,28 @@ const CONTENTION_ROOT = path.resolve("services/api/src");
 // missing one to null, and the suggested-slot autobook records the matched slot where its console
 // siblings do not. MEASURED on the post-change tree with the eval's own `minWrites: 4` scan.
 // RATCHET DOWN ONLY.
-const UNREFEREED_WRITER_BASELINE = 68;
+// 68 -> 67. The RUNG BURN un-stacking (2026-08-05): `advanceFollowUpCadence` was the last
+// unrefereed writer of `followUpCadence` carrying real logic — six ladders behind four `kind`
+// values, the silent-rung rule, and two completely different ways for a ladder to end, all living
+// only inside its own body. It now asks `decideCadenceAdvance`; the day-offset tables stay in the
+// store behind one `CADENCE_LADDER_DAY_OFFSETS` map the referee's ladder key indexes.
+// `followUpCadence` 3 -> 2, and conversationStore drops off its file list entirely.
+//
+// 67 -> 64. THE LAST FOUR CUSTOMER-RISK WRITERS (2026-08-05). Every field on Joe's Tier-1 and
+// Tier-2 lists — the ones where a mistake can TEXT a customer, CLOSE a lead, or BOOK/KILL an
+// appointment — is now at ZERO unrefereed writers: appointment, followUpCadence, status,
+// closedReason, hold, inventoryWatches, inventoryWatchPending, inventoryWatch, financeOutcomeNotify.
+// The four that were left: the health-recovery pause (`decideHealthRecoveryPause`), the staff-reopen
+// residue (`decideStaffReopenResidue`), the stale-booking wipe (`decideStaleBookingReplacement`),
+// and the inventory-watch blank-filling ladder that FOUR call sites each hand-wrote
+// (`resolveInventoryWatchDefaults`).
+//
+// The remaining 64 are all Tier 3 — `lead`, `scheduler`, `inventoryContext` and the tail — frozen by
+// this ratchet rather than worked (Joe's triage ruling, 2026-08-02: tidiness beyond customer risk is
+// explicitly not the goal).
+// MEASURED on the post-change tree with the eval's own `minWrites: 4` scan.
+// RATCHET DOWN ONLY.
+const UNREFEREED_WRITER_BASELINE = 64;
 
 {
   const sourceFiles: SourceFile[] = [];

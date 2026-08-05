@@ -53,6 +53,51 @@ export function salesCriticalKind(todo: any): SalesCriticalKind | null {
   return null;
 }
 
+/**
+ * Does this task demand a FINANCE disposition — i.e. does its "Close" button become
+ * "Outcome" and open the "Resolve Finance To Do" modal?
+ *
+ * Unlike salesCriticalKind above, whose fail-direction is cosmetic, this one changes what
+ * the button DOES, so it is deliberately stricter about what counts as evidence: it reads
+ * the task's `reason` and its `summary` (the promise/ask as it was actually recorded) and
+ * NEVER the backend-derived `action` label.
+ *
+ * Curran Terblanche (+13105956498, operator-reported 2026-08-04 12:59Z: "This creates a
+ * finance outcome when it was not a finance lead"). No finance signal existed anywhere on
+ * that lead. The task was "Promised over text: check current availability, pricing, and
+ * similar options" — and it became a finance task in two hops of our OWN words:
+ *   1. deriveTodoActionLabel's inventory arm tests `check stock`/`inventory`/`verify`, so
+ *      "check current availability" misses it and falls through to the pricing arm =>
+ *      action "Provide pricing or payment details."
+ *   2. this predicate then matched `\bpayment\b` — on the label WE just derived.
+ * A derived label is our own words; a classifier that reads it is treating a regex's
+ * output as if it were evidence. Same class as the reason-"manager" fix in
+ * salesCriticalKind (Jessica Ornce +17167134728, Joe ruling 2026-07-09) — that one landed
+ * on the BADGE only and never reached this predicate.
+ *
+ * FAIL DIRECTION: a false negative offers a plain "Close" on a genuine finance task (staff
+ * still have the Update Lead… finance flow); a false positive demands a finance
+ * disposition on a lead that never discussed money — the reported defect. So this fails
+ * toward NOT claiming finance. APPROVAL_SUMMARY_RE therefore mirrors the finance
+ * vocabulary deriveTodoActionLabel's own call arm keys on (`apr`, `monthly`), so a task
+ * whose SUMMARY carries a real finance signal keeps the finance outcome it has today.
+ */
+const APPROVAL_SUMMARY_RE =
+  /\b(credit|prequal|pre-qual|approval|financ\w*|payment|business manager|apr|monthly)\b/i;
+
+export function isApprovalTodo(todo: any): boolean {
+  const reason = String(todo?.reason ?? "").trim().toLowerCase();
+  // reason + summary ONLY. `action` is deriveTodoActionLabel's output, not evidence.
+  const text = [todo?.reason, todo?.summary].map(value => String(value ?? "")).join(" ");
+  return (
+    reason === "approval" ||
+    reason === "payments" ||
+    reason === "pricing" ||
+    reason === "manager" ||
+    APPROVAL_SUMMARY_RE.test(text)
+  );
+}
+
 export const SALES_REASON_META: Record<
   SalesCriticalKind,
   { label: string; icon: "tag" | "creditCard" | "inventory"; variant: string }

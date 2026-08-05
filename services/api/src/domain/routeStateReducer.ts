@@ -6382,6 +6382,21 @@ const CADENCE_PROTECTED_KINDS = new Set<string>(["post_sale", "long_term"]);
  */
 const CADENCE_CLOSE_SOLD_REASONS = new Set<string>(["sold", "sold_walkin_note"]);
 
+/**
+ * The same authority, for the BACKFILL that repairs records this referee froze before it existed.
+ *
+ * #519 is forward-only, so every lead already stopped this way stays stopped. The heal must select
+ * on EXACTLY what the referee now protects, or the two drift — and the drift is not symmetric: a
+ * heal with its own private list would either miss victims or, far worse, re-arm an owner sequence
+ * on a lead stopped for a real reason. Measured 2026-08-05 on the live store: of 15 stranded sold
+ * leads only 3 carried a sold-close reason; the other 12 stopped for `customer_stepping_back`,
+ * `purchase_delivery`, `in_process_deal`, `inventory_watch` and friends. Texting those would have
+ * been a fresh defect, not a repair. Exported as a predicate, not the Set, so no caller can mutate it.
+ */
+export function isCadenceCloseSoldReason(reason?: string | null): boolean {
+  return CADENCE_CLOSE_SOLD_REASONS.has(String(reason ?? "").trim());
+}
+
 export type CadenceLifecycleInput = {
   verb: CadenceLifecycleVerb | string;
   /**
@@ -7564,4 +7579,409 @@ export function decideVoicemailFollowUpTask(
     reason: "created",
     why: `${input.lane}: no open task and the lead is not parked on a watch — mint the follow-up`
   };
+}
+
+// ===================================================================================================
+// THE CHASE JUST TOOK A RUNG — "what does that write, and does the ladder end here?"
+//
+// `advanceFollowUpCadence` (conversationStore) is the last unrefereed writer of `followUpCadence`
+// that carries real logic, and every rule it applies lived only inside its own body:
+//
+//   - WHICH LADDER this chase is climbing. Six shapes behind four `kind` values, because two of
+//     them are picked off the follow-up REASON and a context tag rather than the kind:
+//     post_sale, engaged, finance-declined long-term, private-party-sell long-term, plain
+//     long-term, and the standard ramp.
+//   - WHETHER THIS RUNG COUNTS AS A TOUCH. Four gates advance the schedule while staying completely
+//     silent (cadence-quality suppress, the value gate and its repeat backstop, the past-dated-event
+//     guard). A silent rung still BURNS — we tried it and had nothing worth saying — but it must not
+//     stamp `lastSentAt`/`lastSentStep` as though a customer heard from us, and it must not spend a
+//     touch against the taper.
+//   - WHETHER THE LADDER ENDS HERE, by either of two completely different routes: the disengagement
+//     taper (a never-engaged sales lead at or past the give-up threshold) or the ride-challenge
+//     final-mileage reminder, which is a one-shot and completes as soon as it fires.
+//
+// THE PRE-INCREMENT RULE IS LOAD-BEARING, and until now it lived in a comment. The taper is judged
+// on the touch count BEFORE this one — the same number `shouldSendDisengagedCloseout` was asked — so
+// the rung that SENDS the goodbye is exactly the rung that ends the ladder. Compare the
+// post-increment count and the sequence ends one touch early, i.e. the lead is retired without ever
+// being said goodbye to. That is not a tidy-up detail; it is the difference between a customer
+// getting a close-out and going silent, and it now has a name and an eval row.
+//
+// FAIL DIRECTION. Ending a ladder is the direction that sends FEWER messages, so it is the safe one
+// — except for the close-out itself, which is the message that ends things politely. Hence: only a
+// DELIVERED touch (or an explicit `endSequence`) may trip the taper, because ending from a silent
+// gate retires the lead without the goodbye. An unknown ladder falls back to the standard ramp
+// rather than completing, since completing on a shape we did not recognise would drop the chase.
+//
+// PURE + CLOCK-FREE: the caller reads the clock, resolves engagement, and owns the day-offset
+// tables; this decides the SHAPE of the rung.
+// ===================================================================================================
+
+/** The six ladder shapes. The caller maps each to its day-offset table. */
+export type CadenceAdvanceLadder =
+  | "post_sale"
+  | "engaged"
+  | "finance_declined_long_term"
+  | "private_party_sell_long_term"
+  | "long_term"
+  | "standard";
+
+export type CadenceAdvanceInput = {
+  /** The chase's kind, exactly as stored. */
+  kind?: string | null;
+  /** `followUp.reason`, which is what splits plain long-term from its two special ladders. */
+  followUpReason?: string | null;
+  /** `followUpCadence.contextTag` — the second way a private-party-sell chase identifies itself. */
+  contextTag?: string | null;
+  /** `followUpCadence.deferredMessage` — the ride-challenge one-shot names itself here. */
+  deferredMessage?: string | null;
+  /** The rung the chase is on right now. */
+  stepIndex?: number | null;
+  /** Touches that ACTUALLY went out before this one. Silent rungs are not in this count. */
+  deliveredTouchesBefore?: number | null;
+  /** Did this rung produce a message? Defaults TRUE — only the four silent gates pass false. */
+  delivered?: boolean;
+  /** The one exception that may end the ladder from a silent rung: the close-out was withheld. */
+  endSequence?: boolean;
+  /** Has the customer ever replied to this chase? */
+  customerEngaged?: boolean;
+  /** `DISENGAGED_TAPER_AFTER_TOUCHES`, handed in so the referee stays free of store constants. */
+  taperAfterTouches: number;
+};
+
+export type CadenceAdvanceDecision = {
+  /** Stamp `lastSentAt` / `lastSentStep` / `deliveredTouches`. False on a silent rung. */
+  stampDelivered: boolean;
+  /** The rung the chase moves to. Always written, delivered or not — a silent rung still burns. */
+  nextStepIndex: number;
+  /** The touch count AFTER this one. Only written when `stampDelivered`. */
+  deliveredTouchesAfter: number;
+  /** End the ladder here, before any due-date maths. Null means climb on. */
+  endNow: null | {
+    /** `disengaged_taper` writes a stopReason; the ride-challenge one-shot deliberately does not. */
+    stopReason: "disengaged_taper" | null;
+    cause: "disengaged_taper" | "ride_challenge_final_mileage";
+  };
+  /** Which day-offset table this chase climbs. The caller owns the tables. */
+  ladder: CadenceAdvanceLadder;
+  /** Post-sale due dates are computed by a different function. */
+  usesPostSaleDueAt: boolean;
+  why: string;
+};
+
+const CADENCE_ADVANCE_RIDE_CHALLENGE_ONE_SHOT = "ride_challenge_final_mileage";
+
+const lowerTrim = (value: unknown): string => String(value ?? "").trim().toLowerCase();
+
+export function decideCadenceAdvance(input: CadenceAdvanceInput): CadenceAdvanceDecision {
+  const kind = lowerTrim(input.kind);
+  const isPostSale = kind === "post_sale";
+  const isEngaged = kind === "engaged";
+  const isLongTerm = kind === "long_term";
+  const reason = lowerTrim(input.followUpReason);
+  const contextTag = lowerTrim(input.contextTag);
+
+  const delivered = input.delivered !== false;
+  const stepIndex = Number(input.stepIndex);
+  const currentStep = Number.isFinite(stepIndex) ? stepIndex : 0;
+  const before = Number(input.deliveredTouchesBefore);
+  const deliveredBefore = Number.isFinite(before) && before >= 0 ? Math.floor(before) : 0;
+
+  // A never-engaged SALES lead at or past the give-up threshold. post_sale and long_term chases are
+  // exempt: those are dated check-backs, not a chase to give up on.
+  const taperApplies =
+    (delivered || input.endSequence === true) &&
+    !isPostSale &&
+    !isLongTerm &&
+    input.customerEngaged !== true &&
+    deliveredBefore >= input.taperAfterTouches;
+
+  // The ride-challenge final-mileage reminder is a ONE-SHOT: it completes as soon as it has fired,
+  // and deliberately records no stopReason — nothing gave up on this lead, the message simply had
+  // one job. Checked after the taper, exactly as the original ordering had it.
+  const rideChallengeOneShot =
+    isLongTerm && lowerTrim(input.deferredMessage) === CADENCE_ADVANCE_RIDE_CHALLENGE_ONE_SHOT;
+
+  const ladder: CadenceAdvanceLadder = isPostSale
+    ? "post_sale"
+    : isEngaged
+      ? "engaged"
+      : isLongTerm
+        ? reason === "financing_declined"
+          ? "finance_declined_long_term"
+          : reason === "private_party_seller" || contextTag === "private_party_seller"
+            ? "private_party_sell_long_term"
+            : "long_term"
+        : "standard";
+
+  const endNow = taperApplies
+    ? ({ stopReason: "disengaged_taper", cause: "disengaged_taper" } as const)
+    : rideChallengeOneShot
+      ? ({ stopReason: null, cause: "ride_challenge_final_mileage" } as const)
+      : null;
+
+  return {
+    stampDelivered: delivered,
+    nextStepIndex: currentStep + 1,
+    deliveredTouchesAfter: deliveredBefore + 1,
+    endNow,
+    ladder,
+    usesPostSaleDueAt: isPostSale,
+    why: endNow
+      ? endNow.cause === "disengaged_taper"
+        ? `the ${ladder} ladder ends here: ${deliveredBefore} delivered touches with no reply, at or ` +
+          `past the give-up threshold of ${input.taperAfterTouches}`
+        : "the ride-challenge final-mileage reminder is a one-shot — it has fired, so the chase is done"
+      : `${ladder} ladder, rung ${currentStep} -> ${currentStep + 1}` +
+        `${delivered ? `, touch ${deliveredBefore + 1} delivered` : ", silent rung (burned, not counted)"}`
+  };
+}
+
+// ── The last four unrefereed writers of the customer-risk fields ─────────────────────────────
+// Everything below arbitrates a piece of state where a mistake can TEXT a customer, CLOSE a lead,
+// or BOOK/KILL an appointment. Each was a rule that lived only inside one call site's body.
+
+// 1. STALE BOOKING REPLACEMENT (`appointment`) ───────────────────────────────────────────────
+// The rep's own outbound confirms a pending appointment request ("Sounds good! See you then") on a
+// record that STILL CARRIES AN EXPIRED BOOKING. The new time is about to be stamped; the question
+// is what of the dead booking must not survive it.
+//
+// The calendar identity fields are the dangerous ones. `bookedEventId` / `bookedEventLink` /
+// `bookedCalendarId` point at a Google event for the OLD time; `bookedSalespersonId` / `...Name`
+// name whoever owned that slot; `matchedSlot` is the availability row it came from. Leave any of
+// them and the record claims the new appointment is the old event — a later cancel or reschedule
+// then edits the wrong calendar entry, and the confirmation names the wrong rep.
+//
+// `whenIso` / `whenText` are deliberately NOT in the wipe list: the caller overwrites both on the
+// next line, and blanking them here would leave the record momentarily timeless for no gain.
+// `status` is likewise left to `applyAppointmentConfirmRecord`, which owns it.
+//
+// FAIL DIRECTION = wipe. A cleared field that did not need clearing costs one re-lookup; a stale
+// calendar id that survives sends the customer a confirmation for an event at the wrong time.
+export type StaleBookingReplacementInput = {
+  /** The rep's text confirmed the pending request (decideManualConfirmPendingAppointment). */
+  confirmsPendingRequest: boolean;
+  /** The booking already on the record is in the past (expired, not live). */
+  existingBookedAppointmentIsPast: boolean;
+};
+export type StaleBookingReplacementDecision = {
+  clearBookedEvent: boolean;
+  clearBookedSalesperson: boolean;
+  clearMatchedSlot: boolean;
+  why: string;
+};
+
+export function decideStaleBookingReplacement(
+  input: StaleBookingReplacementInput
+): StaleBookingReplacementDecision {
+  // A LIVE booking is never torn down from this lane — that is the dedupe guard's job, and
+  // rebooking over a good appointment from a "see you then" text is the failure it exists to stop.
+  if (!input.confirmsPendingRequest || !input.existingBookedAppointmentIsPast) {
+    return {
+      clearBookedEvent: false,
+      clearBookedSalesperson: false,
+      clearMatchedSlot: false,
+      why: input.confirmsPendingRequest
+        ? "no expired booking to replace — nothing stale to wipe"
+        : "this text did not confirm a pending request"
+    };
+  }
+  return {
+    clearBookedEvent: true,
+    clearBookedSalesperson: true,
+    clearMatchedSlot: true,
+    why: "an expired booking is being replaced — its calendar event, owning rep and matched slot all die with it"
+  };
+}
+
+// 2. HEALTH-RECOVERY PAUSE (`followUpCadence`) ────────────────────────────────────────────────
+// A customer who told us they are recovering (surgery, illness, an accident) gets the chase pushed
+// out, not stopped. Any inbound from them re-enters this lane, and the rule that matters is that
+// an ALREADY-SET later pause WINS: without it, every "thanks" they send while recovering slides the
+// pause back to today + N days and the chase creeps forward on someone who is unwell.
+//
+// FAIL DIRECTION = the LATER date. Waiting too long to re-approach a recovering customer costs
+// time; texting them early is the harm this pause exists to prevent. So a pause already standing in
+// the future is kept as-is, and only an absent, unparseable or already-past pause is replaced.
+export type HealthRecoveryPauseInput = {
+  /** The pause currently on the record, if any (ISO string or nullish). */
+  currentPausedUntil?: string | null;
+  /** now + HEALTH_RECOVERY_DELAY_DAYS, resolved by the caller in the dealer's timezone. */
+  fallbackUntilIso: string;
+  nowMs: number;
+};
+export type HealthRecoveryPauseDecision = { pausedUntilIso: string; keptExisting: boolean; why: string };
+
+export function decideHealthRecoveryPause(input: HealthRecoveryPauseInput): HealthRecoveryPauseDecision {
+  const current = String(input.currentPausedUntil ?? "").trim();
+  const currentMs = current ? new Date(current).getTime() : Number.NaN;
+  // A junk date is NOT a pause. Reading an unparseable value as "already paused" would leave the
+  // record pausedUntil=Invalid Date and the chase would never resume at all.
+  const standingInFuture = Number.isFinite(currentMs) && currentMs > input.nowMs;
+  if (standingInFuture) {
+    return {
+      pausedUntilIso: new Date(currentMs).toISOString(),
+      keptExisting: true,
+      why: "a recovery pause is already standing in the future — a new inbound must not pull it forward"
+    };
+  }
+  return {
+    pausedUntilIso: input.fallbackUntilIso,
+    keptExisting: false,
+    why: current
+      ? "the standing pause is past or unparseable — restart the recovery delay from now"
+      : "no recovery pause on the record — start one"
+  };
+}
+
+// 3. STAFF REOPEN RESIDUE (`followUpCadence`, `followUp`, dialog state) ───────────────────────
+// Staff pressed Reopen on an archived thread. `applyCloseoutReversal` reopens the record; this
+// referee says what CLOSEOUT RESIDUE has to be undone with it, because a reopen that leaves the
+// residue behind is a zombie — the thread reads open while the chase stays dead (Dave Batka,
+// 2026-06-11: reopen alone left followUp paused_indefinite / customer_sell_on_own and the cadence
+// stopped).
+//
+// The ORDER is load-bearing. A post-sale chase is BLANKED, and blanking it first is what stops the
+// disposition-revive arm below from ever resurrecting a post-sale ladder onto a reopened deal —
+// those two arms would otherwise both claim the same record.
+//
+// FAIL DIRECTION splits by arm, which is why they are separate flags rather than one boolean:
+//  - BLANK (post-sale) fails toward NOT messaging: no cadence at all beats a delivery-congrats
+//    ladder re-firing at a customer whose sale was just un-done.
+//  - REVIVE (disposition) fails toward working the lead: staff pressing Reopen on a lead they
+//    themselves archived as "stepping back" is an explicit instruction to chase again.
+export const REOPEN_DISPOSITION_REASONS = [
+  "customer_sell_on_own",
+  "customer_keep_current_bike",
+  "customer_stepping_back",
+  "customer_deferred"
+] as const;
+
+export type StaffReopenResidueInput = {
+  /** A cadence RECORD exists. Deliberately separate from `cadenceStatus`, which may be absent. */
+  hasCadence: boolean;
+  cadenceKind?: string | null;
+  cadenceStatus?: string | null;
+  cadenceStopReason?: string | null;
+  followUpReason?: string | null;
+  dialogState?: string | null;
+  hasSale: boolean;
+};
+export type StaffReopenResidueDecision = {
+  clearSale: boolean;
+  blankPostSaleCadence: boolean;
+  clearPostSaleFollowUp: boolean;
+  clearDispositionFollowUp: boolean;
+  resetDispositionDialogState: boolean;
+  reviveDispositionCadence: boolean;
+  why: string;
+};
+
+function isReopenDispositionReason(raw?: string | null): boolean {
+  return (REOPEN_DISPOSITION_REASONS as readonly string[]).includes(String(raw ?? ""));
+}
+
+export function decideStaffReopenResidue(input: StaffReopenResidueInput): StaffReopenResidueDecision {
+  const blankPostSaleCadence = String(input.cadenceKind ?? "") === "post_sale";
+  const clearPostSaleFollowUp = String(input.followUpReason ?? "") === "post_sale";
+  const clearDispositionFollowUp = isReopenDispositionReason(input.followUpReason);
+  const resetDispositionDialogState = isReopenDispositionReason(input.dialogState);
+  // Only a chase that is BOTH stopped and stopped FOR A DISPOSITION is revived — a cadence stopped
+  // for any other reason (opt-out, a hold, a handoff) keeps its own stop, and an already-active one
+  // is left alone rather than restarted at rung zero.
+  //
+  // A cadence record with NO status counts as not-active and IS revived. That reads odd but it is
+  // exactly what the handler did (`status !== "active"` over a missing status is true), and a
+  // statusless record that carries a disposition stopReason is a stopped chase either way — so the
+  // literal reading is also the right one. Gating on `hasCadence` rather than on the status being
+  // present is what keeps the two the same.
+  const reviveDispositionCadence =
+    !blankPostSaleCadence &&
+    input.hasCadence &&
+    String(input.cadenceStatus ?? "") !== "active" &&
+    isReopenDispositionReason(input.cadenceStopReason);
+  return {
+    clearSale: input.hasSale,
+    blankPostSaleCadence,
+    clearPostSaleFollowUp,
+    clearDispositionFollowUp,
+    resetDispositionDialogState,
+    reviveDispositionCadence,
+    why: blankPostSaleCadence
+      ? "a post-sale chase does not survive un-doing the sale — blanked, and never revived below"
+      : reviveDispositionCadence
+        ? `staff reopened a lead they archived as ${String(input.cadenceStopReason)} — restart the chase`
+        : "reopen with no cadence residue to undo"
+  };
+}
+
+// 4. INVENTORY-WATCH DEFAULTS (`inventoryWatch`) ──────────────────────────────────────────────
+// A watch the customer just asked for is usually under-specified ("let me know when a Road Glide
+// comes in") and the blanks get filled from what we already know. THREE call sites filled them —
+// the SMS watch lane, the confirm-a-pending-watch lane, and the live inbound lane — each with its
+// own hand-written ladder, and the ladders had drifted.
+//
+// This is the state that decides WHICH ARRIVING UNIT TEXTS THIS CUSTOMER, so a wrong rung here is
+// an unwanted outbound: fill `condition` from a stale lead record and someone who asked for a used
+// bike gets alerted about a new one.
+//
+// THE DIVERGENCE, PRESERVED ON PURPOSE: only the live inbound lane consults the parser's reading of
+// what the customer said THIS TURN (`semanticCondition`); the other two skip that rung and fall
+// straight from the text scan to the lead record. That is a real disagreement and AGENTS.md
+// parser-first says the parser rung should win everywhere — but adopting it CHANGES which units
+// alert, so it is a behaviour fix and ships separately behind a canary, not inside a cleanup.
+// Passing `semanticCondition: undefined` is how the two legacy lanes keep their exact behaviour
+// while the ladder itself has one owner. Delete this note when the fix lands.
+export type InventoryWatchDefaultsInput = {
+  watchMake?: string | null;
+  watchTrim?: string | null;
+  watchCondition?: string | null;
+  leadMake?: string | null;
+  leadTrim?: string | null;
+  /** normalizeWatchCondition() over the customer's text — the strongest rung. */
+  conditionFromText?: "new" | "used" | null;
+  /** The parser's condition for THIS turn. Only the live inbound lane supplies it (see above). */
+  semanticCondition?: string | null;
+  /** normalizeWatchCondition() over the lead record's condition — the weakest rung. */
+  conditionFromLead?: "new" | "used" | null;
+};
+export type InventoryWatchDefaultsDecision = {
+  make?: string;
+  trim?: string;
+  condition?: string;
+  conditionSource: "already_set" | "text" | "parser" | "lead_record" | "none";
+};
+
+export function resolveInventoryWatchDefaults(
+  input: InventoryWatchDefaultsInput
+): InventoryWatchDefaultsDecision {
+  // NOT trimmed: the four call sites this replaces tested plain truthiness (`!pref.watch.make`), and
+  // a cleanup that starts treating " " as blank would be a behaviour change hiding inside a refactor.
+  const has = (v?: string | null) => String(v ?? "").length > 0;
+  const out: InventoryWatchDefaultsDecision = { conditionSource: "already_set" };
+  // Only ever FILL a blank. The watch the customer described outranks anything we infer for them.
+  if (!has(input.watchMake) && has(input.leadMake)) out.make = String(input.leadMake);
+  if (!has(input.watchTrim) && has(input.leadTrim)) out.trim = String(input.leadTrim);
+  if (has(input.watchCondition)) return out;
+  // "unknown" and "any" are the parser saying it could not tell — they are not a condition, and
+  // treating them as one would pin the watch to a literal condition the customer never named.
+  const semantic =
+    has(input.semanticCondition) &&
+    input.semanticCondition !== "unknown" &&
+    input.semanticCondition !== "any"
+      ? String(input.semanticCondition)
+      : null;
+  if (input.conditionFromText) {
+    out.condition = input.conditionFromText;
+    out.conditionSource = "text";
+  } else if (semantic) {
+    out.condition = semantic;
+    out.conditionSource = "parser";
+  } else if (input.conditionFromLead) {
+    out.condition = input.conditionFromLead;
+    out.conditionSource = "lead_record";
+  } else {
+    out.conditionSource = "none";
+  }
+  return out;
 }
