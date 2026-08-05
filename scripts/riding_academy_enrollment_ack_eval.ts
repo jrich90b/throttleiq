@@ -183,10 +183,16 @@ assert.ok(
   (ackWithJumpstart.match(/\?/g) ?? []).length <= 1,
   "the registration reply must not ask two questions at once"
 );
-// The offer REPLACES the generic tail rather than being appended.
+// The offer REPLACES the generic tail rather than being appended. Pinned on the PROPERTY (no
+// vague "text me" standing next to a concrete offer), not on one exact sentence — a sabotage that
+// merely reworded the tail slipped past the literal version on 2026-08-05.
 assert.ok(
-  !ackWithJumpstart.includes("just text me and I'll take care of it"),
-  "the offer must replace the generic tail, not be bolted onto it"
+  !/\btext me\b/i.test(ackWithJumpstart),
+  `the offer must replace the generic "text me" tail, not stand beside it: "${ackWithJumpstart}"`
+);
+assert.ok(
+  ackWithJumpstart.length < ack.length + jumpstartOffer.length,
+  "the Jumpstart registration reply must be shorter than the plain reply plus the offer"
 );
 // A dealer with no Jumpstart keeps the reply Joe approved, byte for byte.
 assert.equal(
