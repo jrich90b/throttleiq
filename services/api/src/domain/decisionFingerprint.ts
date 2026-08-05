@@ -957,6 +957,31 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     }, ["decideReschedulePendingLatch"]);
   }
 
+  // The SETTLEMENT half of the same latch, sampled once PER LANE for the same reason: the whole
+  // disagreement is between lanes (only `settled_past_appointment` requires a standing latch and only
+  // it stamps `updatedAt`), so one sample would hide it. PROBE: the lane is held fixed per sample and
+  // the only stored state consulted is whether the lead has an appointment record and what the latch
+  // says — the same two inputs the arm half reads, and for the same reason.
+  for (const lane of [
+    "stale_pending_reschedule_slot",
+    "settled_past_appointment",
+    "staff_outcome_showed_up"
+  ] as const) {
+    add(`reschedulePendingClear:${lane}`, conv => {
+      if (!conv || typeof reducer.decideReschedulePendingClear !== "function") return undefined;
+      const decision = reducer.decideReschedulePendingClear({
+        lane, // PROBE
+        hasAppointmentRecord: !!conv.appointment,
+        reschedulePending: conv.appointment?.reschedulePending ?? null
+      });
+      return {
+        clear: decision.clear,
+        stampUpdatedAt: decision.stampUpdatedAt,
+        divergence: decision.divergence
+      };
+    }, ["decideReschedulePendingClear"]);
+  }
+
   // Sampled once PER CAUSE. The whole question is whether a lead we CLOSED against a bike comes back
   // open, and the three causes answer it differently on the same lead — so one sample would hide the
   // divergences the un-stacking preserved. PROBE: the cause is held fixed per sample; everything else

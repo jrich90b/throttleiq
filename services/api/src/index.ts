@@ -515,6 +515,7 @@ import {
   applyAppointmentTeardown,
   applyAppointmentBookingRecord,
   applyReschedulePendingLatch,
+  applyReschedulePendingClear,
   applyInventoryAvailabilityReopen,
   applyInventoryHoldRecord,
   applyInventoryWatchArm,
@@ -25369,7 +25370,7 @@ async function applyAppointmentStateFromContextNote(
         stopFollowUpCadence(conv, "manual_handoff");
         stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
       } else if (outcome.outcome === "showed_up") {
-        conv.appointment.reschedulePending = false;
+        applyReschedulePendingClear(conv, { lane: "staff_outcome_showed_up" });
         setFollowUpMode(conv, "manual_handoff", "appointment_showed_up");
         stopFollowUpCadence(conv, "manual_handoff");
         stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
@@ -62725,13 +62726,12 @@ if (authToken && signature) {
     !!conv.appointment?.bookedEventId && (isFutureBookedAppointment || allowPastAppointmentReschedule);
   if (!hasBookedAppointmentForReschedule && conv.scheduler?.pendingSlot?.reschedule) {
     conv.scheduler.pendingSlot = undefined;
-    if (conv.appointment) conv.appointment.reschedulePending = false;
+    applyReschedulePendingClear(conv, { lane: "stale_pending_reschedule_slot" });
   }
   // Heal the stuck latch itself (live path only — regenerate must stay non-destructive), so the
   // thread stops being re-armed on every future inbound.
-  if (settledPastAppointment && conv.appointment?.reschedulePending === true) {
-    conv.appointment.reschedulePending = false;
-    conv.appointment.updatedAt = new Date().toISOString();
+  if (settledPastAppointment) {
+    applyReschedulePendingClear(conv, { lane: "settled_past_appointment" });
   }
 
   // Auto-reschedule if they confirmed a pending reschedule slot
