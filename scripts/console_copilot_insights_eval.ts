@@ -128,12 +128,8 @@ assert.match(text, /2 open, 1 overdue/, "grounding text carries the task counts"
 // called directly with mock req/res.
 const apiSource = await fs.readFile(path.resolve("services/api/src/index.ts"), "utf8");
 assert.ok(
-  apiSource.includes('app.get("/copilot/insights", copilotInsightsHandler)'),
-  "GET /copilot/insights is registered"
-);
-assert.ok(
-  apiSource.includes('app.post("/copilot/ask", copilotAskHandler)'),
-  "POST /copilot/ask is registered"
+  apiSource.includes("registerCopilotRoutes(app)"),
+  "copilot routes are registered in index.ts"
 );
 // The deterministic GET lane must never grow an LLM call.
 const routeSource = await fs.readFile(path.resolve("services/api/src/routes/copilot.ts"), "utf8");
@@ -199,5 +195,19 @@ delete process.env.COPILOT_ASK_DAILY_CAP;
 const noLlmAsk = mockRes();
 await copilotAskHandler({ user: { role: "manager" }, body: { question: "hot leads?" } } as any, noLlmAsk as any);
 assert.equal(noLlmAsk.statusCode, 503, "LLM off = unavailable, not a made-up answer");
+
+// registerCopilotRoutes registers every copilot endpoint — behavior-tested with a mock app,
+// so index.ts's single registration line provably carries all three routes.
+const { registerCopilotRoutes } = await import("../services/api/src/routes/copilot.ts");
+const registered: string[] = [];
+registerCopilotRoutes({
+  get: (p: string) => registered.push(`GET ${p}`),
+  post: (p: string) => registered.push(`POST ${p}`)
+} as any);
+assert.deepEqual(
+  registered,
+  ["GET /copilot/insights", "POST /copilot/ask", "POST /copilot/marketing-list"],
+  "registerCopilotRoutes carries all copilot endpoints"
+);
 
 console.log("PASS console copilot insights eval");
