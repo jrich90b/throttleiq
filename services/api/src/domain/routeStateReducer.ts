@@ -7565,3 +7565,159 @@ export function decideVoicemailFollowUpTask(
     why: `${input.lane}: no open task and the lead is not parked on a watch — mint the follow-up`
   };
 }
+
+// ===================================================================================================
+// THE CHASE JUST TOOK A RUNG — "what does that write, and does the ladder end here?"
+//
+// `advanceFollowUpCadence` (conversationStore) is the last unrefereed writer of `followUpCadence`
+// that carries real logic, and every rule it applies lived only inside its own body:
+//
+//   - WHICH LADDER this chase is climbing. Six shapes behind four `kind` values, because two of
+//     them are picked off the follow-up REASON and a context tag rather than the kind:
+//     post_sale, engaged, finance-declined long-term, private-party-sell long-term, plain
+//     long-term, and the standard ramp.
+//   - WHETHER THIS RUNG COUNTS AS A TOUCH. Four gates advance the schedule while staying completely
+//     silent (cadence-quality suppress, the value gate and its repeat backstop, the past-dated-event
+//     guard). A silent rung still BURNS — we tried it and had nothing worth saying — but it must not
+//     stamp `lastSentAt`/`lastSentStep` as though a customer heard from us, and it must not spend a
+//     touch against the taper.
+//   - WHETHER THE LADDER ENDS HERE, by either of two completely different routes: the disengagement
+//     taper (a never-engaged sales lead at or past the give-up threshold) or the ride-challenge
+//     final-mileage reminder, which is a one-shot and completes as soon as it fires.
+//
+// THE PRE-INCREMENT RULE IS LOAD-BEARING, and until now it lived in a comment. The taper is judged
+// on the touch count BEFORE this one — the same number `shouldSendDisengagedCloseout` was asked — so
+// the rung that SENDS the goodbye is exactly the rung that ends the ladder. Compare the
+// post-increment count and the sequence ends one touch early, i.e. the lead is retired without ever
+// being said goodbye to. That is not a tidy-up detail; it is the difference between a customer
+// getting a close-out and going silent, and it now has a name and an eval row.
+//
+// FAIL DIRECTION. Ending a ladder is the direction that sends FEWER messages, so it is the safe one
+// — except for the close-out itself, which is the message that ends things politely. Hence: only a
+// DELIVERED touch (or an explicit `endSequence`) may trip the taper, because ending from a silent
+// gate retires the lead without the goodbye. An unknown ladder falls back to the standard ramp
+// rather than completing, since completing on a shape we did not recognise would drop the chase.
+//
+// PURE + CLOCK-FREE: the caller reads the clock, resolves engagement, and owns the day-offset
+// tables; this decides the SHAPE of the rung.
+// ===================================================================================================
+
+/** The six ladder shapes. The caller maps each to its day-offset table. */
+export type CadenceAdvanceLadder =
+  | "post_sale"
+  | "engaged"
+  | "finance_declined_long_term"
+  | "private_party_sell_long_term"
+  | "long_term"
+  | "standard";
+
+export type CadenceAdvanceInput = {
+  /** The chase's kind, exactly as stored. */
+  kind?: string | null;
+  /** `followUp.reason`, which is what splits plain long-term from its two special ladders. */
+  followUpReason?: string | null;
+  /** `followUpCadence.contextTag` — the second way a private-party-sell chase identifies itself. */
+  contextTag?: string | null;
+  /** `followUpCadence.deferredMessage` — the ride-challenge one-shot names itself here. */
+  deferredMessage?: string | null;
+  /** The rung the chase is on right now. */
+  stepIndex?: number | null;
+  /** Touches that ACTUALLY went out before this one. Silent rungs are not in this count. */
+  deliveredTouchesBefore?: number | null;
+  /** Did this rung produce a message? Defaults TRUE — only the four silent gates pass false. */
+  delivered?: boolean;
+  /** The one exception that may end the ladder from a silent rung: the close-out was withheld. */
+  endSequence?: boolean;
+  /** Has the customer ever replied to this chase? */
+  customerEngaged?: boolean;
+  /** `DISENGAGED_TAPER_AFTER_TOUCHES`, handed in so the referee stays free of store constants. */
+  taperAfterTouches: number;
+};
+
+export type CadenceAdvanceDecision = {
+  /** Stamp `lastSentAt` / `lastSentStep` / `deliveredTouches`. False on a silent rung. */
+  stampDelivered: boolean;
+  /** The rung the chase moves to. Always written, delivered or not — a silent rung still burns. */
+  nextStepIndex: number;
+  /** The touch count AFTER this one. Only written when `stampDelivered`. */
+  deliveredTouchesAfter: number;
+  /** End the ladder here, before any due-date maths. Null means climb on. */
+  endNow: null | {
+    /** `disengaged_taper` writes a stopReason; the ride-challenge one-shot deliberately does not. */
+    stopReason: "disengaged_taper" | null;
+    cause: "disengaged_taper" | "ride_challenge_final_mileage";
+  };
+  /** Which day-offset table this chase climbs. The caller owns the tables. */
+  ladder: CadenceAdvanceLadder;
+  /** Post-sale due dates are computed by a different function. */
+  usesPostSaleDueAt: boolean;
+  why: string;
+};
+
+const CADENCE_ADVANCE_RIDE_CHALLENGE_ONE_SHOT = "ride_challenge_final_mileage";
+
+const lowerTrim = (value: unknown): string => String(value ?? "").trim().toLowerCase();
+
+export function decideCadenceAdvance(input: CadenceAdvanceInput): CadenceAdvanceDecision {
+  const kind = lowerTrim(input.kind);
+  const isPostSale = kind === "post_sale";
+  const isEngaged = kind === "engaged";
+  const isLongTerm = kind === "long_term";
+  const reason = lowerTrim(input.followUpReason);
+  const contextTag = lowerTrim(input.contextTag);
+
+  const delivered = input.delivered !== false;
+  const stepIndex = Number(input.stepIndex);
+  const currentStep = Number.isFinite(stepIndex) ? stepIndex : 0;
+  const before = Number(input.deliveredTouchesBefore);
+  const deliveredBefore = Number.isFinite(before) && before >= 0 ? Math.floor(before) : 0;
+
+  // A never-engaged SALES lead at or past the give-up threshold. post_sale and long_term chases are
+  // exempt: those are dated check-backs, not a chase to give up on.
+  const taperApplies =
+    (delivered || input.endSequence === true) &&
+    !isPostSale &&
+    !isLongTerm &&
+    input.customerEngaged !== true &&
+    deliveredBefore >= input.taperAfterTouches;
+
+  // The ride-challenge final-mileage reminder is a ONE-SHOT: it completes as soon as it has fired,
+  // and deliberately records no stopReason — nothing gave up on this lead, the message simply had
+  // one job. Checked after the taper, exactly as the original ordering had it.
+  const rideChallengeOneShot =
+    isLongTerm && lowerTrim(input.deferredMessage) === CADENCE_ADVANCE_RIDE_CHALLENGE_ONE_SHOT;
+
+  const ladder: CadenceAdvanceLadder = isPostSale
+    ? "post_sale"
+    : isEngaged
+      ? "engaged"
+      : isLongTerm
+        ? reason === "financing_declined"
+          ? "finance_declined_long_term"
+          : reason === "private_party_seller" || contextTag === "private_party_seller"
+            ? "private_party_sell_long_term"
+            : "long_term"
+        : "standard";
+
+  const endNow = taperApplies
+    ? ({ stopReason: "disengaged_taper", cause: "disengaged_taper" } as const)
+    : rideChallengeOneShot
+      ? ({ stopReason: null, cause: "ride_challenge_final_mileage" } as const)
+      : null;
+
+  return {
+    stampDelivered: delivered,
+    nextStepIndex: currentStep + 1,
+    deliveredTouchesAfter: deliveredBefore + 1,
+    endNow,
+    ladder,
+    usesPostSaleDueAt: isPostSale,
+    why: endNow
+      ? endNow.cause === "disengaged_taper"
+        ? `the ${ladder} ladder ends here: ${deliveredBefore} delivered touches with no reply, at or ` +
+          `past the give-up threshold of ${input.taperAfterTouches}`
+        : "the ride-challenge final-mileage reminder is a one-shot — it has fired, so the chase is done"
+      : `${ladder} ladder, rung ${currentStep} -> ${currentStep + 1}` +
+        `${delivered ? `, touch ${deliveredBefore + 1} delivered` : ", silent rung (burned, not counted)"}`
+  };
+}

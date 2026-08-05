@@ -1020,6 +1020,43 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     }, ["decideReschedulePendingClear"]);
   }
 
+  // The rung burn, sampled BOTH ways on `delivered` — that flag is the input which decides whether
+  // this rung counts against the give-up threshold, so one sample would hide the silent-rung rule.
+  // PROBE: `delivered` is held fixed per sample and `customerEngaged` is pinned false (the taper's
+  // interesting side); everything else is the lead's real stored chase — kind, reason, context tag,
+  // deferred message, rung and touch count, which is exactly what the six ladders disagree about.
+  for (const delivered of [true, false] as const) {
+    add(`cadenceAdvance:${delivered ? "delivered" : "silent"}`, conv => {
+      const cadence = (conv as any)?.followUpCadence;
+      if (!cadence || typeof reducer.decideCadenceAdvance !== "function") return undefined;
+      const tracked = Number(cadence.deliveredTouches);
+      const legacy = Number(cadence.lastSentStep);
+      const deliveredTouchesBefore = Number.isFinite(tracked) && tracked >= 0
+        ? Math.floor(tracked)
+        : Number.isFinite(legacy) && legacy >= 0
+          ? Math.floor(legacy) + 1
+          : 0;
+      const decision = reducer.decideCadenceAdvance({
+        kind: cadence.kind,
+        followUpReason: (conv as any)?.followUp?.reason,
+        contextTag: cadence.contextTag,
+        deferredMessage: cadence.deferredMessage,
+        stepIndex: cadence.stepIndex,
+        deliveredTouchesBefore,
+        delivered, // PROBE
+        customerEngaged: false, // PROBE — caller-side, and the taper's interesting side
+        taperAfterTouches: 9
+      });
+      return {
+        stampDelivered: decision.stampDelivered,
+        nextStepIndex: decision.nextStepIndex,
+        endNow: decision.endNow,
+        ladder: decision.ladder,
+        usesPostSaleDueAt: decision.usesPostSaleDueAt
+      };
+    }, ["decideCadenceAdvance"]);
+  }
+
   // Sampled once PER CAUSE. The whole question is whether a lead we CLOSED against a bike comes back
   // open, and the three causes answer it differently on the same lead — so one sample would hide the
   // divergences the un-stacking preserved. PROBE: the cause is held fixed per sample; everything else
