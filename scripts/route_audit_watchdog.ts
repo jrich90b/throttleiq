@@ -277,7 +277,11 @@ function main() {
 
   // Same rows the classifier used, narrowed back to the report window — the
   // outcome counts below are a "what happened in the last N minutes" measure and
-  // must not widen just because the stuck lookup did.
+  // must not widen just because the stuck lookup did. `outcomeFiles` stays scoped
+  // to the report window too: it is reported as `fileCount` beside those counts.
+  const outcomeFiles = dateStampsSince(sinceMs, nowMs).map(stamp =>
+    path.join(parsed.routeAuditDir, `route_outcomes_${stamp}.jsonl`)
+  );
   const outcomeRows = allOutcomeRows.filter(r => {
     const tsMs = toMs(String(r?.ts ?? ""));
     return Number.isFinite(tsMs) && tsMs >= sinceMs;

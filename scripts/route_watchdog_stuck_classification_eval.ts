@@ -18,7 +18,10 @@
  * Run: npx tsx scripts/route_watchdog_stuck_classification_eval.ts
  */
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import {
   classifyStuckTurn,
@@ -260,6 +263,106 @@ assert.ok(
   ![...DELIBERATE_SILENCE_ROUTE_OUTCOMES].some(o => o.includes("overridden")),
   "an overridden verdict is not a decision to stay silent"
 );
+
+// --- 2c) SMOKE RUN. The layers above are pure functions plus source-text guards,
+//         and source text is exactly what cannot catch a script that no longer
+//         RUNS. Measured: wiring the verdict lookup left `outcomeFiles` referenced
+//         but undeclared, and the whole watchdog died with a ReferenceError while
+//         every pure test above stayed green — `tsc` never sees it, because
+//         scripts/ sits outside the API tsconfig. So execute the real thing.
+//
+//         Clock-safe by construction (see the 2026-08-05 midnight gate failure):
+//         the fixture is built RELATIVE to now and each outcome row is filed under
+//         the UTC date stamp derived from its own timestamp, so this behaves the
+//         same at 23:59Z as at 00:01Z. ---
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "route-watchdog-smoke-"));
+  try {
+    const nowMs = Date.now();
+    const inboundMs = nowMs - 60 * 60 * 1000; // 1h ago: past the 120s floor, inside the 7d ceiling
+    const verdictMs = inboundMs + 5000; // the judge ruled 5s later, as it does live
+    const iso = (ms: number) => new Date(ms).toISOString();
+    const stampOf = (ms: number) => iso(ms).slice(0, 10).replace(/-/g, "");
+
+    const conv = (id: string) => ({
+      id,
+      leadKey: id,
+      status: null,
+      mode: "suggest",
+      followUp: { mode: "active" },
+      messages: [
+        { at: iso(inboundMs - 60_000), direction: "out", provider: "twilio", body: "Want a pricing breakdown?" },
+        { at: iso(inboundMs), direction: "in", provider: "twilio", body: "No, thanks" }
+      ]
+    });
+    // Two identical threads. The ONLY difference is that a verdict exists for one.
+    const JUDGED = "+15550000001";
+    const UNJUDGED = "+15550000002";
+    fs.writeFileSync(
+      path.join(tmp, "conversations.json"),
+      JSON.stringify({ conversations: [conv(JUDGED), conv(UNJUDGED)], todos: [] })
+    );
+
+    const auditDir = path.join(tmp, "route_audit");
+    fs.mkdirSync(auditDir);
+    fs.writeFileSync(
+      path.join(auditDir, `route_outcomes_${stampOf(verdictMs)}.jsonl`),
+      JSON.stringify({
+        ts: iso(verdictMs),
+        scope: "live",
+        outcome: "customer_ack_no_response",
+        detail: { convId: JUDGED, leadKey: JUDGED }
+      }) + "\n"
+    );
+
+    const outPath = path.join(tmp, "out.json");
+    // Run it the way ci:eval runs it — through the repo's own tsx, not a bare node
+    // type-strip (which cannot resolve the .ts domain imports).
+    const tsxBin = path.resolve("node_modules/.bin/tsx");
+    const res = spawnSync(
+      tsxBin,
+      ["scripts/route_audit_watchdog.ts", "--out", outPath],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          CONVERSATIONS_DB_PATH: path.join(tmp, "conversations.json"),
+          ROUTE_AUDIT_DIR: auditDir
+        }
+      }
+    );
+    assert.equal(
+      res.status,
+      0,
+      `the watchdog must run end-to-end; exited ${res.status}\n${res.stderr ?? ""}`
+    );
+
+    const out = JSON.parse(fs.readFileSync(outPath, "utf8"));
+    const stuck = out?.stuckTurns;
+    const actionableIds = (stuck?.rows ?? []).map((r: any) => String(r.convId));
+    const judgedRow = (stuck?.suppressed?.rows ?? []).find((r: any) => String(r.convId) === JUDGED);
+
+    assert.equal(stuck?.matchedTotal, 2, "both threads must match as unanswered turns");
+    assert.deepEqual(
+      actionableIds,
+      [UNJUDGED],
+      "only the thread with NO recorded verdict may stay actionable"
+    );
+    assert.equal(
+      judgedRow?.suppressionReason,
+      "judged_no_response",
+      "the judged thread must be suppressed with the informative reason"
+    );
+    // The summary block the agent_manager P1 actually reads.
+    assert.equal(stuck?.count, 1, "the headline actionable count must drop to the genuine stall");
+    assert.ok(
+      Number.isFinite(out?.routeOutcomes?.fileCount),
+      "the report-window file count must still be reported"
+    );
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
 
 // --- 3) Invariant: the default ceiling is a sane, positive horizon (7 days). ---
 assert.ok(STUCK_MAX_AGE_SEC_DEFAULT > 0, "recency ceiling must be positive");
