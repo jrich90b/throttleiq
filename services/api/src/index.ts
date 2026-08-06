@@ -708,7 +708,10 @@ import {
   clearInventorySold,
   normalizeInventorySoldKey
 } from "./domain/inventorySolds.js";
-import { appendLeadUnitAvailabilityDisclosure } from "./domain/leadUnitAvailabilityDisclosure.js";
+import {
+  appendLeadUnitAvailabilityDisclosure,
+  isUnitRecordOwnedByConversation
+} from "./domain/leadUnitAvailabilityDisclosure.js";
 import { buildLongTermTimelineMessage } from "./domain/longTermMessage.js";
 import { sendEmail } from "./domain/emailSender.js";
 import {
@@ -13638,15 +13641,23 @@ async function resolveLeadUnitAvailabilityForReply(
     storeLabel ||
     modelLabel ||
     (stockId ? `stock ${stockId}` : vin ? `VIN ${vin}` : "");
+  // Ownership is read the SAME way for both kinds (isUnitRecordOwnedByConversation). The sold
+  // branch used to hardcode false, which is how a buyer got told his own delivered bike was
+  // "no longer available" (+17168614216).
   if (sold) {
-    return { kind: "sold", key: soldKey ?? String(stockId ?? vin), unitLabel, ownedByThisConv: false };
+    return {
+      kind: "sold",
+      key: soldKey ?? String(stockId ?? vin),
+      unitLabel,
+      ownedByThisConv: isUnitRecordOwnedByConversation(sold as any, conv)
+    };
   }
-  const holdConvId = String((hold as any)?.convId ?? "").trim();
-  const holdLeadKey = String((hold as any)?.leadKey ?? "").trim();
-  const ownedByThisConv =
-    (!!holdConvId && holdConvId === String(conv.id ?? "").trim()) ||
-    (!!holdLeadKey && holdLeadKey === String(conv.leadKey ?? "").trim());
-  return { kind: "hold", key: holdKey ?? String(stockId ?? vin), unitLabel, ownedByThisConv };
+  return {
+    kind: "hold",
+    key: holdKey ?? String(stockId ?? vin),
+    unitLabel,
+    ownedByThisConv: isUnitRecordOwnedByConversation(hold as any, conv)
+  };
 }
 
 // Weave the one-time hold/sold disclosure into an outgoing customer reply. Decision centralized in
@@ -13669,7 +13680,7 @@ async function maybeApplyLeadUnitAvailabilityDisclosure(
       | undefined;
     const decision = decideLeadUnitAvailabilityDisclosure({
       unavailableKind: availability?.kind ?? null,
-      holdOwnedByThisConv: !!availability?.ownedByThisConv,
+      unitOwnedByThisConv: !!availability?.ownedByThisConv,
       alreadyDisclosedForThisUnit: !!(
         availability &&
         marker &&
@@ -13806,6 +13817,21 @@ async function buildCadenceLeadUnitAvailabilityOverride(args: {
       convId: conv.id,
       leadKey: conv.leadKey,
       detail: { stockId, vin }
+    });
+    return null;
+  }
+
+  // Never announce a unit's unavailability to the customer whose OWN record it is — their own
+  // hold, or the bike they just bought (+17168614216, 2026-08-06). Same ownership read the
+  // reply-side disclosure uses; a proactive "quick update — it's no longer available" is even
+  // worse unprompted than appended. Ownerless record => not owned => announce, as before.
+  if (isUnitRecordOwnedByConversation((sold ?? hold) as any, conv)) {
+    recordDecisionTrace({
+      scope: "regen",
+      stage: "cadence.lead_unit_disclosure_suppressed_own_record",
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      detail: { stockId, vin, kind: sold ? "sold" : "hold" }
     });
     return null;
   }

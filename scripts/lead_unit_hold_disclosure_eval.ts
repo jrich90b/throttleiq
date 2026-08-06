@@ -30,6 +30,7 @@ import { decideLeadUnitAvailabilityDisclosure } from "../services/api/src/domain
 import {
   appendLeadUnitAvailabilityDisclosure,
   composeLeadUnitAvailabilityDisclosure,
+  isUnitRecordOwnedByConversation,
   textAlreadyDisclosesUnavailability
 } from "../services/api/src/domain/leadUnitAvailabilityDisclosure.ts";
 
@@ -49,6 +50,10 @@ const rows: Row[] = [
   { id: "sold_discloses", kind: "sold", own: false, disclosed: false, protectedReply: false, expect: "disclose_sold" },
   // The customer's OWN hold is good news, not a warning.
   { id: "own_hold_stays_quiet", kind: "hold", own: true, disclosed: false, protectedReply: false, expect: "none" },
+  // Charles Desalvo +17168614216 (2026-08-06): the unit sold TO THIS CUSTOMER. Telling the buyer
+  // his own delivered bike is "no longer available" is the miss this row exists to stop. Before
+  // the fix the resolver hardcoded own=false for every sold record, so this row was unreachable.
+  { id: "own_sold_stays_quiet", kind: "sold", own: true, disclosed: false, protectedReply: false, expect: "none" },
   // Once per unit — a prior disclosure suppresses repeats.
   { id: "already_disclosed_once_only", kind: "hold", own: false, disclosed: true, protectedReply: false, expect: "none" },
   { id: "sold_already_disclosed", kind: "sold", own: false, disclosed: true, protectedReply: false, expect: "none" },
@@ -61,12 +66,43 @@ const rows: Row[] = [
 for (const r of rows) {
   const kind = decideLeadUnitAvailabilityDisclosure({
     unavailableKind: r.kind,
-    holdOwnedByThisConv: r.own,
+    unitOwnedByThisConv: r.own,
     alreadyDisclosedForThisUnit: r.disclosed,
     isProtectedReplyKind: r.protectedReply
   }).kind;
   assert.equal(kind, r.expect, `decision[${r.id}] expected ${r.expect}, got ${kind}`);
 }
+
+// --- 1b) Ownership read (pure): who does the hold/sold record belong to? ---
+// The inventory stores stamp the conversation the record was created for (67 of 68 live sold
+// records carry convId/leadKey). Charles's record: stock U902-24, convId + leadKey +17168614216.
+const charles = { convId: "+17168614216", leadKey: "+17168614216" };
+assert.equal(
+  isUnitRecordOwnedByConversation(charles, { id: "+17168614216", leadKey: "+17168614216" }),
+  true,
+  "the buyer's own sold record is owned by his conversation"
+);
+assert.equal(
+  isUnitRecordOwnedByConversation(charles, { id: "+15857278545", leadKey: "+15857278545" }),
+  false,
+  "someone else's thread does NOT own that sold record (Ryan still gets told the unit is gone)"
+);
+// leadKey-only match still counts (the conv id and the lead key are not always the same string).
+assert.equal(
+  isUnitRecordOwnedByConversation({ leadKey: "+17168614216" }, { id: "conv_abc", leadKey: "+17168614216" }),
+  true,
+  "a leadKey match alone identifies the owner"
+);
+// FAIL DIRECTION: unknown / blank ownership must read false, i.e. keep disclosing.
+assert.equal(isUnitRecordOwnedByConversation({}, { id: "+17168614216", leadKey: "+17168614216" }), false,
+  "an ownerless record is never treated as the customer's own");
+assert.equal(isUnitRecordOwnedByConversation(null, { id: "+17168614216" }), false, "no record => not owned");
+assert.equal(isUnitRecordOwnedByConversation(charles, null), false, "no conversation => not owned");
+assert.equal(
+  isUnitRecordOwnedByConversation({ convId: "", leadKey: "" }, { id: "", leadKey: "" }),
+  false,
+  "empty strings never match each other into a false ownership claim"
+);
 
 // --- 2) Composer + append safety. ---
 const unitLabel = "2013 Harley-Davidson Street Glide";
@@ -139,6 +175,43 @@ assert.ok(
   "compliance (forceSend) replies are protected from injection"
 );
 
+// Ownership is resolved for BOTH kinds, from the record, not hardcoded. The regression this
+// guards: `return { kind: "sold", ..., ownedByThisConv: false }` — a literal that made the
+// own-sold decision row unreachable no matter what the store said.
+const resolverFn = indexSrc.slice(
+  indexSrc.indexOf("async function resolveLeadUnitAvailabilityForReply"),
+  indexSrc.indexOf("async function maybeApplyLeadUnitAvailabilityDisclosure")
+);
+assert.ok(resolverFn.length > 0, "resolveLeadUnitAvailabilityForReply is still the resolver");
+assert.equal(
+  (resolverFn.match(/ownedByThisConv:\s*isUnitRecordOwnedByConversation\(/g) ?? []).length,
+  2,
+  "both the sold and the hold branch resolve ownership through isUnitRecordOwnedByConversation"
+);
+assert.ok(
+  !/ownedByThisConv:\s*(?:false|true)\b/.test(resolverFn),
+  "neither branch hardcodes ownership"
+);
+assert.ok(
+  /unitOwnedByThisConv:\s*!!availability\?\.ownedByThisConv/.test(indexSrc),
+  "the injector passes the resolved ownership into the centralized decision"
+);
+
+// The proactive cadence override suppresses on the same ownership read — an unprompted
+// "quick update, it's no longer available" to the buyer is worse than an appended one.
+const cadenceOverrideFn = indexSrc.slice(
+  indexSrc.indexOf("Sold-news staleness cap (Joe ruling 2026-07-23)") - 2000,
+  indexSrc.indexOf("Sold-news staleness cap (Joe ruling 2026-07-23)")
+);
+assert.ok(
+  /if \(isUnitRecordOwnedByConversation\(\(sold \?\? hold\) as any, conv\)\) \{/.test(cadenceOverrideFn),
+  "the cadence availability override returns early on the customer's own hold/sold record"
+);
+assert.ok(
+  indexSrc.includes("cadence.lead_unit_disclosure_suppressed_own_record"),
+  "the cadence suppression is traced"
+);
+
 // The dedup marker is persisted on the conversation.
 assert.ok(
   indexSrc.includes("leadUnitAvailabilityDisclosed"),
@@ -186,5 +259,5 @@ assert.ok(
 );
 
 console.log(
-  "PASS lead-unit hold disclosure eval (decision table 8 rows + composer/append safety + both-funnel source guards + outward-rounded payment band)"
+  "PASS lead-unit hold disclosure eval (decision table 9 rows + own-record ownership read + composer/append safety + both-funnel + cadence-override source guards + outward-rounded payment band)"
 );

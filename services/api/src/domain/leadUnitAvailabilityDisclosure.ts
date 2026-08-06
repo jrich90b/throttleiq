@@ -15,6 +15,28 @@ export type LeadUnitAvailabilityDisclosureContext = {
   unitLabel: string;
 };
 
+// Does THIS conversation own the hold/sold record for the lead's unit? Both inventory stores
+// stamp the conversation the record belongs to (convId + leadKey), so a "sold" record sitting on
+// the BUYER's own thread is their purchase, not lost inventory — the reply path and the cadence
+// override must both stay quiet about availability there (Charles Desalvo +17168614216, 2026-08-06:
+// two days after delivery the draft told him his own Street Glide was "no longer available").
+//
+// Pure and deterministic (an id comparison, not comprehension). Fail direction: an ownerless or
+// mismatched record returns FALSE = disclose = today's behavior, so this can only ever make us
+// quieter toward the person who already bought the bike.
+export function isUnitRecordOwnedByConversation(
+  record: { convId?: string | null; leadKey?: string | null } | null | undefined,
+  conv: { id?: string | null; leadKey?: string | null } | null | undefined
+): boolean {
+  const recordConvId = String(record?.convId ?? "").trim();
+  const recordLeadKey = String(record?.leadKey ?? "").trim();
+  const convId = String(conv?.id ?? "").trim();
+  const convLeadKey = String(conv?.leadKey ?? "").trim();
+  if (recordConvId && convId && recordConvId === convId) return true;
+  if (recordLeadKey && convLeadKey && recordLeadKey === convLeadKey) return true;
+  return false;
+}
+
 // Belt-and-braces dedup: the cadence engine's buildCadenceLeadUnitAvailabilityOverride
 // composes its own full "quick update — it's on hold" message, and a staff reply may
 // already have said it. If the outgoing text (or a recent outbound) already discloses

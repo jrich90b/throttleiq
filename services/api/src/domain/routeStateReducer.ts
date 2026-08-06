@@ -3412,18 +3412,28 @@ export function decideDealerLeadSurveyTurn(
 // /conversations/:id/regenerate) resolve the inputs (holds/solds lookup by the lead's stock#/VIN)
 // and weave the disclosure into the reply.
 //
-// FAIL DIRECTION: fail toward DISCLOSING. A hold with no/unknown owner conversation still
-// discloses (the unit isn't freely available either way); only the customer's OWN hold suppresses
-// it (their hold is good news, not a warning). Compliance/system replies (STOP acks, opt-out
+// FAIL DIRECTION: fail toward DISCLOSING. A hold/sale with no/unknown owner conversation still
+// discloses (the unit isn't freely available either way); only THIS customer's own record
+// suppresses it. Compliance/system replies (STOP acks, opt-out
 // confirmations) and empty replies never carry it — a disclosure there would be nonsense and
 // tampering with compliance text is the one direction we never fail toward. Disclose ONCE per
 // unit-hold (alreadyDisclosedForThisUnit dedups; re-arms if the hold key changes).
+//
+// OWN-RECORD SUPPRESSION covers BOTH kinds (Charles Desalvo +17168614216, 2026-08-06). The sold
+// branch used to hardcode "not mine", so two days after he took delivery of stock U902-24 the
+// reply path told the BUYER "the 2024 Street Glide is no longer available. I can line up similar
+// in-stock options if you want" — lost inventory narrated to the person holding the keys. The
+// solds store already stamps the buying conversation (67 of 68 live records carry convId/leadKey);
+// nothing read it. Measured blast radius on the live store: 8 conversations are the buyer of their
+// own lead unit (all closed sold/sold_walkin_note), 22 are watching a unit that sold to SOMEONE
+// ELSE and keep disclosing exactly as before.
 export type LeadUnitAvailabilityDisclosureKind = "disclose_hold" | "disclose_sold" | "none";
 
 export type LeadUnitAvailabilityDisclosureInput = {
   unavailableKind: "hold" | "sold" | null;
-  // True when the hold record's convId/leadKey matches THIS conversation (customer's own hold).
-  holdOwnedByThisConv: boolean;
+  // True when the hold/sold record's convId/leadKey matches THIS conversation — the customer's own
+  // hold, or the unit THIS customer bought. Ownerless records read false (fail toward disclosing).
+  unitOwnedByThisConv: boolean;
   alreadyDisclosedForThisUnit: boolean;
   // True for compliance/system reply kinds (STOP/opt-out acks, invariant fallbacks) — never inject.
   isProtectedReplyKind: boolean;
@@ -3437,7 +3447,8 @@ export function decideLeadUnitAvailabilityDisclosure(
   if (!input.unavailableKind) return { kind: "none" };
   if (input.isProtectedReplyKind) return { kind: "none" };
   if (input.alreadyDisclosedForThisUnit) return { kind: "none" };
-  if (input.unavailableKind === "hold" && input.holdOwnedByThisConv) return { kind: "none" };
+  // Their own hold is good news, not a warning; their own PURCHASE is not lost inventory.
+  if (input.unitOwnedByThisConv) return { kind: "none" };
   return { kind: input.unavailableKind === "hold" ? "disclose_hold" : "disclose_sold" };
 }
 
