@@ -47,6 +47,23 @@ export function isStaffAuthoredReply(m: ExemplarCandidate | null | undefined): b
 /** Money figures we cannot verify at mine time — teaching a number risks the model reusing it. */
 const MONEY_RE = /\$\s?\d|(\b\d[\d,]{2,}\b\s*(?:dollars|down|\/mo|per month|a month))/i;
 
+/**
+ * Replies that are broken as ARTIFACTS, whatever they say. Both were found in the promoted set on
+ * 2026-08-06 and both teach a defect rather than a behaviour:
+ *  - a draft that greets twice ("Hi Patrick, Hey Patrick, it's Alexandra…") — a known malformed
+ *    send, and copying it spreads the malformation;
+ *  - a pasted VIN/spec block answering "can you give me a call" — a rep dumping data out of the
+ *    system, not writing to a customer. Teaching it invites the model to emit VINs of its own.
+ * Shape checks over our own outbound record, not a read of what the customer meant.
+ */
+const DOUBLE_GREETING_RE = /\b(hi|hey|hello)\b/gi;
+const VIN_RE = /\b[A-HJ-NPR-Z0-9]{17}\b/;
+
+function isMalformedReply(body: string): boolean {
+  if (VIN_RE.test(body)) return true;
+  return (body.match(DOUBLE_GREETING_RE) ?? []).length > 1;
+}
+
 export type ExemplarRejection =
   | "not_staff_authored"
   | "human_owned_thread"
@@ -54,6 +71,7 @@ export type ExemplarRejection =
   | "too_short"
   | "reply_too_late"
   | "superseded_by_later_inbound"
+  | "malformed_reply"
   | null;
 
 /**
@@ -70,7 +88,9 @@ export function rejectExemplarReason(input: {
   const mode = String(input.threadMode ?? "").trim().toLowerCase();
   if (mode === "human" || mode === "manual_handoff") return "human_owned_thread";
   if (input.isShortAck) return "too_short";
-  if (MONEY_RE.test(String(input.message?.body ?? ""))) return "quotes_money";
+  const body = String(input.message?.body ?? "");
+  if (MONEY_RE.test(body)) return "quotes_money";
+  if (isMalformedReply(body)) return "malformed_reply";
   return null;
 }
 

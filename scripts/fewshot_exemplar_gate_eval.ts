@@ -55,7 +55,11 @@ const cases: [string, Parameters<typeof rejectExemplarReason>[0], ReturnType<typ
   ["human-owned thread", { message: staff, threadMode: "manual_handoff", isShortAck: false }, "human_owned_thread"],
   ["human mode thread", { message: staff, threadMode: "human", isShortAck: false }, "human_owned_thread"],
   ["short ack", { message: staff, threadMode: "active", isShortAck: true }, "too_short"],
-  ["agent draft that shipped over twilio", { message: { ...staff, actorUserName: null, actorUserId: null }, threadMode: "active", isShortAck: false }, "not_staff_authored"]
+  ["agent draft that shipped over twilio", { message: { ...staff, actorUserName: null, actorUserId: null }, threadMode: "active", isShortAck: false }, "not_staff_authored"],
+  // Both found in the promoted set on 2026-08-06 — artifacts, not messages.
+  ["a draft that greets twice", { message: { ...staff, body: "Hi Patrick, Hey Patrick, it's Alexandra over at American Harley-Davidson." }, threadMode: "active", isShortAck: false }, "malformed_reply"],
+  ["a pasted VIN/spec block", { message: { ...staff, body: "2011 HARLEY-DAVIDSON FLSTF FAT BOY 1HD1BX511BB030980 NO SECURITY SYSTEM" }, threadMode: "active", isShortAck: false }, "malformed_reply"],
+  ["one greeting is normal", { message: { ...staff, body: "Hey John — I can get photos over to you today." }, threadMode: "active", isShortAck: false }, null]
 ];
 for (const [label, input, want] of cases) {
   assert.equal(rejectExemplarReason(input), want, `${label}: expected ${want ?? "ACCEPT"}`);
