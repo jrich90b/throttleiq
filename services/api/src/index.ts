@@ -483,6 +483,11 @@ import {
 } from "./domain/routeStateReducer.js";
 import { resolveTownNearestDealer, formatTownLabel } from "./domain/geo.js";
 import { dataPath, getDataDir } from "./domain/dataDir.js";
+import {
+  hasDealerTransactionPolicyParserHint,
+  parseDealerTransactionPolicyFallback,
+  type DealerTransactionPolicyDecision
+} from "./domain/dealerTransactionPolicy.js";
 import { recordOpenAIUsage } from "./domain/openaiUsageLogger.js";
 import { getModelSpecs, buildSpecsSummary, buildGlanceSummary } from "./domain/specsScraper.js";
 import {
@@ -4818,32 +4823,6 @@ function buildRiderToRiderFinanceRegenReply(args: {
   ).trim();
 }
 
-type DealerTransactionPolicyDecision = DealerTransactionPolicyParse & {
-  source: "parser" | "fallback";
-};
-
-function hasDealerTransactionPolicyParserHint(text: string | null | undefined): boolean {
-  const t = String(text ?? "").toLowerCase();
-  if (!t.trim()) return false;
-  const riderToRider = /\brider\s*(?:to|2|-)?\s*rider\b/.test(t) || /\br2r\b/.test(t);
-  const thirdParty =
-    /\b(private\s+(?:seller|party)|third[-\s]?party|outside seller|facebook marketplace|marketplace seller|craigslist)\b/.test(
-      t
-    ) ||
-    /\b(another|other)\s+dealer\b/.test(t) ||
-    /\bdealer\s+trade\b/.test(t) ||
-    /\b(?:facilitate|facilitating|broker|handle|process)\b[\s\S]{0,90}\b(?:private|seller|party|marketplace|another dealer|other dealer|third[-\s]?party|used bike)\b/.test(
-      t
-    ) ||
-    /\b(?:buy|purchase|acquire)\s+(?:this|that|the)\s+bike\b[\s\S]{0,140}\btrade\s+(?:mine|my\s+bike|my\s+motorcycle)\b/.test(
-      t
-    ) ||
-    /\btrade\s+(?:mine|my\s+bike|my\s+motorcycle)\s+(?:on|toward|towards)\s+(?:it|this|that|the\s+bike)\b/.test(
-      t
-    );
-  return riderToRider || thirdParty;
-}
-
 function hasDealerTransactionPolicyContinuationHint(
   text: string | null | undefined,
   conv: any
@@ -4864,73 +4843,19 @@ function hasDealerTransactionPolicyContinuationHint(
   return hasDealerTransactionPolicyParserHint(recent);
 }
 
-function parseDealerTransactionPolicyFallback(text: string): DealerTransactionPolicyDecision | null {
-  const t = String(text ?? "").toLowerCase();
-  if (!hasDealerTransactionPolicyParserHint(t)) return null;
-  const asksRiderToRiderFinancing =
-    (/\brider\s*(?:to|2|-)?\s*rider\b/.test(t) || /\br2r\b/.test(t)) &&
-    /\b(finance|financing|program|work|participate|offer)\b/.test(t);
-  const asksPrivateSellerFacilitation =
-    /\b(private\s+(?:seller|party)|third[-\s]?party|outside seller|facebook marketplace|marketplace seller|craigslist)\b/.test(
-      t
-    );
-  const asksExternalDealerFacilitation =
-    /\b(another|other)\s+dealer\b/.test(t) || /\bdealer\s+trade\b/.test(t);
-  if (!asksRiderToRiderFinancing && !asksPrivateSellerFacilitation && !asksExternalDealerFacilitation) {
-    return null;
-  }
-  const intent: DealerTransactionPolicyParse["intent"] =
-    asksRiderToRiderFinancing && (asksPrivateSellerFacilitation || asksExternalDealerFacilitation)
-      ? "rider_to_rider_and_third_party"
-      : asksRiderToRiderFinancing
-        ? "rider_to_rider_financing"
-        : asksPrivateSellerFacilitation
-          ? "private_seller_facilitation"
-          : "external_dealer_facilitation";
-  return {
-    intent,
-    explicitRequest: true,
-    asksRiderToRiderFinancing,
-    asksPrivateSellerFacilitation,
-    asksExternalDealerFacilitation,
-    confidence: 0.76,
-    source: "fallback"
-  };
-}
-
 function resolveDealerTransactionPolicyDecision(
   text: string,
   parsed: DealerTransactionPolicyParse | null
 ): DealerTransactionPolicyDecision | null {
-  const policySource = resolveDealerTransactionPolicySource({
+  // Precedence (and why a parser `none` beats the keyword scan even when hedged) lives in
+  // resolveDealerTransactionPolicySource, pinned by dealer_transaction_policy_precedence:eval.
+  const source = resolveDealerTransactionPolicySource({
     parserAccepted: !!parsed && isDealerTransactionPolicyParserAccepted(parsed),
     parsedIntent: parsed?.intent ?? null,
     hasParse: !!parsed
   });
-  if (policySource === "parser" && parsed) {
-    return { ...parsed, source: "parser" };
-  }
-  if (policySource === "none") return null;
-  // A DIRECT REQUEST BEATS A BACKGROUND MENTION — and the parser is the only thing that can tell
-  // them apart. When the parser read the turn and said `none`, that answer stands even below the
-  // accept floor, because the only alternative is `parseDealerTransactionPolicyFallback`: a keyword
-  // scan that fires on the mere presence of "private seller" and then ASSERTS `explicitRequest: true`
-  // at a hardcoded 0.76 — deliberately just over the 0.74 gate it is bypassing.
-  //
-  // Measured 2026-08-06 by replaying one turn three times. Customer: "Let me know what you are
-  // looking for price wise and I will make a decision on coming to check it out. I'm currently
-  // talking to a private seller about a 2018 Indian." The parser answered `none` every run; on the
-  // run where it reported 0.72 instead of 0.86 it lost the accept gate, the keyword scan took over,
-  // and he was told "we generally cannot facilitate a trade or purchase for a bike owned by a
-  // private seller" — answering a question he never asked, and never quoting the price he did ask
-  // for. Same words in, a coin-flip on which reply went out.
-  //
-  // FAIL DIRECTION: dropping the fallback here fails toward answering what the customer actually
-  // asked. It cannot promise something we can't do — the policy reply is a refusal, so declining to
-  // send it withholds nothing we owe. A low-confidence `none` is still a reading of the sentence;
-  // the keyword scan is not a reading at all. Under the AGENTS.md migrate-vs-keep test that makes
-  // this comprehension, not a safety gate. The precedence itself lives in
-  // `resolveDealerTransactionPolicySource` above, pinned by a decision table.
+  if (source === "parser" && parsed) return { ...parsed, source: "parser" };
+  if (source === "none") return null;
   return parseDealerTransactionPolicyFallback(text);
 }
 
