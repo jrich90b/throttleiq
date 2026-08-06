@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { applyDraftStateInvariants } from "../services/api/src/domain/draftStateInvariants.ts";
+import {
+  collectExemplarTurn,
+  rejectExemplarReason,
+  type ExemplarRejection
+} from "../services/api/src/domain/fewShotExemplarGate.ts";
 
 type AnyObj = Record<string, any>;
 
@@ -203,6 +208,38 @@ function findNextOutbound(messages: AnyObj[], fromIndex: number): AnyObj | null 
   return null;
 }
 
+/**
+ * The customer's whole turn: this inbound plus the unanswered ones immediately before it, oldest
+ * first. A stale draft never reached the customer, so it does not break the run — only a delivered
+ * outbound does. Voice artifacts are transcripts of a call, not messages in the text thread.
+ */
+function collectPrecedingInboundRun(messages: AnyObj[], index: number): { at: string; body: string }[] {
+  const run: { at: string; body: string }[] = [];
+  for (let j = index; j >= 0; j -= 1) {
+    const msg = messages[j];
+    if (isVoiceArtifactProvider(String(msg?.provider ?? ""))) continue;
+    if (isStaleDraft(msg)) continue;
+    if (String(msg?.direction ?? "").trim().toLowerCase() !== "in") break;
+    const at = toIso(msg?.at);
+    const text = normText(msg?.body);
+    if (at && text) run.push({ at, body: text });
+  }
+  return run.reverse();
+}
+
+/** True when a LATER inbound also precedes this reply — that one owns the exemplar, not this one. */
+function hasInboundBetween(messages: AnyObj[], index: number, nextOutbound: AnyObj | null): boolean {
+  if (!nextOutbound) return false;
+  const end = messages.indexOf(nextOutbound);
+  if (end < 0) return false;
+  for (let j = index + 1; j < end; j += 1) {
+    const msg = messages[j];
+    if (isVoiceArtifactProvider(String(msg?.provider ?? ""))) continue;
+    if (String(msg?.direction ?? "").trim().toLowerCase() === "in" && normText(msg?.body)) return true;
+  }
+  return false;
+}
+
 function isTrainingOutboundProvider(provider: unknown): boolean {
   const p = String(provider ?? "")
     .trim()
@@ -285,7 +322,8 @@ function run() {
     string,
     { count: number; sample: MessageRow[]; direction: string; provider: string }
   >();
-  const fewShotCandidates: FewShotCandidate[] = [];
+  const fewShotRejections: Record<string, number> = {};
+const fewShotCandidates: FewShotCandidate[] = [];
 
   let totalMessages = 0;
   let inboundMessages = 0;
@@ -478,20 +516,46 @@ function run() {
       }
 
       const feedback = outboundFeedbackDetails(nextOutbound);
-      const nextOutProvider = String(nextOutbound?.provider ?? "").trim().toLowerCase();
-      const manualHumanOutbound = nextOutProvider === "human";
-      if (manualHumanOutbound && observedDraft && !isShortAck(observedDraft)) {
+      // The discriminator is the ACTOR STAMP, not the provider — an approved AI draft sends via
+      // "twilio" too, so `provider === "human"` matched 38 messages in the whole store (inside a
+      // 2h window) and froze the teaching set at six examples on 2026-07-21. The real pool is 1,261.
+      // Volume alone is not safe to teach, so the same gate also drops replies we must not copy:
+      // money figures we cannot verify, human-owned threads, and short acks.
+      const exemplarRejection = rejectExemplarReason({
+        message: nextOutbound as any,
+        threadMode: conv?.mode ?? conv?.followUp?.mode ?? null,
+        isShortAck: observedDraft ? isShortAck(observedDraft) : true
+      });
+      // ONE TURN, NOT N COPIES. Only the LAST inbound before this reply builds the exemplar, and it
+      // carries the customer's whole run of messages — otherwise a single reply is harvested once
+      // per inbound and the corpus teaches that "Ok, will do." answers nine different questions.
+      const exemplarTurn =
+        exemplarRejection || !observedDraft
+          ? null
+          : collectExemplarTurn({
+              inbounds: collectPrecedingInboundRun(messages, i),
+              replyAt: nextOutAtIso
+            });
+      const turnRejection: ExemplarRejection =
+        exemplarRejection ||
+        (hasInboundBetween(messages, i, nextOutbound) ? "superseded_by_later_inbound" : null) ||
+        (exemplarTurn && !exemplarTurn.ok ? exemplarTurn.reason : null);
+      if (turnRejection) fewShotRejections[turnRejection] = (fewShotRejections[turnRejection] ?? 0) + 1;
+      if (!turnRejection && observedDraft && exemplarTurn?.ok) {
         fewShotCandidates.push({
           id: buildCandidateId(convId, atIso, "manual_human_exemplar"),
           kind: "manual_human_exemplar",
           severity: "low",
-          reason: "manual human outbound after inbound",
+          reason:
+            exemplarTurn.messageCount > 1
+              ? `staff-authored 1:1 reply to a ${exemplarTurn.messageCount}-message customer turn (actor-stamped)`
+              : "staff-authored 1:1 reply after inbound (actor-stamped)",
           convId,
           leadRef,
           leadName,
           leadPhone,
           inboundAt: atIso,
-          inboundText: body,
+          inboundText: exemplarTurn.inboundText,
           observedDraft,
           observedProvider: String(nextOutbound?.provider ?? ""),
           observedAt: nextOutAtIso,
@@ -612,7 +676,11 @@ function run() {
     patternThreshold: parsed.minCount,
     frequentPatternCount: frequentPatterns.length,
     fewShotCandidateCount: candidateRows.length,
-    fewShotCandidateCountsByKind: candidateCountsByKind
+    fewShotCandidateCountsByKind: candidateCountsByKind,
+    // Finding zero exemplars looks exactly like finding none worth having — which is how a broken
+    // selector stayed invisible for fifteen days. Publish WHY they were dropped, so the next empty
+    // corpus is a number somebody can read instead of a silence.
+    fewShotRejectionsByReason: fewShotRejections
   };
 
   const fewShotSeedRows = candidateRows
