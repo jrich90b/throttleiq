@@ -8131,3 +8131,69 @@ export function resolveInventoryWatchDefaults(
   }
   return out;
 }
+
+// --- ADF sale/trade journey fallback bucket (2026-08-06) -------------------
+//
+// `sale_trade` is the journey parser's BROAD sales label. Its own prompt defines it as
+// "customer is explicitly shopping again, wants to buy, asks for trade/appraisal value, asks
+// about availability/pricing/test ride for purchase" — buying and trading share one tag, so the
+// tag alone says NOTHING about which of the two this customer wants.
+//
+// On a default-rule ADF lead the inbound route used to read that tag as a trade appraisal
+// whenever no stock/VIN/availability signal was present, and open the first touch with
+// "Thanks for using our trade-in estimator on your <bike>". Two reproduced misses, both
+// Room58 "Request details" leads whose structured Trade-In field is a form MIRROR of the bike
+// they are shopping for (see isMirroredTradeFieldArtifact):
+//   - Beth Bremer (Ref 11449): "I sold my sportster several years back ... is the super glide a
+//     good option?" — a fit question, answered with a trade appraisal she never asked for.
+//   - Brandon Drazinski (Ref 11278): "Do you happen to have a PDF brochure ... just shopping
+//     around" — same trade-estimator opening.
+//
+// This decision is only ever consulted AFTER the explicit trade branch has already declined
+// (no trade dialog-act, no trade/sell wording in the inquiry), so the sole remaining honest
+// trade evidence is a STRUCTURED trade vehicle that survived the mirror guard.
+//
+// FAIL DIRECTION: unsure => the shopping bucket. Treating a buyer as a shopper costs us a
+// generic availability reply; treating a shopper as a trade-in costs us a fabricated frame —
+// we assert a trade the customer never mentioned and never answer what they asked.
+// ---------------------------------------------------------------------------
+export type SaleTradeJourneyBucketInput = {
+  /** journeyIntent === "sale_trade" and the parser verdict was accepted. */
+  saleTradeIntentFromParser: boolean;
+  /** The bucket the deterministic chain landed on before this fallback. */
+  inferredBucket: string;
+  /** A routing-parser bucket/cta already won; this fallback must not override it. */
+  hasParserBucketCta: boolean;
+  /** Stock id / VIN / "available" / availability parser — the customer named a unit. */
+  hasStockIntent: boolean;
+  /** A structured trade vehicle that SURVIVED isMirroredTradeFieldArtifact. */
+  hasStructuredTradeVehicle: boolean;
+};
+
+export type SaleTradeJourneyBucketDecision = {
+  applies: boolean;
+  bucket: "inventory_interest" | "trade_in_sell" | null;
+  cta: "check_availability" | "value_my_trade" | null;
+};
+
+const NO_SALE_TRADE_JOURNEY_BUCKET: SaleTradeJourneyBucketDecision = {
+  applies: false,
+  bucket: null,
+  cta: null
+};
+
+export function decideSaleTradeJourneyBucket(
+  input: SaleTradeJourneyBucketInput
+): SaleTradeJourneyBucketDecision {
+  if (!input.saleTradeIntentFromParser) return NO_SALE_TRADE_JOURNEY_BUCKET;
+  if (input.hasParserBucketCta) return NO_SALE_TRADE_JOURNEY_BUCKET;
+  if (input.inferredBucket !== "general_inquiry") return NO_SALE_TRADE_JOURNEY_BUCKET;
+  // A named unit is a shopping signal, and it outranks a trade field either way.
+  if (input.hasStockIntent) {
+    return { applies: true, bucket: "inventory_interest", cta: "check_availability" };
+  }
+  if (input.hasStructuredTradeVehicle) {
+    return { applies: true, bucket: "trade_in_sell", cta: "value_my_trade" };
+  }
+  return { applies: true, bucket: "inventory_interest", cta: "check_availability" };
+}

@@ -46,6 +46,9 @@ const NOT_PROJECTABLE: Record<string, string> = {};
 const TURN_TEXT_REASON =
   "reads THIS TURN's customer text / parser output — not derivable from the stored conversation";
 for (const fn of [
+  // Gated by THIS turn's journey-intent parser verdict plus the availability parser; neither is
+  // persisted, so a stored conversation cannot reproduce the inputs that make it fire.
+  "decideSaleTradeJourneyBucket",
   "resolveTurnPrimaryIntent",
   "decideSchedulingTurn",
   "decideCustomerAckConfirmBooking",
