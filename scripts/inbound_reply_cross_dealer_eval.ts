@@ -256,8 +256,17 @@ function evaluateProfile(input: DealerProfileInput) {
       id: "unresolved_harley_other_inventory_repaired",
       classification: "global",
       actual: applyDraftStateInvariants(unresolvedOtherInvariantInput).draftText,
-      expected: "I’ll have the team check current options in your range with bags and follow up shortly.",
-      note: "Final publication boundary must repair unresolved generic inventory entities before draft/send."
+      // Expectation updated 2026-08-06. The stale string was this eval's, not the product's: the
+      // repair copy was deliberately rewritten in 27a6f5b2 because "I'll have the team check
+      // current options ... and follow up shortly" was vague filler that named no next step and
+      // answered no pricing ask — it scored as intent_mismatch + adf_direct_ask_unanswered. This
+      // eval was never wired into ci:eval, so nobody updated it and it sat red, unseen, ever since.
+      // Checked before changing it rather than assuming the product was right: the new copy quotes
+      // NO number, it commits to following up with one, to a customer who asked "anything in my
+      // range with some bags on it?". A promise to send numbers is not a price claim.
+      expected:
+        "Let me pull current options in your range with bags and get you real pricing. I’ll text the numbers right over.",
+      note: "Final publication boundary must repair unresolved generic inventory entities before draft/send, and must ANSWER the pricing ask rather than defer vaguely."
     },
     {
       id: "truncated_in_good_draft_repaired",
