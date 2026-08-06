@@ -25,12 +25,18 @@ import fs from "node:fs";
 /**
  * name → why it is deliberately not in the gate. Keep the reason specific and current.
  *
- * Empty today, and that is the healthy state: every runnable eval is in the chain. The map exists so
- * a future exclusion has to be written down. (The first entry I tried to add here — `adf_smoke:eval`
- * — was wrong: it has no npm script of its own, it runs as `adf:smoke`, so it was never an orphan.
- * The stale-entry check below caught that immediately, which is the behaviour we want from it.)
+ * Three of the 24 recovered orphans do not belong in a hermetic gate, and one of those is a real
+ * finding rather than a config problem. Writing the reason down is the whole point: an exclusion
+ * somebody decided beats an orphan nobody noticed.
  */
-const EXCLUDED: Record<string, string> = {};
+const EXCLUDED: Record<string, string> = {
+  "tone_quality:eval":
+    "needs a live data/conversations.json; the hermetic variant tone_quality:fixture_eval is already in the chain",
+  "web_fallback:eval":
+    "asserts on live harley-davidson.com search snippets — network- and content-dependent, so it would fail the gate on their copy edits, not ours",
+  "inbound_reply_cross_dealer:eval":
+    "FAILS 15/16 today on a real behaviour mismatch, not config: case unresolved_harley_other_inventory_repaired expects the safe deferral 'I will have the team check current options ... and follow up shortly' but the agent now answers 'Let me pull current options ... and get you real pricing. I will text the numbers right over.' Either the eval is stale or we drifted toward promising numbers. Queued for diagnosis — do NOT wire it in until that is settled, and do NOT delete the eval"
+};
 
 const pkg = JSON.parse(fs.readFileSync("package.json", "utf8")) as {
   scripts: Record<string, string>;
