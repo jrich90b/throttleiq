@@ -52,6 +52,8 @@ export type ExemplarRejection =
   | "human_owned_thread"
   | "quotes_money"
   | "too_short"
+  | "reply_too_late"
+  | "superseded_by_later_inbound"
   | null;
 
 /**
@@ -70,4 +72,56 @@ export function rejectExemplarReason(input: {
   if (input.isShortAck) return "too_short";
   if (MONEY_RE.test(String(input.message?.body ?? ""))) return "quotes_money";
   return null;
+}
+
+/**
+ * ONE CUSTOMER TURN, NOT N COPIES OF ONE REPLY.
+ *
+ * The miner pairs each inbound with "the next outbound". When a customer sends several messages and
+ * we answer once — or worse, when messages go unanswered and a rep finally replies much later —
+ * that single reply was harvested once PER inbound. Measured over the full store on 2026-08-06:
+ * 193 of 403 candidates were the same reply pasted onto 2+ different customer messages, the worst
+ * being one "Ok, will do." attached to NINE questions including "What do I have to do to reserve
+ * one". Teaching that teaches the agent that a vague acknowledgment answers a direct question —
+ * precisely the passivity at the top of the ranked comprehension backlog.
+ *
+ * So an exemplar is built from the customer's whole turn: the run of consecutive inbounds that the
+ * reply actually responded to. Two bounds keep that run honest:
+ *  - REPLY_MAX_LAG — a reply a day and a half later is not an answer to that turn;
+ *  - TURN_SPAN — messages far older than the last one belong to earlier, unanswered turns and must
+ *    not be presented as things this reply addressed.
+ * Both fail the same way the rest of this module does: when the pairing is doubtful, drop it.
+ */
+export const EXEMPLAR_REPLY_MAX_LAG_MS = 24 * 60 * 60 * 1000;
+export const EXEMPLAR_TURN_SPAN_MS = 2 * 60 * 60 * 1000;
+
+export type ExemplarTurnInput = {
+  /** Consecutive inbounds ending with the last one before the reply, oldest first. */
+  inbounds: { at?: string | null; body?: string | null }[];
+  replyAt?: string | null;
+};
+
+export type ExemplarTurn =
+  | { ok: true; inboundText: string; messageCount: number }
+  | { ok: false; reason: Exclude<ExemplarRejection, null> };
+
+/**
+ * Merge a customer's consecutive messages into the single turn a reply answered, or say why this
+ * pairing is not usable. Returns the messages joined newest-last, the order they were sent.
+ */
+export function collectExemplarTurn(input: ExemplarTurnInput): ExemplarTurn {
+  const msgs = (input.inbounds ?? [])
+    .map(m => ({ ms: Date.parse(String(m?.at ?? "")), body: String(m?.body ?? "").trim() }))
+    .filter(m => m.body && Number.isFinite(m.ms))
+    .sort((a, b) => a.ms - b.ms);
+  if (!msgs.length) return { ok: false, reason: "superseded_by_later_inbound" };
+
+  const replyMs = Date.parse(String(input.replyAt ?? ""));
+  const lastMs = msgs[msgs.length - 1].ms;
+  if (!Number.isFinite(replyMs) || replyMs - lastMs > EXEMPLAR_REPLY_MAX_LAG_MS) {
+    return { ok: false, reason: "reply_too_late" };
+  }
+
+  const turn = msgs.filter(m => lastMs - m.ms <= EXEMPLAR_TURN_SPAN_MS);
+  return { ok: true, inboundText: turn.map(m => m.body).join("\n"), messageCount: turn.length };
 }
