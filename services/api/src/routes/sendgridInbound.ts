@@ -193,6 +193,11 @@ import {
   hasSpokenForIncomingCue,
   incomingInventoryPurposeConfidenceFloor
 } from "../domain/pendingIncomingInventory.js";
+import {
+  decideInitialAdfPendingIncomingArm,
+  incomingUnitArrivalConfidenceFloor,
+  parseIncomingUnitArrivalWithLLM
+} from "../domain/incomingUnitArrival.js";
 import { buildOffersLine, resolveOffersUrl } from "../domain/offers.js";
 import { applyWatchFieldHygiene, dropUnstockedWatchColor, formatWatchYearLabel } from "../domain/watchFieldHygiene.js";
 import {
@@ -6575,9 +6580,21 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     .map(value => String(value ?? "").trim())
     .filter(Boolean)
     .join("\n");
-  const initialAdfPendingIncomingSignal =
+  // The keyword regex is a PREFILTER here, not the decision (Robert Myers +17163229218: "Robert
+  // came in and really liked the pre-owned Dyna we have in stock … I looked at his trade" matched
+  // came/in/trade, so the bike he had just sat on was described to him as "coming in"). A confident
+  // comprehended "arriving" is now required on top of it — see domain/incomingUnitArrival.ts.
+  const initialAdfPendingIncomingPrefilter =
     isInitialAdf && hasPendingIncomingInventorySignal(initialAdfPendingIncomingSourceText);
-  if (initialAdfPendingIncomingSignal) {
+  const initialAdfArrivalParse = initialAdfPendingIncomingPrefilter
+    ? await parseIncomingUnitArrivalWithLLM({ seedText: initialAdfPendingIncomingSourceText })
+    : null;
+  const initialAdfPendingIncomingDecision = decideInitialAdfPendingIncomingArm({
+    prefilterSignal: initialAdfPendingIncomingPrefilter,
+    parse: initialAdfArrivalParse,
+    confidenceFloor: incomingUnitArrivalConfidenceFloor()
+  });
+  if (initialAdfPendingIncomingDecision.arm) {
     const nowIsoValue = new Date().toISOString();
     const pending = buildPendingIncomingInventoryFromConversation({
       conv,
