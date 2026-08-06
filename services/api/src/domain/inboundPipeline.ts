@@ -258,6 +258,35 @@ export function resolveInboundTerminalRoute(
   return null;
 }
 
+/**
+ * WHICH READING OF THE TURN WINS: the parser, nothing, or the keyword fallback.
+ *
+ * Pure so the precedence is pinned by a decision table instead of living inline in the handler.
+ * The rule that matters is the middle one — a parser verdict of `none` ends it, even below the
+ * accept floor.
+ *
+ * That is not "trusting a low-confidence parse". The only alternative is
+ * `parseDealerTransactionPolicyFallback`: a keyword scan that fires on the presence of
+ * "private seller" and then asserts `explicitRequest: true` at a hardcoded 0.76 — deliberately just
+ * over the 0.74 gate it is bypassing. A hedged reading of the sentence still beats no reading of it.
+ *
+ * Measured 2026-08-06 by replaying one turn three times: the parser answered `none` every run, at
+ * 0.86 twice and 0.72 once. On the 0.72 run the keyword scan took over and a live buyer who asked
+ * for our price was told we cannot facilitate a private-party sale — a question he never asked,
+ * and no price. Same words in, a coin flip on which reply went out.
+ */
+export type DealerTransactionPolicySource = "parser" | "none" | "fallback";
+
+export function resolveDealerTransactionPolicySource(input: {
+  parserAccepted: boolean;
+  parsedIntent?: string | null;
+  hasParse: boolean;
+}): DealerTransactionPolicySource {
+  if (input.parserAccepted) return "parser";
+  if (input.hasParse && String(input.parsedIntent ?? "") === "none") return "none";
+  return "fallback";
+}
+
 export function resolveDealerTransactionPolicyRoute(
   input: DealerTransactionPolicyRouteInput
 ): DealerTransactionPolicyRouteDecision | null {

@@ -821,6 +821,7 @@ import {
   decorateBusinessHoursReply,
   shouldParseBusinessHoursQuestion,
   resolveDealerTransactionPolicyRoute,
+  resolveDealerTransactionPolicySource,
   resolveInboundTerminalRoute,
   type InboundPreParserDecision
 } from "./domain/inboundPipeline.js";
@@ -4901,13 +4902,35 @@ function resolveDealerTransactionPolicyDecision(
   text: string,
   parsed: DealerTransactionPolicyParse | null
 ): DealerTransactionPolicyDecision | null {
-  if (parsed && isDealerTransactionPolicyParserAccepted(parsed)) {
+  const policySource = resolveDealerTransactionPolicySource({
+    parserAccepted: !!parsed && isDealerTransactionPolicyParserAccepted(parsed),
+    parsedIntent: parsed?.intent ?? null,
+    hasParse: !!parsed
+  });
+  if (policySource === "parser" && parsed) {
     return { ...parsed, source: "parser" };
   }
-  const confidence =
-    typeof parsed?.confidence === "number" && Number.isFinite(parsed.confidence) ? parsed.confidence : 0;
-  const min = Number(process.env.LLM_DEALER_TRANSACTION_POLICY_CONFIDENCE_MIN ?? 0.74);
-  if (parsed && confidence >= min && parsed.intent === "none") return null;
+  if (policySource === "none") return null;
+  // A DIRECT REQUEST BEATS A BACKGROUND MENTION — and the parser is the only thing that can tell
+  // them apart. When the parser read the turn and said `none`, that answer stands even below the
+  // accept floor, because the only alternative is `parseDealerTransactionPolicyFallback`: a keyword
+  // scan that fires on the mere presence of "private seller" and then ASSERTS `explicitRequest: true`
+  // at a hardcoded 0.76 — deliberately just over the 0.74 gate it is bypassing.
+  //
+  // Measured 2026-08-06 by replaying one turn three times. Customer: "Let me know what you are
+  // looking for price wise and I will make a decision on coming to check it out. I'm currently
+  // talking to a private seller about a 2018 Indian." The parser answered `none` every run; on the
+  // run where it reported 0.72 instead of 0.86 it lost the accept gate, the keyword scan took over,
+  // and he was told "we generally cannot facilitate a trade or purchase for a bike owned by a
+  // private seller" — answering a question he never asked, and never quoting the price he did ask
+  // for. Same words in, a coin-flip on which reply went out.
+  //
+  // FAIL DIRECTION: dropping the fallback here fails toward answering what the customer actually
+  // asked. It cannot promise something we can't do — the policy reply is a refusal, so declining to
+  // send it withholds nothing we owe. A low-confidence `none` is still a reading of the sentence;
+  // the keyword scan is not a reading at all. Under the AGENTS.md migrate-vs-keep test that makes
+  // this comprehension, not a safety gate. The precedence itself lives in
+  // `resolveDealerTransactionPolicySource` above, pinned by a decision table.
   return parseDealerTransactionPolicyFallback(text);
 }
 
