@@ -15739,7 +15739,7 @@ export function draftAutoRegenerateEnabled(): boolean {
 const SELF_HEAL_VERDICT_TTL_MS = 120_000;
 const selfHealVerdictCache = new Map<string, { verdict: DraftQualityJudgeParse; at: number }>();
 function selfHealVerdictKey(inbound: string, draft: string): string {
-  return `${String(inbound ?? "").slice(0, 240)} ${String(draft ?? "").trim().slice(0, 500)}`;
+  return `${String(inbound ?? "").slice(0, 240)}\u0000${String(draft ?? "").trim().slice(0, 500)}`;
 }
 export function cacheSelfHealVerdict(inbound: string, draft: string, verdict: DraftQualityJudgeParse | null): void {
   if (!verdict || !String(draft ?? "").trim()) return;
