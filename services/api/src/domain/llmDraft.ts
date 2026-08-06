@@ -52,7 +52,7 @@ import {
 import { decideDraftModelArm, type DraftModelArm } from "./routeStateReducer.js";
 import { passesModelRelevanceGuard } from "./turnUnderstandingAuthority.js";
 import { appendParserCaptureRecord, buildParserCaptureRecord } from "./parserCapture.js";
-import { formatCadenceQualityUnitFacts } from "./cadenceQualityFacts.js";
+import { formatCadenceQualityUnitFacts, type CadenceQualityInventoryFacts } from "./cadenceQualityFacts.js";
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -10778,6 +10778,10 @@ export async function judgeCadenceQualityWithLLM(args: {
   lead?: Conversation["lead"];
   sale?: Conversation["sale"]; // the unit actually PURCHASED — authoritative for state_fit
   daysSinceLastInbound?: number | null;
+  // Live feed facts for the lead's unit — the AUDIT SOURCE for price/availability claims. Omitted
+  // (undefined) when the lead names no unit; the fact block is then left out entirely rather than
+  // asserting a false NOT_MATCHED.
+  inventory?: CadenceQualityInventoryFacts | null;
 }): Promise<CadenceQualityJudgeParse | null> {
   const useLLM =
     process.env.LLM_ENABLED === "1" &&
@@ -10842,6 +10846,13 @@ export async function judgeCadenceQualityWithLLM(args: {
     "",
     "Rules:",
     "- Be fair: do not fail a genuinely good, warm, relevant nudge.",
+    "- USE THE INVENTORY FACTS ABOVE AS THE AUDIT SOURCE. Extract every concrete claim in the message",
+    "  about price, promotions, availability or arrival, then check each one against those facts and the",
+    "  thread. A claim they do not support is UNSUPPORTED — state_fit=false, overall=\"hold\".",
+    "  If the facts say UNPRICED_NO_SET_PRICE, then declining to quote a price is the CORRECT and safe",
+    "  reply: pass it. Never fail a message for refusing to invent a number. If the facts say",
+    "  NOT_MATCHED you know nothing about that unit — an availability claim AND a denial are both",
+    "  unsupported.",
     "- DO NOT REWARD LENGTH OR PENALISE BREVITY. A short message that does its job is BETTER than a",
     "  long one, not worse. Measured 2026-08-05: this judge suppressed a two-line post-sale thank-you",
     "  while passing a longer message carrying a made-up discount — it was reading specificity and word",
@@ -10866,7 +10877,7 @@ export async function judgeCadenceQualityWithLLM(args: {
       ? `Days since the customer last replied: ${args.daysSinceLastInbound}`
       : "Days since the customer last replied: unknown",
     bannedHits.length ? `Banned computer-like phrases present: ${bannedHits.join(", ")}` : "Banned computer-like phrases present: none",
-    formatCadenceQualityUnitFacts({ lead: args.lead as any, sale: args.sale as any }),
+    formatCadenceQualityUnitFacts({ lead: args.lead as any, sale: args.sale as any, inventory: args.inventory }),
     history.length ? `Recent thread:\n${history.join("\n")}` : "Recent thread: (none)",
     `PROACTIVE cadence message to judge: ${message}`
   ].join("\n");

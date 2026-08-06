@@ -19,6 +19,11 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { judgeCadenceQualityWithLLM } from "../services/api/src/domain/llmDraft.ts";
+import {
+  formatCadenceQualityInventoryFacts,
+  buildCadenceQualityJudgeArgs,
+  type CadenceQualityInventoryFacts
+} from "../services/api/src/domain/cadenceQualityFacts.ts";
 import { decideCadenceQualityGate, DRAFT_QUALITY_MIN_CONFIDENCE } from "../services/api/src/domain/draftQualityGate.ts";
 
 // --- 1) Source guard (no LLM). ---
@@ -68,10 +73,52 @@ for (const r of rows) {
 }
 
 // --- 3) LLM coverage (gated; skips cleanly). ---
+// The two sentinels must never collapse: matched-but-unpriced PROTECTS an honest deferral, while
+// never-matched means we know nothing. A single sentinel would grade an unmatched unit as unpriced.
+{
+  const unpriced = formatCadenceQualityInventoryFacts({ matched: true, status: "available", listPrice: null });
+  const missing = formatCadenceQualityInventoryFacts({ matched: false, status: "unknown", listPrice: null });
+  const priced = formatCadenceQualityInventoryFacts({ matched: true, status: "available", listPrice: 18995 });
+  assert.match(unpriced, /UNPRICED_NO_SET_PRICE/, "an unpriced matched unit must say so explicitly");
+  assert.match(unpriced, /DEFERRING a price question is the CORRECT/i, "the unpriced block must protect an honest deferral");
+  assert.match(missing, /NOT_MATCHED/, "an unmatched unit must say NOT_MATCHED");
+  assert.doesNotMatch(missing, /UNPRICED_NO_SET_PRICE/, "never-matched must NOT be reported as unpriced");
+  assert.match(priced, /\$18,995/, "a priced unit must state its list price for the judge to audit against");
+  assert.doesNotMatch(priced + unpriced + missing, /21,?5/, "the internal target-price note must never reach the prompt");
+}
+
+// WIRING, EXECUTED — not grepped. The LLM cases below hand `inventory` straight to the judge, so
+// they keep passing even if production stops supplying it (a sabotage on 2026-08-06 proved exactly
+// that). This calls the real assembly the cadence path uses and asserts the facts are actually
+// resolved and attached.
+{
+  const withUnit = await buildCadenceQualityJudgeArgs({
+    conv: { lead: { vehicle: { stockId: "U590-17", vin: "" } } },
+    message: "test",
+    channel: "sms"
+  });
+  assert.ok(
+    withUnit.inventory && typeof withUnit.inventory.matched === "boolean",
+    "a lead naming a unit must get resolved inventory facts attached to the judge args"
+  );
+  const withoutUnit = await buildCadenceQualityJudgeArgs({
+    conv: { lead: { vehicle: {} } },
+    message: "test",
+    channel: "sms"
+  });
+  assert.equal(
+    withoutUnit.inventory,
+    null,
+    "a lead naming no unit must attach null — never a fabricated NOT_MATCHED assertion"
+  );
+  assert.ok("lead" in withUnit && "sale" in withUnit, "the assembly must still carry lead + sale");
+}
+
 const cases: {
   id: string;
   message: string;
   history?: { direction: "in" | "out"; body: string }[];
+  inventory?: CadenceQualityInventoryFacts | null;
   assert: (v: NonNullable<Awaited<ReturnType<typeof judgeCadenceQualityWithLLM>>>) => void;
 }[] = [
   {
@@ -138,6 +185,58 @@ const cases: {
         `a message contradicting our own previous turn must fail state_fit, got state_fit=${v.stateFit} (${v.reason})`
       )
   },
+  // --- INVENTORY GROUND TRUTH (Joe, 2026-08-06). Four cases, and the two CONTROLS matter as much
+  // as the two catches: without them we would fix hallucinated prices by punishing honest ones.
+  {
+    // The unit is UNPRICED in the feed. Declining to quote is the correct, safe reply. This exact
+    // draft was disposed no-action on 2026-08-05 — the rep had said the bike still needed to go
+    // through service, so the deferral was right and the wrong_fact grade against it was wrong.
+    id: "control_safe_deferral_on_unpriced_unit_must_pass",
+    message:
+      "I'll have the team confirm the current price on the 2023 Street Glide Special and send it over.",
+    inventory: { matched: true, status: "available", listPrice: null },
+    assert: v =>
+      assert.notEqual(
+        v.overall,
+        "hold",
+        `deferring a quote on an UNPRICED unit is correct and must not be held, got ${v.overall} (${v.reason})`
+      )
+  },
+  {
+    // A promotion that belongs to a different (new) unit, asserted on a used one the feed prices
+    // at $18,995. Judged good@0.9 in production for having "a concrete reason".
+    id: "promo_not_supported_by_inventory_facts",
+    message: "Hey Mark, quick update on the Breakout: Save $4,000 off list price. Want a payment breakdown?",
+    inventory: { matched: true, status: "available", listPrice: 18995 },
+    history: [
+      { direction: "in" as const, body: "WEB LEAD (ADF) Year: 2017 Vehicle: Harley-Davidson Breakout Stock: U590-17 (pre-owned)" }
+    ],
+    assert: v =>
+      assert.equal(
+        v.stateFit,
+        false,
+        `a $4,000 discount unsupported by the inventory facts must fail state_fit, got state_fit=${v.stateFit} (${v.reason})`
+      )
+  },
+  {
+    // We know nothing about this unit. A DENIAL is as unsupported as a claim — the judge must not
+    // treat an empty feed match as evidence the bike is gone.
+    id: "control_not_matched_denial_is_also_unsupported",
+    message: "Hey Clifton, quick update on the Freewheeler: I'm not seeing one available right now.",
+    inventory: { matched: false, status: "unknown", listPrice: null },
+    history: [
+      {
+        direction: "out" as const,
+        body: "Hey Clifton, quick update on the Freewheeler: I'm taking a pre-owned 2016 in next week. Would that be something you'd want to see?"
+      }
+    ],
+    assert: v =>
+      assert.equal(
+        v.stateFit,
+        false,
+        `an availability denial contradicting our own last turn must fail state_fit, got state_fit=${v.stateFit} (${v.reason})`
+      )
+  },
   {
     id: "corporate_bot",
     message:
@@ -148,7 +247,7 @@ const cases: {
 
 let ran = 0;
 for (const c of cases) {
-  const v = await judgeCadenceQualityWithLLM({ message: c.message, channel: "sms", history: c.history });
+  const v = await judgeCadenceQualityWithLLM({ message: c.message, channel: "sms", history: c.history, inventory: c.inventory });
   if (!v) continue; // judge disabled / transient null — skip, don't red the gate
   ran += 1;
   c.assert(v);
