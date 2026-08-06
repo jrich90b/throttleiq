@@ -730,6 +730,67 @@ export type FlywheelFinding = {
   gradedAtCommit?: string;
 };
 
+/** Total width of a finding's `detail`, unchanged — every downstream report renders to this. */
+export const REPLAY_DETAIL_CAP = 480;
+/**
+ * Characters held back for the judge's complaint before the transcript quotes may spend any.
+ * The quotes are recoverable (the `[replay …]` prefix pins the exact turn); the judge's reason
+ * exists nowhere else, so it is the one part that must never be the thing that falls off.
+ */
+export const REPLAY_DETAIL_WHY_RESERVE = 200;
+/** Floor each transcript quote aims for once the reserve is taken. */
+const REPLAY_DETAIL_QUOTE_TARGET = 100;
+
+function clip(value: string, room: number): string {
+  if (room <= 0) return "";
+  if (value.length <= room) return value;
+  return `${value.slice(0, Math.max(0, room - 1))}…`;
+}
+
+/**
+ * Build a replay finding's `detail` under a per-part budget instead of one trailing `.slice()`.
+ *
+ * Measured 2026-08-05: 11 of 13 replay work orders were EXACTLY 480 chars, i.e. cut, and because
+ * the judge's reason is last it was always the casualty — the rows arrived saying what the
+ * customer wrote and what we drafted but never why either was wrong, so they could not be triaged
+ * and returned every nightly. Two (+17163229218, +17169700408) had to be left open on that alone.
+ *
+ * Order and cap are unchanged (`services/api/src/domain/reproduceConfirm.ts` parses the
+ * `[replay +NNN::msg_x]` prefix, so the prefix is kept WHOLE — strictly safer than before, where
+ * a long enough turnKey could in principle eat it). Unused budget flows between the parts, so a
+ * short reason still gives the quotes everything that is left and a short quote lengthens the
+ * reason: nothing is truncated unless the total genuinely overflows.
+ */
+export function buildReplayDetail(args: {
+  turnKey: string;
+  body: string;
+  draft: string;
+  why: string;
+  cap?: number;
+}): string {
+  const cap = args.cap ?? REPLAY_DETAIL_CAP;
+  const prefix = `[replay ${args.turnKey}] `;
+  const body = String(args.body ?? "");
+  const draft = String(args.draft ?? "");
+  const why = String(args.why ?? "");
+  const scaffold = `customer: "" → draft: ""${why ? " — " : ""}`.length;
+  const budget = cap - prefix.length - scaffold;
+  // Degenerate cap (a turnKey longer than the whole budget): keep the machine-readable prefix and
+  // give whatever is left to the reason. Never emit a detail wider than the cap.
+  if (budget <= 0) return clip(`${prefix}${why}`, cap);
+
+  // The reserve is a FLOOR the quotes may not eat into, not a ceiling: the quotes take what they
+  // actually need out of what is left, then every unspent character goes back to the reason.
+  const reserved = Math.min(why.length, Math.max(REPLAY_DETAIL_WHY_RESERVE, budget - 2 * REPLAY_DETAIL_QUOTE_TARGET));
+  const quoteRoom = Math.min(body.length + draft.length, Math.max(0, budget - reserved));
+  const whyKeep = Math.min(why.length, Math.max(0, budget - quoteRoom));
+  // Split evenly, then hand the shorter quote's leftover to the other one.
+  const draftKeep = Math.min(draft.length, Math.max(0, quoteRoom - Math.min(body.length, Math.floor(quoteRoom / 2))));
+  const bodyKeep = Math.max(0, quoteRoom - draftKeep);
+  const clippedWhy = clip(why, whyKeep);
+  return `${prefix}customer: "${clip(body, bodyKeep)}" → draft: "${clip(draft, draftKeep)}"${clippedWhy ? ` — ${clippedWhy}` : ""}`;
+}
+
 export function buildFindings(
   scores: Array<TurnScore & { adjustment?: ScoreAdjustment; excluded?: boolean }>,
   regressions: TurnScore[],
@@ -760,7 +821,7 @@ export function buildFindings(
       // Unknown keeps atIso — recent, therefore still visible (the noisier, safer direction).
       occurredAt: s.turnAt ?? atIso,
       category: "reply",
-      detail: `[replay ${s.turnKey}] customer: "${s.body}" → draft: "${s.draft ?? "(none)"}" — ${why}`.slice(0, 480),
+      detail: buildReplayDetail({ turnKey: s.turnKey, body: s.body, draft: s.draft ?? "(none)", why }),
       ...(String(gradedAtCommit ?? "").trim() ? { gradedAtCommit: String(gradedAtCommit).trim() } : {})
     });
   }
