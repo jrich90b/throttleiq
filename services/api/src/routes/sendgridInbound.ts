@@ -71,7 +71,7 @@ import { buildAdfResubmissionAck, detectAdfFormResubmission } from "../domain/ad
 import { buildMarketplaceRelayFirstTouchReply, buildMarketplaceRelayTaskSummary } from "../domain/marketplaceRelay.js";
 import { isHtmlClientNoticeOnly } from "../domain/inboundMailActionability.js";
 import { buildTradeAdfAck } from "../domain/tradeAdfReply.js";
-import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn, decideRidingAcademyTurn, shouldCloseEventPromoLeadOnIntake, resolveRideChallengeEventTouch, decideIncomingInventoryPurpose, decideWalkInInventoryWatchTurn } from "../domain/routeStateReducer.js";
+import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn, decideRidingAcademyTurn, shouldCloseEventPromoLeadOnIntake, resolveRideChallengeEventTouch, decideIncomingInventoryPurpose, decideWalkInInventoryWatchTurn, decideSaleTradeJourneyBucket } from "../domain/routeStateReducer.js";
 import { buildLongTermTimelineMessage } from "../domain/longTermMessage.js";
 import { orchestrateInbound } from "../domain/orchestrator.js";
 import { collectRecentStaffCorrections } from "../domain/feedbackSteering.js";
@@ -5457,9 +5457,21 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       inferredBucket = "general_inquiry";
       inferredCta = "unknown";
     }
-    if (saleTradeIntentFromParser && inferredBucket === "general_inquiry" && !parserBucketCta) {
-      inferredBucket = hasStockIntent ? "inventory_interest" : "trade_in_sell";
-      inferredCta = hasStockIntent ? "check_availability" : "value_my_trade";
+    // Centralized + pure (routeStateReducer.decideSaleTradeJourneyBucket): the broad `sale_trade`
+    // journey tag is NOT evidence of a trade appraisal, so a shopper with no trade signal lands in
+    // the shopping bucket instead of being met with "Thanks for using our trade-in estimator".
+    const saleTradeJourneyBucket = decideSaleTradeJourneyBucket({
+      saleTradeIntentFromParser,
+      inferredBucket,
+      hasParserBucketCta: !!parserBucketCta,
+      hasStockIntent,
+      // The PARSED lead's trade field — already stripped of Room58 form mirrors by
+      // isMirroredTradeFieldArtifact, so anything left is a trade the customer really reported.
+      hasStructuredTradeVehicle: !!lead.tradeVehicle
+    });
+    if (saleTradeJourneyBucket.applies) {
+      inferredBucket = saleTradeJourneyBucket.bucket as LeadBucket;
+      inferredCta = saleTradeJourneyBucket.cta as LeadCTA;
     }
   }
   const forcedTestRide = leadSourceLower.includes("test ride") || leadSourceLower.includes("book test ride");
