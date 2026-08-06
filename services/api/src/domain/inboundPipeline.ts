@@ -318,6 +318,41 @@ export function resolveFirstTimeRiderGuidanceSource(input: {
   return "fallback";
 }
 
+/**
+ * Same precedence, on the most expensive decision in the system: whether to CLOSE a lead.
+ *
+ * `resolveCustomerDispositionDecision` acts on the parser only when `isDispositionParserAccepted`
+ * passes — which needs `explicitDisposition === true` AND `disposition !== "none"` AND confidence
+ * >= 0.74. Measured over four live days (2026-08-02..05): **516 calls, 0 accepted.** So lead
+ * closure has been running entirely on `parseCustomerDispositionFallback`, a keyword scan matching
+ * "can't afford | too expensive | too high | out of budget | hold off | I'll pass", while the
+ * parser's reading of all 516 turns was discarded.
+ *
+ * The turn that shows the cost — parser answered `none` at **0.93**:
+ *   "I took a look at those programs the interest rate is just too high. Those rates are not
+ *    competitive in the market."
+ * That is a buyer negotiating financing, not one walking away. The scan matches "too high" and
+ * marks him `customer_stepping_back`, which stops the follow-up cadence and retires the lead.
+ * A wrong reply costs a reply; this costs the customer.
+ *
+ * WHY THIS IS SAFE IN BOTH DIRECTIONS, which the measurement settles rather than argues:
+ * since nothing is ever accepted, closure today happens ONLY through the scan. Blocking on a
+ * parser `none` removes exactly the closures the parser said were not dispositions. A hedged
+ * `stepping_back` still reaches the scan and still closes, so genuine walk-aways are untouched —
+ * we do not start pestering people who told us they are out.
+ */
+export type CustomerDispositionSource = "parser" | "none" | "fallback";
+
+export function resolveCustomerDispositionSource(input: {
+  parserAccepted: boolean;
+  parsedDisposition?: string | null;
+  hasParse: boolean;
+}): CustomerDispositionSource {
+  if (input.parserAccepted) return "parser";
+  if (input.hasParse && String(input.parsedDisposition ?? "") === "none") return "none";
+  return "fallback";
+}
+
 export function resolveDealerTransactionPolicyRoute(
   input: DealerTransactionPolicyRouteInput
 ): DealerTransactionPolicyRouteDecision | null {
