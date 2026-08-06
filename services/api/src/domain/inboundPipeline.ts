@@ -287,6 +287,37 @@ export function resolveDealerTransactionPolicySource(input: {
   return "fallback";
 }
 
+/**
+ * Same precedence, for the first-time-rider route — where the override is not occasional but TOTAL.
+ *
+ * The parser here is only CALLED when `hasFirstTimeRiderGuidanceParserHint` has already matched, and
+ * it is only ACCEPTED when `explicitRequest` is true. Measured over four live days (2026-08-02..05):
+ * **48 calls, 0 accepted, 48 overruled by the keyword scan — 100%.** The parser never sets
+ * `explicitRequest` on these turns, so its verdict is structurally unusable and the route is, in
+ * practice, entirely keyword-driven. We pay for 48 LLM reads and discard every one.
+ *
+ * 26 of the 48 were the parser saying `none` — not a first-time rider — at 0.85-0.90, and being
+ * overruled anyway. Among them, an ADF record reading `Bike Owner: Current, not first motorcycle`:
+ * an existing owner, explicitly not a beginner, pulled into the first-time-rider lane because the
+ * keyword hint matched the words "first motorcycle". That lane now carries the Jumpstart invite, so
+ * the failure is offering an experienced rider a beginner session.
+ *
+ * Deliberately narrow: only `none` blocks the scan. The 22 turns where the parser DID see a
+ * first-time-rider topic keep their current behaviour — loosening the acceptance gate would make
+ * this route fire MORE, and over-offering a beginner session is the costlier direction.
+ */
+export type FirstTimeRiderGuidanceSource = "parser" | "none" | "fallback";
+
+export function resolveFirstTimeRiderGuidanceSource(input: {
+  parserAccepted: boolean;
+  parsedIntent?: string | null;
+  hasParse: boolean;
+}): FirstTimeRiderGuidanceSource {
+  if (input.parserAccepted) return "parser";
+  if (input.hasParse && String(input.parsedIntent ?? "") === "none") return "none";
+  return "fallback";
+}
+
 export function resolveDealerTransactionPolicyRoute(
   input: DealerTransactionPolicyRouteInput
 ): DealerTransactionPolicyRouteDecision | null {
