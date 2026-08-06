@@ -16,6 +16,8 @@
  * backstops these drafts; this fixes them at the source so the customer gets a correct initial touch).
  */
 
+import { extractDealerLeadAppDemoBikeLabel } from "./workflowRegressionGuards.js";
+
 /** Customer's own words that confirm they physically came in / completed a ride. */
 const CUSTOMER_CONFIRMED_VISIT =
   /\b(i (stopped|came) (in|by)|stopped in|came in (today|yesterday|earlier)|was (in|there) (today|yesterday)|test ?rode|test ?drove|rode it|came down|made it in)\b/i;
@@ -38,6 +40,36 @@ export function customerVisitConfirmed(conv: any): boolean {
   if (msgs.some((m: any) => m?.direction === "in" && CUSTOMER_CONFIRMED_VISIT.test(String(m?.body ?? "")))) return true;
 
   return false;
+}
+
+/**
+ * Did the DEALER's own Dealer Lead App record name a specific bike this customer rode?
+ *
+ * This is the dealership's structured post-interaction log, filled in by the salesperson — the
+ * "Demo Bikes Ridden" field. It is actively curated, not an echo of the interest model: across the
+ * live store 17 of 75 Dealer Lead App leads name a DIFFERENT bike than the one the customer said
+ * they were interested in, and 6 say "None recorded." (which extractDealerLeadAppDemoBikeLabel
+ * already resolves to null). So a named bike here is real evidence a ride happened.
+ *
+ * Read scope is deliberately narrow: the lead comment plus INBOUND message bodies only. Never our
+ * own outbound — an agent draft that mentions a ride must not become the evidence that the ride
+ * happened (the "read our own words back as the customer's" class).
+ *
+ * NOTE this is evidence for the JUDGE's anchor, NOT a visit-confirmation for the draft builders:
+ * customerVisitConfirmed deliberately does not consult it, because flipping it there would newly
+ * assert "thanks again for coming in" on ~49 live leads — expansion in the unsafe direction, which
+ * needs its own slice and its own canary. Pure.
+ */
+export function dealerRecordedDemoRide(conv: any): boolean {
+  const msgs = Array.isArray(conv?.messages) ? conv.messages : [];
+  const text = [
+    conv?.lead?.comment,
+    conv?.latestLead?.comment,
+    ...msgs.filter((m: any) => m?.direction === "in").map((m: any) => m?.body)
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return !!extractDealerLeadAppDemoBikeLabel(text);
 }
 
 /** A recorded dealer-ride / appointment OUTCOME implies the customer showed (you can only sell/hold/

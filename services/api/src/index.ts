@@ -398,6 +398,7 @@ import { resolveNoResponseTrace } from "./domain/noResponseTrace.js";
 import { buildCadenceQualityJudgeArgs, daysSinceLastCustomerReply } from "./domain/cadenceQualityFacts.js";
 import {
   decideContextFidelityHold,
+  buildContextFidelityAnchor,
   contextFidelityHoldShadowEnabled,
   isContextFidelityHoldEnabled,
   contextFidelityHeldSurfacingEnabled,
@@ -5467,12 +5468,7 @@ async function evaluateContextFidelityHold(
     const inbound = String(getLastInboundBody(conv) ?? "").trim();
     const draft = String(candidate ?? "").trim();
     if (!inbound || !draft) return null; // cadence/proactive draft has no inbound — out of scope here
-    const anchor = {
-      modelOfRecord: conv?.lead?.vehicle?.model ?? conv?.lead?.vehicle?.description ?? null,
-      leadType: [conv?.classification?.bucket, conv?.classification?.cta].filter(Boolean).join("/") || null,
-      appointmentBooked: !!conv?.appointment?.bookedEventId,
-      dialogState: conv?.dialogState?.name ?? null
-    };
+    const anchor = buildContextFidelityAnchor(conv);
     const sc = await scoreContextFidelityWithLLM({ draft, inbound, history: buildHistory(conv, 8), anchor, channel });
     const decision = decideContextFidelityHold({ enabled: live, score: sc });
     if (decision.action !== "hold") return { hold: false, live, frame: decision.frame ?? null, reason: decision.reason, steering: null, severity: sc?.severity ?? null, confidence: sc?.confidence ?? null };
