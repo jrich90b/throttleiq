@@ -9,7 +9,9 @@
  * the fix commit date. ANY uncertainty keeps the finding (fail-safe — never hide a real one).
  */
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import {
   suppressStaleFindings,
@@ -478,6 +480,138 @@ const rec = (over: Partial<DispositionRecord> = {}): DispositionRecord => ({
   assert.equal(none.anomalies.length, 1, "no regressions ⇒ the feed passes through untouched");
 }
 
+// 28. THE UNDATABLE DIMENSION. `open_critic_finding` carries NEITHER `occurredAt` NOR `reportedAt` —
+//     its only datable field is the detector's own `firstSeenAt` — so every `fixed`/`stale-echo`
+//     disposition on that dimension suppressed nothing and the row cycled forever. Measured
+//     2026-08-06: +17165104578::open_critic_finding was disposed `fixed` with a deploy boundary, the
+//     ledger accepted the record, and `act_runner list` returned the row on the very next read.
+//
+//     This section EXECUTES the real detector against a synthetic REPORT_ROOT rather than reading its
+//     source, because the bug was never in the suppressor — it was in the ORDER: `firstSeenAt` is
+//     stamped when findings are classified, which happens AFTER the ledger pass, so the ledger was
+//     handed a row with no dates on it at all. A source-text assertion cannot see that.
+{
+  const day = 24 * 60 * 60 * 1000;
+  const nowMs = Date.now(); // built relative to now — never a fixed date the calendar can turn red
+  const iso = (ms: number) => new Date(ms).toISOString();
+  const boundary = iso(nowMs - 5 * day);
+
+  // Unit level first: firstSeenAt is the THIRD fallback and must never outrank a real event time.
+  assert.equal(
+    occurrenceMsOf({ firstSeenAt: "2026-07-01T00:00:00.000Z" }),
+    Date.parse("2026-07-01T00:00:00.000Z"),
+    "firstSeenAt dates a finding that carries nothing else"
+  );
+  assert.equal(
+    occurrenceMsOf({ reportedAt: "2026-07-20T00:00:00.000Z", firstSeenAt: "2026-07-01T00:00:00.000Z" }),
+    Date.parse("2026-07-20T00:00:00.000Z"),
+    "reportedAt still beats firstSeenAt"
+  );
+  assert.equal(
+    occurrenceMsOf({
+      occurredAt: "2026-06-01T00:00:00.000Z",
+      reportedAt: "2026-07-20T00:00:00.000Z",
+      firstSeenAt: "2026-07-01T00:00:00.000Z"
+    }),
+    Date.parse("2026-06-01T00:00:00.000Z"),
+    "the true event time still wins over both upper bounds"
+  );
+  assert.ok(
+    !Number.isFinite(occurrenceMsOf({ firstSeenAt: "not-a-date" })),
+    "an unparseable first-seen stamp stays undatable — never silently suppressed"
+  );
+
+  // --- the executing half: one run of scripts/anomaly_loop_detect.ts over a synthetic feed ---
+  const critic = (convId: string) => ({
+    convId,
+    leadKey: convId,
+    dimension: "open_critic_finding",
+    category: "discovery" as const,
+    severity: "P2" as const,
+    healed: false,
+    detail: "open-critic: promised_unit_not_in_stock — synthetic fixture"
+  });
+  const SUPPRESSED = "+15550000001"; // first seen BEFORE the fix boundary ⇒ must drop out
+  const REGRESSION = "+15550000002"; // first seen AFTER  the fix boundary ⇒ must come back, tagged
+  const CONTROL = "+15550000003"; // no prior stamp ⇒ undatable ⇒ must survive (fail-safe)
+  const disposedFor = (convId: string) => ({
+    key: `${convId}::open_critic_finding`,
+    disposition: "fixed",
+    at: boundary,
+    by: "agent-loop",
+    deployTs: boundary,
+    note: "synthetic"
+  });
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "disposition-firstseen-"));
+  try {
+    fs.mkdirSync(path.join(root, "outcome_audit"), { recursive: true });
+    fs.mkdirSync(path.join(root, "anomaly_loop"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, "outcome_audit", "latest.json"),
+      JSON.stringify({ generatedAt: iso(nowMs), anomalies: [critic(SUPPRESSED), critic(REGRESSION), critic(CONTROL)] })
+    );
+    // The PRIOR run's first-seen ledger — the only place these findings are datable at all.
+    fs.writeFileSync(
+      path.join(root, "anomaly_loop", "prev_keys.json"),
+      JSON.stringify({
+        keys: [`${SUPPRESSED}::open_critic_finding`, `${REGRESSION}::open_critic_finding`],
+        firstSeen: {
+          [`${SUPPRESSED}::open_critic_finding`]: iso(nowMs - 10 * day),
+          [`${REGRESSION}::open_critic_finding`]: iso(nowMs - 2 * day)
+        }
+      })
+    );
+    fs.writeFileSync(
+      path.join(root, "anomaly_loop", "dispositions.json"),
+      JSON.stringify({
+        version: 1,
+        updatedAt: iso(nowMs),
+        records: [disposedFor(SUPPRESSED), disposedFor(REGRESSION), disposedFor(CONTROL)]
+      })
+    );
+
+    execFileSync("npx", ["tsx", "scripts/anomaly_loop_detect.ts"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, REPORT_ROOT: root }
+    });
+
+    const out = JSON.parse(fs.readFileSync(path.join(root, "anomaly_loop", "next.json"), "utf8"));
+    const survivors: string[] = JSON.parse(
+      fs.readFileSync(path.join(root, "anomaly_loop", "prev_keys.json"), "utf8")
+    ).keys;
+    const suppressedIds = (out.suppressedByDisposition ?? []).map((s: any) => String(s.convId));
+    const regressionIds = (out.regressionOfDisposed ?? []).map((r: any) => String(r.convId));
+
+    assert.ok(
+      suppressedIds.includes(SUPPRESSED),
+      "THE BUG: a finding first seen before its fix boundary must be suppressed — an open_critic row carries no other date"
+    );
+    assert.ok(!survivors.includes(`${SUPPRESSED}::open_critic_finding`), "the suppressed key must leave the feed");
+
+    assert.ok(
+      regressionIds.includes(REGRESSION),
+      "first seen AFTER the boundary is a regression-of-disposed, never a suppression"
+    );
+    assert.ok(!suppressedIds.includes(REGRESSION), "a regression must never be eaten as stale");
+
+    // THE CONTROL, and the reason this section is not self-fulfilling: a key with no prior stamp is
+    // undatable, so it must survive every pass. It also proves the two above dropped out because of
+    // the ledger, and not because the detector discards this shape.
+    assert.ok(
+      !suppressedIds.includes(CONTROL) && !regressionIds.includes(CONTROL),
+      "no prior first-seen stamp ⇒ undatable ⇒ never dated to now and never suppressed"
+    );
+    assert.ok(
+      survivors.includes(`${CONTROL}::open_critic_finding`),
+      "the undatable finding must still be in the feed — fail-safe: keep what you cannot prove is old"
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 console.log(
-  "PASS stale-finding suppression eval (suppress pre-fix / keep uncertain / ledger integrity / wiring + already-shipped echoes: named-fix-postdates-event / regression-safe / scope / wiring + disposition ledger: permanent policy suppression / regression-of-disposed fail-safe / boundary / operator-report reportedAt fallback / parse+upsert fail-safety / vocabulary / wiring / regression shield vs the later suppression passes)"
+  "PASS stale-finding suppression eval (suppress pre-fix / keep uncertain / ledger integrity / wiring + already-shipped echoes: named-fix-postdates-event / regression-safe / scope / wiring + disposition ledger: permanent policy suppression / regression-of-disposed fail-safe / boundary / operator-report reportedAt fallback / parse+upsert fail-safety / vocabulary / wiring / regression shield vs the later suppression passes / undatable open_critic firstSeenAt fallback, detector EXECUTED)"
 );

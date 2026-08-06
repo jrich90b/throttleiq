@@ -173,6 +173,8 @@ export type DisposableFinding = {
   occurredAt?: string | null;
   /** Upper bound on the triggering event (operator "Report issue" time) — see occurrenceMsOf. */
   reportedAt?: string | null;
+  /** Upper bound of LAST RESORT: when the detector first saw this key — see occurrenceMsOf. */
+  firstSeenAt?: string | null;
   [k: string]: unknown;
 };
 
@@ -192,11 +194,23 @@ export type DisposableFinding = {
  * `reportedAt <= boundary` proves `event <= boundary` too. The error can only ever fall the safe
  * way — a report filed after the fix looks NEWER than it is, so it resurfaces as a regression
  * rather than being eaten. That is the same fail-direction the rest of this module keeps.
+ *
+ * `firstSeenAt` is the same argument one step weaker, for the NEXT source with the same shape:
+ * `open_critic_finding` carries neither of the first two (its only datable field is the detector's
+ * first-seen stamp), so until this fallback existed a `fixed` disposition on that dimension
+ * suppressed nothing at all — measured 2026-08-06 by disposing +17165104578::open_critic_finding
+ * with a deploy boundary and watching the row come straight back. It is still an UPPER bound
+ * (`event <= firstSeenAt`, because the detector cannot see a finding before it happens), so the
+ * comparison stays sound and the error still falls the safe way. It is LAST because it is the
+ * loosest: the first-seen ledger self-prunes, so a key that lapses and returns is re-stamped, which
+ * can only make it look newer — resurfacing as a regression, never eaten.
  */
 export function occurrenceMsOf(finding: DisposableFinding | null | undefined): number {
   const occurredMs = Date.parse(String(finding?.occurredAt ?? ""));
   if (Number.isFinite(occurredMs)) return occurredMs;
-  return Date.parse(String(finding?.reportedAt ?? "")); // NaN when neither is datable ⇒ caller keeps it
+  const reportedMs = Date.parse(String(finding?.reportedAt ?? ""));
+  if (Number.isFinite(reportedMs)) return reportedMs;
+  return Date.parse(String(finding?.firstSeenAt ?? "")); // NaN when none is datable ⇒ caller keeps it
 }
 
 export type DispositionSuppression<T = DisposableFinding> = {

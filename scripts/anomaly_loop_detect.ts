@@ -92,6 +92,31 @@ for (const sib of [
 
 const rawAnomalyCount = anomalies.length;
 
+// Persistence: an anomaly seen in the PRIOR run too (same convId+dimension). Used to flag a `healed`
+// dimension that the reconcile tick never actually clears (a heal gap) rather than a one-tick transient.
+const keyOf = (a: any) => `${a?.convId ?? ""}::${a?.dimension ?? ""}`;
+const prevPayload: any = fs.existsSync(prevPath) ? JSON.parse(fs.readFileSync(prevPath, "utf8")) : {};
+const prevKeys: Set<string> = new Set(prevPayload?.keys ?? []);
+// First-seen ledger (the AGE CLOCK, Joe 2026-07-09: "they just keep building in the reports and
+// aren't touched for a while"): every finding key remembers when it FIRST appeared, so the digest
+// can lead with "oldest untouched: N days" and mark >48h items OVERDUE instead of re-listing them
+// agelessly forever. Keys that stop appearing are dropped (resolved), so the ledger self-prunes.
+const prevFirstSeen: Record<string, string> =
+  prevPayload && typeof prevPayload.firstSeen === "object" && prevPayload.firstSeen ? prevPayload.firstSeen : {};
+
+// STAMP THE PRIOR FIRST-SEEN BEFORE THE LEDGER PASS. `firstSeenAt` is otherwise attached far below,
+// when the surviving findings are classified — which is AFTER the disposition pass, so the ledger
+// never saw it. That mattered for exactly one source: `open_critic_finding` carries neither
+// `occurredAt` nor `reportedAt`, so with no `firstSeenAt` it was undatable, and undated ⇒ KEPT ⇒ a
+// `fixed` disposition on that dimension suppressed nothing and the row cycled forever (measured
+// 2026-08-06 on +17165104578). Only the PRIOR run's stamp is used: a key first seen THIS run has no
+// upper bound older than now, and inventing one would date a finding to after the fix boundary and
+// mis-report it as a regression. No prior stamp ⇒ leave it undated ⇒ kept, the fail-safe direction.
+for (const a of anomalies as any[]) {
+  const prior = prevFirstSeen[keyOf(a)];
+  if (prior && !a?.firstSeenAt) a.firstSeenAt = prior;
+}
+
 // DISPOSITION-LEDGER suppression (Joe, 2026-07-30: "it should know what is stale/already fixed and
 // not show up again"). Runs FIRST because it is the only non-inferential pass — the three below are
 // date/commit GUESSES that expire, this one is the explicit record a routine wrote when it disposed
@@ -335,17 +360,8 @@ if (regressionAnomalies.length) {
   }
 }
 
-// Persistence: an anomaly seen in the PRIOR run too (same convId+dimension). Used to flag a `healed`
-// dimension that the reconcile tick never actually clears (a heal gap) rather than a one-tick transient.
-const keyOf = (a: any) => `${a?.convId ?? ""}::${a?.dimension ?? ""}`;
-const prevPayload: any = fs.existsSync(prevPath) ? JSON.parse(fs.readFileSync(prevPath, "utf8")) : {};
-const prevKeys: Set<string> = new Set(prevPayload?.keys ?? []);
-// First-seen ledger (the AGE CLOCK, Joe 2026-07-09: "they just keep building in the reports and
-// aren't touched for a while"): every finding key remembers when it FIRST appeared, so the digest
-// can lead with "oldest untouched: N days" and mark >48h items OVERDUE instead of re-listing them
-// agelessly forever. Keys that stop appearing are dropped (resolved), so the ledger self-prunes.
-const prevFirstSeen: Record<string, string> =
-  prevPayload && typeof prevPayload.firstSeen === "object" && prevPayload.firstSeen ? prevPayload.firstSeen : {};
+// `keyOf`, `prevPayload`, `prevKeys` and `prevFirstSeen` are read ABOVE the disposition-ledger pass —
+// that pass needs the prior first-seen stamp to date an `open_critic_finding` at all.
 const nowIsoForAges = new Date().toISOString();
 const firstSeen: Record<string, string> = {};
 for (const a of anomalies) {
