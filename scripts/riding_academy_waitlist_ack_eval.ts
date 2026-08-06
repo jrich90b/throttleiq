@@ -90,6 +90,13 @@ const reply = buildRidingAcademyWaitlistAck("igor", "Alexandra", "American Harle
 assert.ok(/wait list/i.test(reply), `must say he is on the wait list: ${reply}`);
 assert.ok(reply.includes("8/15/2026") && reply.includes("New Rider Course"), `must name the class off the record: ${reply}`);
 assert.ok(/jumpstart/i.test(reply), "Joe's ruling: KEEP the invite");
+// Joe, 2026-08-06: "you can say we will follow up." Commit to following up — do NOT promise to
+// watch the list and catch the moment a seat frees, which is a trigger nobody owns.
+assert.ok(/follow up/i.test(reply), `must commit to following up: ${reply}`);
+assert.ok(
+  !/as soon as a seat opens|the moment a seat|when a seat frees/i.test(reply),
+  `must not promise to watch the wait list for a seat opening: ${reply}`
+);
 assert.ok(
   !/i saw you want|you wanted|you asked/i.test(reply),
   `must not attribute a request he never made: ${reply}`
