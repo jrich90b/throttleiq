@@ -1591,6 +1591,23 @@ function formatRequestedConditionPrefix(condition: "new" | "used" | null): strin
   return condition ? `${condition} ` : "";
 }
 
+/**
+ * "the new 2019 Street Glide" — or plain "that bike". Never "the new that bike".
+ *
+ * `bikeLabel` falls back to the literal words "that bike" when neither year nor model resolved, and
+ * the pricing lines glued a condition in front of it. A customer was told on 2026-08-06:
+ * "I'll have our team check the current price on the new that bike and follow up with exact
+ * numbers." The condition word and the definite article only make sense once we can name the unit —
+ * the same special case the used-label line already makes (`modelLabel === "that bike"`).
+ */
+const UNRESOLVED_BIKE_LABEL = "that bike";
+
+export function formatConditionedBikeReference(conditionPrefix: string, bikeLabel: string): string {
+  const label = String(bikeLabel ?? "").trim();
+  if (!label || label === UNRESOLVED_BIKE_LABEL) return UNRESOLVED_BIKE_LABEL;
+  return `the ${String(conditionPrefix ?? "")}${label}`;
+}
+
 async function buildStockNumberInventoryInterestReply(stockId: string): Promise<{
   draft: string;
   intent: OrchestratorResult["intent"];
@@ -3548,8 +3565,8 @@ export async function orchestrateInbound(
           const nf = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
           pricingOrPaymentsLine =
             priceLookup?.price != null
-              ? `The listed price on the ${leadConditionPrefix}${bikeLabel} is ${nf.format(priceLookup.price)}. Final numbers can change with tax, fees, trade-in, and financing.`
-              : `I’ll have our team check the current price on the ${leadConditionPrefix}${bikeLabel} and follow up with exact numbers.`;
+              ? `The listed price on ${formatConditionedBikeReference(leadConditionPrefix, bikeLabel)} is ${nf.format(priceLookup.price)}. Final numbers can change with tax, fees, trade-in, and financing.`
+              : `I’ll have our team check the current price on ${formatConditionedBikeReference(leadConditionPrefix, bikeLabel)} and follow up with exact numbers.`;
         } else {
           const range = modelRaw ? await findPriceRange({ year: yearRaw, model: modelRaw }) : null;
         const paymentRange =

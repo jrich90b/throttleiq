@@ -34,8 +34,6 @@ const EXCLUDED: Record<string, string> = {
     "needs a live data/conversations.json; the hermetic variant tone_quality:fixture_eval is already in the chain",
   "web_fallback:eval":
     "asserts on live harley-davidson.com search snippets — network- and content-dependent, so it would fail the gate on their copy edits, not ours",
-  "inbound_reply_cross_dealer:eval":
-    "FAILS 15/16 today on a real behaviour mismatch, not config: case unresolved_harley_other_inventory_repaired expects the safe deferral 'I will have the team check current options ... and follow up shortly' but the agent now answers 'Let me pull current options ... and get you real pricing. I will text the numbers right over.' Either the eval is stale or we drifted toward promising numbers. Queued for diagnosis — do NOT wire it in until that is settled, and do NOT delete the eval"
 };
 
 const pkg = JSON.parse(fs.readFileSync("package.json", "utf8")) as {
