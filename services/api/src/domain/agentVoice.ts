@@ -638,9 +638,14 @@ export function buildRidingAcademyWaitlistAck(
       : `the ${course}`
     : "the Riding Academy";
 
+  // Joe, 2026-08-06: "you can say we will follow up." The first draft of this line promised
+  // "I'll let you know as soon as a seat opens up" — a TRIGGER promise that commits somebody to
+  // watching the list and to noticing the moment it moves. "We'll follow up" is the commitment the
+  // store actually makes, and it stays true whether the update is a seat, a later class, or a
+  // cancellation.
   const body =
     `Thanks for signing up for ${classPhrase} - you're on the wait list right now, ` +
-    "and I'll let you know as soon as a seat opens up. I'm your contact here for anything to do with the course.";
+    "and we'll follow up with you as soon as we have an update. I'm your contact here for anything to do with the course.";
 
   return `${intro}${body}${jumpstart ? ` ${jumpstart}` : ""}`;
 }
