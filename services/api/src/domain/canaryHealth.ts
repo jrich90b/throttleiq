@@ -108,6 +108,21 @@ export type CanaryThresholds = {
    * downgraded to INCONCLUSIVE (neutral), never to a pass.
    */
   minSliceActivity: number;
+  /**
+   * A ratio breach ALSO needs this many extra events in absolute terms.
+   *
+   * THE BUG THIS EXISTS TO KILL. This store produces ~2.3 drafts in an 8h slice, so a x2 ratio
+   * bound trips on three extra drafts. Measured on the 2026-08-04 watch: a healthy build logged
+   * `draftsProduced 2.33 -> 5 (x2.15, limit x2)` as a FAILURE. With `failureLimit: 2`, two such
+   * false alarms auto-revert a good commit — the exact wolf-crying this file's thresholds already
+   * name as the real failure mode.
+   *
+   * A ratio is only meaningful once the counts are big enough to out-run ordinary variation. Below
+   * this delta the slice says nothing, so the breach is not raised. The genuinely dangerous cases
+   * are untouched: sending into silence still clears it easily (17.8 -> 59 is +41), and the fast
+   * runaway tripwire (`detectRunaway`) never consults a baseline at all.
+   */
+  minIncreaseDelta: number;
 };
 
 export const DEFAULT_CANARY_THRESHOLDS: CanaryThresholds = {
@@ -123,7 +138,10 @@ export const DEFAULT_CANARY_THRESHOLDS: CanaryThresholds = {
   runawayMinPerHour: 12, // ~12x the normal hourly rate; nothing legitimate here sends that fast
   // ~6.6 inbound + ~10 replies per 8h slice here, so 3 events is a genuinely dead window (an
   // overnight stretch), not merely a slow one. Set from the measurement, not from taste.
-  minSliceActivity: 3
+  minSliceActivity: 3,
+  // Drafts run ~2.3/slice, so the observed false alarm was +2.67. Five clears that with room while
+  // staying far under a real runaway. Set from the measurement, not from taste.
+  minIncreaseDelta: 5
 };
 
 const SEND_PROVIDERS = new Set(["twilio", "sendgrid", "human"]);
@@ -491,14 +509,21 @@ export function decideCanaryVerdict(
     }
 
     const ratio = now / base;
-    if (ratio > thresholds.maxIncreaseRatio) {
+    // A ratio ALONE cannot fail a slice on counters this small — see `minIncreaseDelta`. The guard
+    // is deliberately NOT applied to the sends-per-inbound rate above: that rule catches
+    // double-texting at FLAT volume (20 sends against 3 inbound instead of 13), where the absolute
+    // delta is small by definition and the rate is the whole signal. Here, where we compare raw
+    // counts, a small delta genuinely is noise.
+    if (ratio > thresholds.maxIncreaseRatio && now - base >= thresholds.minIncreaseDelta) {
       breaches.push({
         metric,
         kind: "increase",
         baseline: base,
         current: now,
         limit: thresholds.maxIncreaseRatio,
-        detail: `${metric} ${base} -> ${now} (x${ratio.toFixed(2)}, limit x${thresholds.maxIncreaseRatio})`
+        detail:
+          `${metric} ${base} -> ${now} (x${ratio.toFixed(2)}, limit x${thresholds.maxIncreaseRatio}; ` +
+          `+${(now - base).toFixed(2)} against a floor of +${thresholds.minIncreaseDelta})`
       });
     }
   }
