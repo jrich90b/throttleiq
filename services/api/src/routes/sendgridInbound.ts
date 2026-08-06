@@ -174,6 +174,7 @@ import {
   isFirstTimeRiderGuidanceParserAccepted,
   isResponseControlParserAccepted
 } from "../domain/transitionSafety.js";
+import { resolveFirstTimeRiderGuidanceSource } from "../domain/inboundPipeline.js";
 import { applyDraftStateInvariants } from "../domain/draftStateInvariants.js";
 import { resolveRoutingParserDecision, decideAdfDepartmentRoute } from "../domain/routerV2.js";
 import { listUsers } from "../domain/userStore.js";
@@ -1429,7 +1430,14 @@ function resolveFirstTimeRiderGuidanceDecision(
   text: string,
   parsed: FirstTimeRiderGuidanceParse | null
 ): FirstTimeRiderGuidanceParse | null {
-  if (isFirstTimeRiderGuidanceParserAccepted(parsed)) return parsed;
+  // Mirrors the SMS lane exactly — both lanes go through the one referee so they cannot drift.
+  const source = resolveFirstTimeRiderGuidanceSource({
+    parserAccepted: isFirstTimeRiderGuidanceParserAccepted(parsed),
+    parsedIntent: parsed?.intent ?? null,
+    hasParse: !!parsed
+  });
+  if (source === "parser") return parsed;
+  if (source === "none") return null;
   return parseFirstTimeRiderGuidanceFallback(text);
 }
 

@@ -827,6 +827,7 @@ import {
   shouldParseBusinessHoursQuestion,
   resolveDealerTransactionPolicyRoute,
   resolveDealerTransactionPolicySource,
+  resolveFirstTimeRiderGuidanceSource,
   resolveInboundTerminalRoute,
   type InboundPreParserDecision
 } from "./domain/inboundPipeline.js";
@@ -27397,7 +27398,15 @@ function resolveFirstTimeRiderGuidanceDecision(
   text: string,
   parsed: FirstTimeRiderGuidanceParse | null
 ): FirstTimeRiderGuidanceParse | null {
-  if (isFirstTimeRiderGuidanceParserAccepted(parsed)) return parsed;
+  // Precedence lives in resolveFirstTimeRiderGuidanceSource (pinned by
+  // first_time_rider_precedence:eval): a parser `none` blocks the keyword scan.
+  const source = resolveFirstTimeRiderGuidanceSource({
+    parserAccepted: isFirstTimeRiderGuidanceParserAccepted(parsed),
+    parsedIntent: parsed?.intent ?? null,
+    hasParse: !!parsed
+  });
+  if (source === "parser") return parsed;
+  if (source === "none") return null;
   return parseFirstTimeRiderGuidanceFallback(text);
 }
 
