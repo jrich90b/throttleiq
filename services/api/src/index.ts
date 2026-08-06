@@ -395,7 +395,7 @@ import {
 } from "./domain/draftQualityGate.js";
 import { sampleCadenceQualityConsensus, cadenceQualityConsensusSamples, resolveCadenceUnanimousFloor } from "./domain/cadenceQualityConsensus.js";
 import { resolveNoResponseTrace } from "./domain/noResponseTrace.js";
-import { daysSinceLastCustomerReply } from "./domain/cadenceQualityFacts.js";
+import { buildCadenceQualityJudgeArgs, daysSinceLastCustomerReply } from "./domain/cadenceQualityFacts.js";
 import {
   decideContextFidelityHold,
   contextFidelityHoldShadowEnabled,
@@ -5348,11 +5348,9 @@ async function runCadenceQualityJudgeShadow(
     // BOUGHT, without which a post-sale touch naming the right bike read as a mismatch and was
     // suppressed (+17168614216, 2026-08-01) — see cadenceQualityFacts.ts.
     const enforce = isCadenceQualityEnforceEnabled() || isCadenceQualityJudgeEnabled();
+    const judgeArgs = await buildCadenceQualityJudgeArgs({ conv, message: text, channel, cadenceKind, history: buildHistory(conv, 8) });
     const consensus = await sampleCadenceQualityConsensus(
-      () => judgeCadenceQualityWithLLM({
-        message: text, channel, cadenceKind, history: buildHistory(conv, 8),
-        lead: conv.lead, sale: conv.sale, daysSinceLastInbound: daysSinceLastCustomerReply(conv)
-      }),
+      () => judgeCadenceQualityWithLLM(judgeArgs),
       { samples: enforce ? cadenceQualityConsensusSamples() : 1, floor: cadenceQualityEnforceFloor(), unanimousFloor: resolveCadenceUnanimousFloor({ enforce, cadenceKind, sale: conv?.sale }) }
     );
     const verdict = consensus.verdict;

@@ -68,6 +68,7 @@ export function resolvePurchasedUnitLabel(sale?: CadenceQualitySaleFacts): strin
 export function formatCadenceQualityUnitFacts(input: {
   lead?: CadenceQualityLeadFacts;
   sale?: CadenceQualitySaleFacts;
+  inventory?: CadenceQualityInventoryFacts | null;
 }): string {
   const lead = input?.lead ?? {};
   const lines = [
@@ -76,6 +77,7 @@ export function formatCadenceQualityUnitFacts(input: {
       source: lead?.source ?? null
     })}`
   ];
+  if (input?.inventory !== undefined) lines.push(formatCadenceQualityInventoryFacts(input.inventory));
   const purchased = resolvePurchasedUnitLabel(input?.sale);
   if (purchased) {
     lines.push(
@@ -103,4 +105,129 @@ export function daysSinceLastCustomerReply(
   const lastMs = lastInbound?.at ? Date.parse(String(lastInbound.at)) : NaN;
   if (!Number.isFinite(lastMs)) return null;
   return Math.max(0, Math.floor((now - lastMs) / 86_400_000));
+}
+
+// ---------------------------------------------------------------------------------------------
+// INVENTORY GROUND TRUTH for the cadence-quality judge (Joe, 2026-08-06).
+//
+// WHY. The judge scored "Save $4,000 off list price" on a USED 2017 unit as good@0.9, and "I'm not
+// seeing a Freewheeler available" as good@0.9 two turns after we said we were taking one in next
+// week. That is not a reasoning failure — the judge was handed no inventory facts at all, so there
+// was nothing to check the claims against. Asking it to audit a price claim without these is asking
+// an auditor to verify an expense report with no bank statement.
+//
+// DELIBERATELY NOT INCLUDED: the internal target-price note. The judge needs to know whether a
+// price EXISTS (so it can protect an honest deferral) — it does not need the number we are hoping
+// to get. Passing an internal figure into a prompt whose output is graded against customer copy is
+// a leak vector for no auditing benefit. See human-correction-steering-can-be-unsafe: a rep quoting
+// $21,495 on an unpriced unit is the exact hazard, and the fix is to not put the figure in reach.
+// ---------------------------------------------------------------------------------------------
+
+import { findInventoryPrice } from "./inventoryFeed.js";
+import { listInventoryHolds, normalizeInventoryHoldKey } from "./inventoryHolds.js";
+import { listInventorySolds, normalizeInventorySoldKey } from "./inventorySolds.js";
+
+export type CadenceQualityInventoryFacts = {
+  /** Did we match the lead's unit in the feed at all? */
+  matched: boolean;
+  status: "available" | "on_hold" | "sold" | "unknown";
+  /** Public list price from the feed. null when the unit is matched but carries no price. */
+  listPrice: number | null;
+};
+
+/**
+ * "Matched but unpriced" and "never matched" are DIFFERENT STATES and must never collapse into one
+ * sentinel. Matched-with-no-price means deferring a quote is CORRECT and the judge must protect it;
+ * never-matched means the judge knows nothing and must not read silence as evidence either way.
+ * Collapsing them grades an unmatched unit as if we had confirmed it unpriced.
+ */
+export function formatCadenceQualityInventoryFacts(inv?: CadenceQualityInventoryFacts | null): string {
+  if (!inv || !inv.matched) {
+    return (
+      "Inventory facts for the lead's unit: NOT_MATCHED — we could not find this unit in the feed. " +
+      "You know NOTHING about its price or availability. Do NOT treat that as evidence in either " +
+      "direction: a claim about it is unsupported, and so is a denial."
+    );
+  }
+  const price =
+    typeof inv.listPrice === "number" && inv.listPrice > 0
+      ? `list price $${inv.listPrice.toLocaleString("en-US")}`
+      : "UNPRICED_NO_SET_PRICE (no public price exists yet — DEFERRING a price question is the " +
+        "CORRECT and safe reply here; do not fail a message for declining to quote)";
+  return `Inventory facts for the lead's unit (treat as authoritative): status ${inv.status}, ${price}.`;
+}
+
+/**
+ * Resolve the lead's unit against the live feed + hold/sold ledgers. Mirrors the lookup
+ * `buildCadenceLeadUnitAvailabilityOverride` already does on this same cadence path, so the judge
+ * grades against the same picture the sender uses.
+ *
+ * Returns null when the lead names no unit at all (no stock# and no VIN) — there is nothing to
+ * resolve, and the caller omits the block rather than asserting a false NOT_MATCHED.
+ *
+ * FAIL DIRECTION: any lookup error resolves to `matched: false` (the "you know nothing" branch),
+ * never to a confident availability or price. A feed hiccup must not become evidence.
+ */
+export async function resolveCadenceQualityInventoryFacts(
+  lead: any
+): Promise<CadenceQualityInventoryFacts | null> {
+  const stockId =
+    String(lead?.vehicle?.stockId ?? lead?.vehicle?.stock ?? lead?.stockId ?? "").trim() || null;
+  const vin = String(lead?.vehicle?.vin ?? lead?.vin ?? "").trim() || null;
+  if (!stockId && !vin) return null;
+  try {
+    const [hit, holds, solds] = await Promise.all([
+      findInventoryPrice({ stockId, vin }),
+      listInventoryHolds(),
+      listInventorySolds()
+    ]);
+    const soldKey = normalizeInventorySoldKey(stockId, vin);
+    const holdKey = normalizeInventoryHoldKey(stockId, vin);
+    const sold = soldKey ? solds?.[soldKey] : null;
+    const hold = holdKey ? holds?.[holdKey] : null;
+    if (!hit?.item && !sold && !hold) return { matched: false, status: "unknown", listPrice: null };
+    const price = typeof hit?.price === "number" && hit.price > 0 ? hit.price : null;
+    const status = sold ? "sold" : hold ? "on_hold" : hit?.item ? "available" : "unknown";
+    return { matched: true, status, listPrice: price };
+  } catch {
+    return { matched: false, status: "unknown", listPrice: null };
+  }
+}
+
+/**
+ * Assemble everything the cadence-quality judge is asked to grade against. Lives here so the
+ * judge's whole input — unit facts, live inventory, thread, days-since-reply — sits in one testable
+ * place rather than being hand-built at the call site (and so index.ts pays for its own growth
+ * under source_size_ratchet:eval).
+ *
+ * The inventory lookup happens ONCE, here — not inside the consensus closure, which runs up to N
+ * times per judgement and would otherwise multiply the feed reads by the sample count.
+ */
+export async function buildCadenceQualityJudgeArgs(input: {
+  conv: any;
+  message: string;
+  channel: "sms" | "email";
+  cadenceKind?: string | null;
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<{
+  message: string;
+  channel: "sms" | "email";
+  cadenceKind?: string | null;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead: any;
+  sale: any;
+  daysSinceLastInbound: number | null;
+  inventory: CadenceQualityInventoryFacts | null;
+}> {
+  const conv = input.conv;
+  return {
+    message: input.message,
+    channel: input.channel,
+    cadenceKind: input.cadenceKind ?? null,
+    history: input.history,
+    lead: conv?.lead,
+    sale: conv?.sale,
+    daysSinceLastInbound: daysSinceLastCustomerReply(conv),
+    inventory: await resolveCadenceQualityInventoryFacts(conv?.lead)
+  };
 }
