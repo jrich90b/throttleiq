@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { applyDraftStateInvariants } from "../services/api/src/domain/draftStateInvariants.ts";
+import { rejectExemplarReason } from "../services/api/src/domain/fewShotExemplarGate.ts";
 
 type AnyObj = Record<string, any>;
 
@@ -285,7 +286,8 @@ function run() {
     string,
     { count: number; sample: MessageRow[]; direction: string; provider: string }
   >();
-  const fewShotCandidates: FewShotCandidate[] = [];
+  const fewShotRejections: Record<string, number> = {};
+const fewShotCandidates: FewShotCandidate[] = [];
 
   let totalMessages = 0;
   let inboundMessages = 0;
@@ -478,14 +480,23 @@ function run() {
       }
 
       const feedback = outboundFeedbackDetails(nextOutbound);
-      const nextOutProvider = String(nextOutbound?.provider ?? "").trim().toLowerCase();
-      const manualHumanOutbound = nextOutProvider === "human";
-      if (manualHumanOutbound && observedDraft && !isShortAck(observedDraft)) {
+      // The discriminator is the ACTOR STAMP, not the provider — an approved AI draft sends via
+      // "twilio" too, so `provider === "human"` matched 38 messages in the whole store (inside a
+      // 2h window) and froze the teaching set at six examples on 2026-07-21. The real pool is 1,261.
+      // Volume alone is not safe to teach, so the same gate also drops replies we must not copy:
+      // money figures we cannot verify, human-owned threads, and short acks.
+      const exemplarRejection = rejectExemplarReason({
+        message: nextOutbound as any,
+        threadMode: conv?.mode ?? conv?.followUp?.mode ?? null,
+        isShortAck: observedDraft ? isShortAck(observedDraft) : true
+      });
+      if (exemplarRejection) fewShotRejections[exemplarRejection] = (fewShotRejections[exemplarRejection] ?? 0) + 1;
+      if (!exemplarRejection && observedDraft) {
         fewShotCandidates.push({
           id: buildCandidateId(convId, atIso, "manual_human_exemplar"),
           kind: "manual_human_exemplar",
           severity: "low",
-          reason: "manual human outbound after inbound",
+          reason: "staff-authored 1:1 reply after inbound (actor-stamped)",
           convId,
           leadRef,
           leadName,
