@@ -829,6 +829,7 @@ import {
   resolveDealerTransactionPolicyRoute,
   resolveDealerTransactionPolicySource,
   resolveFirstTimeRiderGuidanceSource,
+  resolveCustomerDispositionSource,
   resolveInboundTerminalRoute,
   type InboundPreParserDecision
 } from "./domain/inboundPipeline.js";
@@ -27045,6 +27046,16 @@ function resolveCustomerDispositionDecision(
       // A "not right now" — re-engageable later. Same dialogState, distinct reason.
       return { reason: "customer_deferred", state: "customer_stepping_back" };
     }
+  }
+  // A parser `none` ends it, even below the accept floor: closing a lead on a keyword the parser
+  // already read and rejected is the costliest misfire we have. Precedence lives in
+  // resolveCustomerDispositionSource, pinned by customer_disposition_precedence:eval.
+  if (resolveCustomerDispositionSource({
+    parserAccepted: parsedAccepted,
+    parsedDisposition: parsed?.disposition ?? null,
+    hasParse: !!parsed
+  }) === "none") {
+    return null;
   }
   // Fallback for parser-disabled/low-confidence cases.
   return parseCustomerDispositionFallback(text);
