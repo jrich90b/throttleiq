@@ -127,6 +127,60 @@ assert.ok(/export async function realJudge/.test(audit), "realJudge stays export
   assert.ok(/trend_on_target: rate >= TREND_PASS_RATE_TARGET/.test(src), "pass rate is tracked as a trend, not a gate");
 }
 
+// THE JUDGE'S REASON MUST SURVIVE THE DETAIL BUDGET (2026-08-05).
+// The detail used to be assembled whole and cut with one trailing `.slice(0, 480)`. Because the
+// judge's complaint is LAST, it was always the casualty: 11 of 13 replay work orders in the
+// 08-05 feed were exactly 480 chars, arriving with the customer's words and our draft but no
+// statement of what was wrong. Two (+17163229218, +17169700408) had to be left open on that
+// alone, so they returned every nightly — an untriageable finding can never settle. These
+// assertions RUN the real builder and the real fold; a source-text check could not tell a live
+// budget from a dead one.
+{
+  const { buildReplayDetail, buildFindings, REPLAY_DETAIL_CAP, REPLAY_DETAIL_WHY_RESERVE } =
+    await import("./corpus_replay_flywheel.ts");
+  const { extractPinnedMessageId } = await import("../services/api/src/domain/reproduceConfirm.ts");
+
+  const turnKey = "+17163229218::msg_f114c99425156_1776890120306";
+  const body = `WEB LEAD (ADF) Source: Traffic Log Pro Ref: 11020 Name: Robert Myers Phone: 7163229218 ${"Y".repeat(300)}`;
+  const draft = `Hey Robert, it's Alexandra over at American Harley-Davidson. ${"D".repeat(300)}`;
+  const why = `Whether the bike can be held until Saturday — ${"W".repeat(300)}`;
+
+  const detail = buildReplayDetail({ turnKey, body, draft, why });
+  assert.ok(detail.length <= REPLAY_DETAIL_CAP, `detail stays within the report width, got ${detail.length}`);
+  // The one part that exists NOWHERE else: without it the row cannot be triaged at all.
+  assert.ok(
+    detail.includes(why.slice(0, REPLAY_DETAIL_WHY_RESERVE - 1)),
+    "the judge's reason survives an overflowing detail — it is exactly what a trailing slice() drops"
+  );
+  // Both transcript quotes still appear, just clipped — the row must stay readable at a glance.
+  assert.ok(detail.includes(body.slice(0, 60)) && detail.includes(draft.slice(0, 60)), "both quotes keep a readable head");
+  // reproduce_confirm re-runs a pinned turn by parsing this prefix; budgeting must not disturb it.
+  assert.equal(extractPinnedMessageId({ detail }), "msg_f114c99425156_1776890120306", "the pinned message id stays parseable");
+
+  // Nothing is truncated when it genuinely fits.
+  const small = buildReplayDetail({ turnKey: "+1716::msg_a_1", body: "sounds good", draft: "(none)", why: "no reason given" });
+  assert.equal(small, `[replay +1716::msg_a_1] customer: "sounds good" → draft: "(none)" — no reason given`, "a detail that fits is left alone");
+  // A short quote lends its unused budget to the reason rather than stranding it.
+  const lentBack = buildReplayDetail({ turnKey: "+1716::msg_a_1", body: "ok", draft: "(none)", why: "R".repeat(600) });
+  assert.ok(lentBack.length > REPLAY_DETAIL_CAP - 20, "unspent quote budget flows back to the reason");
+
+  // WIRING, not just the helper: the fold that actually mints findings must go through the budget.
+  const [finding] = buildFindings(
+    [{
+      turnKey, conversationId: "+17163229218", pass: false, critical: false, verdict: "fail",
+      reviewReasons: [], judge: { addressed: false, customerAsk: "Whether the bike can be held", why: "W".repeat(400) },
+      body, draft, turnAt: "2026-07-01T12:00:00.000Z"
+    } as never],
+    [], "2026-08-05T00:00:00.000Z"
+  );
+  assert.ok(finding, "the synthetic failing turn mints a finding");
+  assert.ok(finding.detail.length <= REPLAY_DETAIL_CAP, "minted details respect the cap");
+  assert.ok(
+    finding.detail.includes("Whether the bike can be held"),
+    "buildFindings routes through the budget — the judge's ask reaches the work order"
+  );
+}
+
 // Nightly box orchestrator: the sweep gate is pure + self-tested (skip-if-unchanged, forced,
 // weekly UTC-Monday confirmation, fail-toward-measuring), and the detect chain folds the
 // flywheel's latest.json like every other sibling feed.
