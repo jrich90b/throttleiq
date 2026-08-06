@@ -597,6 +597,54 @@ export function buildNonBuyerSurveyAck(
  * It also says nothing about being new to riding — this lane carries skills-refresher students too.
  * Pinned by `riding_academy_enrollment_ack:eval`.
  */
+/**
+ * Approved acknowledgement for a Riding Academy **WAIT LIST** registration — the twin of
+ * `buildRidingAcademyEnrollmentAck`, used when `decideRidingAcademyTurn` returns
+ * `riding_academy_waitlist_ack`.
+ *
+ * WHY IT EXISTS (igor yuzbashev, +17164442120, 2026-08-06). His record read
+ * `Enrollment Status: Wait List`, and the agent drafted:
+ *   "Thanks - I saw you want to do the Jumpstart experience before the course."
+ * He never said that. Two FIELD LABELS in the form - `Motivation: Learn to ride` and
+ * `Training Experience: No` - satisfied a keyword rule meant for customer prose, so a form's
+ * schema became a customer's request. The waitlist status was also ignored entirely: the reply
+ * spoke as though a seat was his.
+ *
+ * So this message asserts only what the record actually says:
+ *   - he is on the WAIT LIST, not enrolled, and we will tell him when a seat frees up;
+ *   - the course and start date only when the record carries them (never invented);
+ *   - the Jumpstart as OUR offer, phrased as an offer - never as something he asked for.
+ *
+ * The Jumpstart line is caller-supplied precisely so the experience read stays where it belongs
+ * (`resolveRiderExperienceLevel`) and the dealer toggle still governs it. Joe, 2026-08-06:
+ * fix the claim, keep the invite.
+ */
+export function buildRidingAcademyWaitlistAck(
+  firstName: string | null | undefined,
+  agentName: string,
+  dealerName: string,
+  extras: { course?: string | null; startDate?: string | null; jumpstartInvite?: string } = {}
+): string {
+  const intro = buildAgentIntro(firstName, agentName, dealerName);
+  const course = String(extras.course ?? "").trim();
+  const startDate = String(extras.startDate ?? "").trim();
+  const jumpstart = String(extras.jumpstartInvite ?? "").trim();
+
+  // Name the class only when the record named it. "the New Rider Course starting 8/15" is a fact
+  // off the form; "the course" is the honest fallback when it is not.
+  const classPhrase = course
+    ? startDate
+      ? `the ${course} starting ${startDate}`
+      : `the ${course}`
+    : "the Riding Academy";
+
+  const body =
+    `Thanks for signing up for ${classPhrase} - you're on the wait list right now, ` +
+    "and I'll let you know as soon as a seat opens up. I'm your contact here for anything to do with the course.";
+
+  return `${intro}${body}${jumpstart ? ` ${jumpstart}` : ""}`;
+}
+
 export function buildRidingAcademyEnrollmentAck(
   firstName: string | null | undefined,
   agentName: string,

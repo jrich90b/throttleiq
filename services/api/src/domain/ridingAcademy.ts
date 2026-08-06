@@ -23,6 +23,7 @@ import {
 } from "./routeStateReducer.js";
 import {
   buildRidingAcademyEnrollmentAck,
+  buildRidingAcademyWaitlistAck,
   buildNonBuyerSurveyAck,
   buildJumpstartOneOnOneInvite,
   buildJumpstartRegistrationInvite,
@@ -38,6 +39,7 @@ import {
 /** Which approved first-touch ack (if any) replaces the generic sales opener on an ADF lead. */
 export type AdfFirstTouchAckKind =
   | "riding_academy_enrollment_ack"
+  | "riding_academy_waitlist_ack"
   | "non_buyer_survey_ack"
   | "none";
 
@@ -78,11 +80,9 @@ export function resolveAdfFirstTouchAckKind(input: {
     isAdfFirstTouchRegen({ provider: input.provider, messages: input.messages }) &&
     String(input.eventPromoKind ?? "") !== "event_promo_ack";
   if (!isAdfFirstTouch) return { isAdfFirstTouch, kind: "none" };
-  if (
-    decideRidingAcademyTurn({ leadSource: input.leadSource, inquiry: input.inquiry }).kind ===
-    "riding_academy_enrollment_ack"
-  ) {
-    return { isAdfFirstTouch, kind: "riding_academy_enrollment_ack" };
+  const academy = decideRidingAcademyTurn({ leadSource: input.leadSource, inquiry: input.inquiry });
+  if (academy.kind === "riding_academy_enrollment_ack" || academy.kind === "riding_academy_waitlist_ack") {
+    return { isAdfFirstTouch, kind: academy.kind };
   }
   if (
     decideNonBuyerSurveyTurn({ purchaseTimeframe: input.purchaseTimeframe }).kind ===
@@ -103,15 +103,27 @@ export function buildAdfFirstTouchAck(
     jumpstartInvite?: string;
     registrationNote?: string;
     unpaidSeatLine?: string;
+    course?: string | null;
+    startDate?: string | null;
   }
 ): string {
-  return kind === "riding_academy_enrollment_ack"
-    ? buildRidingAcademyEnrollmentAck(args.firstName, args.agentName, args.dealerName, {
-        registrationNote: args.registrationNote,
-        unpaidSeatLine: args.unpaidSeatLine,
-        jumpstartInvite: args.jumpstartInvite
-      })
-    : buildNonBuyerSurveyAck(args.firstName, args.agentName, args.dealerName);
+  if (kind === "riding_academy_enrollment_ack") {
+    return buildRidingAcademyEnrollmentAck(args.firstName, args.agentName, args.dealerName, {
+      registrationNote: args.registrationNote,
+      unpaidSeatLine: args.unpaidSeatLine,
+      jumpstartInvite: args.jumpstartInvite
+    });
+  }
+  if (kind === "riding_academy_waitlist_ack") {
+    // No seat yet, so no registration note and no unpaid-seat line — both are about a seat he does
+    // not have. The Jumpstart stays, as an offer.
+    return buildRidingAcademyWaitlistAck(args.firstName, args.agentName, args.dealerName, {
+      course: args.course,
+      startDate: args.startDate,
+      jumpstartInvite: args.jumpstartInvite
+    });
+  }
+  return buildNonBuyerSurveyAck(args.firstName, args.agentName, args.dealerName);
 }
 
 /**
@@ -160,4 +172,62 @@ export function resolveEnrollmentAckExtras(
       : "",
     jumpstartInvite: jumpstart
   };
+}
+
+/**
+ * Did the CUSTOMER ask to try the Jumpstart before their course?
+ *
+ * The explicit words always count. The looser reading — a Riding Academy mention plus
+ * "prior / before / prep / practice / experience" — is written for customer PROSE, and it must not
+ * be run against a Riding Academy enrollment record, because that record is a form and its FIELD
+ * LABELS satisfy it on their own:
+ *
+ *   Enrollment Status: Wait List-Course: New Rider Course - eCourse + Range-Class Start Date:
+ *   8/15/2026-Gender: Male-Motivation: Learn to ride-Motorcycle Riding History: I have ridden only
+ *   as a passenger-Training Experience: No-...
+ *
+ * "Motivation: Learn to ride" + "Training Experience: No" — two labels, no request — and on
+ * 2026-08-06 igor yuzbashev was told "I saw you want to do the Jumpstart experience before the
+ * course." He had said nothing of the kind.
+ *
+ * FAIL DIRECTION: on a machine record we require the explicit Jumpstart words. Getting it wrong now
+ * means we do not claim he asked for something — the Jumpstart is still offered on the reply side,
+ * as an offer. The old behaviour put words in a customer's mouth, which is the costlier error.
+ */
+const ADF_ENROLLMENT_RECORD_MARKER = /\benrollment status:\s*/i;
+
+export function isJumpStartExperienceRequestText(text: string | null | undefined): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  if (/\bjump\s*start\b|\bjumpstart\b|\bjump-start\b/.test(t)) return true;
+  if (ADF_ENROLLMENT_RECORD_MARKER.test(t)) return false;
+  return (
+    /\b(riding academy|rider academy|learn to ride)\b/.test(t) &&
+    /\b(prior|before|prep|practice|experience)\b/.test(t)
+  );
+}
+
+/**
+ * The course name and class start date off a Riding Academy enrollment record.
+ *
+ * Structured extraction from a MACHINE record, not comprehension: the body is a `-`-joined list of
+ * `Label: Value` pairs, and the values themselves contain hyphens
+ * ("Course: New Rider Course - eCourse + Range"), so it splits only before a capitalised label
+ * followed by a colon. Returns nulls when a field is absent — the waitlist reply then says
+ * "the Riding Academy" rather than inventing a class.
+ */
+export function readRidingAcademyRecordFields(inquiry?: string | null): {
+  course: string | null;
+  startDate: string | null;
+} {
+  const raw = String(inquiry ?? "").trim();
+  if (!raw) return { course: null, startDate: null };
+  const fields = new Map<string, string>();
+  for (const part of raw.split(/-(?=[A-Z][A-Za-z ]{2,40}:)/)) {
+    const m = /^\s*([^:]{2,40}):\s*(.*)$/.exec(part);
+    if (m) fields.set(m[1].trim().toLowerCase(), m[2].trim());
+  }
+  const course = fields.get("course") || null;
+  const startDate = fields.get("class start date") || fields.get("start date") || null;
+  return { course, startDate };
 }
