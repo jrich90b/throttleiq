@@ -33,6 +33,42 @@
  * the actual hold) is a separate approve-first step.
  */
 
+import { customerVisitConfirmed, dealerRecordedDemoRide } from "./visitFraming.js";
+
+/** The ANCHOR handed to the scorer — the persisted truth of the conversation, so the judge can tell a
+ *  reply that references established context from one that invents it. */
+export type ContextFidelityAnchor = {
+  modelOfRecord: string | null;
+  leadType: string | null;
+  appointmentBooked: boolean;
+  dialogState: string | null;
+  /** Is a past visit / test ride ON RECORD for this lead? */
+  visitConfirmed: boolean;
+};
+
+/**
+ * Pure. Builds the scorer's anchor from the conversation.
+ *
+ * `visitConfirmed` exists because of Mark Sorrentino (+17163160886, 2026-08-05): a Dealer Lead App
+ * lead whose ADF says "Demo Bikes Ridden: 2025,TOURING,ROAD GLIDE". The draft thanked him for coming
+ * in for the test ride — TRUE — and the judge held it as stale_intent ("Do not assume the customer
+ * has already done the test ride"), so a real buyer got silence. The judge was never handed any visit
+ * signal at all, so it had no way to tell a true ride reference from a fabricated one.
+ *
+ * FAIL DIRECTION: this only ever tells the judge a ride IS on record. With no record it is false and
+ * nothing changes — the judge keeps holding fabricated visits (the Tim Williams class the hold was
+ * built for). It can prevent a wrong hold; it cannot cause one.
+ */
+export function buildContextFidelityAnchor(conv: any): ContextFidelityAnchor {
+  return {
+    modelOfRecord: conv?.lead?.vehicle?.model ?? conv?.lead?.vehicle?.description ?? null,
+    leadType: [conv?.classification?.bucket, conv?.classification?.cta].filter(Boolean).join("/") || null,
+    appointmentBooked: !!conv?.appointment?.bookedEventId,
+    dialogState: conv?.dialogState?.name ?? null,
+    visitConfirmed: customerVisitConfirmed(conv) || dealerRecordedDemoRide(conv)
+  };
+}
+
 /** The subset of scoreContextFidelityWithLLM's output this gate reasons over (kept local so the
  *  module stays pure + decoupled from llmDraft). The runtime score is structurally compatible. */
 export type ContextFidelityScoreLike = {

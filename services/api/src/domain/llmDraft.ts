@@ -10283,6 +10283,7 @@ export async function scoreContextFidelityWithLLM(args: {
     leadType?: string | null; // classification bucket/cta, e.g. "event_promo/sweepstakes"
     appointmentBooked?: boolean;
     dialogState?: string | null;
+    visitConfirmed?: boolean; // a past visit / test ride is ON RECORD (dealer log or the customer's words)
   };
   channel?: "sms" | "email";
 }): Promise<ContextFidelityScoreParse | null> {
@@ -10318,6 +10319,10 @@ export async function scoreContextFidelityWithLLM(args: {
     "  and the draft replies with a sales/bike-inquiry/stop-in frame -> frame=wrong_lead_type.",
     "- appointment/dialog_state: if the draft re-asks or re-answers something the turn already settled",
     "  (e.g. re-asks a day the customer just named) -> frame=stale_intent.",
+    "- visit_confirmed: whether a past visit or test ride is ON RECORD for this lead (the dealership's",
+    "  own demo-ride log, or the customer's own words). When TRUE, a draft that thanks the customer for",
+    "  coming in or for the test ride is stating a FACT -> that alone is faithful, never stale_intent or",
+    "  fabricated. When FALSE, a draft asserting a past visit the thread does not support -> fabricated.",
     "If the draft forgot the established subject entirely -> frame=dropped_anchor. If it invents a",
     "frame the turn doesn't warrant -> frame=fabricated. If it's on-target -> frame=matches.",
     "",
@@ -10343,6 +10348,15 @@ export async function scoreContextFidelityWithLLM(args: {
     '  {"addresses_this_turn":false,"referenced_entities_present":false,"frame":"over_attached_model",',
     '   "unsupported_assertion":"offers Ultra Limited; the customer referenced a Road Glide",',
     '   "verdict":"out_of_context","severity":"major","confidence":0.9,"reason":"pitches a model the customer did not reference","steering":"talk about the Road Glide the customer named"}',
+    '- anchor visit_confirmed true | customer: "(Dealer Lead App questionnaire — Demo Bikes Ridden: 2025 Road Glide)" |',
+    '  draft: "Thanks again for coming in for the test ride on the Road Glide. If questions come up, just text me." ->',
+    '  {"addresses_this_turn":true,"referenced_entities_present":true,"frame":"matches",',
+    '   "unsupported_assertion":"","verdict":"faithful","severity":"minor","confidence":0.9,"reason":"the ride is on record, so thanking them for it is true","steering":""}',
+    '- anchor visit_confirmed false | customer: "(new web lead, never been in)" | draft: "Thanks again for coming in',
+    '  for the test ride — congrats on the Street Glide!" ->',
+    '  {"addresses_this_turn":false,"referenced_entities_present":true,"frame":"fabricated",',
+    '   "unsupported_assertion":"claims a past test ride and a purchase that never happened",',
+    '   "verdict":"out_of_context","severity":"major","confidence":0.95,"reason":"invents a visit with nothing on record","steering":"greet a new lead without claiming a past visit"}',
     '- customer: "I\'ll see you Monday!" | draft: "Absolutely — what day and time works for you?" ->',
     '  {"addresses_this_turn":false,"referenced_entities_present":true,"frame":"stale_intent",',
     '   "unsupported_assertion":"re-asks the day the customer already gave (Monday)",',
@@ -10357,7 +10371,8 @@ export async function scoreContextFidelityWithLLM(args: {
       model_of_record: anchor.modelOfRecord ?? null,
       lead_type: anchor.leadType ?? null,
       appointment_booked: anchor.appointmentBooked ?? false,
-      dialog_state: anchor.dialogState ?? null
+      dialog_state: anchor.dialogState ?? null,
+      visit_confirmed: anchor.visitConfirmed ?? false
     })}`,
     history.length ? `Recent thread:\n${history.join("\n")}` : "Recent thread: (none)",
     `Customer's latest message: ${inbound}`,
