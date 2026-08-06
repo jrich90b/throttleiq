@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isParserFlagEnabled } from "./llmFlags.js";
+import { appendDraftPromptFingerprint, buildDraftPromptFingerprint } from "./draftPromptFingerprint.js";
 import { fileURLToPath } from "node:url";
 import OpenAI from "openai";
 import type { Conversation } from "./conversationStore.js";
@@ -16359,6 +16360,22 @@ ${ctx.inquiry}
 Recent history:
 ${ctx.history.map(h => `${h.direction.toUpperCase()}: ${h.body}`).join("\n\n")}
 `.trim();
+
+  // Fingerprint the exact payload before it goes out. Replaying one turn twice can produce a reply
+  // that advances the deal and a reply that parks it; without this there is no way to tell whether
+  // the model sampled differently or we handed it a different prompt — opposite fixes. Records a
+  // hash, not the text (the capture dir is already ~134MB/day). Off unless a report root is set.
+  appendDraftPromptFingerprint(
+    buildDraftPromptFingerprint({
+      at: new Date().toISOString(),
+      model,
+      instructions,
+      input,
+      leadKey: ctx.leadKey ?? null,
+      leadRef: ctx.lead?.leadRef ?? null,
+      channel: ctx.channel ?? null
+    })
+  );
 
   const generateViaOpenAI = async (openAiModel: string): Promise<string> => {
     const response = await client.responses.create({
