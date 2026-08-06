@@ -3243,7 +3243,10 @@ export function decideNonBuyerSurveyTurn(input: NonBuyerSurveyTurnInput): NonBuy
 // a fingerprint we have never seen is worse than leaving it alone. FAIL DIRECTION: a false negative
 // keeps today's behaviour; a false positive costs one over-warm opener that makes no availability
 // claim, no price claim and no close.
-export type RidingAcademyTurnKind = "riding_academy_enrollment_ack" | "none";
+export type RidingAcademyTurnKind =
+  | "riding_academy_enrollment_ack"
+  | "riding_academy_waitlist_ack"
+  | "none";
 
 export type RidingAcademyTurnInput = {
   leadSource?: string | null;
@@ -3268,8 +3271,17 @@ export function decideRidingAcademyTurn(input: RidingAcademyTurnInput): RidingAc
   // Must be THIS lane: the rider-training source, or the school's enrollment record in the body.
   if (!source.includes("riding academy") && !hasEnrollmentRecord) return { kind: "none" };
   const status = readRidingAcademyStatus(input);
-  if (!status.startsWith("enrolled")) return { kind: "none" };
-  return { kind: "riding_academy_enrollment_ack" };
+  if (status.startsWith("enrolled")) return { kind: "riding_academy_enrollment_ack" };
+  // WAIT LIST is its own state, not a near-enrollment (igor yuzbashev, 2026-08-06). Falling through
+  // to `none` handed the turn to the generic ADF path, which read the form's FIELD LABELS
+  // ("Motivation: Learn to ride", "Training Experience: No") as a Jumpstart request and told him
+  // "I saw you want to do the Jumpstart experience before the course" — a claim he never made — while
+  // never mentioning that he has no seat yet. He is owed the truth about his status; the Jumpstart
+  // stays available as an OFFER on the reply side.
+  if (/^(wait|waitlist)/.test(status.replace(/[\s_-]+/g, ""))) {
+    return { kind: "riding_academy_waitlist_ack" };
+  }
+  return { kind: "none" };
 }
 
 // JUMPSTART 1-on-1 invite (Joe, 2026-08-05). The H-D Jumpstart is a real bike locked onto a

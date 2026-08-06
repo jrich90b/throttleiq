@@ -293,9 +293,13 @@ assert.ok(
   "the regen path must resolve the enrollment ack through the shared first-touch resolver"
 );
 assert.ok(
-  /decideRidingAcademyTurn\(\{ leadSource: input\.leadSource, inquiry: input\.inquiry \}\)\.kind ===\s*"riding_academy_enrollment_ack"/.test(
-    adfFirstTouch
-  ) && /buildRidingAcademyEnrollmentAck\(args\.firstName, args\.agentName, args\.dealerName, \{/.test(adfFirstTouch),
+  // Pins the DECISION SOURCE and the copy, not the statement's shape: this originally required
+  // `decideRidingAcademyTurn(...).kind === "riding_academy_enrollment_ack"` as one adjacent
+  // expression, and broke when the wait-list branch (2026-08-06) hoisted the call into a local. A
+  // pin that fails on a refactor it does not care about trains people to loosen pins.
+  /decideRidingAcademyTurn\(\{ leadSource: input\.leadSource, inquiry: input\.inquiry \}\)/.test(adfFirstTouch) &&
+    /"riding_academy_enrollment_ack"/.test(adfFirstTouch) &&
+    /buildRidingAcademyEnrollmentAck\(args\.firstName, args\.agentName, args\.dealerName, \{/.test(adfFirstTouch),
   "the shared resolver must decide from the reducer and build the approved enrollment copy"
 );
 // Precedence: the enrollment ack is checked BEFORE the non-buyer survey ack.

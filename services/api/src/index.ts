@@ -484,6 +484,7 @@ import {
 } from "./domain/routeStateReducer.js";
 import { resolveTownNearestDealer, formatTownLabel } from "./domain/geo.js";
 import { dataPath, getDataDir } from "./domain/dataDir.js";
+import { isJumpStartExperienceRequestText } from "./domain/ridingAcademy.js";
 import {
   hasDealerTransactionPolicyParserHint,
   parseDealerTransactionPolicyFallback,
@@ -28901,13 +28902,9 @@ function isCallOnlyText(text: string): boolean {
 }
 
 function isJumpStartExperienceText(text: string | null | undefined): boolean {
-  const t = String(text ?? "").toLowerCase();
-  if (!t.trim()) return false;
-  if (/\bjump\s*start\b|\bjumpstart\b|\bjump-start\b/.test(t)) return true;
-  return (
-    /\b(riding academy|rider academy|learn to ride)\b/.test(t) &&
-    /\b(prior|before|prep|practice|experience)\b/.test(t)
-  );
+  // Shared referee — see isJumpStartExperienceRequestText: an enrollment RECORD is a form, and its
+  // field labels ("Motivation: Learn to ride", "Training Experience: No") are not a request.
+  return isJumpStartExperienceRequestText(text);
 }
 
 function isTextingTypoJokeText(text: string): boolean {

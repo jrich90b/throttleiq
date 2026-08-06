@@ -175,6 +175,7 @@ import {
   isResponseControlParserAccepted
 } from "../domain/transitionSafety.js";
 import { resolveFirstTimeRiderGuidanceSource } from "../domain/inboundPipeline.js";
+import { isJumpStartExperienceRequestText } from "../domain/ridingAcademy.js";
 import { applyDraftStateInvariants } from "../domain/draftStateInvariants.js";
 import { resolveRoutingParserDecision, decideAdfDepartmentRoute } from "../domain/routerV2.js";
 import { listUsers } from "../domain/userStore.js";
@@ -1333,13 +1334,9 @@ function inferAppointmentTypeFromConv(conv: any): string | null {
 }
 
 function isJumpStartExperienceText(text: string | null | undefined): boolean {
-  const t = String(text ?? "").toLowerCase();
-  if (!t.trim()) return false;
-  if (/\bjump\s*start\b|\bjumpstart\b|\bjump-start\b/.test(t)) return true;
-  return (
-    /\b(riding academy|rider academy|learn to ride)\b/.test(t) &&
-    /\b(prior|before|prep|practice|experience)\b/.test(t)
-  );
+  // Shared referee — see isJumpStartExperienceRequestText: an enrollment RECORD is a form, and its
+  // field labels ("Motivation: Learn to ride", "Training Experience: No") are not a request.
+  return isJumpStartExperienceRequestText(text);
 }
 
 function hasExplicitRiderCourseInfoText(text: string | null | undefined): boolean {
