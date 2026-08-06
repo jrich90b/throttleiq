@@ -71,6 +71,7 @@ for (const r of rows) {
 const cases: {
   id: string;
   message: string;
+  history?: { direction: "in" | "out"; body: string }[];
   assert: (v: NonNullable<Awaited<ReturnType<typeof judgeCadenceQualityWithLLM>>>) => void;
 }[] = [
   {
@@ -83,6 +84,60 @@ const cases: {
     message: "Just checking in!",
     assert: v => assert.equal(v.overall, "suppress", `bare check-in should suppress, got ${v.overall} (${v.reason})`)
   },
+  // --- Ground-truth cases from a hand-labelled sample of LIVE judge calls (2026-08-05). The judge
+  // scored 8 of 13 correctly; all three shapes below are ones it got WRONG, so they are the fixtures.
+  {
+    // Tim, 2026-08-01: judged suppress @0.88 ("no new info"), went out anyway, and the customer
+    // replied "Thanks allot Scott you're very professional. Nancy wanted me to tell you thank you
+    // so much". Warmth is a reason to send; the empty-ping rule is for sales nudges, not gratitude.
+    id: "post_sale_warmth_is_send_worthy",
+    message:
+      "Hi Tim — this is Scott at American Harley-Davidson. Congrats on your Tri Glide Ultra! If you need anything, just let me know.",
+    assert: v =>
+      assert.notEqual(
+        v.overall,
+        "suppress",
+        `a warm post-sale congratulations must not be suppressed for 'no new info', got ${v.overall} (${v.reason})`
+      )
+  },
+  {
+    // Mark, 2026-08-01: judged GOOD @0.9 for having "a concrete reason (price drop)". The $4,000
+    // promotion belongs to a NEW bike; this lead is a USED 2017 (stock U590-17). A money claim
+    // borrowed from another unit is a fabrication, not a concrete reason.
+    id: "discount_borrowed_from_another_unit_is_not_good",
+    message:
+      "Hey Mark, quick update on the Breakout: Save $4,000 off list price. Want me to send a short pricing and payment breakdown? Still watching for something with Custom Colour Laguna Orange (stock U590-17) for you.",
+    history: [
+      { direction: "in" as const, body: "WEB LEAD (ADF) Year: 2017 Vehicle: Harley-Davidson Breakout Stock: U590-17 (pre-owned)" },
+      { direction: "out" as const, body: "Hey Mark, thanks for your inquiry about the 2017 Breakout. If you'd like to stop in and check it out, just say the word." }
+    ],
+    assert: v =>
+      assert.notEqual(
+        v.overall,
+        "good",
+        `a $4,000 new-bike discount attached to a used 2017 unit must not pass as good, got ${v.overall} (${v.reason})`
+      )
+  },
+  {
+    // Clifton, 2026-08-04: judged GOOD @0.9 as a "concrete, relevant update about availability" —
+    // two turns after we told him we were taking one in next week. It contradicts our own last word.
+    id: "contradicts_our_own_previous_message",
+    message:
+      "Hey Clifton, quick update on the Freewheeler: I'm not seeing one available right now. I can help pick another bike for a test ride or keep an eye out for one.",
+    history: [
+      {
+        direction: "out" as const,
+        body: "Hey Clifton, quick update on the Freewheeler: I'm going to be taking in a pre-owned 2016 with about 6,800 miles on it next week. Would that be something you'd want to see?"
+      },
+      { direction: "in" as const, body: "Sounds good" }
+    ],
+    assert: v =>
+      assert.equal(
+        v.stateFit,
+        false,
+        `a message contradicting our own previous turn must fail state_fit, got state_fit=${v.stateFit} (${v.reason})`
+      )
+  },
   {
     id: "corporate_bot",
     message:
@@ -93,7 +148,7 @@ const cases: {
 
 let ran = 0;
 for (const c of cases) {
-  const v = await judgeCadenceQualityWithLLM({ message: c.message, channel: "sms" });
+  const v = await judgeCadenceQualityWithLLM({ message: c.message, channel: "sms", history: c.history });
   if (!v) continue; // judge disabled / transient null — skip, don't red the gate
   ran += 1;
   c.assert(v);
