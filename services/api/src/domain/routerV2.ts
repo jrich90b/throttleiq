@@ -81,5 +81,6 @@ export {
   shouldTreatInboundAsTestRideBikeSelection,
   decideHealthRecoveryPause,
   decideStaffReopenResidue,
-  resolveInventoryWatchDefaults
+  resolveInventoryWatchDefaults,
+  decideLostSaleCloseoutAck
 } from "./routeStateReducer.js";

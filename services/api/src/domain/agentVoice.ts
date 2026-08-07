@@ -857,11 +857,27 @@ export function buildPriceObjectionCheaperWatchReply(modelLabel?: string | null)
  * one over from the thread or the lead record. Congratulating someone on the wrong bike is worse
  * than congratulating them on no bike at all, so a blank falls back to the generic line.
  */
-export function buildAcquiredVehicleAck(vehicle?: string | null): string {
+export function buildAcquiredVehicleAck(
+  vehicle?: string | null,
+  opts?: {
+    /**
+     * Does this customer have alerts to come off? TRUE (the default) is the original watch-lane
+     * wording, byte for byte. FALSE drops only the alert-list clause — for the lost-sale closeout,
+     * where the customer told us they bought one but was never on a watch. Promising to take
+     * someone off a list they were never on is a small lie, and the rest of the sentence is the
+     * part that matters: we are still here for parts, service and gear.
+     */
+    removingFromAlertList?: boolean;
+  }
+): string {
   const named = String(vehicle ?? "").replace(/\s+/g, " ").trim();
   const congrats = named ? `Congrats on the ${named}!` : "Congrats on the new bike!";
+  const acknowledgement =
+    opts?.removingFromAlertList === false
+      ? "Thanks for letting me know."
+      : "Thanks for letting me know — I'll take you off the alert list.";
   return (
-    `${congrats} Thanks for letting me know — I'll take you off the alert list. ` +
+    `${congrats} ${acknowledgement} ` +
     "If you ever need anything for it — parts, service, or gear — just text me here."
   );
 }

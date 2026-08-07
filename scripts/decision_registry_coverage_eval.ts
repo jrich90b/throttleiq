@@ -68,6 +68,12 @@ for (const fn of [
   "decideThumbsDownNoteRouting",
   "decideDealStatusCheckTurn",
   "decideWatchOptOutTurn",
+  // Driven by THIS turn's acquired-vehicle parse (intent/confidence/vehicle), which is never
+  // persisted — a stored conversation cannot reproduce the inputs. Its two STATE inputs
+  // (hasActiveWatch, hasPostSaleContext) are projectable, but they only shape the wording and the
+  // suppression; the decision itself cannot fire without the turn. Pinned by
+  // lost_sale_closeout_ack:eval, which executes it directly.
+  "decideLostSaleCloseoutAck",
   "decidePostSaleOwnershipTurn",
   "decideWatchScopeTurn",
   "decideAdfDepartmentRoute",

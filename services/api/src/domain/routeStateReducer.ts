@@ -1647,6 +1647,87 @@ export type WatchOptOutTurnDecision = {
   kind: WatchOptOutTurnKind;
 };
 
+// --- The lost-sale closeout acknowledgement (Joe, 2026-08-07) ----------------
+// "Can the agents let the customer know if they need anything for their new bike to let us know?"
+//
+// The wording already existed (buildAcquiredVehicleAck, Joe's 2026-08-04 rule) but only the WATCH
+// lane could reach it, and only outside human mode. Everyone else walking away got the generic
+// goodbye — +15853528447, "I appreciate your time, but I purchased a bike at a different
+// dealership", answered with "I hear you. If anything changes down the road, just give me a shout."
+//
+// WHY THIS RIDES ON THE CLOSEOUT AND NOT ON THE MESSAGE. Measured over the 30 days to 2026-08-07,
+// the acquired-vehicle read on raw turns is wrong more often than right once it leaves the watch
+// lane: it called a customer's own TRADE-IN, a tour pack, a Chevy Traverse lease and a bike being
+// brought IN to us all "acquired_vehicle" at 0.85-0.9. Executed against those same five turns, the
+// DISPOSITION parser answers `none` for every one of them, so none reaches a closeout. That is the
+// whole safety argument: the congratulation can only ever ride on top of a walk-away we are already
+// confident about. It never reads a message on its own.
+//
+// FAIL DIRECTION: the generic goodbye. Every uncertain input returns "generic", which is exactly
+// today's behaviour — we close the lead and say the neutral line. The only thing this can get wrong
+// in the other direction is congratulating someone who is walking away for a different reason, and
+// that needs BOTH an accepted disposition closeout AND an explicit purchase statement above the
+// confidence floor.
+export type LostSaleCloseoutAckKind = "lost_sale" | "generic";
+
+export type LostSaleCloseoutAckInput = {
+  /** The acquired/opt-out parser's read of THIS turn. */
+  intent?: string | null;
+  confidence: number;
+  confidenceMin: number;
+  /** The bike they named in THIS message, never carried over from the thread or lead record. */
+  vehicle?: string | null;
+  /** Do they actually have alerts to come off? Decides one clause of the wording. */
+  hasActiveWatch: boolean;
+  /**
+   * Did WE sell them a bike? Then "I just bought the bike" means OURS, and a congratulation is
+   * wrong. Kevin +17163440581, 2026-07-21, one day after taking delivery: "Bro your brother just
+   * called me and said I had to pay for another set I dad what I just bought the bike" — an
+   * annoyed customer arguing about a $150 key fob, read as a purchase at 0.9. It is the ONLY false
+   * positive among the six purchases that reached a closeout in 30 days, and this closes it.
+   *
+   * A STATE gate (closedReason "sold" / sale.soldAt / post_sale cadence), never a word gate.
+   */
+  hasPostSaleContext?: boolean;
+};
+
+export type LostSaleCloseoutAckDecision = {
+  kind: LostSaleCloseoutAckKind;
+  /** The closeout reason to record. "customer_bought_elsewhere" is an OUTCOME, never re-engaged. */
+  closeReason: string | null;
+  vehicle: string;
+  removesFromAlertList: boolean;
+};
+
+const GENERIC_ACK: LostSaleCloseoutAckDecision = {
+  kind: "generic",
+  closeReason: null,
+  vehicle: "",
+  removesFromAlertList: false
+};
+
+export function decideLostSaleCloseoutAck(
+  input: LostSaleCloseoutAckInput
+): LostSaleCloseoutAckDecision {
+  if (String(input.intent ?? "") !== "acquired_vehicle") return GENERIC_ACK;
+  // We sold them this bike — "I just bought it" is about OURS. Never congratulate our own buyer
+  // on a purchase, and never imply they bought elsewhere.
+  if (input.hasPostSaleContext) return GENERIC_ACK;
+  const confidence = Number(input.confidence);
+  const floor = Number(input.confidenceMin);
+  if (!Number.isFinite(confidence) || !Number.isFinite(floor)) return GENERIC_ACK;
+  if (confidence < floor) return GENERIC_ACK;
+  // Naming the wrong bike is worse than naming none, so a blank simply falls back to the generic
+  // congratulations — the same rule the watch lane already follows.
+  const vehicle = String(input.vehicle ?? "").replace(/\s+/g, " ").trim();
+  return {
+    kind: "lost_sale",
+    closeReason: "customer_bought_elsewhere",
+    vehicle: vehicle.length <= 60 ? vehicle : "",
+    removesFromAlertList: !!input.hasActiveWatch
+  };
+}
+
 export function decideWatchOptOutTurn(input: WatchOptOutTurnInput): WatchOptOutTurnDecision {
   if (!input.hasActiveWatch) return { kind: "none" }; // nothing to remove
   if (!input.parserAccepted) return { kind: "none" };

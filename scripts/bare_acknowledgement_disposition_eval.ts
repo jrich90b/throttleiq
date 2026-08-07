@@ -225,15 +225,24 @@ ok(
 );
 
 // The second half of the operator's ask: the closeout must SAY something, as a draft.
-const closeoutBranch = api.slice(
-  api.indexOf('recordRouteOutcome("live", "human_mode_customer_disposition_closeout"')
-);
-const closeoutBody = closeoutBranch.slice(0, 1600);
+//
+// 2026-08-07: the reply is no longer built inline here. All three closeout paths (live, human
+// mode, regen) now go through applyDispositionCloseoutAndBuildReply so a lost-sale customer can
+// get the "congrats, we're here for parts/service/gear" wording — see lost_sale_closeout_ack:eval,
+// which owns that behaviour. What THIS eval still guards is unchanged and is the point: human mode
+// must not go silent again, and whatever it says must be a DRAFT.
+const humanBranchStart = api.indexOf("const humanModeCloseoutReply = await applyDispositionCloseoutAndBuildReply(");
+ok(humanBranchStart > 0, "the human-mode closeout builds a reply through the shared builder");
+const closeoutBody = api.slice(humanBranchStart, humanBranchStart + 1600);
 ok(
-  /return publishLiveTwilioReply\(\s*ensureUniqueDispositionReply\(\s*buildCustomerDispositionReply\(/.test(
+  /return publishLiveTwilioReply\(humanModeCloseoutReply, undefined, \{ draftOnly: true \}\);/.test(
     closeoutBody
   ),
-  "the human-mode closeout sends the existing disposition goodbye"
+  "and publishes it — the human-mode closeout is never silent"
+);
+ok(
+  /applyDispositionCloseoutAndBuildReply\(\s*conv,\s*humanModeDispositionText,/.test(closeoutBody),
+  "built from THIS turn's text, not the thread"
 );
 ok(
   /\{ draftOnly: true \}/.test(closeoutBody),
