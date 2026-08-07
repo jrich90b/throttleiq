@@ -3391,12 +3391,74 @@ export function resolveRiderExperienceLevel(input: {
   // rider, and every unrecognised wording stays unknown rather than being guessed at.
   const history = String(input.ridingHistory ?? "").toLowerCase();
   if (history) {
-    if (/\b(never|not)\b[^.]*\boperated\b/.test(history) || /\bno riding experience\b/.test(history)) {
+    // The negative wordings the school form actually emits. It required the word "operated", but
+    // the live records say "I have NEVER BEEN ON a motorcycle (even as a passenger)" — 2 of the 4
+    // enrollment records in the store on 2026-08-07 — which read `unknown` and kept the two most
+    // plainly inexperienced people we have off the beginner list. Still only explicit negatives:
+    // never/not paired with operating, being on, or riding a motorcycle.
+    if (/\b(never|not)\b[^.]*\b(operated|been on|ridden|rode)\b/.test(history) || /\bno riding experience\b/.test(history)) {
       return "none_or_little";
     }
+    // "I have ridden ONLY AS A PASSENGER" — one of the school form's fixed options, and one of the
+    // four live enrollment records on 2026-08-07. It read `unknown`, which kept a genuine beginner
+    // off the beginner list. A passenger has not operated a motorcycle; that is a plainly-negative
+    // wording, not a guess, so it belongs with the other two above. Checked BEFORE the `operated`
+    // test below, which would otherwise never see it anyway — order kept explicit on purpose.
+    if (/\bonly as a passenger\b/.test(history)) return "none_or_little";
     if (/\boperated\b/.test(history)) return "experienced";
   }
   return "unknown";
+}
+
+/** What we durably know about a lead's riding experience. Only ever an EXPLICIT read. */
+export type RiderExperienceRecord = {
+  level: "none_or_little" | "experienced";
+  /** "parser" = the typed first_time_rider_guidance read; "enrollment" = the school's machine record. */
+  source: "parser" | "enrollment";
+  at: string;
+};
+
+export type RiderExperiencePersistDecision =
+  | { write: false; reason: string }
+  | { write: true; next: RiderExperienceRecord; reason: string };
+
+/**
+ * THE REFEREE for `conv.riderExperience` — the only thing allowed to decide whether we write it.
+ *
+ * WHY THIS EXISTS (Joe, 2026-08-07, asking for a list of customers who are not licensed yet).
+ * `resolveRiderExperienceLevel` already works this out on every relevant turn and then throws it
+ * away — nothing persists it, so the audience cannot be queried. Measured on the live store: across
+ * 822 conversations we raised an endorsement in 19 outbound messages, a customer answered in 4, and
+ * 4 leads carry the riding school's structured record. Storing the reads we already make is what
+ * turns that into a list that grows.
+ *
+ * MONOTONIC, and the direction is the whole point. `none_or_little` -> `experienced` is allowed:
+ * people get licensed, and a stale beginner label would put a newly-endorsed rider on a
+ * learn-to-ride list. `experienced` -> `none_or_little` is REFUSED: the failure the surrounding code
+ * has always guarded against is calling a thirty-year rider a beginner, and a marketing list makes
+ * that failure durable and public instead of one awkward sentence. A missed invite costs an
+ * opportunity; a wrong one insults a customer.
+ *
+ * `unknown` NEVER writes — absence of evidence is not evidence, and a stored "unknown" would be
+ * indistinguishable from a real read.
+ */
+export function decideRiderExperiencePersist(input: {
+  current?: { level?: string | null } | null;
+  observed: RiderExperienceLevel;
+  source: "parser" | "enrollment";
+  nowIso: string;
+}): RiderExperiencePersistDecision {
+  if (input.observed !== "none_or_little" && input.observed !== "experienced") {
+    return { write: false, reason: "observed_unknown" };
+  }
+  const next: RiderExperienceRecord = { level: input.observed, source: input.source, at: input.nowIso };
+  const current = String(input.current?.level ?? "").trim();
+  if (!current) return { write: true, next, reason: "first_observation" };
+  if (current === input.observed) return { write: false, reason: "unchanged" };
+  if (current === "experienced" && input.observed === "none_or_little") {
+    return { write: false, reason: "never_demote_experienced" };
+  }
+  return { write: true, next, reason: "upgrade_to_experienced" };
 }
 
 export function decideJumpstartInviteTurn(

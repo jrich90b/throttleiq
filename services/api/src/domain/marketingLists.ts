@@ -33,6 +33,17 @@ export type MarketingListFilters = {
   activeWithinDays?: number | null;
   /** Closed leads are re-engagement candidates; default false = open leads only. */
   includeClosed?: boolean;
+  /**
+   * Durable riding-experience read (`conv.riderExperience`, written only by
+   * `decideRiderExperiencePersist`). "none_or_little" is the Riding-Academy / Jumpstart audience —
+   * people who cannot ride yet.
+   *
+   * A lead we have never read matches NEITHER value. That is deliberate: "we do not know" must not
+   * silently join the beginner list, because the standing fail-direction here is that calling an
+   * experienced rider a beginner insults a customer. The list stays SMALL when we are ignorant,
+   * exactly like every compliance exclusion above it.
+   */
+  riderExperience?: "none_or_little" | "experienced" | null;
 };
 
 export type MarketingListRow = {
@@ -222,6 +233,7 @@ export function buildMarketingList(
   const sourceQuery = (filters.source ?? "").trim().toLowerCase();
   const condition = (filters.condition ?? "").trim();
   const windowDays = filters.activeWithinDays ?? null;
+  const riderExperience = (filters.riderExperience ?? "").trim() || null;
 
   let totalConsidered = 0;
   const rows: MarketingListRow[] = [];
@@ -249,6 +261,11 @@ export function buildMarketingList(
     if (windowDays != null) {
       const inboundMs = parseMs(inboundAt);
       if (inboundMs == null || nowMs - inboundMs > windowDays * 86_400_000) continue;
+    }
+    // Riding experience: an EXACT match on the stored read. A lead we have never read has no
+    // `riderExperience` and therefore matches neither value — never-read is not "beginner".
+    if (riderExperience && String((conv as any).riderExperience?.level ?? "") !== riderExperience) {
+      continue;
     }
 
     // ── Compliance exclusions — order is law (see header). Each row counts ONCE. ──

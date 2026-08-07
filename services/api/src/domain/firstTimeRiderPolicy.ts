@@ -1,3 +1,6 @@
+import { decideRiderExperiencePersist, resolveRiderExperienceLevel } from "./routeStateReducer.js";
+import type { FirstTimeRiderGuidanceParse } from "./llmDraft.js";
+
 /**
  * The dealer's FIRST-TIME-RIDER policy, read once.
  *
@@ -134,4 +137,34 @@ export function enrollmentSeatIsUnpaid(inquiry?: string | null): boolean {
   const status = hit?.[1] ? hit[1].trim().toLowerCase() : "";
   if (!status) return false;
   return /\b(failed|declined|unpaid|awaiting payment|payment due|not paid|pending payment)\b/.test(status);
+}
+
+/**
+ * Persist what this turn told us about the lead's riding experience — the ONE writer of
+ * `conv.riderExperience`, refereed by `decideRiderExperiencePersist` (monotonic; it refuses to
+ * demote an experienced rider). Reads the SAME two sources the reply side already uses: the typed
+ * first_time_rider_guidance parse, and the riding school's machine enrollment record.
+ *
+ * Called from applyFirstTimeRiderGuidanceState in index.ts so it inherits that function's three call
+ * sites —
+ * live twilio, regenerate, and the initial-ADF regenerate — rather than becoming a fourth writer
+ * someone has to keep in sync.
+ */
+export function applyRiderExperienceState(conv: any, parsed?: FirstTimeRiderGuidanceParse | null) {
+  const ridingHistory = readEnrollmentRidingHistory(conv?.lead?.inquiry);
+  const enrolledCourse = readEnrollmentCourseName(conv?.lead?.inquiry);
+  const observed = resolveRiderExperienceLevel({
+    riderIntent: parsed?.intent ?? null,
+    hasEndorsement: parsed?.hasEndorsement ?? null,
+    ridingHistory,
+    enrolledCourse
+  });
+  const decision = decideRiderExperiencePersist({
+    current: conv?.riderExperience ?? null,
+    observed,
+    // The enrollment record is a machine field; anything else came from the typed parse.
+    source: ridingHistory || enrolledCourse ? "enrollment" : "parser",
+    nowIso: new Date().toISOString()
+  });
+  if (decision.write) conv.riderExperience = decision.next;
 }

@@ -94,6 +94,12 @@ for (const fn of [
   "decideRidingAcademyTurn",
   "decideJumpstartInviteTurn",
   "resolveRiderExperienceLevel",
+  // Its `current` half IS stored (conv.riderExperience), but the half that decides the outcome —
+  // `observed` — comes straight from resolveRiderExperienceLevel above, which is listed here
+  // because it reads THIS turn's parser output. A referee whose deciding input cannot be rebuilt
+  // from a stored conversation cannot be sampled from one. Its decision table is pinned instead by
+  // rider_experience_persist:eval, including the never-demote-an-experienced-rider rule.
+  "decideRiderExperiencePersist",
   "decideReservationHandoffTurn",
   "decideStockNumberInterestTurn",
   "decidePriceAnswerAnchor",
