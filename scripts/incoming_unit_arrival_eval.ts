@@ -138,13 +138,22 @@ n += rows.length;
 }
 
 // --- 4) LLM coverage (gated; skips cleanly when the parser is disabled). ---
-const coverage: { seedText: string; expect: "arriving" | "already_here" | "none" }[] = [
+type ArrivalStatus = "arriving" | "already_here" | "none";
+// `expect` may list MORE THAN ONE acceptable status. That is not a loosening: `already_here` and
+// `none` both decline to arm a watch (see the decision table above — arm:false either way), so on a
+// sentence where the two readings are genuinely interchangeable the LABEL carries no customer-facing
+// difference and pinning it only buys flake. Measured 2026-08-07: the Low Rider S row below failed
+// roughly half the times it ran and red-lined two consecutive full gates on unrelated changes, which
+// is how a gate teaches people to re-run instead of read it.
+const coverage: { seedText: string; expect: ArrivalStatus | ArrivalStatus[] }[] = [
   // THE replay fixture. This is the one that must never come back.
   { seedText: ROBERT_NOTE, expect: "already_here" },
   {
+    // "we have on the floor today" reads as an inventory statement to one sampling and as scene-
+    // setting for a test-ride note to another. Both decline. What must never happen is `arriving`.
     seedText:
       "Customer test rode the Low Rider S we have on the floor today and asked about payment options on his way out.",
-    expect: "already_here"
+    expect: ["already_here", "none"]
   },
   // Genuine arrivals — the capability must survive the fix, or we have traded one miss for another.
   { seedText: "Interested in 2016 Freewheeler we are taking in on trade. His bike comes in next week.", expect: "arriving" },
@@ -154,15 +163,29 @@ const coverage: { seedText: string; expect: "arriving" | "already_here" | "none"
     expect: "arriving"
   }
 ];
+// A row may accept several statuses only when they AGREE about arming. "arriving" arms a watch;
+// "already_here" and "none" decline. Accepting "arriving" alongside a decline would let the original
+// miss — a watch armed for a bike already on the floor — back through this gate silently.
+for (const c of coverage) {
+  const accepted = Array.isArray(c.expect) ? c.expect : [c.expect];
+  if (accepted.length > 1) {
+    assert.ok(
+      !accepted.includes("arriving"),
+      `coverage row "${c.seedText.slice(0, 50)}…" accepts both an arming and a declining status — ` +
+        `that is not an ambiguity, it is the bug this eval exists to catch`
+    );
+  }
+}
+
 let ran = 0;
 for (const c of coverage) {
   const parsed = await parseIncomingUnitArrivalWithLLM({ seedText: c.seedText });
   if (!parsed) continue; // parser disabled / transient null — skip, don't red the gate
   ran += 1;
-  assert.equal(
-    parsed.status,
-    c.expect,
-    `"${c.seedText.slice(0, 60)}…" should read ${c.expect}, got ${parsed.status}`
+  const accepted = Array.isArray(c.expect) ? c.expect : [c.expect];
+  assert.ok(
+    accepted.includes(parsed.status as ArrivalStatus),
+    `"${c.seedText.slice(0, 60)}…" should read ${accepted.join(" or ")}, got ${parsed.status}`
   );
 }
 
