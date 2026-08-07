@@ -299,7 +299,14 @@ const CEILINGS: Ceiling[] = [
     // coerceWalkInOutcomeState in walkInInventoryWant.ts, set-based like its want sibling. That
     // paid for the three return-visit fields (Ed Szulist +17167255404) with room to spare — this
     // file was sitting EXACTLY on its ceiling, so the slot work had to fund itself.
-    max: 16_476,
+    // 16_476 -> 16_437. The customer-ack parser's 63 few-shot exemplars moved verbatim to
+    // domain/customerAckActionExemplars.ts — a static string corpus with no interpolation and no
+    // dependence on the turn, so it was never function-local in anything but position. Same shape
+    // as inboundReplyActionPrompt.ts and walkInInventoryWant.ts above: the prompt surface that
+    // grows every time we teach the parser a new case now grows on its own budget. That paid for
+    // `accept_offer_of_information` (+16076549423) and leaves the ceiling 39 lines lower than it
+    // was, not higher.
+    max: 16_437,
     note: "every parser prompt + JSON schema; second-largest and on the same trajectory"
   }
 ];
