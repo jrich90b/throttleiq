@@ -2326,6 +2326,19 @@ export type CustomerAckAction =
   // engaged leads sat in the booking funnel's `accepted_no_time` bucket — the single largest
   // recoverable gap between "offered a time" (136) and "booked" (41).
   | "accept_scheduling_ask"
+  // The customer said YES to OUR OWN offer to SEND or DO something that is not a visit:
+  // "I can check current incentives and send only what applies", "I can grab a few photos and
+  // text them over", "I can send a simple compare and next-step options."
+  // Measured 2026-08-07 against the replay regression on +16076549423 — our own offer of
+  // incentives drew "That would be great" and the turn produced NO draft; the thread then went
+  // ten days with nothing but cadence. Executed on current main, 4/4 stable in BOTH wrong
+  // directions: an offer of PHOTOS reads `no_response_needed` (we go silent on a yes), an offer
+  // of INCENTIVES or a COMPARE reads `accept_scheduling_ask` (we answer a request for
+  // information by proposing appointment times). The old rule collapsed every non-scheduling
+  // prior turn into "no response needed", which is only true when nothing was PENDING.
+  // Carries shouldReply=true, shouldBook=false, and deliberately routes nowhere special: it
+  // simply stops the two wrong gates from firing so the ordinary draft answers the thread.
+  | "accept_offer_of_information"
   | "ask_for_available_times"
   | "appointment_status_question"
   | "staff_availability_question"
@@ -3539,6 +3552,7 @@ const CUSTOMER_ACK_ACTION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
         "confirm_proposed_appointment",
         "accept_tentative_appointment",
         "accept_scheduling_ask",
+        "accept_offer_of_information",
         "ask_for_available_times",
         "appointment_status_question",
         "staff_availability_question",
@@ -5436,6 +5450,13 @@ export async function parseCustomerAckActionWithLLM(args: {
     'input: "Customer: Sounds good" history: "out: Just text me what day works and I\'ll get you on the schedule." output: {"action":"accept_scheduling_ask","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"last_outbound","normalized_text":"customer accepts coming in, no day or time named","confidence":0.93}',
     'input: "Customer: That would be great" history: "out: Want me to set up a time for you to come take a look at it?" output: {"action":"accept_scheduling_ask","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"last_outbound","normalized_text":"customer accepts coming in, no day or time named","confidence":0.93}',
     'input: "Customer: Yes" history: "out: We have the 250 Years of Freedom party Sat, July 18, 12-5PM. Want me to save you a spot?" output: {"action":"accept_scheduling_ask","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"july 18","time_text":"","time_window":"unknown"},"reference":"last_outbound","normalized_text":"customer accepts july 18, no time named","confidence":0.92}',
+    // ACCEPTING OUR OWN OFFER TO SEND SOMETHING — not a visit, and emphatically not a sign-off.
+    // The dividing line against the sign-off pairs below is whether the dealer COMMITTED or ASKED:
+    // "I'll get those photos over" is already promised and the yes adds nothing; "I can grab a few
+    // photos if you want" is waiting on exactly this yes, and going quiet strands the lead.
+    'input: "Customer: That would be great" history: "out: I can also check current incentives on the Street Glide Limited and send only what applies." output: {"action":"accept_offer_of_information","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"last_outbound","normalized_text":"customer accepts the offer to send current incentives","confidence":0.93}',
+    'input: "Customer: That would be great" history: "out: I can grab a few photos of that Street Glide and text them over if you want." output: {"action":"accept_offer_of_information","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"last_outbound","normalized_text":"customer accepts the offer to send photos","confidence":0.93}',
+    'input: "Customer: Yes please" history: "out: If helpful, I can send a simple compare and next-step options." output: {"action":"accept_offer_of_information","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"last_outbound","normalized_text":"customer accepts the offer to send a compare","confidence":0.92}',
     // CONTRAST PAIRS: identical words, non-scheduling outbound → still a sign-off.
     'input: "Customer: Sounds good" history: "out: I\'ll keep you posted as soon as it lands." output: {"action":"no_response_needed","explicit_action":false,"should_reply":false,"should_book":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.95}',
     'input: "Customer: Sounds great!" history: "out: No problem at all — I\'ll get those photos over to you shortly." output: {"action":"no_response_needed","explicit_action":false,"should_reply":false,"should_book":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.94}',
@@ -5509,7 +5530,9 @@ export async function parseCustomerAckActionWithLLM(args: {
     "- should_book=true only when the customer confirms a concrete slot/time already offered or staff explicitly said they will schedule it.",
     "- If the last dealer message only says 'can work' or 'if that works', set accept_tentative_appointment and should_book=false.",
     "- If the customer asks what time works, do not ask them for a time again; set ask_for_available_times.",
-    "- A BARE AFFIRMATIVE (\"Sounds great!\", \"Sounds good\", \"Sounds perfect\", \"That would be great\", \"Yes\", \"Perfect\", \"Ok\") carries NO meaning of its own — it is entirely determined by what the DEALER's previous message said. Read that message first, then pick in this order: (1) the dealer named a CONCRETE time or slot (\"I have Sat, May 9, 2:00 PM — does that work?\", \"Tuesday between 9:30 and 10:00\") => the customer is confirming THAT time: confirm_proposed_appointment (or accept_tentative_appointment when the dealer only said 'can work'/'if that works'), and carry the day + time into requested. (2) the dealer asked an OPEN scheduling question or offered to set something up WITHOUT naming a time (\"what day and time works best?\", \"text me what day works\", \"want me to set up a time?\", \"want me to save you a spot?\") => accept_scheduling_ask, should_reply=true, should_book=false, reference last_outbound; carry requested.day ONLY if the dealer's message named a day. (3) the dealer's message was NOT about scheduling at all (\"I'll keep you posted\", \"I'll get those photos over\", \"glad that works\") => no_response_needed.",
+    "- A BARE AFFIRMATIVE (\"Sounds great!\", \"Sounds good\", \"Sounds perfect\", \"That would be great\", \"Yes\", \"Perfect\", \"Ok\") carries NO meaning of its own — it is entirely determined by what the DEALER's previous message said. Read that message first, then pick in this order: (1) the dealer named a CONCRETE time or slot (\"I have Sat, May 9, 2:00 PM — does that work?\", \"Tuesday between 9:30 and 10:00\") => the customer is confirming THAT time: confirm_proposed_appointment (or accept_tentative_appointment when the dealer only said 'can work'/'if that works'), and carry the day + time into requested. (2) the dealer asked an OPEN scheduling question or offered to set something up WITHOUT naming a time (\"what day and time works best?\", \"text me what day works\", \"want me to set up a time?\", \"want me to save you a spot?\") => accept_scheduling_ask, should_reply=true, should_book=false, reference last_outbound; carry requested.day ONLY if the dealer's message named a day. (3) the dealer's message was not about scheduling but OFFERED to send or do something and was waiting on a yes (\"I can check current incentives and send only what applies\", \"I can grab a few photos and text them over if you want\", \"if helpful, I can send a simple compare\", \"want me to email the brochure?\") => accept_offer_of_information, should_reply=true, should_book=false, reference last_outbound; say in normalized_text WHAT they accepted. (4) the dealer's message was neither scheduling nor a pending offer — it already COMMITTED to the thing (\"I'll keep you posted\", \"I'll get those photos over\", \"I'll have the team confirm and send it\") or was pure acknowledgement (\"glad that works\", \"no problem at all\") => no_response_needed.",
+    "- Cases (3) and (4) turn on ONE question: did the dealer ASK or did the dealer COMMIT? \"I can send X if you want\" / \"want me to send X?\" is still waiting on the customer, so the yes is the trigger and going silent strands the lead => accept_offer_of_information. \"I'll send X\" is already promised, so the yes adds nothing => no_response_needed. When the dealer's message is genuinely both a commitment and an open offer, prefer accept_offer_of_information — answering an accepted offer is recoverable, silence is not.",
+    "- accept_offer_of_information is NEVER a visit. The customer accepted INFORMATION (incentives, photos, pricing sheets, a compare, a brochure, a video), not an invitation to come in — do not choose accept_scheduling_ask for it and do not carry a day or time.",
     "- accept_scheduling_ask NEVER applies when the dealer already named a concrete time — that is always case (1). Choosing accept_scheduling_ask there would throw away a booking the customer just agreed to.",
     "- If the customer asks whether an existing appointment is today/still on/confirmed, set appointment_status_question, not ask_for_available_times.",
     "- appointment_status_question is ONLY about whether/when the appointment stands. A question about what to BRING or how to PREPARE for it (\"should I bring the bike and cash?\", \"do I need my title/license?\") is a substantive question — set none so it gets a real answer, even though it mentions the appointment.",
@@ -5564,6 +5587,9 @@ export async function parseCustomerAckActionWithLLM(args: {
     rawAction === "confirm_proposed_appointment" ||
     rawAction === "accept_tentative_appointment" ||
     rawAction === "accept_scheduling_ask" ||
+    // Second whitelist between the strict schema and the result type — TRAP 1 of PR #535: a new
+    // enum value that is not listed here maps to "none" and the parse is silently thrown away.
+    rawAction === "accept_offer_of_information" ||
     rawAction === "ask_for_available_times" ||
     rawAction === "appointment_status_question" ||
     rawAction === "staff_availability_question" ||

@@ -590,5 +590,86 @@
       "should_reply": false,
       "should_book": false
     }
+  },
+  {
+    "id": "accept_offer_of_information_incentives_michael_16076549423",
+    "text": "That would be great",
+    "history": [
+      {
+        "direction": "out",
+        "body": "I can also check current incentives on the Street Glide Limited and send only what applies."
+      }
+    ],
+    "expected": {
+      "action": "accept_offer_of_information",
+      "should_reply": true,
+      "should_book": false,
+      "day_contains": null,
+      "time_contains": null
+    }
+  },
+  {
+    "id": "accept_offer_of_information_photos_if_you_want",
+    "text": "That would be great",
+    "history": [
+      {
+        "direction": "out",
+        "body": "I can grab a few photos of that Street Glide and text them over if you want."
+      }
+    ],
+    "expected": {
+      "action": "accept_offer_of_information",
+      "should_reply": true,
+      "should_book": false,
+      "day_contains": null,
+      "time_contains": null
+    }
+  },
+  {
+    "id": "accept_offer_of_information_compare_sheet",
+    "text": "Yes please",
+    "history": [
+      {
+        "direction": "out",
+        "body": "If helpful, I can send a simple compare and next-step options."
+      }
+    ],
+    "expected": {
+      "action": "accept_offer_of_information",
+      "should_reply": true,
+      "should_book": false,
+      "day_contains": null,
+      "time_contains": null
+    }
+  },
+  {
+    "id": "no_response_needed_dealer_already_committed_photos",
+    "text": "Sounds great!",
+    "history": [
+      {
+        "direction": "out",
+        "body": "No problem at all \u2014 I'll get those photos over to you shortly."
+      }
+    ],
+    "expected": {
+      "action": "no_response_needed",
+      "should_reply": false,
+      "should_book": false
+    }
+  },
+  {
+    "id": "no_response_needed_dealer_already_committed_keep_posted",
+    "text": "Sounds good",
+    "history": [
+      {
+        "direction": "out",
+        "body": "I'll keep you posted as soon as it lands."
+      }
+    ],
+    "expected": {
+      "action": "no_response_needed",
+      "should_reply": false,
+      "should_book": false
+    }
   }
 ]
