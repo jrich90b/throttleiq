@@ -157,12 +157,31 @@ await check("NO-OP GUARD: the price-fact section is untouched by this change", (
 
 // ---------------------------------------------------------------------------------------------
 // LLM arm — the only proof the judge ACTS on the rules. Votes, because verdicts are not
-// reproducible. The comparative assertion is the load-bearing one: absolute pass rates drift with
-// the model, but the judge must never prefer the draft that threw the appointment away.
+// reproducible.
+//
+// ⚠️ SAMPLE SIZE IS LOAD-BEARING, and 3 was too few. MEASURED 2026-08-07 with n=12 per draft on
+// clean `origin/main`: the times draft scores good 9/12 (75%), the channel-question draft 8/12
+// (67%). The judge does prefer the times draft — but by ~8 points, and at 3 samples a single vote
+// flip inverts the comparison. This eval therefore red-lined main on ONE RUN IN THREE (measured:
+// 3 consecutive runs of the unchanged file on 37fb69ff gave exit 0 / 1 / 0), blocking every
+// routine and every human on an eval that was measuring nothing but noise. It runs with plain
+// `tsx`, no retry wrapper, so a single unlucky sample was a red gate.
+//
+// The fix is sample size plus honest thresholds, NOT a weaker claim:
+//   - n=12 per draft, so the 75%-vs-67% signal survives sampling.
+//   - The times draft must clear a real majority (>= 7/12). A regression to a coin flip trips it;
+//     the measured 9/12 clears it with room.
+//   - It must NEVER be HELD. That is the DECISION the system branches on — a held draft is what
+//     the self-heal then rewrites into the version with the times deleted, which is the whole bug
+//     this file exists to guard. Measured 0 holds in 24 verdicts.
+//   - The comparison survives with a noise band of 2 votes. A systematic inversion (the judge
+//     genuinely preferring the stripped draft) still fails; a one-vote wobble no longer does.
 // ---------------------------------------------------------------------------------------------
 if (process.env.OPENAI_API_KEY && process.env.LLM_ENABLED === "1") {
   const { judgeDraftQualityWithLLM } = await import("../services/api/src/domain/llmDraft.js");
-  const SAMPLES = 3;
+  const SAMPLES = 12;
+  /** Measured jitter at n=12; a real preference inversion is far larger than this. */
+  const NOISE_BAND = 2;
 
   const vote = async (draft: string) => {
     const verdicts = await Promise.all(
@@ -180,22 +199,33 @@ if (process.env.OPENAI_API_KEY && process.env.LLM_ENABLED === "1") {
     return verdicts.map(v => (v ? v.overall : "null"));
   };
 
+  // One sample set, both claims — the comparison must be drawn from the SAME run, and re-voting
+  // the times draft a second time was pure cost and pure extra variance.
+  const timesVotes = await vote(CONCRETE_TIMES_DRAFT);
+  const channelVotes = await vote(CHANNEL_QUESTION_DRAFT);
+  const goodTimes = timesVotes.filter(v => v === "good").length;
+  const goodChannel = channelVotes.filter(v => v === "good").length;
+  const heldTimes = timesVotes.filter(v => v === "hold").length;
+  console.log(
+    `      votes(concrete times) = ${JSON.stringify(timesVotes)}\n` +
+      `      votes(channel question) = ${JSON.stringify(channelVotes)}`
+  );
+
   await check("LLM: the two-concrete-times draft PASSES — the form email no longer reads as a preference", async () => {
-    const votes = await vote(CONCRETE_TIMES_DRAFT);
-    const good = votes.filter(v => v === "good").length;
-    console.log(`      votes(concrete times) = ${JSON.stringify(votes)}`);
-    assert.ok(good >= 2, `a majority must pass the draft that offers real times; got ${JSON.stringify(votes)}`);
+    assert.ok(
+      goodTimes >= 7,
+      `a clear majority must pass the draft that offers real times; got ${goodTimes}/${SAMPLES}`
+    );
+  });
+
+  await check("LLM: the draft that offers real times is NEVER held — a held draft is what the self-heal rewrites", async () => {
+    assert.equal(heldTimes, 0, `the times draft was held ${heldTimes}/${SAMPLES} times: ${JSON.stringify(timesVotes)}`);
   });
 
   await check("LLM: the judge does NOT prefer the draft that deleted the times", async () => {
-    const timesVotes = await vote(CONCRETE_TIMES_DRAFT);
-    const channelVotes = await vote(CHANNEL_QUESTION_DRAFT);
-    const goodTimes = timesVotes.filter(v => v === "good").length;
-    const goodChannel = channelVotes.filter(v => v === "good").length;
-    console.log(`      votes(concrete times) = ${JSON.stringify(timesVotes)}  votes(channel question) = ${JSON.stringify(channelVotes)}`);
     assert.ok(
-      goodTimes >= goodChannel,
-      `the reply with real appointment times must not score below the one that removed them; ${goodTimes} vs ${goodChannel}`
+      goodTimes >= goodChannel - NOISE_BAND,
+      `the reply with real appointment times scored materially below the one that removed them; ${goodTimes} vs ${goodChannel} of ${SAMPLES}`
     );
   });
 } else {
