@@ -623,6 +623,48 @@ export function isShortAckNoReplyText(textRaw: string | null | undefined): boole
   );
 }
 
+/**
+ * The one question BOTH inbound paths ask before the lexical sign-off test above is allowed to
+ * end a turn: did the customer-ack parser read this as accepting something WE left pending?
+ *
+ * `isShortAckNoReplyText` stays exactly as it is — it is a KEEP-class safety gate (remove it and
+ * we fail toward answering every "thanks"). What it cannot do is look at OUR previous message,
+ * and a bare affirmative carries no meaning without it. So the parser outranks it in the cases it
+ * provably gets wrong, and nowhere else:
+ *  - `accept_scheduling_ask` — "Sounds great!" to "what day works?" (#535, 18 stranded leads).
+ *  - `accept_offer_of_information` — "That would be great" to "I can send current incentives"
+ *    (+16076549423, 2026-06-09). MEASURED 2026-08-07: recognising this in the parser alone was
+ *    INERT. Replayed on the parser branch the turn still produced NO draft, because this gate
+ *    fires on the word "great" and only exempted `accept_scheduling_ask`. The customer said yes
+ *    to our own offer and got ten days of cadence and nothing else.
+ *
+ * Deliberately a CLOSED list of parser actions, not a general "parser wins" rule: an unaccepted
+ * or absent parse leaves the word list in charge, which is the safe direction.
+ */
+export function parserAcceptanceOutranksShortAckSignOff(args: {
+  accepted: boolean;
+  action?: string | null;
+}): boolean {
+  if (!args.accepted) return false;
+  return args.action === "accept_scheduling_ask" || args.action === "accept_offer_of_information";
+}
+
+/**
+ * The whole gate, so BOTH inbound paths ask ONE function and neither can drift: should this turn
+ * end right here as a sign-off? Twilio only — the lexical test is SMS shorthand and was never
+ * meant for ADF or widget bodies, which is why both call sites already checked the provider.
+ */
+export function shouldEndTurnAsShortAckSignOff(args: {
+  provider?: string | null;
+  text?: string | null;
+  accepted: boolean;
+  action?: string | null;
+}): boolean {
+  if (args.provider !== "twilio") return false;
+  if (!isShortAckNoReplyText(args.text)) return false;
+  return !parserAcceptanceOutranksShortAckSignOff({ accepted: args.accepted, action: args.action });
+}
+
 export function shouldRebaseWeekdayReplyToPriorNextWeek(
   inboundTextRaw: string | null | undefined,
   lastOutboundTextRaw: string | null | undefined

@@ -16,10 +16,14 @@ import { strict as assert } from "node:assert";
 import fs from "node:fs";
 
 const llm = fs.readFileSync("services/api/src/domain/llmDraft.ts", "utf8");
+// The customer-ack parser's few-shot corpus lives in its own file (moved out verbatim so
+// llmDraft.ts could stay under the source_size_ratchet ceiling); the schema, the prompt rule and
+// the parse mapping stayed behind. Read each pin from wherever the thing it pins actually is.
+const exemplars = fs.readFileSync("services/api/src/domain/customerAckActionExemplars.ts", "utf8");
 assert.ok(llm.includes('"on_site",') && llm.includes('on_site: { type: "boolean" }'), "on_site is a REQUIRED strict-schema field");
 assert.ok(/on_site: true ONLY when the customer indicates they are physically AT the dealership/.test(llm), "prompt rule defines on_site");
-assert.ok(llm.includes('"on_site":true,"confidence":0.97'), "on-site few-shot carries on_site:true");
-assert.ok(llm.includes('"normalized_text":"today now","on_site":false'), "pre-arrival few-shot carries on_site:false");
+assert.ok(exemplars.includes('"on_site":true,"confidence":0.97'), "on-site few-shot carries on_site:true");
+assert.ok(exemplars.includes('"normalized_text":"today now","on_site":false'), "pre-arrival few-shot carries on_site:false");
 assert.ok(/onSite: !!parsed\.on_site/.test(llm), "parse mapping exposes onSite");
 
 const index = fs.readFileSync("services/api/src/index.ts", "utf8");
