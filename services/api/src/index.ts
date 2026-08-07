@@ -16,7 +16,7 @@ import sharp from "sharp";
 import { orchestrateInbound, evaluateTestRideInventoryGate, buildBlockedTestRideInventoryDraft } from "./domain/orchestrator.js";
 import { resolveWatchOptOutOutcome } from "./domain/watchOptOutTurn.js";
 import { resolveAdfFirstTouchAckKind, buildAdfFirstTouchAck, resolveEnrollmentAckExtras } from "./domain/ridingAcademy.js";
-import { readFirstTimeRiderPolicy, hasRiderCoursePublicInfo, readEnrollmentRidingHistory } from "./domain/firstTimeRiderPolicy.js";
+import { readFirstTimeRiderPolicy, hasRiderCoursePublicInfo, readEnrollmentRidingHistory, applyRiderExperienceState } from "./domain/firstTimeRiderPolicy.js";
 import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildRidingAcademyEnrollmentAck, buildJumpstartOneOnOneInvite, buildFirstTimeRiderBeginnerReply, buildWatchAvailableReply, buildCholoWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, resolveIntroducedOwnerFirstName, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, hasCustomerReceivedOutbound, hasRecentDeliveredHumanOutbound } from "./domain/agentVoice.js";
 import {
   postSaleVehicleIsNew,
@@ -27529,6 +27529,7 @@ function hasRiderCourseCustomerFacingInfo(dealerProfile: any): boolean {
 }
 
 function applyFirstTimeRiderGuidanceState(conv: any, parsed?: FirstTimeRiderGuidanceParse | null) {
+  applyRiderExperienceState(conv, parsed);
   if (parsed?.intent === "rider_course_info" || parsed?.asksRiderCourse) {
     setDialogState(conv, "rider_course_info");
     setFollowUpMode(conv, "active", "rider_course_info");

@@ -259,7 +259,12 @@ const CEILINGS: Ceiling[] = [
     // to the narrower predicate that replaces one of their uses, and isReachOutWhenReadyCloseText
     // moved to domain/dispositionReply.ts beside the goodbye builders whose output it matches.
     // Net -3 with the new human-mode closeout draft included.
-    max: 71_027,
+    // 71_027 -> 71_026. Persisting the rider-experience read (Joe asked for a list of customers who
+    // are not licensed yet). index.ts was sitting EXACTLY on the ceiling AGAIN, so the new state
+    // applier went straight into domain/firstTimeRiderPolicy.ts beside the enrollment-record readers
+    // it uses, rather than inline. index.ts pays one line for the call and nothing for the import —
+    // it already imported from that module — so the slice lands a line UNDER what it started at.
+    max: 71_026,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

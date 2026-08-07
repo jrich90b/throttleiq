@@ -33,6 +33,17 @@ export type MarketingListFilters = {
   activeWithinDays?: number | null;
   /** Closed leads are re-engagement candidates; default false = open leads only. */
   includeClosed?: boolean;
+  /**
+   * Durable riding-experience read (`conv.riderExperience`, written only by
+   * `decideRiderExperiencePersist`). "none_or_little" is the Riding-Academy / Jumpstart audience —
+   * people who cannot ride yet.
+   *
+   * A lead we have never read matches NEITHER value. That is deliberate: "we do not know" must not
+   * silently join the beginner list, because the standing fail-direction here is that calling an
+   * experienced rider a beginner insults a customer. The list stays SMALL when we are ignorant,
+   * exactly like every compliance exclusion above it.
+   */
+  riderExperience?: "none_or_little" | "experienced" | null;
 };
 
 export type MarketingListRow = {
@@ -163,6 +174,30 @@ function matchesCondition(conv: Conversation, condition: string): boolean {
   });
 }
 
+/**
+ * The name a human reading this list needs to see.
+ *
+ * WHY THIS IS NOT `lead.name` (measured 2026-08-07 on the live americanharley store): `lead.name`
+ * is populated on 563 of 822 conversations, while `firstName` is on 814 and `lastName` on 803. The
+ * list read `lead.name` alone, so roughly a THIRD of every list came out as bare phone numbers with
+ * no name beside them — including all four rows of the first real list a manager pulled (the Riding
+ * Academy audience: Maya, igor, Savannah, Donald all rendered `null`). Same fallback order the
+ * console itself already uses for a lead's display name (`index.ts`, the conversations list).
+ *
+ * Returns null only when we genuinely hold no name — the caller still shows the row, because a
+ * contactable lead with no name on file is a real lead, not a broken one.
+ */
+export function resolveMarketingListName(conv: Conversation): string | null {
+  const joined = [conv.lead?.firstName, conv.lead?.lastName]
+    .map(v => String(v ?? "").trim())
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  if (joined) return joined;
+  const legacy = String(conv.lead?.name ?? "").trim();
+  return legacy || null;
+}
+
 export function buildMarketingList(
   convs: Conversation[],
   opts: {
@@ -198,6 +233,7 @@ export function buildMarketingList(
   const sourceQuery = (filters.source ?? "").trim().toLowerCase();
   const condition = (filters.condition ?? "").trim();
   const windowDays = filters.activeWithinDays ?? null;
+  const riderExperience = (filters.riderExperience ?? "").trim() || null;
 
   let totalConsidered = 0;
   const rows: MarketingListRow[] = [];
@@ -225,6 +261,11 @@ export function buildMarketingList(
     if (windowDays != null) {
       const inboundMs = parseMs(inboundAt);
       if (inboundMs == null || nowMs - inboundMs > windowDays * 86_400_000) continue;
+    }
+    // Riding experience: an EXACT match on the stored read. A lead we have never read has no
+    // `riderExperience` and therefore matches neither value — never-read is not "beginner".
+    if (riderExperience && String((conv as any).riderExperience?.level ?? "") !== riderExperience) {
+      continue;
     }
 
     // ── Compliance exclusions — order is law (see header). Each row counts ONCE. ──
@@ -261,7 +302,7 @@ export function buildMarketingList(
     rows.push({
       convId: conv.id,
       leadKey: conv.leadKey || conv.id,
-      name: conv.lead?.name ?? null,
+      name: resolveMarketingListName(conv),
       phone,
       email,
       source,
