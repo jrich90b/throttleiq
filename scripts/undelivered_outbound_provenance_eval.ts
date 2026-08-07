@@ -129,7 +129,18 @@ for (const call of directHuman) {
       `that skipped the wrapper — use appendUndeliveredOutbound instead: ${call.slice(0, 90)}`
   );
 }
-assert.ok(directHuman.length >= 2, "the two genuine console-send sites remain direct");
+// CORRECTED 2026-08-07. This pin used to read `directHuman.length >= 2, "the two genuine
+// console-send sites remain direct"` — but neither of those two sites is a genuine send. Both are
+// FAILURE paths in POST /conversations/:id/send: one when Twilio credentials are missing, one in
+// the catch when the send throws. Calling them "genuine" is what left them unstamped, and on
+// 2026-08-07 Maya Iversen had a message in her thread she never received. Both now go through
+// recordFailedManualSend, so no direct provider-"human" append should remain here at all.
+assert.equal(
+  directHuman.length,
+  0,
+  `every provider-"human" append in the send handler is a FAILURE path and must go through ` +
+    `recordFailedManualSend; found ${directHuman.length} direct`
+);
 
 const sendgrid = fs.readFileSync("services/api/src/routes/sendgridInbound.ts", "utf8");
 assert.ok(
