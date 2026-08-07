@@ -117,13 +117,16 @@ const trans = (introduce: boolean) =>
   });
 
 ok(trans(true).includes("it's Alexandra over at American Harley-Davidson"), "first contact introduces the agent");
-ok(trans(true).includes("I'm your contact here"), "and says who to talk to");
-// Joe, 2026-08-07: "If it's a 2nd touch it should not say I'm your contact again."
-ok(!trans(false).includes("I'm your contact"), "a genuine second touch does NOT re-introduce");
-ok(!trans(false).includes("over at American Harley-Davidson"), "and does not re-announce the dealership");
+// Joe, 2026-08-07, twice over: "If it's a 2nd touch it should not say I'm your contact again", and
+// "We already told her the agent is her contact - maybe just say I'm here if you need anything."
+// This message ONLY ever follows a wait-list ack, which already carries the role sentence in full, so
+// the light line replaces it in BOTH variants — not only when the intro is suppressed.
+ok(!trans(false).includes("over at American Harley-Davidson"), "a second touch does not re-announce the dealership");
 ok(trans(false).startsWith("Hey Maya, good news"), "it still opens warmly, lower-case after the comma");
 for (const introduce of [true, false]) {
   const t = trans(introduce);
+  ok(!t.includes("I'm your contact"), "never repeats the contact-role sentence the wait-list ack already sent");
+  ok(t.includes("I'm here if you need anything."), "says the light line Joe chose instead");
   ok(t.includes("a seat opened up and you're registered"), "the news is that the wait ended");
   ok(t.includes("the New Rider Course starting 8/15/2026"), "names the class and date off the record");
   ok(t.includes(NOTE), "carries the dealer's e-course sentence — the same registration moment");

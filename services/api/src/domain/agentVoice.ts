@@ -695,7 +695,13 @@ export function buildRidingAcademyWaitlistToEnrolledAck(
   const opener = introduce
     ? `${buildAgentIntro(firstName, agentName, dealerName)}Good news - `
     : `${buildAgentGreeting(greetName)}good news - `;
-  const contact = introduce ? " I'm your contact here for anything to do with the course." : "";
+  // Joe, 2026-08-07: "We already told her the agent is her contact - maybe just say I'm here if you
+  // need anything." By construction this message only ever follows a wait-list ack, and that ack
+  // already carries "I'm your contact here for anything to do with the course" in full. Repeating the
+  // ROLE is the same over-explaining as repeating the introduction, so the light line is used in BOTH
+  // variants — including the introduce path, where the name and dealership are new but the role
+  // sentence would still be a repeat.
+  const contact = " I'm here if you need anything.";
 
   return `${opener}a seat opened up and you're registered for ${classPhrase}.${contact}${note ? ` ${note}` : ""}`;
 }
