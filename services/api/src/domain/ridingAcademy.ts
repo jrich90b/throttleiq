@@ -24,6 +24,8 @@ import {
 import {
   buildRidingAcademyEnrollmentAck,
   buildRidingAcademyWaitlistAck,
+  buildRidingAcademyWaitlistToEnrolledAck,
+  buildRidingAcademyCompletionAck,
   buildNonBuyerSurveyAck,
   buildJumpstartOneOnOneInvite,
   buildJumpstartRegistrationInvite,
@@ -40,8 +42,48 @@ import {
 export type AdfFirstTouchAckKind =
   | "riding_academy_enrollment_ack"
   | "riding_academy_waitlist_ack"
+  | "riding_academy_waitlist_to_enrolled_ack"
+  | "riding_academy_completion_ack"
+  | "riding_academy_unknown_status"
   | "non_buyer_survey_ack"
   | "none";
+
+/**
+ * The status the school last told us this person was in — read off the PREVIOUS enrollment record on
+ * the thread, never off anything the customer wrote. `decideRidingAcademyTurn` needs it to tell "you
+ * are enrolled" (a first record) from "a seat opened up" (wait list, then enrolled), and it has to be
+ * supplied by the caller so the reducer stays pure.
+ *
+ * The lead's own `source`/`inquiry` are overwritten by the NEWEST record, so this history exists only
+ * in the message rows. Walks the inbound ADF rows and returns the most recent status that is not the
+ * record being answered right now.
+ */
+export function readPriorRidingAcademyStatus(input: {
+  messages?: unknown;
+  excludeProviderMessageId?: string | null;
+}): string | null {
+  const rows = Array.isArray(input?.messages) ? (input.messages as any[]) : [];
+  const exclude = String(input?.excludeProviderMessageId ?? "").trim();
+  const adfs = rows.filter(
+    m =>
+      m?.direction === "in" &&
+      String(m?.provider ?? "") === "sendgrid_adf" &&
+      String(m?.body ?? "").trim()
+  );
+  // Drop the record being answered: by id when we have one, otherwise the newest row (the event is
+  // appended before the draft is composed).
+  const prior = exclude
+    ? adfs.filter(m => String(m?.providerMessageId ?? "") !== exclude)
+    : adfs.slice(0, -1);
+  for (let i = prior.length - 1; i >= 0; i -= 1) {
+    const body = String(prior[i]?.body ?? "");
+    const recorded = body.match(/\benrollment status:\s*([^-\n]+)/i);
+    if (recorded?.[1]) return recorded[1].trim().toLowerCase();
+    const suffix = body.match(/\briding academy\s*[-–]\s*(.+)$/im);
+    if (suffix?.[1]) return suffix[1].trim().toLowerCase();
+  }
+  return null;
+}
 
 /**
  * The shared "this regen target is the ADF FIRST touch" predicate: the event being regenerated is
@@ -80,8 +122,15 @@ export function resolveAdfFirstTouchAckKind(input: {
     isAdfFirstTouchRegen({ provider: input.provider, messages: input.messages }) &&
     String(input.eventPromoKind ?? "") !== "event_promo_ack";
   if (!isAdfFirstTouch) return { isAdfFirstTouch, kind: "none" };
-  const academy = decideRidingAcademyTurn({ leadSource: input.leadSource, inquiry: input.inquiry });
-  if (academy.kind === "riding_academy_enrollment_ack" || academy.kind === "riding_academy_waitlist_ack") {
+  const academy = decideRidingAcademyTurn({
+    leadSource: input.leadSource,
+    inquiry: input.inquiry,
+    // A SECOND record from the school is news about her status, not a customer reply — so the
+    // transition (wait list -> a seat) has to be visible here too, or regen would answer Maya's
+    // "Enrolled" notice as if it were her first.
+    priorStatus: readPriorRidingAcademyStatus({ messages: input.messages })
+  });
+  if (academy.kind !== "none") {
     return { isAdfFirstTouch, kind: academy.kind };
   }
   if (
@@ -105,8 +154,24 @@ export function buildAdfFirstTouchAck(
     unpaidSeatLine?: string;
     course?: string | null;
     startDate?: string | null;
+    /** False once the customer has genuinely RECEIVED something from us (Joe, 2026-08-07). */
+    introduce?: boolean;
   }
 ): string {
+  if (kind === "riding_academy_waitlist_to_enrolled_ack") {
+    return buildRidingAcademyWaitlistToEnrolledAck(args.firstName, args.agentName, args.dealerName, {
+      course: args.course,
+      startDate: args.startDate,
+      registrationNote: args.registrationNote,
+      introduce: args.introduce
+    });
+  }
+  if (kind === "riding_academy_completion_ack") {
+    return buildRidingAcademyCompletionAck(args.firstName, args.agentName, args.dealerName, {
+      course: args.course,
+      introduce: args.introduce
+    });
+  }
   if (kind === "riding_academy_enrollment_ack") {
     return buildRidingAcademyEnrollmentAck(args.firstName, args.agentName, args.dealerName, {
       registrationNote: args.registrationNote,

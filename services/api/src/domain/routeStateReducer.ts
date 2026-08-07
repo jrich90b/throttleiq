@@ -3237,20 +3237,43 @@ export function decideNonBuyerSurveyTurn(input: NonBuyerSurveyTurnInput): NonBuy
 // comprehension — there is no customer prose on this lead to comprehend. Applied at the INITIAL ADF
 // draft only (both paths); once the person actually texts back, normal routing answers them.
 //
-// STRICT ON PURPOSE: only a status that reads `enrolled` diverts. A "Riding Academy" lead with any
-// other status (a completion, a cancellation, a waitlist) returns `none` and routes normally —
-// course COMPLETIONS have their own copy still to be written and none has ever arrived, so guessing
-// a fingerprint we have never seen is worse than leaving it alone. FAIL DIRECTION: a false negative
-// keeps today's behaviour; a false positive costs one over-warm opener that makes no availability
-// claim, no price claim and no close.
+// THE STATUS VOCABULARY IS CLOSED, AND WE HAVE IT (Joe's Lead Source List 8.15, confirmed against
+// services/api/data/lead_sources/hdmc.json — the same file dealer_onboard.sh copies to every new
+// dealer). H-D files exactly three rider-training sources:
+//   2843  RIDING ACADEMY - ENROLLED
+//   2844  RIDING ACADEMY - COMPLETE
+//   2978  Riding Academy - Wait List
+// The older note here said completions "have their own copy still to be written ... none has ever
+// arrived", and routed them to `none`. That was true when written and is not any more: Joe chose the
+// copy on 2026-08-07 (congratulate, and stop — no pitch, no price, no model ask).
+//
+// FALLING THROUGH TO `none` IS NOT NEUTRAL, which is the correction this revision makes. `none` hands
+// the turn to generic SALES routing. Maya Iversen (+15854782032) moved wait list -> Enrolled on
+// 2026-08-07 and the second record, never reaching this lane at all, was answered with "I can ballpark
+// payments once I confirm the exact price. If you'd like to stop in, what day and time works best?" —
+// to someone whose own form says she has never been on a motorcycle, even as a passenger. So an
+// unrecognised status now returns `riding_academy_unknown_status`: stay quiet and raise a task, never
+// guess and never sell. FAIL DIRECTION: silence + a human, which is recoverable; a sales pitch to
+// someone who just cancelled a course is not.
 export type RidingAcademyTurnKind =
   | "riding_academy_enrollment_ack"
   | "riding_academy_waitlist_ack"
+  /** Wait list -> a seat. The school files a SECOND record; this is the "you're in" turn. */
+  | "riding_academy_waitlist_to_enrolled_ack"
+  /** They finished the course (source 2844). Joe 2026-08-07: congratulate, and stop. */
+  | "riding_academy_completion_ack"
+  /** On this lane, status word unknown. Silence + a staff task — never generic sales routing. */
+  | "riding_academy_unknown_status"
   | "none";
 
 export type RidingAcademyTurnInput = {
   leadSource?: string | null;
   inquiry?: string | null;
+  /**
+   * The status this thread was ALREADY in, from the school's previous record — not from anything the
+   * customer said. Supplied by the caller so this stays pure. Absent = no prior record = first touch.
+   */
+  priorStatus?: string | null;
 };
 
 export type RidingAcademyTurnDecision = { kind: RidingAcademyTurnKind };
@@ -3265,23 +3288,39 @@ function readRidingAcademyStatus(input: RidingAcademyTurnInput): string {
   return suffix?.[1] ? suffix[1].trim().toLowerCase() : "";
 }
 
+/** Is this status word the wait list? Shared so the current and prior reads cannot drift. */
+function isWaitListStatus(status: string): boolean {
+  return /^(wait|waitlist)/.test(String(status ?? "").replace(/[\s_-]+/g, ""));
+}
+
 export function decideRidingAcademyTurn(input: RidingAcademyTurnInput): RidingAcademyTurnDecision {
   const source = String(input.leadSource ?? "").toLowerCase();
   const hasEnrollmentRecord = /\benrollment status:\s*/i.test(String(input.inquiry ?? ""));
   // Must be THIS lane: the rider-training source, or the school's enrollment record in the body.
   if (!source.includes("riding academy") && !hasEnrollmentRecord) return { kind: "none" };
   const status = readRidingAcademyStatus(input);
-  if (status.startsWith("enrolled")) return { kind: "riding_academy_enrollment_ack" };
+
+  if (status.startsWith("enrolled")) {
+    // A seat, after being wait-listed, is its own moment — the news IS that the wait ended. Keyed off
+    // the school's PREVIOUS record, never off anything the customer wrote.
+    return isWaitListStatus(String(input.priorStatus ?? ""))
+      ? { kind: "riding_academy_waitlist_to_enrolled_ack" }
+      : { kind: "riding_academy_enrollment_ack" };
+  }
   // WAIT LIST is its own state, not a near-enrollment (igor yuzbashev, 2026-08-06). Falling through
   // to `none` handed the turn to the generic ADF path, which read the form's FIELD LABELS
   // ("Motivation: Learn to ride", "Training Experience: No") as a Jumpstart request and told him
   // "I saw you want to do the Jumpstart experience before the course" — a claim he never made — while
   // never mentioning that he has no seat yet. He is owed the truth about his status; the Jumpstart
   // stays available as an OFFER on the reply side.
-  if (/^(wait|waitlist)/.test(status.replace(/[\s_-]+/g, ""))) {
-    return { kind: "riding_academy_waitlist_ack" };
-  }
-  return { kind: "none" };
+  if (isWaitListStatus(status)) return { kind: "riding_academy_waitlist_ack" };
+  // Source 2844. Joe, 2026-08-07, choosing between three drafted options: congratulate and STOP.
+  // No pitch, no price, no "which model" — they just spent five days with the instructors and the
+  // dealership's first word to them should not be a sale.
+  if (status.startsWith("complete")) return { kind: "riding_academy_completion_ack" };
+  // On the lane, unknown word (a cancellation, a transfer, a status H-D adds later) — or no status at
+  // all. Never generic sales routing; see the header.
+  return { kind: "riding_academy_unknown_status" };
 }
 
 // JUMPSTART 1-on-1 invite (Joe, 2026-08-05). The H-D Jumpstart is a real bike locked onto a

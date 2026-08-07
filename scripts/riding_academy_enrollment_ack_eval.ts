@@ -270,17 +270,25 @@ const index = fs.readFileSync("services/api/src/index.ts", "utf8");
 const sendgrid = fs.readFileSync("services/api/src/routes/sendgridInbound.ts", "utf8");
 const store = fs.readFileSync("services/api/src/domain/conversationStore.ts", "utf8");
 
-// Live intake (this is the lane these actually arrive on): decided from BOTH structured fields,
-// gated to the first touch, and it is what sets the draft.
+// Live intake (this is the lane these actually arrive on): decided from BOTH structured fields, and
+// it is what sets the draft.
+//
+// RE-PINNED 2026-08-07, deliberately. The gate was `isInitialAdf` and the shape asserted here was an
+// inline `decideRidingAcademyTurn({...}).kind === "riding_academy_enrollment_ack"`. `isInitialAdf` is
+// false as soon as ANY outbound exists, so the school's SECOND record (wait list -> Enrolled) never
+// reached this branch and Maya Iversen (+15854782032) was answered with a payments question. The lane
+// now opens on `isAdfFirstTouchRegen` — "has the CUSTOMER replied yet" — which is the guard the
+// comment always described and the one the regen path already used, so this also closes a two-path
+// drift. Full behaviour pinned by scripts/riding_academy_status_lane_eval.ts.
 assert.ok(
-  /decideRidingAcademyTurn\(\{\s*leadSource: conv\.lead\?\.source,\s*inquiry: effectiveInquiry\s*\}\)\.kind === "riding_academy_enrollment_ack"/.test(
-    sendgrid
-  ),
+  /decideRidingAcademyTurn\(\{\s*leadSource: conv\.lead\?\.source,\s*inquiry: effectiveInquiry,/.test(sendgrid),
   "live intake must decide from the lead source AND the enrollment record, by exact call shape"
 );
 assert.ok(
-  /isInitialAdf/.test(sendgrid) && /draft = buildRidingAcademyEnrollmentAck\(/.test(sendgrid),
-  "live intake must override the initial-ADF draft with the enrollment ack, first touch only"
+  /const ridingAcademyLaneOpen =\s*\n\s*isAdfFirstTouchRegen\(/.test(sendgrid) &&
+    /ridingAcademyTurn\.kind === "riding_academy_enrollment_ack"/.test(sendgrid) &&
+    /draft = buildAdfFirstTouchAck\(ridingAcademyTurn\.kind,/.test(sendgrid),
+  "live intake must override the draft with the enrollment ack, gated on the customer not having replied"
 );
 // Regen twin: same decision, gated to an ADF first touch with no customer SMS reply yet. The gate
 // and the reply choice live in domain/ridingAcademy.ts (the source-size ratchet keeps new logic out
@@ -297,7 +305,7 @@ assert.ok(
   // `decideRidingAcademyTurn(...).kind === "riding_academy_enrollment_ack"` as one adjacent
   // expression, and broke when the wait-list branch (2026-08-06) hoisted the call into a local. A
   // pin that fails on a refactor it does not care about trains people to loosen pins.
-  /decideRidingAcademyTurn\(\{ leadSource: input\.leadSource, inquiry: input\.inquiry \}\)/.test(adfFirstTouch) &&
+  /decideRidingAcademyTurn\(\{\s*leadSource: input\.leadSource,\s*inquiry: input\.inquiry,/.test(adfFirstTouch) &&
     /"riding_academy_enrollment_ack"/.test(adfFirstTouch) &&
     /buildRidingAcademyEnrollmentAck\(args\.firstName, args\.agentName, args\.dealerName, \{/.test(adfFirstTouch),
   "the shared resolver must decide from the reducer and build the approved enrollment copy"

@@ -650,6 +650,90 @@ export function buildRidingAcademyWaitlistAck(
   return `${intro}${body}${jumpstart ? ` ${jumpstart}` : ""}`;
 }
 
+/**
+ * THE WAIT ENDED — wait list -> a seat (Joe, 2026-08-07). The school files a SECOND enrollment
+ * record when someone moves off the wait list, and until now that record never reached this lane at
+ * all: the Riding Academy branch ran on the FIRST record only, so Maya Iversen's "Enrolled" notice
+ * fell through to generic sales routing and drafted her *"I can ballpark payments once I confirm the
+ * exact price. If you'd like to stop in, what day and time works best?"* — to someone whose own form
+ * says she has never been on a motorcycle, even as a passenger.
+ *
+ * THE INTRO IS CONDITIONAL, and that is Joe's rule twice over. 2026-08-07: *"If it's a 2nd touch it
+ * should not say I'm your contact again."* 2026-07-16, on the same question: key the intro off what
+ * the customer has actually RECEIVED, not off what we drafted — a draft nobody sent means they have
+ * never heard of us. Both point the same way; the caller passes `introduce` from
+ * `hasCustomerReceivedOutbound`. Maya is exactly why the distinction matters: her wait-list text
+ * FAILED to send (#586), so her "second" touch is really her first hello.
+ *
+ * The e-course sentence rides along from the dealer profile, same as the plain registration reply —
+ * this is the same "you're registered" moment, so the same note applies. Blank profile ⇒ absent.
+ */
+export function buildRidingAcademyWaitlistToEnrolledAck(
+  firstName: string | null | undefined,
+  agentName: string,
+  dealerName: string,
+  extras: {
+    course?: string | null;
+    startDate?: string | null;
+    registrationNote?: string;
+    introduce?: boolean;
+  } = {}
+): string {
+  const course = String(extras.course ?? "").trim();
+  const startDate = String(extras.startDate ?? "").trim();
+  const note = String(extras.registrationNote ?? "").trim();
+  const introduce = extras.introduce !== false;
+  const greetName = firstNameCollidesWithAgentName(firstName, agentName) ? null : firstName;
+
+  // Same honesty rule as the wait-list ack: name the class only when the record named it.
+  const classPhrase = course
+    ? startDate
+      ? `the ${course} starting ${startDate}`
+      : `the ${course}`
+    : "the Riding Academy";
+
+  const opener = introduce
+    ? `${buildAgentIntro(firstName, agentName, dealerName)}Good news - `
+    : `${buildAgentGreeting(greetName)}good news - `;
+  const contact = introduce ? " I'm your contact here for anything to do with the course." : "";
+
+  return `${opener}a seat opened up and you're registered for ${classPhrase}.${contact}${note ? ` ${note}` : ""}`;
+}
+
+/**
+ * THEY FINISHED (source 2844, RIDING ACADEMY - COMPLETE). Joe chose this shape on 2026-08-07 from
+ * three options: **congratulate, and stop.** No pitch, no price, no "which model", no stop-in push.
+ *
+ * That restraint is the point, not an oversight. A course completion is the strongest buying signal
+ * this lane produces — a newly licensed rider with no bike — and the temptation is to open with a
+ * sale. Joe's call is that the dealership's first word after five days with its instructors is
+ * congratulations. The door stays open; nothing is asked for. Same conditional intro as above.
+ */
+export function buildRidingAcademyCompletionAck(
+  firstName: string | null | undefined,
+  agentName: string,
+  dealerName: string,
+  extras: { course?: string | null; introduce?: boolean } = {}
+): string {
+  const course = String(extras.course ?? "").trim();
+  const introduce = extras.introduce !== false;
+  const greetName = firstNameCollidesWithAgentName(firstName, agentName) ? null : firstName;
+  const what = course ? `the ${course}` : "the Riding Academy";
+
+  // `buildAgentGreeting` ends in a COMMA ("Hey Maya, "), so the sentence that follows it has to start
+  // lower-case or the message reads "Hey Maya, Congratulations…". The intro path ends in a full stop
+  // ("…over at American Harley-Davidson. ") and takes the capital.
+  const opener = introduce
+    ? buildAgentIntro(firstName, agentName, dealerName)
+    : buildAgentGreeting(greetName);
+  const congrats = introduce ? "Congratulations" : "congratulations";
+  const contact = introduce
+    ? " I'm your contact here if anything comes up."
+    : " Anything you need, just text me.";
+
+  return `${opener}${congrats} on finishing ${what} - that's a real accomplishment.${contact}`;
+}
+
 export function buildRidingAcademyEnrollmentAck(
   firstName: string | null | undefined,
   agentName: string,
