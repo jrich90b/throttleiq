@@ -51,13 +51,19 @@ assert.match(
 );
 
 // ── Parser few-shot pin: the bare/compact concrete-time proposal must carry the offered day.
+// The customer-ack few-shot corpus lives in its own file now (moved verbatim so llmDraft.ts could
+// stay under its source_size_ratchet ceiling); the wiring pins above still read llmDraft.ts.
+const ackExemplars = await fs.readFile(
+  path.resolve("services/api/src/domain/customerAckActionExemplars.ts"),
+  "utf8"
+);
 assert.match(
-  draftSource,
+  ackExemplars,
   /Customer: Can I come at 12 1230/,
   "customer-ack parser must have a few-shot for the bare/compact time proposal"
 );
 assert.match(
-  draftSource,
+  ackExemplars,
   /"normalized_text":"friday 12:30"/,
   "that few-shot must normalize the proposal to a carried day + time (friday 12:30)"
 );
