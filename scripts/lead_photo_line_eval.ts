@@ -169,14 +169,59 @@ ok(
   "the route no longer builds the sentence itself — one place owns the copy"
 );
 
+// ---------------------------------------------------------------------------
+// PART 4 — ADDRESSING SOMEONE BY NAME IS ALSO A GREETING (this fix tripping over itself).
+//
+// The colour-correction copy Part 2 introduced opens "Michael — one correction on my last note".
+// No hi/hey/hello, so the detector above missed it and the layout stacked a greeting anyway:
+// "Hi Michael,\n\nMichael — one correction…" went to +17165481952 at 2026-08-07T13:04:33Z, NINE
+// MINUTES after the 12:55Z deploy that was meant to end doubled greetings. Executed, not grepped.
+// ---------------------------------------------------------------------------
+{
+  const correction = formatEmailLayout(
+    "Michael — one correction on my last note: we don't have the Aurora Blue Denim Low Rider S on the floor.",
+    { firstName: "Michael", fallbackName: "there" }
+  );
+  ok(
+    !/^Hi Michael,\s*\n+\s*Michael\b/i.test(correction),
+    "a body that already addresses the customer by name must not get a second greeting stacked on it"
+  );
+  ok(correction.startsWith("Michael —"), "the composer's own opening is kept, not rewritten");
+
+  const commaForm = formatEmailLayout("Michael, one correction on my last note.", {
+    firstName: "Michael",
+    fallbackName: "there"
+  });
+  ok(!/^Hi Michael,\s*\n+\s*Michael,/i.test(commaForm), "the comma form is addressed too");
+
+  // FAIL DIRECTION: only the EXACT name we were about to greet with counts, and only when it is
+  // followed by a comma or a dash. Anything else still gets a greeting — today's behaviour.
+  for (const [body, why] of [
+    ["Michelle, here is that quote.", "a DIFFERENT name is not this customer being addressed"],
+    ["Michaels are great bikes for that.", "the name inside another word is not an address"],
+    ["Thanks for reaching out about the Low Rider S.", "a body with no opening name still gets one"]
+  ] as const) {
+    const out = formatEmailLayout(body, { firstName: "Michael", fallbackName: "there" });
+    ok(out.startsWith("Hi Michael,"), why);
+  }
+  // With no real name there is nothing to match, so the fallback greeting must still appear.
+  ok(
+    formatEmailLayout("there — here is that quote.", { firstName: "", fallbackName: "there" }).startsWith(
+      "Hi there,"
+    ),
+    "the 'there' fallback is not a name and must never suppress the greeting"
+  );
+}
+
 const tone = fs.readFileSync(path.join(here, "../services/api/src/domain/tone.ts"), "utf8");
 ok(
   /EMAIL_BODY_OPENS_WITH_GREETING\s*=\s*\/\^\(hi\|hey\|hello\|hiya\)/i.test(tone),
   "the greeting detector recognises hey/hiya, not just hi/hello"
 );
 ok(
-  tone.includes("if (!EMAIL_BODY_OPENS_WITH_GREETING.test(out)) {"),
-  "and formatEmailLayout actually consults it"
+  tone.includes("EMAIL_BODY_OPENS_WITH_GREETING.test(out)") &&
+    tone.includes("emailBodyOpensByAddressing(out, greetingName)"),
+  "and formatEmailLayout consults BOTH openings before prepending"
 );
 
 console.log(`lead_photo_line_eval: PASS (${n} assertions)`);

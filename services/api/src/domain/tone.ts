@@ -470,6 +470,27 @@ export function formatSmsLayout(text: string): string {
  */
 const EMAIL_BODY_OPENS_WITH_GREETING = /^(hi|hey|hello|hiya)\b\s*(?:,|[^,\n]{1,60},)/i;
 
+/**
+ * ADDRESSING SOMEONE BY NAME IS ALSO A GREETING, even with no greeting word in front of it.
+ *
+ * Measured 2026-08-07, and it is the fix above tripping over itself: the colour-correction copy
+ * that shipped with it opens *"Michael — one correction on my last note…"*. No hi/hey/hello, so
+ * the test above failed and the layout stacked another greeting on top —
+ * *"Hi Michael,\n\nMichael — one correction…"* went out to +17165481952 at 13:04Z, nine minutes
+ * after the deploy that was supposed to have ended doubled greetings.
+ *
+ * Deliberately narrow: only the EXACT name we were about to greet with counts, and only when it
+ * is followed by a comma or a dash. Any other opening still gets a greeting prepended, which is
+ * today's behaviour — an email that reads slightly abrupt is a far smaller failure than one that
+ * says the customer's name twice in two lines.
+ */
+function emailBodyOpensByAddressing(body: string, name: string): boolean {
+  const addressed = String(name ?? "").trim();
+  if (!addressed || addressed.toLowerCase() === "there") return false;
+  const escaped = addressed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^${escaped}\\s*(?:,|[—-])\\s`, "i").test(body);
+}
+
 export function formatEmailLayout(
   text: string,
   opts?: {
@@ -483,7 +504,10 @@ export function formatEmailLayout(
   const fallbackName = firstToken(opts?.fallbackName ?? "there");
   const greetingName = preferredName !== "there" ? preferredName : fallbackName;
   out = out.replace(/^Hi\s+([^—,\n]+)\s*[—-]\s*/i, (_m, name) => `Hi ${String(name).trim()},\n\n`);
-  if (!EMAIL_BODY_OPENS_WITH_GREETING.test(out)) {
+  if (
+    !EMAIL_BODY_OPENS_WITH_GREETING.test(out) &&
+    !emailBodyOpensByAddressing(out, greetingName)
+  ) {
     out = `Hi ${greetingName},\n\n${out}`;
   }
   out = out.replace(/\n{3,}/g, "\n\n");
