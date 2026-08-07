@@ -5,10 +5,68 @@
  * exclusion fails toward a SMALLER list. Clock pinned; this eval never spends an LLM call.
  */
 import assert from "node:assert/strict";
-
-const { buildMarketingList } = await import("../services/api/src/domain/marketingLists.ts");
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 const nowMs = Date.parse("2026-08-05T15:00:00.000Z");
+
+// ── Seed the conversation store BEFORE anything imports it. ──
+// The endpoint assertions near the bottom call the real handler, which reads the real store via
+// getAllConversations(). conversationStore resolves CONVERSATIONS_DB_PATH into a module-scope const
+// at LOAD, and marketingLists pulls it in transitively — so setting the path later has no effect and
+// the endpoint ran against an EMPTY store. Every "no touring bike survives the exclusion" assertion
+// was then trivially true on zero rows. MEASURED 2026-08-08: 0 rows in, 0 rows out, sabotage
+// undetected. Two leads — one touring, one not — so the exclusion has something to remove AND
+// something to keep.
+const ENDPOINT_STORE_PATH = path.join(os.tmpdir(), `copilot-marketing-list-eval-${process.pid}.json`);
+const endpointSeedConv = (n: number, model: string) => ({
+  id: `endpoint-conv-${n}`,
+  leadKey: `+1555999${String(n).padStart(4, "0")}`,
+  mode: "suggest",
+  createdAt: new Date(nowMs - 30 * 86_400_000).toISOString(),
+  updatedAt: new Date(nowMs - 86_400_000).toISOString(),
+  messages: [
+    {
+      id: `endpoint-m-${n}`,
+      direction: "in",
+      from: "x",
+      to: "y",
+      body: "hi",
+      at: new Date(nowMs - 2 * 86_400_000).toISOString(),
+      provider: "twilio"
+    }
+  ],
+  lead: {
+    name: `Endpoint Lead ${n}`,
+    phone: `+1555999${String(n).padStart(4, "0")}`,
+    email: `endpoint${n}@example.com`,
+    source: "Dealer Website",
+    vehicle: { model }
+  }
+});
+fs.writeFileSync(
+  ENDPOINT_STORE_PATH,
+  JSON.stringify({
+    version: 1,
+    savedAt: new Date(nowMs).toISOString(),
+    conversations: [endpointSeedConv(1, "Road King"), endpointSeedConv(2, "Iron 883")],
+    todos: [],
+    questions: []
+  })
+);
+process.env.CONVERSATIONS_DB_PATH = ENDPOINT_STORE_PATH;
+process.on("exit", () => {
+  try {
+    fs.unlinkSync(ENDPOINT_STORE_PATH);
+  } catch {
+    /* best effort */
+  }
+});
+
+const { buildMarketingList } = await import("../services/api/src/domain/marketingLists.ts");
+const { isTouringClassModel } = await import("../services/api/src/domain/modelFamily.ts");
+
 const daysAgo = (d: number) => new Date(nowMs - d * 86_400_000).toISOString();
 
 let leadSeq = 0;
@@ -221,13 +279,66 @@ assert.equal(
   false,
   "a specific-model query is NOT widened into the whole class"
 );
-// The cross-listing trap this deliberately does NOT open: family words other than trike keep
-// matching by name, because 62 of the catalog's 278 codes sit in more than one family (FLTRT is
-// in TOURING *and* TRIKE), so a "touring" class lane would drag the trikes straight back in.
+// ── TOURING is the second class lane (Joe, 2026-08-06: "so there is no way to exclude touring?").
+// It is supportable ONLY because both of its contaminations are measured and handled:
+//   * TRIKE overlap — 2 codes (FLTRT Road Glide 3, FLHTCUTG Tri Glide Ultra). Trike wins.
+//   * SOFTAIL overlap — exactly 1 code, FLHC (Heritage Classic). A Softail is not a touring bike.
+// The CVO overlap is deliberately kept: a CVO Street Glide IS a touring bike.
+assert.equal(
+  audienceModelMatches("2026 Harley-Davidson Street Glide", "touring"),
+  true,
+  "a Street Glide is touring even though its label never says 'touring'"
+);
+assert.equal(
+  audienceModelMatches("2026 Harley-Davidson Road King", "touring"),
+  true,
+  "a Road King is touring"
+);
+assert.equal(
+  audienceModelMatches("2026 Harley-Davidson CVO Road Glide ST", "touring"),
+  true,
+  "a CVO touring bike is touring — the CVO overlay never disqualifies"
+);
 assert.equal(
   audienceModelMatches("2026 Harley-Davidson Street Glide 3 Limited", "touring"),
   false,
-  "'touring' stays a name match — a family lane there would re-introduce the trike bug"
+  "a trike is never in a touring audience"
+);
+// These two are the trikes that ACTUALLY exercise the trike guard: FLTRT and FLHTCUTG are the
+// only codes filed under both TOURING and TRIKE, so they are the only models that reach the
+// touring test still looking like touring bikes. Street Glide 3 Limited does not — its code is
+// not cross-listed, so it would be excluded even with the guard removed. Asserting only on it
+// left the guard untested (caught by sabotage, 2026-08-06).
+assert.equal(
+  audienceModelMatches("2026 Harley-Davidson Road Glide 3", "touring"),
+  false,
+  "Road Glide 3 (FLTRT — cross-listed TOURING+TRIKE) is a trike, not a touring bike"
+);
+assert.equal(
+  audienceModelMatches("2019 Harley-Davidson Tri Glide Ultra", "touring"),
+  false,
+  "Tri Glide Ultra (FLHTCUTG — the other cross-listed code) is a trike, not a touring bike"
+);
+assert.equal(
+  audienceModelMatches("2026 Harley-Davidson Heritage Classic", "touring"),
+  false,
+  "a Heritage Classic is a SOFTAIL — the one code the catalog cross-lists into TOURING"
+);
+assert.equal(
+  audienceModelMatches("2026 Harley-Davidson Fat Boy", "touring"),
+  false,
+  "a Softail with no touring code is not touring"
+);
+assert.equal(
+  audienceModelMatches("2022 Harley-Davidson Iron 883", "touring"),
+  false,
+  "a Sportster is not touring"
+);
+// A THIRD class must not appear by accident: an unmeasured family word stays a NAME match.
+assert.equal(
+  audienceModelMatches("2026 Harley-Davidson Breakout", "softail"),
+  false,
+  "'softail' is not a supported class lane — it stays a name match and finds nothing by that name"
 );
 
 // FAIL DIRECTION: the class read can only ever NARROW. Anything that fails to resolve to a class
@@ -272,6 +383,56 @@ const windowList = buildMarketingList([recent, stale], {
 assert.equal(windowList.rows.length, 1, "activity window narrows");
 assert.equal(windowList.rows[0]!.convId, recent.id, "only the recent replier is inside 90 days");
 
+// ── excludeModelQuery: "everyone in the last 90 days EXCEPT touring bikes" (Joe, 2026-08-06). ──
+const sgLead = lead({ vehicle: { year: "2026", make: "Harley-Davidson", model: "Street Glide" } });
+const sportsterLead = lead({ vehicle: { year: "2022", make: "Harley-Davidson", model: "Iron 883" } });
+const trikeLead = lead({ vehicle: { year: "2026", make: "Harley-Davidson", model: "Street Glide 3 Limited" } });
+const exTouring = buildMarketingList([sgLead, sportsterLead, trikeLead], {
+  filters: { channel: "sms", excludeModelQuery: "touring" },
+  isPhoneSuppressed: NO_SUPPRESSION,
+  nowMs
+});
+assert.deepEqual(
+  exTouring.rows.map(r => r.convId).sort(),
+  [sportsterLead.id, trikeLead.id].sort(),
+  "excluding touring drops the Street Glide and keeps the Sportster and the trike"
+);
+// Both filters at once: "street glides but not trikes" — the reason exclusion runs AFTER modelQuery.
+const sgNotTrikes = buildMarketingList([sgLead, trikeLead, sportsterLead], {
+  filters: { channel: "sms", modelQuery: "street glide", excludeModelQuery: "trike" },
+  isPhoneSuppressed: NO_SUPPRESSION,
+  nowMs
+});
+assert.deepEqual(
+  sgNotTrikes.rows.map(r => r.convId),
+  [sgLead.id],
+  "include and exclude compose"
+);
+// ANY matching interest disqualifies — an exclusion asks whether this is a touring customer AT ALL.
+const bothInterests = lead({
+  vehicle: { year: "2022", make: "Harley-Davidson", model: "Iron 883" },
+  watches: [{ make: "Harley-Davidson", model: "Road Glide", status: "active" }]
+});
+const exTouring2 = buildMarketingList([bothInterests], {
+  filters: { channel: "sms", excludeModelQuery: "touring" },
+  isPhoneSuppressed: NO_SUPPRESSION,
+  nowMs
+});
+assert.equal(
+  exTouring2.rows.length,
+  0,
+  "one touring interest is enough to exclude, even when another interest is not touring"
+);
+// FAIL DIRECTION: an exclusion can only ever SHRINK. Absent or empty changes nothing.
+for (const ex of [undefined, null, ""] as const) {
+  const noEx = buildMarketingList([sgLead, sportsterLead], {
+    filters: { channel: "sms", excludeModelQuery: ex },
+    isPhoneSuppressed: NO_SUPPRESSION,
+    nowMs
+  });
+  assert.equal(noEx.rows.length, 2, `excludeModelQuery=${JSON.stringify(ex)} filters nothing`);
+}
+
 // One row per LEAD: two conversations sharing a leadKey collapse to the newest.
 const dupA = lead({});
 const dupB = { ...lead({}), leadKey: dupA.leadKey, updatedAt: daysAgo(0.5) };
@@ -288,6 +449,13 @@ assert.equal(dedupList.generatedAt, new Date(nowMs).toISOString(), "result stamp
 // ── Endpoint gates (behavior; never a real LLM call). ──
 process.env.LLM_ENABLED = "0";
 process.env.OPENAI_API_KEY ??= "eval-placeholder-never-called";
+
+// The store this handler reads was seeded at the TOP of this file, before any import could load it.
+// Await hydration explicitly: the boot load is ASYNC, and everything above here is synchronous, so
+// without this the endpoint section reaches the handler before the seed has landed and reads an
+// empty store — the same vacuum, arriving by a different route. reloadConversationStore() chains
+// after any in-flight boot load by design, so awaiting it is the documented way to be sure.
+await (await import("../services/api/src/domain/conversationStore.ts")).reloadConversationStore();
 const { copilotMarketingListHandler } = await import("../services/api/src/routes/copilot.ts");
 function mockRes() {
   return {
@@ -381,4 +549,58 @@ assert.equal(describeNoLlm.statusCode, 503, "describe path with LLM off degrades
   assert.equal(wiredList.rows[0].name, "Savannah Reed", "buildMarketingList must USE the resolver, not lead.name");
 }
 
-console.log("PASS console copilot marketing list eval (compliance order + audience filters + trike-class scope both directions + matched-interest labelling + row name fallback)");
+// The exclusion reaches the builder THROUGH the endpoint — a field the parser fills but the
+// handler drops would leave a filter that quietly does nothing (the wiring trap).
+const exclusionThroughEndpoint = mockRes();
+await copilotMarketingListHandler(
+  { user: { role: "manager" }, body: { filters: { channel: "sms", excludeModelQuery: "touring" } } } as any,
+  exclusionThroughEndpoint as any
+);
+assert.equal(exclusionThroughEndpoint.statusCode, 200, "the endpoint accepts an exclusion filter");
+assert.equal(
+  exclusionThroughEndpoint.body?.filters?.excludeModelQuery,
+  "touring",
+  "the endpoint echoes the exclusion back, so the console can show what it built"
+);
+// POSITIVE FIRST: the same endpoint, WITHOUT the exclusion, must return a touring row — otherwise
+// the negative assertion below passes on an empty result and proves nothing (see the seed above).
+const noExclusionThroughEndpoint = mockRes();
+await copilotMarketingListHandler(
+  { user: { role: "manager" }, body: { filters: { channel: "sms" } } } as any,
+  noExclusionThroughEndpoint as any
+);
+const touringRows = (r: any) =>
+  (r.body?.result?.rows ?? []).filter((x: any) => isTouringClassModel(x.modelInterest) === true).length;
+assert.ok(
+  touringRows(noExclusionThroughEndpoint) > 0,
+  "the endpoint fixture must CONTAIN a touring bike, or the exclusion assertion is vacuous"
+);
+assert.ok(
+  exclusionThroughEndpoint.body.result.rows.length > 0,
+  "the exclusion must SHRINK the list, not empty it — a non-touring lead still belongs"
+);
+assert.equal(
+  touringRows(exclusionThroughEndpoint),
+  0,
+  "no touring bike survives an excludeModelQuery=touring list built through the endpoint"
+);
+
+// The plain-English lane must be ABLE to produce an exclusion: the field is required by the
+// schema (so the model always answers it) and survives into the parser's typed result.
+const copilotSrc = fs.readFileSync("services/api/src/domain/copilotLLM.ts", "utf8");
+assert.ok(
+  /required:\s*\[[^\]]*"excludeModelQuery"/s.test(copilotSrc),
+  "excludeModelQuery is a REQUIRED schema field — an optional one gets silently omitted"
+);
+assert.ok(
+  /excludeModelQuery:\s*\n?\s*typeof parsed\.excludeModelQuery === "string"/.test(copilotSrc),
+  "the parser maps excludeModelQuery into its typed result"
+);
+assert.ok(
+  /-\s*excludeModelQuery:/.test(copilotSrc),
+  "the prompt tells the model when to fill it"
+);
+
+console.log(
+  "PASS console copilot marketing list eval (compliance order + audience filters + trike/touring class lanes both directions + exclusions + matched-interest labelling + row name fallback)"
+);
