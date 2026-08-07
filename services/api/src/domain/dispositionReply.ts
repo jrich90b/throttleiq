@@ -14,6 +14,23 @@ export function buildFriendlyReachOutClose(hasAppreciation: boolean): string {
     : "I hear you. If anything changes down the road, just give me a shout.";
 }
 
+/**
+ * Did WE already say the reach-out-when-you're-ready goodbye on this thread? It reads our
+ * own outbound copy, never the customer's — and it belongs beside the two builders whose
+ * output it is looking for (buildFriendlyReachOutClose / buildCustomerDispositionReply)
+ * rather than drifting apart from them over in index.ts.
+ */
+export function isReachOutWhenReadyCloseText(text: string): boolean {
+  const t = String(text ?? "")
+    .toLowerCase()
+    .replace(/[’']/g, "'");
+  if (!t.trim()) return false;
+  return (
+    /\b(no rush|if anything changes|down the road|time is right)\b/.test(t) &&
+    /\b(reach out|here when you're ready|give me a shout|just let me know)\b/.test(t)
+  );
+}
+
 export function buildCustomerDispositionReply(text: string, displayFirstName?: string | null): string {
   const textLower = String(text ?? "").toLowerCase();
   const firstName = displayFirstName || "";

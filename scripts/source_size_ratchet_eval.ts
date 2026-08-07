@@ -253,7 +253,13 @@ const CEILINGS: Ceiling[] = [
     // every caller, and the new invite still lands 12 lines UNDER the old ceiling — the three
     // beginner reply bodies moved to agentVoice too, so `jumpstart_invite:eval` can RUN them
     // instead of grepping for them (a sabotage that appended the invite passed the grep version).
-    max: 71_030,
+    // 71_030 -> 71_027. The bare-acknowledgement gate (+13105956498, "Found a better offer.
+    // Thanks"). index.ts was sitting EXACTLY on the ceiling again, so the slice funded itself
+    // twice over: isShortAckText + isEmojiOnlyText moved to domain/bareAcknowledgement.ts, next
+    // to the narrower predicate that replaces one of their uses, and isReachOutWhenReadyCloseText
+    // moved to domain/dispositionReply.ts beside the goodbye builders whose output it matches.
+    // Net -3 with the new human-mode closeout draft included.
+    max: 71_027,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
