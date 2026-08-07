@@ -133,4 +133,85 @@ ok(
 );
 ok(decide({ rows: [{}] as never }).kind === "handoff", "and that decision is hand-off");
 
+// ---------------------------------------------------------------------------
+// THE REPLY — the live defect this fixes, and it needs no schedule data
+// ---------------------------------------------------------------------------
+const ask = (over: Record<string, unknown> = {}) =>
+  S.resolveRiderCourseLogisticsReply({
+    intent: "enrolled_class_logistics",
+    firstName: "Maya",
+    rows: [],
+    studentClassDate: "8/15/2026",
+    nowMs: NOW,
+    ...over
+  });
+
+// TODAY: no table configured. This is the state that ships.
+const handoff = ask();
+ok(handoff.handled === true, "a class-logistics question is handled here, not by the sign-up branch");
+ok(handoff.needsTodo === true, "and raises a task — the promise of a person has to be made true");
+ok(/I don't want to guess/.test(handoff.reply), "the hand-off says plainly that it will not guess");
+ok(handoff.reply.startsWith("Good question, Maya"), "uses the customer's name when we have it");
+// The whole point: no price, no sign-up copy, and no invented logistics.
+ok(!/\$|price|sign up|best place to start/i.test(handoff.reply), "never quotes the price at an enrolled student");
+ok(
+  !/bring|helmet|gloves|boots|park|arrive|[0-9]{1,2}\s*(am|pm)/i.test(handoff.reply),
+  "and never invents gear, a place or a time"
+);
+// Portability: no dealer-specific job title baked into the copy.
+ok(!/Riding Academy Manager|American Harley/i.test(handoff.reply), "copy is dealer-agnostic");
+ok(ask({ firstName: null }).reply.startsWith("Good question -"), "reads correctly with no name");
+
+// Everything that is NOT a class-logistics question must be untouched.
+for (const intent of ["rider_course_info", "first_time_rider", "beginner_bike_advice", "no_motorcycle_endorsement", "none"]) {
+  const r = ask({ intent });
+  ok(r.handled === false, `${intent} is left to its existing branch`);
+  ok(r.reply === "" && r.needsTodo === false, `${intent} produces nothing here`);
+}
+ok(ask({ intent: "none", asksClassLogistics: true }).handled === true, "the boolean alone is enough to catch it");
+
+// IF a feed ever fills the table: the same call answers, with no other change.
+const fed = ask({ rows: [CLASS], studentClassDate: "8/22/2026" });
+ok(fed.handled === true && fed.needsTodo === false, "a confirmed class answers and needs no task");
+ok(/8:00 AM/.test(fed.reply) && /front parking lot/.test(fed.reply), "states the first day from the row");
+ok(/Niagara Wheatfield/.test(fed.reply), "and the range day, which is a different place");
+// ...and if that feed goes stale, it reverts to the hand-off rather than serving old times.
+const stale = ask({ rows: [{ ...CLASS, updatedAt: ago(45) }], studentClassDate: "8/22/2026" });
+ok(stale.needsTodo === true && /I don't want to guess/.test(stale.reply), "a stale feed reverts to a person");
+
+// ---------------------------------------------------------------------------
+// THE WIRING — checked BEFORE the sign-up branch, in the shared builder
+// ---------------------------------------------------------------------------
+const fs = await import("node:fs");
+const api = fs.readFileSync(new URL("../services/api/src/index.ts", import.meta.url), "utf8");
+
+ok(
+  api.includes('import { resolveRiderCourseLogisticsReply } from "./domain/riderCourseSchedule.js";'),
+  "index.ts imports the resolver"
+);
+const callIdx = api.indexOf("const classLogistics = resolveRiderCourseLogisticsReply({");
+const signupIdx = api.indexOf('if (parsed.intent === "rider_course_info" || parsed.asksRiderCourse) {');
+ok(callIdx > 0, "the shared guidance builder calls it");
+ok(
+  callIdx < signupIdx,
+  "and calls it BEFORE the rider_course_info branch — otherwise the price answer wins and nothing changes"
+);
+ok(
+  /if \(classLogistics\.handled\) return classLogistics\.reply;/.test(api),
+  "the result is consumed — a decision nothing returns is the bug, not the fix"
+);
+ok(
+  api.split("resolveRiderCourseLogisticsReply(").length - 1 === 1,
+  "exactly ONE call site — both reply paths reach it through the one shared builder, so they cannot drift"
+);
+// The task must fire wherever the hand-off can, in BOTH paths (route-parity law).
+ok(
+  api.split("Riding Academy student asked about their class").length - 1 === 2,
+  "the task is raised at BOTH call sites — live and regenerate"
+);
+ok(
+  /studentClassDate: readRidingAcademyRecordFields\(conv\.lead\?\.inquiry\)\.startDate/.test(api),
+  "the student's own class date is threaded in, so a feed could match their class"
+);
+
 console.log(`rider_course_schedule_eval: PASS (${n} assertions)`);

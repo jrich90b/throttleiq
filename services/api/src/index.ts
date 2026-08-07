@@ -17,6 +17,8 @@ import { orchestrateInbound, evaluateTestRideInventoryGate, buildBlockedTestRide
 import { resolveWatchOptOutOutcome } from "./domain/watchOptOutTurn.js";
 import { resolveAdfFirstTouchAckKind, buildAdfFirstTouchAck, resolveEnrollmentAckExtras } from "./domain/ridingAcademy.js";
 import { readFirstTimeRiderPolicy, hasRiderCoursePublicInfo, readEnrollmentRidingHistory, applyRiderExperienceState } from "./domain/firstTimeRiderPolicy.js";
+import { resolveRiderCourseLogisticsReply } from "./domain/riderCourseSchedule.js";
+import { readRidingAcademyRecordFields } from "./domain/ridingAcademy.js";
 import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildRidingAcademyEnrollmentAck, buildJumpstartOneOnOneInvite, buildFirstTimeRiderBeginnerReply, buildAcquiredVehicleAck, buildWatchAvailableReply, buildCholoWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, resolveIntroducedOwnerFirstName, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, hasCustomerReceivedOutbound, hasRecentDeliveredHumanOutbound } from "./domain/agentVoice.js";
 import {
   postSaleVehicleIsNew,
@@ -27432,6 +27434,9 @@ function buildFirstTimeRiderGuidanceReply(args: {
   dealerProfile: any;
   text?: string | null;
   ridingHistory?: string | null;
+  /** For the class-logistics hand-off below. Both optional — absent degrades to a hand-off. */
+  firstName?: string | null;
+  studentClassDate?: string | null;
 }): string {
   const parsed = args.parsed;
   const policy = readFirstTimeRiderPolicy(args.dealerProfile);
@@ -27451,6 +27456,22 @@ function buildFirstTimeRiderGuidanceReply(args: {
     }).kind === "jumpstart_one_on_one_invite"
       ? buildJumpstartOneOnOneInvite()
       : "";
+
+  // ALREADY IN A CLASS, asking about the class itself. Checked BEFORE rider_course_info, which is
+  // SIGN-UP copy: an enrolled student asking "what time do I show up?" was answered with "the Riding
+  // Academy course is the best place to start. The current price is $321." — quoting the price at
+  // somebody who has already paid (Maya Iversen, +15854782032, 2026-08-07). With no class table
+  // configured (today) this always hands off to a person, which needs no schedule data at all; if a
+  // feed ever fills the rows in, the same call starts answering from them with no other change.
+  const classLogistics = resolveRiderCourseLogisticsReply({
+    intent: parsed.intent,
+    asksClassLogistics: parsed.asksClassLogistics,
+    firstName: args.firstName ?? null,
+    rows: policy.classSchedule,
+    studentClassDate: args.studentClassDate ?? null,
+    nowMs: Date.now()
+  });
+  if (classLogistics.handled) return classLogistics.reply;
 
   if (parsed.intent === "rider_course_info" || parsed.asksRiderCourse) {
     const isAmbiguous = hasAmbiguousRiderCourseInfoText(args.text);
@@ -55865,10 +55886,24 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   if (regenFirstTimeRiderDecision) {
     const profile = await getDealerProfileHot();
     applyFirstTimeRiderGuidanceState(conv, regenFirstTimeRiderDecision);
+    // The class-logistics hand-off promises a person; this is what makes that promise true.
+    if (regenFirstTimeRiderDecision?.intent === "enrolled_class_logistics" || regenFirstTimeRiderDecision?.asksClassLogistics) {
+      addTodo(
+        conv,
+        "other",
+        "Riding Academy student asked about their class (time, place or what to bring) - confirm and reply.",
+        undefined,
+        undefined,
+        undefined,
+        "followup"
+      );
+    }
     const reply = buildFirstTimeRiderGuidanceReply({
       parsed: regenFirstTimeRiderDecision,
       dealerProfile: profile,
       text: event.body ?? "",
+      firstName: conv.lead?.firstName ?? null,
+      studentClassDate: readRidingAcademyRecordFields(conv.lead?.inquiry).startDate,
       ridingHistory: readEnrollmentRidingHistory(conv.lead?.inquiry)
     });
     recordRouteOutcome("regen", "first_time_rider_guidance", {
@@ -61612,10 +61647,24 @@ if (authToken && signature) {
   if (firstTimeRiderDecision) {
     const dealerProfile = await getDealerProfileHot();
     applyFirstTimeRiderGuidanceState(conv, firstTimeRiderDecision);
+    // The class-logistics hand-off promises a person; this is what makes that promise true.
+    if (firstTimeRiderDecision?.intent === "enrolled_class_logistics" || firstTimeRiderDecision?.asksClassLogistics) {
+      addTodo(
+        conv,
+        "other",
+        "Riding Academy student asked about their class (time, place or what to bring) - confirm and reply.",
+        undefined,
+        undefined,
+        undefined,
+        "followup"
+      );
+    }
     const reply = buildFirstTimeRiderGuidanceReply({
       parsed: firstTimeRiderDecision,
       dealerProfile,
       text: semanticInboundText,
+      firstName: conv.lead?.firstName ?? null,
+      studentClassDate: readRidingAcademyRecordFields(conv.lead?.inquiry).startDate,
       ridingHistory: readEnrollmentRidingHistory(conv.lead?.inquiry)
     });
     recordRouteOutcome("live", "first_time_rider_guidance", {

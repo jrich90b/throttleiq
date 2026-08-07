@@ -176,3 +176,70 @@ export function decideRiderCourseScheduleAnswer(input: {
     why: "matched a confirmed class for this student, with per-day sessions"
   };
 }
+
+/**
+ * THE REPLY for a student asking about the class they are already in.
+ *
+ * TODAY, without this, an enrolled student asking "what time do I show up?" is answered by the
+ * `rider_course_info` branch: *"Good question. The Riding Academy course is the best place to start.
+ * The current price is $321."* — sign-up copy quoted at somebody who has already paid. That is the
+ * live defect this fixes, and it needs no schedule data at all to fix.
+ *
+ * With no class table configured (the state today — the schedule feed does not exist yet) this ALWAYS
+ * hands off, which is the point: a person answers, and a task says so. If a feed ever populates the
+ * rows, the same call starts answering from them with no other change.
+ *
+ * Returns `handled: false` for anything that is not a class-logistics question, so every other
+ * first-time-rider answer is untouched.
+ */
+export function resolveRiderCourseLogisticsReply(input: {
+  intent?: string | null;
+  asksClassLogistics?: boolean;
+  firstName?: string | null;
+  rows?: ReadonlyArray<RiderCourseClassRow | null | undefined> | null;
+  studentClassDate?: string | null;
+  nowMs: number;
+  staleAfterDays?: number;
+}): { handled: boolean; reply: string; needsTodo: boolean; todoSummary: string; why: string } {
+  const asking =
+    String(input?.intent ?? "") === "enrolled_class_logistics" || input?.asksClassLogistics === true;
+  if (!asking) {
+    return { handled: false, reply: "", needsTodo: false, todoSummary: "", why: "not a class-logistics question" };
+  }
+
+  const decision = decideRiderCourseScheduleAnswer({
+    rows: input?.rows,
+    studentClassDate: input?.studentClassDate,
+    nowMs: input.nowMs,
+    staleAfterDays: input?.staleAfterDays
+  });
+
+  if (decision.kind === "answer") {
+    const lines = decision.sessions.map(s => {
+      const when = [String(s.date ?? "").trim(), [s.startTime, s.endTime].filter(Boolean).join("-")]
+        .filter(Boolean)
+        .join(" ");
+      const place = String(s.location ?? "").trim();
+      return [when, place].filter(Boolean).join(" at ");
+    });
+    return {
+      handled: true,
+      reply: `Here's your class: ${lines.join("; ")}.`,
+      needsTodo: false,
+      todoSummary: "",
+      why: decision.why
+    };
+  }
+
+  // The hand-off. Deliberately says nothing about times, places or gear — it promises a person, and
+  // the task below is what makes that promise true (an offer with nothing behind it is its own bug
+  // class). No dealer-specific job title, so it reads correctly for any dealer.
+  const name = String(input?.firstName ?? "").trim();
+  return {
+    handled: true,
+    reply: `Good question${name ? `, ${name}` : ""} - I don't want to guess on that one. I'll have the team that runs the class confirm and get right back to you.`,
+    needsTodo: true,
+    todoSummary: "Riding Academy student asked about their class (time, place or what to bring) - confirm and reply.",
+    why: decision.why
+  };
+}
