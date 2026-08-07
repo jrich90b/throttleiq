@@ -24,6 +24,7 @@ import {
   READINESS_TARGETS,
   countAhHardcodes,
   evaluateReadiness,
+  resolveLatencyInput,
   formatReadinessLine,
   parseChecklistRows,
   pickWidestFunnelWindow,
@@ -402,6 +403,52 @@ check("a 30-day funnel snapshot is wired to be produced", () => {
   const cmd = String(pkg?.scripts?.["booking_funnel:audit30"] ?? "");
   assert.match(cmd, /--since-days 30/, "audit30 runs a 30-day window");
   assert.match(cmd, /booking_funnel_30d/, "audit30 writes the snapshot dir the scorecard reads");
+});
+
+// --- First-touch latency: the window it is measured over, and the sample behind it. ---
+// Measured 2026-08-07 on the live store at one instant: 24h -> n=9, median 80.6min; 30d -> n=337,
+// median 30.2min. The bar read this row MET (7min) on 8/6 and NOT_MET twice on 8/7 with nothing
+// about the system having changed. These EXECUTE the reader and the scorer, because a source-text
+// assertion cannot prove which field a reader reads.
+check("the bar grades the trailing-30d latency window, not the daily one", () => {
+  const picked = resolveLatencyInput({
+    source: { sinceHours: 24, measured: 9 },
+    summary: { effective: { medianMin: 80.6, under5minPct: 22 } },
+    trailing30d: { sinceHours: 720, measured: 337, summary: { effective: { medianMin: 30.2, under5minPct: 26 } } }
+  });
+  assert.equal(picked?.effectiveMedianMin, 30.2, "the 30-day median is what gets graded");
+  assert.equal(picked?.measured, 337, "and the sample behind it travels with it");
+  assert.equal(picked?.sinceHours, 720);
+});
+
+check("a summary written before trailing30d existed still reads", () => {
+  const picked = resolveLatencyInput({
+    source: { sinceHours: 24, measured: 11 },
+    summary: { effective: { medianMin: 39.5, under5minPct: 18 } }
+  });
+  assert.equal(picked?.effectiveMedianMin, 39.5, "fall back rather than lose the reading entirely");
+  assert.equal(picked?.measured, 11);
+});
+
+check("a FAST median on too few turns still cannot read MET", () => {
+  // The 8/6 reading: 7 minutes, comfortably inside the 15-minute target, on a single day's turns.
+  const s = evaluateReadiness({
+    ...ALL_GREEN,
+    latency: { effectiveMedianMin: 7, under5minPct: 60, measured: 9, sinceHours: 24 }
+  });
+  const row = s.sections.find(x => x.id === "funnel")?.metrics.find(m => /First-touch/.test(m.label));
+  assert.equal(row?.met, false, "a 9-turn window is noise, not a passing first-touch time");
+  assert.ok(/only 9 turns/.test(String(row?.label)), "and the row says WHY it did not pass");
+  assert.equal(s.sections.find(x => x.id === "funnel")?.status, "OPEN");
+});
+
+check("the same fast median over a real sample DOES pass", () => {
+  const s = evaluateReadiness({
+    ...ALL_GREEN,
+    latency: { effectiveMedianMin: 7, under5minPct: 60, measured: 337, sinceHours: 720 }
+  });
+  const row = s.sections.find(x => x.id === "funnel")?.metrics.find(m => /First-touch/.test(m.label));
+  assert.equal(row?.met, true, "the floor must gate on the SAMPLE, never on the number");
 });
 
 if (failures) {

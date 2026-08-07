@@ -16,6 +16,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { execFileSync } from "node:child_process";
+import os from "node:os";
 
 type AnyObj = Record<string, any>;
 
@@ -196,7 +198,57 @@ function selfTest() {
   // A=180min, B=2min, C=0.5min → median 2, one over-1h (A).
   if (s.effective.over1hPct !== 33) fail(`one of three over 1h = 33%, got ${s.effective.over1hPct}`);
   if (s.agentDraft.n !== 2) fail(`two draft measurements (A,C), got ${s.agentDraft.n}`);
-  console.log("PASS response latency audit self-test");
+
+  // EXECUTE the real CLI and read what it actually WROTE. The assertions above call the pure
+  // helpers, so they stayed green when `trailing30d` was deleted from the emitted object — and the
+  // readiness bar would then have silently fallen back to the 24h window and gone back to flipping
+  // on ~10 turns. A source-text check could not prove this either; only running it can.
+  //
+  // Clock-safe by construction: the fixture is built relative to NOW, with one turn inside the
+  // 24h window and one 10 days back, so `trailing30d` MUST see strictly more than the daily block
+  // no matter what day this runs.
+  const nowMs = Date.now();
+  const iso = (msAgo: number) => new Date(nowMs - msAgo).toISOString();
+  const HOUR = 60 * MIN;
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "latency-audit-selftest-"));
+  try {
+    const storePath = path.join(tmp, "conversations.json");
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify([
+        mk("recent", [
+          ["in", "twilio", iso(2 * HOUR)],
+          ["out", "twilio", iso(2 * HOUR - 2 * MIN)]
+        ]),
+        mk("ten-days-back", [
+          ["in", "twilio", iso(10 * 24 * HOUR)],
+          ["out", "twilio", iso(10 * 24 * HOUR - 3 * MIN)]
+        ])
+      ])
+    );
+    const outDir = path.join(tmp, "out");
+    execFileSync(
+      process.execPath,
+      [process.argv[1], "--store", storePath, "--out-dir", outDir],
+      { stdio: "pipe" }
+    );
+    const written = JSON.parse(fs.readFileSync(path.join(outDir, "response_latency_summary.json"), "utf8"));
+    if (!written.trailing30d) fail("the emitted summary must carry a trailing30d block — the readiness bar grades it");
+    if (!(written.trailing30d.sinceHours > written.source.sinceHours)) {
+      fail(`trailing30d must be a WIDER window than the daily one (got ${written.trailing30d.sinceHours}h vs ${written.source.sinceHours}h)`);
+    }
+    if (!(written.trailing30d.measured > written.source.measured)) {
+      fail(`trailing30d must see the older turn the daily window cannot (got ${written.trailing30d.measured} vs ${written.source.measured})`);
+    }
+    if (written.trailing30d.summary?.effective?.medianMin == null) {
+      fail("trailing30d must carry an effective median — that is the number the bar reads");
+    }
+    if (written.summary?.effective?.medianMin == null) fail("the daily summary must survive untouched — the release gate reads it");
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+
+  console.log("PASS response latency audit self-test (incl. emitted trailing30d block)");
 }
 
 function main() {
@@ -223,6 +275,29 @@ function main() {
   const pairs = collectLatencyPairs(conversations, windowStartMs);
   const summary = summarizeLatency(pairs);
 
+  // A SECOND, WIDER window — added, never replacing the one above.
+  //
+  // The daily window is the right lens for ops (the release gate grades agent draft speed on it,
+  // and "did we get slow TODAY" is the question it asks). It is the wrong lens for the readiness
+  // bar, which asks "is this dealership's first response fast enough" — a standing property.
+  // Measured 2026-08-07 on the live store, same instant:
+  //     24h  -> n=9    effective median 80.6 min
+  //     7d   -> n=110  effective median 20.0 min
+  //     30d  -> n=337  effective median 30.2 min
+  // The store answers roughly two messages an hour, so a day carries ~10 turns and the median
+  // swings on one slow lead: the bar read 7 min (MET) on 8/6, 39.5 min on 8/7 morning and 80.6 min
+  // that afternoon, off the same unchanged system. The three funnel rates beside it are already
+  // measured over 30 days behind a `minEngagedSample` floor; this row simply never got the same
+  // discipline. Widening it does NOT move the verdict — 30.2 min is still over the 15 min target —
+  // it just stops the row flipping on noise.
+  const trailing30dHours = 24 * 30;
+  const trailing30dPairs = collectLatencyPairs(conversations, Date.now() - trailing30dHours * 60 * MIN);
+  const trailing30d = {
+    sinceHours: trailing30dHours,
+    measured: trailing30dPairs.length,
+    summary: summarizeLatency(trailing30dPairs)
+  };
+
   const slowest = [...pairs]
     .filter(p => p.sentMin != null)
     .sort((a, b) => (b.sentMin ?? 0) - (a.sentMin ?? 0))
@@ -235,6 +310,7 @@ function main() {
     generatedAt: new Date().toISOString(),
     source: { storePath, sinceHours, conversationCount: conversations.length, measured: pairs.length },
     summary,
+    trailing30d,
     slowestEffective: slowest
   };
   fs.writeFileSync(path.join(outDir, "response_latency_summary.json"), JSON.stringify(out, null, 2) + "\n");
@@ -250,6 +326,9 @@ function main() {
     "## Effective first response (what the customer feels — Suggest-mode gated)",
     `- median: ${summary.effective.medianMin ?? "n/a"} min | p90: ${summary.effective.p90Min ?? "n/a"} min`,
     `- under 5 min: ${summary.effective.under5minPct ?? "n/a"}% | over 1 hour: ${summary.effective.over1hPct ?? "n/a"}%`,
+    "",
+    "## Trailing 30 days (what the readiness bar reads — a day is too few turns to grade)",
+    `- ${trailing30d.measured} answered turns | effective median: ${trailing30d.summary.effective.medianMin ?? "n/a"} min | p90: ${trailing30d.summary.effective.p90Min ?? "n/a"} min`,
     "",
     "## Slowest effective responses",
     ...(slowest.length
