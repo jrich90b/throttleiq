@@ -206,7 +206,18 @@ export function buildMarketingList(
 
     // ── Audience filters (not compliance — a miss here just narrows the list) ──
     const models = modelInterestCandidates(conv);
-    if (modelQuery && !models.some(m => audienceModelMatches(m, modelQuery))) continue;
+    // Keep the interest that ACTUALLY satisfied the query, not just whether one did. A lead can
+    // carry several (a lead vehicle plus watches), and the row used to display models[0] — so a
+    // customer who earns a "street glide" list through a watch on a two-wheel Street Glide was
+    // still LABELLED with his other interest, a Street Glide 3 Limited trike (+17163163226,
+    // found 2026-08-06 while verifying the trike-scope fix on live data). The membership was
+    // right and the label made it look like the trike bug all over again. Same in reverse: a
+    // genuine trike watcher (+15136149740, two Road Glide 3 watches) was labelled with his
+    // two-wheel Road Glide lead vehicle.
+    const matchedModel = modelQuery
+      ? models.find(m => audienceModelMatches(m, modelQuery)) ?? null
+      : null;
+    if (modelQuery && !matchedModel) continue;
     if (condition && !matchesCondition(conv, condition)) continue;
     const source = conv.lead?.source ?? null;
     if (sourceQuery && !String(source ?? "").toLowerCase().includes(sourceQuery)) continue;
@@ -254,7 +265,9 @@ export function buildMarketingList(
       phone,
       email,
       source,
-      modelInterest: models[0] ?? null,
+      // The interest that answered the query, so the row explains why the lead is on THIS list.
+      // No query => nothing to explain => the lead's first known interest, as before.
+      modelInterest: matchedModel ?? models[0] ?? null,
       lastInboundAt: inboundAt,
       status: conv.status === "closed" ? "closed" : "open"
     });
