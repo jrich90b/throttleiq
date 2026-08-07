@@ -108,7 +108,14 @@ export type ReadinessInput = {
     showed?: number | null;
     sinceDays?: number | null;
   } | null;
-  latency: { effectiveMedianMin?: number | null; under5minPct?: number | null } | null;
+  latency: {
+    effectiveMedianMin?: number | null;
+    under5minPct?: number | null;
+    /** Turns behind effectiveMedianMin. A day carries ~10, which is not enough to grade. */
+    measured?: number | null;
+    /** Window effectiveMedianMin was measured over, so the detail line can say so. */
+    sinceHours?: number | null;
+  } | null;
   /** Section 2 — the eval split scan + a source-literal count. */
   portability: { universal: number; dealer: number; violations: string[] } | null;
   ahHardcodes: number | null;
@@ -208,6 +215,30 @@ function settle(
 }
 
 /** The pure grader — every section decided from already-collected inputs, no I/O. */
+/**
+ * Which latency figure the bar grades. Exported so it can be EXECUTED by the eval — a source-text
+ * assertion cannot prove a reader still reads the right field.
+ *
+ * Prefer the TRAILING-30d block; fall back to the daily one only for an older summary written
+ * before that block existed. The daily window belongs to ops (the release gate grades agent draft
+ * speed on it, and "did we get slow today" is its question). Grading a STANDING property on the
+ * ~10 turns a day carries made this row flip on an unchanged system: 7 min on 8/6, then 39.5 min
+ * and 80.6 min on 8/7. Over 30 days the same store reads 30.2 min on 337 turns — still over the
+ * 15 min target, so this changes the stability of the row and not its verdict.
+ */
+export function resolveLatencyInput(latency: any): ReadinessInput["latency"] {
+  if (!latency) return null;
+  const wide = latency.trailing30d;
+  const effective = wide?.summary?.effective ?? latency.summary?.effective ?? null;
+  if (!effective) return null;
+  return {
+    effectiveMedianMin: effective.medianMin ?? null,
+    under5minPct: effective.under5minPct ?? null,
+    measured: wide?.measured ?? latency.source?.measured ?? null,
+    sinceHours: wide?.sinceHours ?? latency.source?.sinceHours ?? null
+  };
+}
+
 export function evaluateReadiness(input: ReadinessInput): ReadinessScore {
   const T = READINESS_TARGETS;
   const sections: ReadinessSection[] = [];
@@ -216,7 +247,24 @@ export function evaluateReadiness(input: ReadinessInput): ReadinessScore {
   const bf = input.bookingFunnel;
   const engaged = num(bf?.engaged);
   const funnelSampled = Boolean(bf) && engaged !== null && engaged >= T.funnel.minEngagedSample;
+  // Same discipline the three rates beside it already have. Two rules, and the second one matters:
+  //  - the figure comes from the TRAILING-30d window, not the daily one (see the audit for why);
+  //  - a figure measured on too few turns can never read MET. It stays a BLOCKER whose label says
+  //    the sample was thin, so the fail direction is unchanged.
+  // It deliberately does NOT abstain (met: null). An abstaining row is ignored by the section, so
+  // abstaining would have made an ABSENT latency reading a silent pass — the exact thing the
+  // "a missing latency reading cannot pass the funnel section" check exists to stop.
+  const latencyMeasured = num(input.latency?.measured);
+  const latencySampled = latencyMeasured === null || latencyMeasured >= T.funnel.minEngagedSample;
   const latencyMedian = num(input.latency?.effectiveMedianMin);
+  const latencyRow = latencySampled
+    ? atMost("First-touch effective median", latencyMedian, T.funnel.firstTouchMedianMin, "min")
+    : {
+        label: `First-touch effective median (only ${latencyMeasured} turns, need >= ${T.funnel.minEngagedSample})`,
+        value: latencyMedian === null ? "unmeasured" : `${latencyMedian}min`,
+        target: `<= ${T.funnel.firstTouchMedianMin}min`,
+        met: false
+      };
   sections.push(
     settle(
       {
@@ -229,7 +277,7 @@ export function evaluateReadiness(input: ReadinessInput): ReadinessScore {
           atLeast("Offered a time (of engaged)", num(bf?.offeredRatePct), T.funnel.offeredRatePct),
           atLeast("Booked (of engaged)", num(bf?.bookRatePct), T.funnel.bookRatePct),
           atLeast("Offer -> book conversion", num(bf?.offerToBookPct), T.funnel.offerToBookPct),
-          atMost("First-touch effective median", latencyMedian, T.funnel.firstTouchMedianMin, "min"),
+          latencyRow,
           { label: "Showed", value: num(bf?.showed) === null ? "unmeasured" : String(num(bf?.showed)), target: "tracked", met: null }
         ]
       },
@@ -529,7 +577,7 @@ async function main() {
         }
       : null,
     latency: latency?.summary?.effective
-      ? { effectiveMedianMin: latency.summary.effective.medianMin, under5minPct: latency.summary.effective.under5minPct }
+      ? resolveLatencyInput(latency)
       : null,
     portability,
     ahHardcodes: countAhHardcodes(),
