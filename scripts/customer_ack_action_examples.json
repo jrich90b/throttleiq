@@ -514,5 +514,81 @@
       "should_book": true,
       "day_contains": "may"
     }
+  },
+  {
+    "id": "night_shift_availability_answering_a_voicemail_is_not_a_signoff",
+    "text": "Hey buddy just got up I work over nights",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Perfect. Because the 2026 Road Glide in Purple Abyss with Black Trim is our demo we will be able to save you some money. $895 freight, $395 prep and 1k mile service at no charge (about$475)"
+      },
+      {
+        "direction": "out",
+        "body": "Hey Chris, this is Scott from American Harley-Davidson. I was texting you back and forth this morning about the credit application. Figured I'd give you a call to go over some information - if you could give me a callback at this number. If text is easier, just let me know."
+      }
+    ],
+    "expected": {
+      "action": "neutral_ack",
+      "action_any_of": [
+        "neutral_ack",
+        "none"
+      ],
+      "should_reply": true,
+      "should_book": false
+    }
+  },
+  {
+    "id": "third_shift_reply_to_outreach_is_not_a_signoff",
+    "text": "Just woke up, I work third shift",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Tried you on the phone - what is the best way to reach you?"
+      }
+    ],
+    "expected": {
+      "action": "neutral_ack",
+      "action_any_of": [
+        "neutral_ack",
+        "none"
+      ],
+      "should_reply": true,
+      "should_book": false
+    }
+  },
+  {
+    "id": "works_nights_late_re_engagement_is_not_a_signoff",
+    "text": "sorry just seeing this, I work nights",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Just following up on the numbers we went over - let me know if you want me to keep going."
+      }
+    ],
+    "expected": {
+      "action": "neutral_ack",
+      "action_any_of": [
+        "neutral_ack",
+        "none"
+      ],
+      "should_reply": true,
+      "should_book": false
+    }
+  },
+  {
+    "id": "shift_mention_WITH_an_explicit_promise_is_still_customer_will_provide_time",
+    "text": "I work nights so let me look at my schedule and I'll text you a time",
+    "history": [
+      {
+        "direction": "out",
+        "body": "What day works for you to come in?"
+      }
+    ],
+    "expected": {
+      "action": "customer_will_provide_time",
+      "should_reply": false,
+      "should_book": false
+    }
   }
 ]
