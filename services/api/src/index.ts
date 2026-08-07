@@ -731,8 +731,14 @@ import {
 import {
   buildFriendlyReachOutClose,
   buildCustomerDispositionReply,
-  ensureUniqueDispositionReply
+  ensureUniqueDispositionReply,
+  isReachOutWhenReadyCloseText
 } from "./domain/dispositionReply.js";
+import {
+  isBareAcknowledgementText,
+  isEmojiOnlyText,
+  isShortAckText
+} from "./domain/bareAcknowledgement.js";
 import { buildSchedulingConflictContinuationReply } from "./domain/schedulingConflictContinuation.js";
 import {
   inboundReplyActionConfidence,
@@ -23776,10 +23782,6 @@ function stringifyPolicyField(value: unknown): string {
   return value.trim();
 }
 
-function isEmojiOnlyText(text: string): boolean {
-  const t = String(text ?? "").trim();
-  return t.length > 0 && /^[\p{Extended_Pictographic}\s]+$/u.test(t);
-}
 
 function normalizeReactionInboundText(text: string): string {
   return String(text ?? "")
@@ -24604,17 +24606,6 @@ function getRegenerateAvailabilityMediaContext(
   return null;
 }
 
-function isShortAckText(text: string): boolean {
-  const t = String(text ?? "").trim().toLowerCase();
-  if (!t) return false;
-  if (isEmojiOnlyText(t)) return true;
-  if (t.length > 60) return false;
-  if (/[?]/.test(t)) return false;
-  return /\b(thanks|thank you|thanks again|thx|ty|appreciate|got it|sounds good|sounds great|will do|ok|okay|k|kk|cool|perfect|great|all good|no problem|you bet|yep|yup|sure)\b/.test(
-    t
-  );
-}
-
 function shouldSuppressShortAckDraft(text: string): boolean {
   const t = String(text ?? "").trim();
   if (!isShortAckText(t)) return false;
@@ -24636,17 +24627,6 @@ function shouldSuppressShortAckDraft(text: string): boolean {
     return false;
   }
   return true;
-}
-
-function isReachOutWhenReadyCloseText(text: string): boolean {
-  const t = String(text ?? "")
-    .toLowerCase()
-    .replace(/[’']/g, "'");
-  if (!t.trim()) return false;
-  return (
-    /\b(no rush|if anything changes|down the road|time is right)\b/.test(t) &&
-    /\b(reach out|here when you're ready|give me a shout|just let me know)\b/.test(t)
-  );
 }
 
 function formatLienHolderDirectoryEntry(entry: any): string | null {
@@ -60778,8 +60758,12 @@ if (authToken && signature) {
       return res.status(200).type("text/xml").send(twiml);
     }
     const humanModeDispositionText = String(event.body ?? "");
-    const humanModeDispositionShortAck =
-      isShortAckText(humanModeDispositionText) || isEmojiOnlyText(humanModeDispositionText);
+    // A courtesy word is not a reason to skip comprehension. This gate used to be
+    // isShortAckText, a word list that ruled ANY short polite sentence a non-event —
+    // "Found a better offer. Thanks" (+13105956498, 2026-08-04) never reached the
+    // parser, so a lost sale drew no reply and no closeout. isBareAcknowledgementText
+    // skips only turns with nothing left once the courtesy words are removed.
+    const humanModeDispositionShortAck = isBareAcknowledgementText(humanModeDispositionText);
     const humanModeDispositionParserEligible =
       event.provider === "twilio" &&
       process.env.LLM_ENABLED === "1" &&
@@ -60820,10 +60804,23 @@ if (authToken && signature) {
         parsedDisposition: humanModeDispositionParse?.disposition ?? null,
         confidence: humanModeDispositionParse?.confidence ?? null
       });
-      saveConversation(conv);
-      await flushConversationStore();
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      // Closing the lead in silence is half the job. The operator note on
+      // +13105956498 asked for both: "send out the one message letting them know if
+      // they need anything to let us know and close out." Agent mode already sends
+      // that message; human mode said nothing at all. Same existing copy, queued as a
+      // DRAFT — a rep owns this thread, so the send stays their call.
+      return publishLiveTwilioReply(
+        ensureUniqueDispositionReply(
+          buildCustomerDispositionReply(
+            humanModeDispositionText,
+            normalizeDisplayCase(conv?.lead?.firstName)
+          ),
+          conv,
+          normalizeOutboundText
+        ),
+        undefined,
+        { draftOnly: true }
+      );
     }
     // Sell-to-dealer outright cash sale — the same shared helper the live + regen paths use.
     // This is the exact turn that produced the bug (+17169831712 was in staff takeover when

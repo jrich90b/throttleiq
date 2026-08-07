@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 import { XMLParser } from "fast-xml-parser";
 import { extractAdfXmlFromEmail, parseAdfXml, stripFeedInventoryTailFromModel } from "../domain/adfParser.js";
 import { parsePreferredAdfDate } from "../domain/preferredAdfDate.js";
+import { decideLeadPhotoLine } from "../domain/leadPhotoLine.js";
 import {
   resolveModelDiscontinuation,
   decideInitialAdfOrderAnswer,
@@ -1312,11 +1313,18 @@ function buildInitialPhotoLine(conv: any, pick?: LeadInventoryMediaPick): string
   const modelText = String(modelRaw ?? "").trim();
   if (isGenericLeadModel(modelText)) return null;
   const yearText = String(pick.year ?? conv?.lead?.vehicle?.year ?? "").trim();
-  const colorText = String(pick.color ?? conv?.lead?.vehicle?.color ?? "").trim();
   const label = [yearText, modelText].filter(Boolean).join(" ").trim();
   if (!label) return null;
-  const colorPart = colorText ? ` in ${colorText}` : "";
-  return `Here’s a photo of a ${label}${colorPart} we have in stock.`;
+  // The colour comes off the UNIT only — never off the lead. See domain/leadPhotoLine.ts: the old
+  // `pick.color ?? lead.vehicle.color` fallback would print the customer's requested colour onto a
+  // unit we never verified. When the two differ, the line says so instead of quietly showing a
+  // different bike (+17165481952 built an Aurora Blue Denim; we showed a White Onyx and said
+  // nothing).
+  return decideLeadPhotoLine({
+    label,
+    unitColor: pick.color,
+    requestedColor: conv?.lead?.vehicle?.color
+  }).line;
 }
 
 function inferAppointmentTypeFromConv(conv: any): string | null {

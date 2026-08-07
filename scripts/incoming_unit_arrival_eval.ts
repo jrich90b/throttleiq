@@ -138,22 +138,26 @@ n += rows.length;
 }
 
 // --- 4) LLM coverage (gated; skips cleanly when the parser is disabled). ---
-type ArrivalStatus = "arriving" | "already_here" | "none";
-// `expect` may list MORE THAN ONE acceptable status. That is not a loosening: `already_here` and
-// `none` both decline to arm a watch (see the decision table above — arm:false either way), so on a
-// sentence where the two readings are genuinely interchangeable the LABEL carries no customer-facing
-// difference and pinning it only buys flake. Measured 2026-08-07: the Low Rider S row below failed
-// roughly half the times it ran and red-lined two consecutive full gates on unrelated changes, which
-// is how a gate teaches people to re-run instead of read it.
-const coverage: { seedText: string; expect: ArrivalStatus | ArrivalStatus[] }[] = [
+//
+// WHAT THIS ASSERTS, AND WHY IT IS NOT AN EXACT LABEL (2026-08-07, agent loop).
+// This block used to demand an exact `status` on every fixture, and it made `main` red on a coin
+// flip. Measured over 6 runs of the floor-note fixture: 4x `none`, 2x `already_here` — and
+// `decideInitialAdfPendingIncomingArm` returned `arm: false` on ALL SIX. Robert's note wobbles the
+// same way (3x `already_here`, 1x `none`, arm false every time). The two labels are behaviourally
+// IDENTICAL here: only `arriving` can arm a pending-incoming watch, so `none` and `already_here`
+// are the same answer wearing different hats, and the gate was failing on which hat.
+//
+// So the not-incoming cases assert the PROPERTY #575 exists to protect — "an in-stock bike is
+// never read as one that is coming in" — instead of the label. The guard keeps every tooth it had:
+// a regression to `arriving` fails this AND the arm check below. The genuine arrivals still demand
+// the exact `arriving` label, because that one IS load-bearing and it measured stable 4/4.
+const coverage: { seedText: string; expect: "arriving" | "not_incoming" }[] = [
   // THE replay fixture. This is the one that must never come back.
-  { seedText: ROBERT_NOTE, expect: "already_here" },
+  { seedText: ROBERT_NOTE, expect: "not_incoming" },
   {
-    // "we have on the floor today" reads as an inventory statement to one sampling and as scene-
-    // setting for a test-ride note to another. Both decline. What must never happen is `arriving`.
     seedText:
       "Customer test rode the Low Rider S we have on the floor today and asked about payment options on his way out.",
-    expect: ["already_here", "none"]
+    expect: "not_incoming"
   },
   // Genuine arrivals — the capability must survive the fix, or we have traded one miss for another.
   { seedText: "Interested in 2016 Freewheeler we are taking in on trade. His bike comes in next week.", expect: "arriving" },
@@ -163,30 +167,31 @@ const coverage: { seedText: string; expect: ArrivalStatus | ArrivalStatus[] }[] 
     expect: "arriving"
   }
 ];
-// A row may accept several statuses only when they AGREE about arming. "arriving" arms a watch;
-// "already_here" and "none" decline. Accepting "arriving" alongside a decline would let the original
-// miss — a watch armed for a bike already on the floor — back through this gate silently.
-for (const c of coverage) {
-  const accepted = Array.isArray(c.expect) ? c.expect : [c.expect];
-  if (accepted.length > 1) {
-    assert.ok(
-      !accepted.includes("arriving"),
-      `coverage row "${c.seedText.slice(0, 50)}…" accepts both an arming and a declining status — ` +
-        `that is not an ambiguity, it is the bug this eval exists to catch`
-    );
-  }
-}
-
 let ran = 0;
 for (const c of coverage) {
   const parsed = await parseIncomingUnitArrivalWithLLM({ seedText: c.seedText });
   if (!parsed) continue; // parser disabled / transient null — skip, don't red the gate
   ran += 1;
-  const accepted = Array.isArray(c.expect) ? c.expect : [c.expect];
-  assert.ok(
-    accepted.includes(parsed.status as ArrivalStatus),
-    `"${c.seedText.slice(0, 60)}…" should read ${accepted.join(" or ")}, got ${parsed.status}`
-  );
+  if (c.expect === "arriving") {
+    assert.equal(parsed.status, "arriving", `"${c.seedText.slice(0, 60)}…" should read arriving, got ${parsed.status}`);
+  } else {
+    assert.notEqual(
+      parsed.status,
+      "arriving",
+      `"${c.seedText.slice(0, 60)}…" is already here — it must never read arriving, got ${parsed.status}`
+    );
+    // and the only thing that label is used for must stay declined, whichever non-arriving label it picked.
+    const decision = decideInitialAdfPendingIncomingArm({
+      prefilterSignal: hasPendingIncomingInventorySignal(c.seedText),
+      parse: parsed,
+      confidenceFloor: incomingUnitArrivalConfidenceFloor()
+    });
+    assert.equal(
+      decision.arm,
+      false,
+      `"${c.seedText.slice(0, 60)}…" must not arm pending-incoming (${decision.reason})`
+    );
+  }
 }
 
 // --- 5) End-to-end: prefilter + parser + decision on the live shapes. ---

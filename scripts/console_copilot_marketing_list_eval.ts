@@ -109,6 +109,50 @@ const modelList = buildMarketingList([touringWatcher, sportster], {
 assert.equal(modelList.rows.length, 1, "model query narrows to matching leads");
 assert.equal(modelList.rows[0]!.convId, touringWatcher.id, "watch models count as model interest");
 
+// ── The row shows the interest that ANSWERED the query, not just the lead's first one. ──
+// Found 2026-08-06 verifying the trike-scope fix against live data: +17163163226 earns a
+// "street glide" list through a watch on a two-wheel Street Glide, but his lead vehicle is a
+// Street Glide 3 Limited — and the row displayed the TRIKE. Membership was right; the label
+// read exactly like the bug that was just fixed. +15136149740 is the mirror: a genuine trike
+// watcher (two Road Glide 3 watches) labelled with his two-wheel Road Glide lead vehicle.
+const mixedInterest = lead({
+  vehicle: { year: "2025", make: "Harley-Davidson", model: "Street Glide 3 Limited" },
+  watches: [{ make: "Harley-Davidson", model: "Street Glide", status: "active" }]
+});
+const mixedSg = buildMarketingList([mixedInterest], {
+  filters: { channel: "sms", modelQuery: "street glide" },
+  isPhoneSuppressed: NO_SUPPRESSION,
+  nowMs
+});
+assert.equal(mixedSg.rows.length, 1, "the two-wheel watch still earns a place on a Street Glide list");
+assert.equal(
+  mixedSg.rows[0]!.modelInterest,
+  "Harley-Davidson Street Glide",
+  "the row names the two-wheeler that matched — never the trike sitting beside it"
+);
+const mixedTrike = buildMarketingList([mixedInterest], {
+  filters: { channel: "sms", modelQuery: "trike" },
+  isPhoneSuppressed: NO_SUPPRESSION,
+  nowMs
+});
+assert.equal(mixedTrike.rows.length, 1, "the same lead also belongs on a trike list");
+assert.equal(
+  mixedTrike.rows[0]!.modelInterest,
+  "2025 Harley-Davidson Street Glide 3 Limited",
+  "on the trike list the row names the TRIKE — the label follows the query, not the record order"
+);
+// No query means nothing to explain: the first known interest, exactly as before.
+const noQuery = buildMarketingList([mixedInterest], {
+  filters: { channel: "sms" },
+  isPhoneSuppressed: NO_SUPPRESSION,
+  nowMs
+});
+assert.equal(
+  noQuery.rows[0]!.modelInterest,
+  "2025 Harley-Davidson Street Glide 3 Limited",
+  "with no model query the row keeps the lead's first interest"
+);
+
 // ── A TRIKE is not its two-wheel namesake (Joe, 2026-08-06). ──
 // "anyone who inquired about a new Street Glide in the last 90 days" came back carrying Street
 // Glide 3 Limited buyers, because that label literally contains "street glide". On the live store
@@ -273,4 +317,4 @@ const describeNoLlm = mockRes();
 await copilotMarketingListHandler({ user: { role: "manager" }, body: { describe: "touring buyers" } } as any, describeNoLlm as any);
 assert.equal(describeNoLlm.statusCode, 503, "describe path with LLM off degrades, never guesses filters");
 
-console.log("PASS console copilot marketing list eval (compliance order + audience filters + trike-class scope, both directions)");
+console.log("PASS console copilot marketing list eval (compliance order + audience filters + trike-class scope both directions + matched-interest labelling)");

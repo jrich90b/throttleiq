@@ -33,6 +33,12 @@ const SAFETY_ALLOWLIST = new Set([
   "isShortAckText",
   "isShortAckNoReplyText",
   "isEmojiOnlyText",
+  // Same class as the two above, and strictly NARROWER than them: it answers "is there
+  // anything here besides the courtesy word?" so we know whether a comprehension call is
+  // worth paying for. It never composes a reply and never concludes anything about intent
+  // — it hands MORE turns to the typed parser than isShortAckText did (+13105956498,
+  // "Found a better offer. Thanks", which the word list swallowed whole).
+  "isBareAcknowledgementText",
   "isWrongNumberText",
   "isQuotedReactionInboundText",
   "isCloseoutSignoffNoResponseText"
