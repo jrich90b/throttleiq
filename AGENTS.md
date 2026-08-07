@@ -101,6 +101,11 @@ escalate. The contract (full version in the loop doc):
 - Any new deterministic fallback that can publish SMS/email must add eval coverage proving it is an approved template or safe handoff.
 - Parser-accepted `no_response` overrides must not use deterministic sales-discovery prompts (for example asking for term, year/color/trim, or appointment time). If the orchestrator cannot confidently answer an actionable turn, send a safe handoff ack and create a staff follow-up task.
 
+## Fallback-vs-Parser Precedence (Joe, 2026-08-06; five instances in one day)
+- **A fallback may not overrule a parser verdict that exists.** When the parser produced a reading — including a hedged one below the accept floor — a deterministic fallback must not run against it. It may only fill the gap when there is NO reading at all (parser disabled, keyless, errored). A hedged reading of the sentence beats a keyword that never read it. Instances found 2026-08-06: dealer-transaction-policy (#573 — a buyer asking our price told "we cannot facilitate a private-party sale"), first-time-rider (#574 — 48 parser calls, 0 ever accepted; an owner offered a beginner Jumpstart), customer-disposition (#579 — 516 calls, 0 accepted; a buyer negotiating rates closed as "stepping back"). Precedence lives in a pure referee beside its siblings in `inboundPipeline.ts` (`resolve*Source`), pinned by a decision-table eval, shared by every lane.
+- **A fallback may not manufacture a confidence.** Hardcoding a score just above the accept floor it is bypassing (0.76 against a 0.74 gate, 0.79 against 0.78) is not a measurement — it is a way through the gate. Enforced by `manufactured_confidence_ratchet:eval`: the inventory of such literals may shrink, never grow.
+- **A keyword rule written for customer prose must not run against a machine record.** ADF bodies, enrollment records and questionnaires carry FIELD LABELS in the same haystack: `Motivation: Learn to ride` + `Training Experience: No` matched a rule meant for someone asking about pre-course practice, and a customer was told "I saw you want to do the Jumpstart" about a form he filled in (#582). Inside a record, require the explicit term (`isJumpStartExperienceRequestText` is the model).
+
 ## ADF Inquiry Priority
 - For initial ADF response drafting, specific customer inquiry intent must win over generic “learn more” phrasing.
 - Generic availability line (`I saw you wanted to learn more about ...`) should be used only when inquiry intent is non-specific.
@@ -443,6 +448,7 @@ When changing responses:
 3) LLM rules remain strict (no repeated intros, no premature booking).
 4) Hand‑off reasons must not ask for scheduling.
 5) New state/disposition logic is parser-first (schema + shared handler + regen parity + eval), not regex-only.
+- An eval case pins BEHAVIOUR, not vocabulary. If two labels produce the same customer-facing action (e.g. `already_here` vs `none` — both decline to arm), do not assert which one came back: that buys flake, red gates on unrelated work, and a team that re-runs instead of reads. When a case accepts several labels they must AGREE about the action, and the eval should guard against widening across that line (`incoming_unit_arrival_eval.ts` is the pattern).
 
 ## Key Files
 - `services/api/src/routes/sendgridInbound.ts` — ADF handling, deterministic responses, handoffs.
