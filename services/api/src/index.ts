@@ -827,6 +827,7 @@ import {
   nextActionFromState,
   reduceStaleStateForInbound,
   resolveNoResponsePolicyDecision,
+  decideShortAckTurnEnd,
   resolveRoutingParserDecision,
   shouldTreatInboundAsTestRideBikeSelection
 } from "./domain/routerV2.js";
@@ -67987,31 +67988,23 @@ if (authToken && signature) {
       }
     }
   }
-  if (event.provider === "twilio" && schedulingBlocked && shortAck) {
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-    return res.status(200).type("text/xml").send(twiml);
-  }
-  if (
-    event.provider === "twilio" &&
-    !lastOutboundAskedQuestion &&
-    !conv.inventoryWatchPending &&
-    !conv.scheduler?.pendingSlot &&
-    !conv.appointment?.reschedulePending &&
-    isAckOnlyCloseTurn(event.body, lastOutboundText)
-  ) {
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-    return res.status(200).type("text/xml").send(twiml);
-  }
-  if (
-    event.provider === "twilio" &&
-    shortAck &&
-    !lastOutboundAskedQuestion &&
-    !conv.inventoryWatchPending &&
-    !conv.scheduler?.pendingSlot &&
-    !conv.appointment?.reschedulePending
-  ) {
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+  // Was THREE hand-maintained copies of "end the turn here", all returning empty TwiML with NOTHING
+  // recorded — the fourth and last silencer on +16076549423, and the only one no instrument could
+  // see. One referee now, and it logs why.
+  const shortAckTurnEnd = decideShortAckTurnEnd({
+    provider: event.provider,
+    shortAck,
+    schedulingBlocked,
+    ackOnlyCloseTurn: isAckOnlyCloseTurn(event.body, lastOutboundText),
+    lastOutboundAskedQuestion,
+    hasPendingWatch: !!conv.inventoryWatchPending,
+    hasPendingSlot: !!conv.scheduler?.pendingSlot,
+    hasReschedulePending: !!conv.appointment?.reschedulePending,
+    acceptedPendingOffer: parserAcceptanceDeclinesAutoSilence({ accepted: customerAckActionAccepted, action: customerAckActionParse?.action, confidence: customerAckActionParse?.confidence })
+  });
+  if (shortAckTurnEnd.end) {
+    logRouteOutcome("short_ack_turn_end", { reason: shortAckTurnEnd.reason });
+    return res.status(200).type("text/xml").send(emptyTwilioWebhookResponse());
   }
 
   if (

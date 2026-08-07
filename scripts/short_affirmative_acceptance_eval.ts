@@ -37,7 +37,7 @@
  */
 import assert from "node:assert/strict";
 
-const { decideSchedulingTurn } = await import("../services/api/src/domain/routeStateReducer.ts");
+const { decideSchedulingTurn, decideShortAckTurnEnd } = await import("../services/api/src/domain/routeStateReducer.ts");
 const {
   buildAcceptedVisitTimeOffer,
   pickNextAvailableVisitSlots,
@@ -585,9 +585,84 @@ for (const action of ["accept_scheduling_ask", "accept_offer_of_information"]) {
   // Every silencer asks the SAME predicate — one idea, one implementation, no drift.
   const declineSites = index.split("parserAcceptanceDeclinesAutoSilence" + "(").length - 1;
   ok(
-    declineSites === 3,
-    `expected 3 direct predicate calls in index.ts — the response-control gate plus both referee sites; the sign-off gate reaches it through shouldEndTurnAsShortAckSignOff. Found ${declineSites}`
+    declineSites === 4,
+    `expected 4 direct predicate calls in index.ts — the response-control gate, both no-response referee sites, and the short-ack turn-end referee; the sign-off gate reaches it through shouldEndTurnAsShortAckSignOff. Found ${declineSites}`
   );
+
+  // THE FOURTH SILENCER. Three hand-maintained `return empty TwiML` blocks used to sit in a row
+  // here, recording NOTHING — invisible to decision tracing, to the route-outcome log and to the
+  // replay harness, which is why finding it needed markers bisected through 3,700 lines. One
+  // referee now, and it must LOG. Assert the copies are gone and cannot come back.
+  const turnEndSites = index.split("decideShortAckTurnEnd" + "(").length - 1;
+  ok(turnEndSites === 1, `expected exactly 1 short-ack turn-end referee call; found ${turnEndSites}`);
+  ok(
+    index.includes('logRouteOutcome("short_ack_turn_end"'),
+    "the short-ack turn end must record WHY — an exit that logs nothing is how this one hid for a day"
+  );
+  const bareShortAckExits = lines.filter(
+    (line, i) =>
+      line.includes("shortAck &&") &&
+      lines.slice(i, i + 8).some(l => l.includes("<Response></Response>"))
+  );
+  ok(
+    bareShortAckExits.length === 0,
+    `a bare shortAck exit returning empty TwiML is back in index.ts (${bareShortAckExits.length}) — route it through the referee`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 9. THE FOURTH SILENCER'S DECISION TABLE. `lastOutboundAskedQuestion` is a WORD LIST — a trailing
+//    "?" or `want me to|should i|can i|would you like|…`. We had written "**I can also** check
+//    current incentives and send only what applies": no "?", and "I can" is not "can i". So the
+//    handler decided we had asked nothing and ended the turn. The word list is deliberately NOT
+//    widened — widening it is the anti-pattern that produced all four silencers. The parser
+//    outranks it instead.
+// ---------------------------------------------------------------------------
+{
+  const MICHAEL = {
+    provider: "twilio",
+    shortAck: true,
+    schedulingBlocked: false,
+    ackOnlyCloseTurn: false,
+    lastOutboundAskedQuestion: false, // "I can also check current incentives…" — no "?", not "can i"
+    hasPendingWatch: false,
+    hasPendingSlot: false,
+    hasReschedulePending: false,
+    acceptedPendingOffer: false
+  };
+  ok(
+    decideShortAckTurnEnd(MICHAEL).end === true,
+    "today's behaviour is preserved when the parser says nothing: the turn still ends"
+  );
+  ok(
+    decideShortAckTurnEnd({ ...MICHAEL, acceptedPendingOffer: true }).end === false,
+    "THE FIX: an accepted offer must not be ended here either"
+  );
+  ok(
+    decideShortAckTurnEnd({ ...MICHAEL, acceptedPendingOffer: true }).reason === "accepted_pending_offer",
+    "and it must say so, so this exit is never invisible again"
+  );
+  // The acceptance outranks the scheduling-blocked arm too — same ruling, same reason.
+  ok(
+    decideShortAckTurnEnd({ ...MICHAEL, schedulingBlocked: true, acceptedPendingOffer: true }).end === false,
+    "an accepted offer outranks the scheduling-blocked short-ack arm"
+  );
+  // EVERY OTHER RULE UNCHANGED — a parser miss lands on exactly today's behaviour.
+  for (const [patch, expected, why] of [
+    [{ schedulingBlocked: true }, true, "scheduling blocked + short ack still ends"],
+    [{ lastOutboundAskedQuestion: true }, false, "we asked something, so the turn continues"],
+    [{ hasPendingWatch: true }, false, "a pending watch keeps the turn alive"],
+    [{ hasPendingSlot: true }, false, "a pending slot keeps the turn alive"],
+    [{ hasReschedulePending: true }, false, "a pending reschedule keeps the turn alive"],
+    [{ shortAck: false, ackOnlyCloseTurn: true }, true, "an ack-only close turn still ends"],
+    [{ shortAck: false }, false, "not a short ack and not a close turn: the turn continues"],
+    [{ provider: "sendgrid_adf" }, false, "this gate is Twilio-only"]
+  ] as const) {
+    ok(
+      decideShortAckTurnEnd({ ...MICHAEL, ...patch }).end === expected,
+      `${why} (got ${decideShortAckTurnEnd({ ...MICHAEL, ...patch }).end})`
+    );
+  }
 }
 
 console.log(`short_affirmative_acceptance:eval OK (${checks} checks)`);

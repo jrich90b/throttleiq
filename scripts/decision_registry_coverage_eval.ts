@@ -49,6 +49,9 @@ for (const fn of [
   // Gated by THIS turn's journey-intent parser verdict plus the availability parser; neither is
   // persisted, so a stored conversation cannot reproduce the inputs that make it fire.
   "decideSaleTradeJourneyBucket",
+  // The fourth silencer on +16076549423: keyed to THIS turn's short-ack text and the customer-ack
+  // parser's verdict on it, neither of which the stored conversation carries.
+  "decideShortAckTurnEnd",
   "resolveTurnPrimaryIntent",
   "decideSchedulingTurn",
   "decideCustomerAckConfirmBooking",
