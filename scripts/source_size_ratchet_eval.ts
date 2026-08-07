@@ -271,7 +271,10 @@ const CEILINGS: Ceiling[] = [
     // in workflowRegressionGuards, so each of its two call sites is one line. Three slices landed in
     // the same window, so this is the REAL post-merge count with all of them applied — re-derived
     // against current main, never carried from any branch (the #418 trap).
-    max: 71_008,
+    // 71_008 -> 71_007. Ruling 24: the three legacy watch-defaults lanes now pass their own lane's
+    // parsed condition instead of `undefined`, which is a same-line edit, and the comment claiming
+    // one lane was ALONE in asking the parser stopped being true and went.
+    max: 71_007,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

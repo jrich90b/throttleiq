@@ -8276,13 +8276,12 @@ export function decideStaffReopenResidue(input: StaffReopenResidueInput): StaffR
 // an unwanted outbound: fill `condition` from a stale lead record and someone who asked for a used
 // bike gets alerted about a new one.
 //
-// THE DIVERGENCE, PRESERVED ON PURPOSE: only the live inbound lane consults the parser's reading of
-// what the customer said THIS TURN (`semanticCondition`); the other two skip that rung and fall
-// straight from the text scan to the lead record. That is a real disagreement and AGENTS.md
-// parser-first says the parser rung should win everywhere — but adopting it CHANGES which units
-// alert, so it is a behaviour fix and ships separately behind a canary, not inside a cleanup.
-// Passing `semanticCondition: undefined` is how the two legacy lanes keep their exact behaviour
-// while the ladder itself has one owner. Delete this note when the fix lands.
+// THE DIVERGENCE IS CLOSED (ruling 24, adopted 2026-08-07). Until now only the live inbound lane
+// consulted the parser's reading of what the customer said THIS TURN (`semanticCondition`); the
+// other three skipped that rung and fell straight from the text scan to a possibly-stale LEAD
+// RECORD. AGENTS.md parser-first decides it — a typed parser's reading of this turn outranks a
+// stored field, and the non-answers below mean it cannot over-attach. All four lanes now pass their
+// own lane's accepted parse; `customer_risk_referees:eval` reddens if one goes back to `undefined`.
 export type InventoryWatchDefaultsInput = {
   watchMake?: string | null;
   watchTrim?: string | null;
@@ -8291,7 +8290,7 @@ export type InventoryWatchDefaultsInput = {
   leadTrim?: string | null;
   /** normalizeWatchCondition() over the customer's text — the strongest rung. */
   conditionFromText?: "new" | "used" | null;
-  /** The parser's condition for THIS turn. Only the live inbound lane supplies it (see above). */
+  /** The parser's condition for THIS turn, from each lane's own accepted parse. All four supply it. */
   semanticCondition?: string | null;
   /** normalizeWatchCondition() over the lead record's condition — the weakest rung. */
   conditionFromLead?: "new" | "used" | null;
