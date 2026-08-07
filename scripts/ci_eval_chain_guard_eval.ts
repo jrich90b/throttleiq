@@ -127,6 +127,35 @@ assert.ok(
   `ci:eval has ${chain.length} entries but the manifest requires ${manifest.required.length}`
 );
 
+// --- THE GAP THIS GUARD SHIPPED WITH (measured 2026-08-07) -------------------------------------
+// "Additions are free and need no edit here" left every NEWLY-ADDED eval unprotected until someone
+// remembered to run --update. Nobody did: the chain had grown to 457 while the manifest still
+// required 408, so 49 evals were droppable in silence — and the guard reported "no drops" the whole
+// time, which is worse than no guard, because it is a green light over a widening hole.
+//
+// That 49 is the WORST possible set to leave uncovered. A brand-new eval is unprotected during
+// exactly the window when it is most likely to be lost: its own branch is the stale one in the next
+// merge conflict, and the eval it would have dropped is the one added days later. Verified by
+// execution on 2026-08-07 — deleting `draft_judge_contact_preference:eval` from the chain and
+// running this guard exited 0.
+//
+// So the manifest is now an INVENTORY, not a floor: every entry the chain runs must be named in it.
+// The cost is one command on the PR that adds an eval; the diff then shows the addition, exactly as
+// the header already asks for removals. Both directions become deliberate.
+//
+// FAIL DIRECTION is unchanged and still safe: the worst case is a red build on a legitimate
+// addition, cleared by running --update. It can never let a drop through, and it has no opinion
+// about which evals should exist.
+const unlisted = chain.filter(name => !manifest.required.includes(name));
+assert.deepEqual(
+  unlisted,
+  [],
+  `ci:eval runs ${unlisted.length} eval(s) the manifest does not protect: ${unlisted.join(", ")}\n` +
+    "  An eval outside the manifest can be dropped by a stale merge with NOTHING going red.\n" +
+    `  Fix: npx tsx ${MANIFEST_PATH.replace("ci_eval_chain_manifest.json", "ci_eval_chain_guard_eval.ts")} --update\n` +
+    "  then commit the manifest alongside your new eval, so the addition is visible in the diff."
+);
+
 // The guard has to be in the chain it guards, or it never runs to notice its own removal.
 assert.ok(
   chain.includes("ci_eval_chain_guard:eval"),
