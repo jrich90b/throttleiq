@@ -17,7 +17,7 @@ import { orchestrateInbound, evaluateTestRideInventoryGate, buildBlockedTestRide
 import { resolveWatchOptOutOutcome } from "./domain/watchOptOutTurn.js";
 import { resolveAdfFirstTouchAckKind, buildAdfFirstTouchAck, resolveEnrollmentAckExtras } from "./domain/ridingAcademy.js";
 import { readFirstTimeRiderPolicy, hasRiderCoursePublicInfo, readEnrollmentRidingHistory, applyRiderExperienceState } from "./domain/firstTimeRiderPolicy.js";
-import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildRidingAcademyEnrollmentAck, buildJumpstartOneOnOneInvite, buildFirstTimeRiderBeginnerReply, buildWatchAvailableReply, buildCholoWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, resolveIntroducedOwnerFirstName, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, hasCustomerReceivedOutbound, hasRecentDeliveredHumanOutbound } from "./domain/agentVoice.js";
+import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildRidingAcademyEnrollmentAck, buildJumpstartOneOnOneInvite, buildFirstTimeRiderBeginnerReply, buildAcquiredVehicleAck, buildWatchAvailableReply, buildCholoWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, resolveIntroducedOwnerFirstName, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, hasCustomerReceivedOutbound, hasRecentDeliveredHumanOutbound } from "./domain/agentVoice.js";
 import {
   postSaleVehicleIsNew,
   postSaleAccessoryOrEnjoyMessage,
@@ -717,6 +717,7 @@ import { buildLongTermTimelineMessage } from "./domain/longTermMessage.js";
 import { sendEmail } from "./domain/emailSender.js";
 import {
   canApplyDispositionCloseout,
+  hasPostSaleOrOwnershipContext,
   isLogisticsProgressUpdateText,
   isAffordabilityRideConfidenceObjectionText,
   isDealerTransactionPolicyParserAccepted,
@@ -739,6 +740,13 @@ import {
   isEmojiOnlyText,
   isShortAckText
 } from "./domain/bareAcknowledgement.js";
+import {
+  hasBoughtElsewhereDispositionSignalText,
+  hasKeepCurrentBikeSignal,
+  hasSellOnOwnSignal,
+  parseCustomerDispositionFallback,
+  type CustomerDispositionDecision
+} from "./domain/customerDispositionFallback.js";
 import { buildSchedulingConflictContinuationReply } from "./domain/schedulingConflictContinuation.js";
 import {
   inboundReplyActionConfidence,
@@ -758,6 +766,7 @@ import {
   decideConversationCloseoutTurn,
   decideDealStatusCheckTurn,
   decideWatchOptOutTurn,
+  decideLostSaleCloseoutAck,
   decidePostSaleOwnershipTurn,
   decideWatchScopeTurn,
   decideLeadUnitAvailabilityDisclosure,
@@ -3274,6 +3283,56 @@ async function resolveWatchOptOutReply(
     closeArmed: outcome.closeAfterSend
   });
   return outcome.reply;
+}
+
+/**
+ * THE ONE closeout-reply builder for a customer who stepped back, shared by /webhooks/twilio
+ * (agent + human mode) and /conversations/:id/regenerate — so the three paths can never drift.
+ *
+ * It answers one extra question before we say goodbye: did they tell us they BOUGHT one? If so
+ * they get the acknowledgement Joe wrote on 2026-08-04 (congratulate, and we are here for parts,
+ * service and gear) and the lead closes as `customer_bought_elsewhere` — an OUTCOME, never
+ * re-pitched — instead of the ambiguous `customer_stepping_back`.
+ *
+ * COST: one extra parser call, and only on a turn already headed for a closeout, which is rare.
+ * SAFETY: see decideLostSaleCloseoutAck. The acquired read is unreliable on raw turns and reliable
+ * on top of an accepted disposition; this is the only place it is asked, and it is asked last.
+ */
+async function applyDispositionCloseoutAndBuildReply(
+  conv: any,
+  text: string,
+  decision: CustomerDispositionDecision,
+  scope: "live" | "regen"
+): Promise<string> {
+  const acquired = await safeLlmParse("customer_acquired_vehicle_closeout", () =>
+    parseWatchOptOutWithLLM({ text, history: buildHistory(conv, 8) })
+  );
+  const ack = decideLostSaleCloseoutAck({
+    intent: acquired?.intent ?? null,
+    confidence: Number(acquired?.confidence ?? 0),
+    confidenceMin: watchOptOutConfidenceMin(),
+    vehicle: acquired?.vehicle ?? null,
+    hasActiveWatch: hasActiveInventoryWatch(conv),
+    hasPostSaleContext: hasPostSaleOrOwnershipContext(conv)
+  });
+  if (ack.kind !== "lost_sale") {
+    applyCustomerDispositionCloseout(conv, decision);
+    return ensureUniqueDispositionReply(
+      buildCustomerDispositionReply(text, normalizeDisplayCase(conv?.lead?.firstName)),
+      conv,
+      normalizeOutboundText
+    );
+  }
+  // Same dialogState as any step-back so every existing disengagement guard keys off it unchanged —
+  // the reason is what carries the new meaning, exactly how `customer_deferred` was added.
+  applyCustomerDispositionCloseout(conv, { ...decision, reason: "customer_bought_elsewhere" });
+  recordRouteOutcome(scope, "customer_bought_elsewhere_closeout", {
+    convId: conv.id,
+    leadKey: conv.leadKey,
+    namedVehicle: !!ack.vehicle,
+    confidence: acquired?.confidence ?? null
+  });
+  return buildAcquiredVehicleAck(ack.vehicle, { removingFromAlertList: ack.removesFromAlertList });
 }
 
 // Post-sale ownership loss: confidence floor (default 0.7 — a wrongful stop drops courtesy/warranty
@@ -26864,20 +26923,6 @@ function isRegenerateInboundActionableForRouting(text: string): boolean {
   return false;
 }
 
-type CustomerDispositionDecision = {
-  // "customer_deferred" is a genuine "not right now" (the parser's defer_no_window). It is kept
-  // SEPARATE from customer_stepping_back because that reason is ambiguous — it also carries "I'll
-  // pass", "can't afford it", and hasBoughtElsewhereDispositionSignalText ("I ended up buying a
-  // 2016 in Ohio"). Flattening the two threw away the one distinction that decides whether this
-  // lead is ever worth re-engaging (Joe ruling 2026-07-29). The dialogState stays
-  // customer_stepping_back so every existing disengagement guard keys off it unchanged.
-  reason:
-    | "customer_sell_on_own"
-    | "customer_keep_current_bike"
-    | "customer_stepping_back"
-    | "customer_deferred";
-  state: "customer_sell_on_own" | "customer_keep_current_bike" | "customer_stepping_back";
-};
 
 // The cheap pre-filters that GATE the deal-progress LLM parser call (cost control, same
 // pattern as the disposition hint below) — never a routing decision — live in
@@ -26921,29 +26966,6 @@ function hasCustomerDispositionParserHintText(text: string | null | undefined): 
   ) || hasBoughtElsewhereDispositionSignalText(lower);
 }
 
-function hasBoughtElsewhereDispositionSignalText(text: string | null | undefined): boolean {
-  const lower = String(text ?? "")
-    .toLowerCase()
-    .replace(/[’]/g, "'")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!lower) return false;
-  const boughtVehicle =
-    /\b(?:i|we|he|she|they)?\s*(?:ended up\s+)?bought\s+(?:a|an|one|the|another)?[\s\S]{0,90}\b(?:\d{4}|bike|motorcycle|harley|street glide|road glide|softail|sportster|low rider|heritage)\b/.test(
-      lower
-    ) || /\bbought\s+a\s+\d{4}\b/.test(lower);
-  if (!boughtVehicle) return false;
-  if (/\b(?:from|through)\s+(?:you|u|your|american|american h-?d|american harley|the dealership|your store)\b/.test(lower)) {
-    return false;
-  }
-  return (
-    /\b(?:elsewhere|somewhere else|another dealer|different dealer|private seller)\b/.test(lower) ||
-    /\b(?:from|through)\s+(?!you\b|u\b|your\b|american\b|american h-?d\b|american harley\b|the dealership\b|your store\b)[a-z0-9][a-z0-9'.& -]{2,40}\b/.test(
-      lower
-    ) ||
-    /\bin\s+(?!north tonawanda\b|buffalo\b|your store\b|the dealership\b)[a-z][a-z'. -]{2,35}\b/.test(lower)
-  );
-}
 
 function hasFutureBuyingWindowHintText(text: string | null | undefined): boolean {
   const raw = String(text ?? "");
@@ -26991,33 +27013,6 @@ function isAppointmentCancellationWithoutNewTimeText(text: string | null | undef
   );
 }
 
-function parseCustomerDispositionFallback(text: string): CustomerDispositionDecision | null {
-  const lower = String(text ?? "").toLowerCase();
-  if (hasSellOnOwnSignal(lower)) {
-    return { reason: "customer_sell_on_own", state: "customer_sell_on_own" };
-  }
-  if (hasKeepCurrentBikeSignal(lower)) {
-    return { reason: "customer_keep_current_bike", state: "customer_keep_current_bike" };
-  }
-  if (
-    /\b(can(?:not|'t)\s+afford|too (expensive|high)|out of (my )?budget|can't do that right now|cannot do that right now|not in the budget|payments? (are|is) too high)\b/i.test(
-      lower
-    )
-  ) {
-    return { reason: "customer_stepping_back", state: "customer_stepping_back" };
-  }
-  if (
-    /\b(hold off(?: for now)?|pass(?: for now| man)?|i(?:'|’)?ll pass|i(?:'|’)?ll have to pass|i will pass|i will have to pass|have to pass(?: at this point| for now)?)\b/i.test(
-      lower
-    )
-  ) {
-    return { reason: "customer_stepping_back", state: "customer_stepping_back" };
-  }
-  if (hasBoughtElsewhereDispositionSignalText(lower)) {
-    return { reason: "customer_stepping_back", state: "customer_stepping_back" };
-  }
-  return null;
-}
 
 function resolveCustomerDispositionDecision(
   text: string,
@@ -27546,19 +27541,7 @@ function buildAffordabilityRideConfidenceObjectionReply(): string {
   );
 }
 
-function hasSellOnOwnSignal(text: string): boolean {
-  const t = String(text ?? "").toLowerCase();
-  return /\b(sell (it|my bike|my motorcycle|my ride) (on my own|myself)|sell (my bike|my motorcycle|my ride) myself)\b/i.test(
-    t
-  );
-}
 
-function hasKeepCurrentBikeSignal(text: string): boolean {
-  const t = String(text ?? "").toLowerCase();
-  return /\b(keep (it|my bike|my motorcycle|my ride)|going to keep (it|my bike|my motorcycle|my ride)|gonna keep (it|my bike|my motorcycle|my ride)|just keep (it|my bike|my motorcycle|my ride))\b/i.test(
-    t
-  );
-}
 
 function isSteppingBackDispositionText(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
@@ -58135,8 +58118,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     });
   }
   if (regenTerminalRouteDecision?.kind === "customer_disposition_closeout" && regenDispositionDecision) {
-    applyCustomerDispositionCloseout(conv, regenDispositionDecision);
-    const regenReply = ensureUniqueDispositionReply(buildCustomerDispositionReply(event.body, normalizeDisplayCase(conv?.lead?.firstName)), conv, normalizeOutboundText);
+    const regenReply = await applyDispositionCloseoutAndBuildReply(
+      conv,
+      String(event.body ?? ""),
+      regenDispositionDecision,
+      "regen"
+    );
     recordRouteOutcome("regen", regenTerminalRouteDecision.routeOutcome, {
       convId: conv.id,
       leadKey: conv.leadKey,
@@ -60795,7 +60782,12 @@ if (authToken && signature) {
       schedulingConflictOpen: isSchedulingConflictStillOpen(inboundReplyActionParse)
     });
     if (humanModeDispositionCloseoutAllowed && humanModeDispositionDecision) {
-      applyCustomerDispositionCloseout(conv, humanModeDispositionDecision);
+      const humanModeCloseoutReply = await applyDispositionCloseoutAndBuildReply(
+        conv,
+        humanModeDispositionText,
+        humanModeDispositionDecision,
+        "live"
+      );
       discardPendingDrafts(conv, "human_mode_customer_disposition_closeout");
       delete conv.emailDraft;
       recordRouteOutcome("live", "human_mode_customer_disposition_closeout", {
@@ -60810,18 +60802,7 @@ if (authToken && signature) {
       // they need anything to let us know and close out." Agent mode already sends
       // that message; human mode said nothing at all. Same existing copy, queued as a
       // DRAFT — a rep owns this thread, so the send stays their call.
-      return publishLiveTwilioReply(
-        ensureUniqueDispositionReply(
-          buildCustomerDispositionReply(
-            humanModeDispositionText,
-            normalizeDisplayCase(conv?.lead?.firstName)
-          ),
-          conv,
-          normalizeOutboundText
-        ),
-        undefined,
-        { draftOnly: true }
-      );
+      return publishLiveTwilioReply(humanModeCloseoutReply, undefined, { draftOnly: true });
     }
     // Sell-to-dealer outright cash sale — the same shared helper the live + regen paths use.
     // This is the exact turn that produced the bug (+17169831712 was in staff takeover when
@@ -61911,8 +61892,12 @@ if (authToken && signature) {
     return publishLiveTwilioReply(reply);
   }
   if (terminalRouteDecision?.kind === "customer_disposition_closeout" && dispositionDecision) {
-    applyCustomerDispositionCloseout(conv, dispositionDecision);
-    const reply = ensureUniqueDispositionReply(buildCustomerDispositionReply(semanticInboundText, normalizeDisplayCase(conv?.lead?.firstName)), conv, normalizeOutboundText);
+    const reply = await applyDispositionCloseoutAndBuildReply(
+      conv,
+      semanticInboundText,
+      dispositionDecision,
+      "live"
+    );
     recordRouteOutcome("live", terminalRouteDecision.routeOutcome, {
       convId: conv.id,
       leadKey: conv.leadKey,

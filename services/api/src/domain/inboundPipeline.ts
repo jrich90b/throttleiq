@@ -96,11 +96,13 @@ export type InboundTerminalRouteDecision =
       // "customer_deferred" = an explicit "not right now", kept distinct from the ambiguous
       // customer_stepping_back (which also carries "I'll pass" and "bought elsewhere"). The
       // dispositionState stays customer_stepping_back, so route/guard behavior is unchanged.
+      // "customer_bought_elsewhere" = an EXPLICIT purchase; an outcome, never re-pitched.
       dispositionReason:
         | "customer_sell_on_own"
         | "customer_keep_current_bike"
         | "customer_stepping_back"
-        | "customer_deferred";
+        | "customer_deferred"
+        | "customer_bought_elsewhere";
       dispositionState:
         | "customer_sell_on_own"
         | "customer_keep_current_bike"
@@ -120,7 +122,9 @@ export type InboundTerminalRouteInput = {
       | "customer_sell_on_own"
       | "customer_keep_current_bike"
       | "customer_stepping_back"
-      | "customer_deferred";
+      | "customer_deferred"
+      // Explicit purchase elsewhere — an outcome, never re-pitched (Joe, 2026-08-07).
+      | "customer_bought_elsewhere";
     state:
       | "customer_sell_on_own"
       | "customer_keep_current_bike"

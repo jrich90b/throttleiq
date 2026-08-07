@@ -2317,7 +2317,10 @@ export function isDeclineCloseoutReason(reason: string | null | undefined): bool
     r === "customer_stepping_back" ||
     // A "not right now" archives on the same terms as any other decline — a real customer text
     // still reopens it, only a bare ack leaves it archived (Joe ruling 2026-07-29).
-    r === "customer_deferred"
+    r === "customer_deferred" ||
+    // A lost sale is the most finished decline there is; it archives on the same terms, and a real
+    // customer text still reopens it (Joe, 2026-08-07).
+    r === "customer_bought_elsewhere"
   );
 }
 
@@ -2378,6 +2381,18 @@ export const DEFER_SOFT_PAUSE_RESUME_DAYS = 45;
  *                                2016 in Ohio"). Since it can mean "already bought", the safe read
  *                                is to leave it alone. Genuine deferrals now land on
  *                                "customer_deferred" instead, so this parks less than it used to.
+ *                                2026-08-07: an EXPLICIT purchase now lands on
+ *                                "customer_bought_elsewhere", so the "already bought" half of the
+ *                                ambiguity is smaller than it was — but it is not gone. The
+ *                                deterministic hasBoughtElsewhereDispositionSignalText arm still
+ *                                routes some purchases here, and it is only reached when the typed
+ *                                parser did not answer. Making this bucket re-engageable is a
+ *                                DIFFERENT decision: it starts new outbound conversations with
+ *                                leads we have never re-touched, so it is Joe's call, not a
+ *                                consequence of adding the new reason. Measure the bucket first.
+ *  - "customer_bought_elsewhere" — an OUTCOME, not a deferral. They bought a bike. Never re-pitch
+ *                                one; that is the fabricated-frame failure this whole split exists
+ *                                to prevent.
  *  - "customer_sell_on_own"     — about selling THEIR bike themselves, not about buying one.
  *
  * FAIL DIRECTION: no re-engagement. An unrecognized reason gets no resume date, so silence is

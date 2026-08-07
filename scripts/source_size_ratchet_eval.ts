@@ -264,7 +264,14 @@ const CEILINGS: Ceiling[] = [
     // applier went straight into domain/firstTimeRiderPolicy.ts beside the enrollment-record readers
     // it uses, rather than inline. index.ts pays one line for the call and nothing for the import —
     // it already imported from that module — so the slice lands a line UNDER what it started at.
-    max: 71_026,
+    // 71_026 -> PLACEHOLDER. The lost-sale closeout acknowledgement (Joe, 2026-08-07) collapsed
+    // THREE hand-maintained copies of the closeout reply block into applyDispositionCloseoutAndBuildReply
+    // and moved the deterministic fallback scan to domain/customerDispositionFallback.ts; the
+    // short-ack sign-off gate (+16076549423) then moved wholesale to shouldEndTurnAsShortAckSignOff
+    // in workflowRegressionGuards, so each of its two call sites is one line. Three slices landed in
+    // the same window, so this is the REAL post-merge count with all of them applied — re-derived
+    // against current main, never carried from any branch (the #418 trap).
+    max: PLACEHOLDER,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
