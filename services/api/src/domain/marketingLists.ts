@@ -14,7 +14,7 @@
  *   4. watchOptOut    — the durable "stop alerting me" conversation flag
  */
 import type { Conversation } from "./conversationStore.js";
-import { trikeClassConflict } from "./modelFamily.js";
+import { isBareTrikeClassRequest, isTrikeClassModel, trikeClassConflict } from "./modelFamily.js";
 import { isNonSalesConversation } from "./scoringExclusions.js";
 
 export type MarketingListChannel = "sms" | "email";
@@ -109,6 +109,12 @@ export function audienceModelMatches(
   const query = String(modelQuery ?? "").trim().toLowerCase();
   if (!query) return true;
   const label = String(modelLabel ?? "");
+  // A bare CLASS request is not a name to search for (Joe, 2026-08-06 — the mirror of the Street
+  // Glide 3 defect). "anyone interested in a trike" must collect Street Glide 3 Limited, Tri
+  // Glide and Freewheeler, and not one of those labels contains the word "trike"; a substring
+  // test finds nobody. Only the TRIKE axis gets this lane — see isBareTrikeClassRequest for why a
+  // general family lane would re-introduce the very bug this fixes.
+  if (isBareTrikeClassRequest(query)) return isTrikeClassModel(label) === true;
   if (!label.toLowerCase().includes(query)) return false;
   return !trikeClassConflict(query, label);
 }

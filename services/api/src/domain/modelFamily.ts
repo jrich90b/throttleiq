@@ -220,6 +220,33 @@ export function isFamilyOnlyModelLabel(label: string | null | undefined): boolea
 }
 
 /**
+ * Is this text a bare request for the TRIKE CLASS itself ("trike", "trikes", "a new trike")
+ * rather than for a named model? Joe, 2026-08-06, on the marketing-list audience filter: asking
+ * for trikes must collect Street Glide 3 Limited / Tri Glide / Freewheeler, none of which contain
+ * the word "trike" anywhere in their label.
+ *
+ * WHY ONLY TRIKE, and not a general "match the named family" — the same reason this module
+ * discriminates trike-class membership instead of family disjointness (see the file header):
+ * the catalog CROSS-LISTS. 62 of its 278 codes sit in more than one family; FLTRT (Road Glide 3)
+ * is in BOTH TOURING and TRIKE. So "everything in the TOURING family" would drag the trikes right
+ * back in — the audience bug in reverse. TRIKE is the one clean form-factor axis (7 codes, and
+ * membership requires EVERY code to be a trike code).
+ *
+ * Reuses isFamilyOnlyModelLabel's whole-label equality, so it can never fire on a specific model:
+ * "Street Glide Trike" is a MODEL, not the class, and reads false.
+ *
+ * Fail direction: no catalog, an unrecognised word, or any specific model → false → the caller
+ * keeps its existing matching. This only ever ADDS a class lane; it narrows nothing.
+ */
+export function isBareTrikeClassRequest(text: string | null | undefined): boolean {
+  if (!isFamilyOnlyModelLabel(text)) return false;
+  const stripped = stripFamilyLabelNoise(normalizeFamilyModelKey(text));
+  if (!stripped) return false;
+  if (stripped === "trike") return true;
+  return stripped.split(" ").map(singularizeFamilyWord).join(" ") === "trike";
+}
+
+/**
  * Does this customer TURN reference a family word ("trike") standalone — i.e.
  * NOT as part of a longer specific-model alias ("Street Glide Trike", "Road
  * Glide 3 Trike")? Returns the family word, or null. Used by the watch-model

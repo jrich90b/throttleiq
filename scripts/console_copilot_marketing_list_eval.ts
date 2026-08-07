@@ -142,6 +142,50 @@ assert.equal(
   "a two-wheeler is not swept into a trike query"
 );
 
+// ── Asking for the CLASS finds the trikes by class, not by name (Joe, 2026-08-06). ──
+// "anyone interested in a trike" used to return nobody: no trike label contains the word.
+const classList = buildMarketingList([twoWheeler, trike, cvoTrike, trikeWatcher], {
+  filters: { channel: "sms", modelQuery: "trike" },
+  isPhoneSuppressed: NO_SUPPRESSION,
+  nowMs
+});
+assert.deepEqual(
+  classList.rows.map(r => r.convId).sort(),
+  [trike.id, cvoTrike.id, trikeWatcher.id].sort(),
+  "a trike audience collects every trike — including labels with no 'trike' in the name — and no two-wheeler"
+);
+for (const phrasing of ["trike", "trikes", "a new trike"]) {
+  assert.equal(
+    audienceModelMatches("2026 Harley-Davidson Street Glide 3 Limited", phrasing),
+    true,
+    `class request "${phrasing}" reaches a trike whose name never says trike`
+  );
+  assert.equal(
+    audienceModelMatches("2026 Harley-Davidson Street Glide Special", phrasing),
+    false,
+    `class request "${phrasing}" does not collect a two-wheeler`
+  );
+}
+// The class lane must never fire on a specific MODEL that happens to carry the word.
+assert.equal(
+  audienceModelMatches("2026 Harley-Davidson Street Glide Trike", "street glide trike"),
+  true,
+  "naming a specific trike model still matches it by name"
+);
+assert.equal(
+  audienceModelMatches("2026 Harley-Davidson Tri Glide Ultra", "street glide trike"),
+  false,
+  "a specific-model query is NOT widened into the whole class"
+);
+// The cross-listing trap this deliberately does NOT open: family words other than trike keep
+// matching by name, because 62 of the catalog's 278 codes sit in more than one family (FLTRT is
+// in TOURING *and* TRIKE), so a "touring" class lane would drag the trikes straight back in.
+assert.equal(
+  audienceModelMatches("2026 Harley-Davidson Street Glide 3 Limited", "touring"),
+  false,
+  "'touring' stays a name match — a family lane there would re-introduce the trike bug"
+);
+
 // FAIL DIRECTION: the class read can only ever NARROW. Anything that fails to resolve to a class
 // on BOTH sides falls through to the substring behaviour that shipped before this change.
 assert.equal(
@@ -229,4 +273,4 @@ const describeNoLlm = mockRes();
 await copilotMarketingListHandler({ user: { role: "manager" }, body: { describe: "touring buyers" } } as any, describeNoLlm as any);
 assert.equal(describeNoLlm.statusCode, 503, "describe path with LLM off degrades, never guesses filters");
 
-console.log("PASS console copilot marketing list eval (compliance order + audience filters + trike-class scope)");
+console.log("PASS console copilot marketing list eval (compliance order + audience filters + trike-class scope, both directions)");
