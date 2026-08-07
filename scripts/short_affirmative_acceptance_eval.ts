@@ -44,7 +44,7 @@ const {
   resolveAcceptedVisitTimeOffer,
   shouldOfferTimesAfterAcceptance
 } = await import("../services/api/src/domain/schedulingAcceptance.ts");
-const { isShortAckNoReplyText } = await import(
+const { isShortAckNoReplyText, parserAcceptanceOutranksShortAckSignOff } = await import(
   "../services/api/src/domain/workflowRegressionGuards.ts"
 );
 
@@ -363,6 +363,86 @@ for (const text of ["ok thanks, what time do you close?", "Afternoon would be gr
     freeBusy: (async () => ({ calendars: {} })) as any
   });
   ok(nothing.reply === null, "with no bookable rep the arm must decline rather than improvise");
+}
+
+// ---------------------------------------------------------------------------
+// 7. THE GATE ITSELF — recognising the acceptance is worthless if the sign-off gate still ends
+//    the turn. MEASURED 2026-08-07 on +16076549423: the parser change alone was INERT. Michael
+//    answered our own "I can also check current incentives on the Street Glide Limited and send
+//    only what applies" with "That would be great" on 2026-06-09 and got NOTHING but cadence for
+//    ten days. Replayed on the parser-only branch the turn STILL produced no draft, because this
+//    gate fires on the word "great" and exempted `accept_scheduling_ask` alone.
+//    So assert the DECISION — does the turn get skipped? — never the parser's label.
+// ---------------------------------------------------------------------------
+{
+  // Mirrors the gate expression used in BOTH inbound paths. Section 8 is what catches this
+  // going out of sync with index.ts.
+  const wouldSkipAsSignOff = (text: string, accepted: boolean, action: string | null) =>
+    isShortAckNoReplyText(text) && !parserAcceptanceOutranksShortAckSignOff({ accepted, action });
+
+  const MICHAEL = "That would be great"; // +16076549423, 2026-06-09T21:36Z
+
+  ok(
+    isShortAckNoReplyText(MICHAEL) === true,
+    "the lexical gate must still match this turn — the parser, not a word list, is what overrides it"
+  );
+  ok(
+    wouldSkipAsSignOff(MICHAEL, true, "accept_offer_of_information") === false,
+    "accepting our own offer to SEND something must not be skipped as a sign-off"
+  );
+  ok(
+    wouldSkipAsSignOff("Sounds great!", true, "accept_scheduling_ask") === false,
+    "accepting our own scheduling ask must not be skipped as a sign-off"
+  );
+
+  // FAIL DIRECTION. Anything short of an ACCEPTED parse naming one of those two actions leaves
+  // the word list in charge — a recognition miss is exactly today's behavior, never worse.
+  for (const action of ["no_response_needed", "customer_will_provide_time", "neutral_ack", "none", null]) {
+    ok(
+      wouldSkipAsSignOff(MICHAEL, true, action) === true,
+      `an accepted parse reading "${action}" must leave the sign-off gate in charge`
+    );
+  }
+  ok(
+    wouldSkipAsSignOff(MICHAEL, false, "accept_offer_of_information") === true,
+    "an UNACCEPTED parse must never override the sign-off gate, whatever action it names"
+  );
+  ok(
+    wouldSkipAsSignOff("Thanks!", true, "no_response_needed") === true,
+    "a plain thank-you after a commitment must still end the turn"
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 8. WIRING, BY COUNT — neither the ratchet nor a source pin can prove this. The gate is only
+//    fixed if BOTH inbound paths ask the shared predicate, so require an exact call count and
+//    require every sign-off gate site to be guarded by it.
+// ---------------------------------------------------------------------------
+{
+  const { readFileSync } = await import("node:fs");
+  const index = readFileSync("services/api/src/index.ts", "utf8");
+
+  const callSites = index.split("parserAcceptanceOutranksShortAckSignOff" + "(").length - 1;
+  ok(
+    callSites === 2,
+    `expected exactly 2 sign-off exemption call sites in index.ts — live + regenerate; found ${callSites}`
+  );
+
+  const lines = index.split("\n");
+  const gateLines = lines
+    .map((line, i) => ({ line, i }))
+    .filter(entry => entry.line.includes("isShortAckNoReplyText" + "("));
+  ok(
+    gateLines.length === 2,
+    `expected exactly 2 sign-off gate sites in index.ts; found ${gateLines.length}`
+  );
+  for (const gate of gateLines) {
+    const window = lines.slice(gate.i, gate.i + 8).join("\n");
+    ok(
+      window.includes("parserAcceptanceOutranksShortAckSignOff"),
+      `the sign-off gate at index.ts line ${gate.i + 1} is UNGUARDED — the parser cannot outrank it there`
+    );
+  }
 }
 
 console.log(`short_affirmative_acceptance:eval OK (${checks} checks)`);
