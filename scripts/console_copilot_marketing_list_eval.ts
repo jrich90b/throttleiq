@@ -109,6 +109,107 @@ const modelList = buildMarketingList([touringWatcher, sportster], {
 assert.equal(modelList.rows.length, 1, "model query narrows to matching leads");
 assert.equal(modelList.rows[0]!.convId, touringWatcher.id, "watch models count as model interest");
 
+// ── A TRIKE is not its two-wheel namesake (Joe, 2026-08-06). ──
+// "anyone who inquired about a new Street Glide in the last 90 days" came back carrying Street
+// Glide 3 Limited buyers, because that label literally contains "street glide". On the live store
+// that day, 22 of the 97 matched leads were trikes. Same class line the watch engine scopes on
+// (modelFamily.trikeClassConflict) — Joe: "This should probably use the same logic as the watches."
+const { audienceModelMatches } = await import("../services/api/src/domain/marketingLists.ts");
+const twoWheeler = lead({ vehicle: { year: "2026", make: "Harley-Davidson", model: "Street Glide Special" } });
+const trike = lead({ vehicle: { year: "2026", make: "Harley-Davidson", model: "Street Glide 3 Limited" } });
+const cvoTrike = lead({ vehicle: { year: "2026", make: "Harley-Davidson", model: "CVO Street Glide 3 Limited" } });
+const trikeWatcher = lead({ watches: [{ model: "Street Glide Trike", status: "active" }] });
+const sgList = buildMarketingList([twoWheeler, trike, cvoTrike, trikeWatcher], {
+  filters: { channel: "sms", modelQuery: "street glide" },
+  isPhoneSuppressed: NO_SUPPRESSION,
+  nowMs
+});
+assert.deepEqual(
+  sgList.rows.map(r => r.convId),
+  [twoWheeler.id],
+  "a Street Glide list carries the two-wheeler and NO trike — not the 3 Limited, not the CVO 3 Limited, not a Street Glide Trike watch"
+);
+
+// The mirror direction: a trike query must not collect two-wheelers.
+assert.equal(
+  audienceModelMatches("2026 Harley-Davidson Street Glide 3 Limited", "street glide 3"),
+  true,
+  "the trike itself still matches a trike query"
+);
+assert.equal(
+  audienceModelMatches("2026 Harley-Davidson Street Glide Special", "street glide 3"),
+  false,
+  "a two-wheeler is not swept into a trike query"
+);
+
+// ── Asking for the CLASS finds the trikes by class, not by name (Joe, 2026-08-06). ──
+// "anyone interested in a trike" used to return nobody: no trike label contains the word.
+const classList = buildMarketingList([twoWheeler, trike, cvoTrike, trikeWatcher], {
+  filters: { channel: "sms", modelQuery: "trike" },
+  isPhoneSuppressed: NO_SUPPRESSION,
+  nowMs
+});
+assert.deepEqual(
+  classList.rows.map(r => r.convId).sort(),
+  [trike.id, cvoTrike.id, trikeWatcher.id].sort(),
+  "a trike audience collects every trike — including labels with no 'trike' in the name — and no two-wheeler"
+);
+for (const phrasing of ["trike", "trikes", "a new trike"]) {
+  assert.equal(
+    audienceModelMatches("2026 Harley-Davidson Street Glide 3 Limited", phrasing),
+    true,
+    `class request "${phrasing}" reaches a trike whose name never says trike`
+  );
+  assert.equal(
+    audienceModelMatches("2026 Harley-Davidson Street Glide Special", phrasing),
+    false,
+    `class request "${phrasing}" does not collect a two-wheeler`
+  );
+}
+// The class lane must never fire on a specific MODEL that happens to carry the word.
+assert.equal(
+  audienceModelMatches("2026 Harley-Davidson Street Glide Trike", "street glide trike"),
+  true,
+  "naming a specific trike model still matches it by name"
+);
+assert.equal(
+  audienceModelMatches("2026 Harley-Davidson Tri Glide Ultra", "street glide trike"),
+  false,
+  "a specific-model query is NOT widened into the whole class"
+);
+// The cross-listing trap this deliberately does NOT open: family words other than trike keep
+// matching by name, because 62 of the catalog's 278 codes sit in more than one family (FLTRT is
+// in TOURING *and* TRIKE), so a "touring" class lane would drag the trikes straight back in.
+assert.equal(
+  audienceModelMatches("2026 Harley-Davidson Street Glide 3 Limited", "touring"),
+  false,
+  "'touring' stays a name match — a family lane there would re-introduce the trike bug"
+);
+
+// FAIL DIRECTION: the class read can only ever NARROW. Anything that fails to resolve to a class
+// on BOTH sides falls through to the substring behaviour that shipped before this change.
+assert.equal(
+  audienceModelMatches("2026 Harley-Davidson Street Glide Special", "street glide"),
+  true,
+  "a same-class pair is unaffected"
+);
+assert.equal(
+  audienceModelMatches("Some Unlisted Custom Build", "custom"),
+  true,
+  "an unresolvable label still matches on substring — never narrower than before"
+);
+assert.equal(
+  audienceModelMatches("2026 Harley-Davidson Street Glide 3 Limited", "harley"),
+  true,
+  "an unresolvable QUERY still matches on substring — the guard needs both sides to resolve"
+);
+assert.equal(
+  audienceModelMatches("2026 Harley-Davidson Road Glide", "street glide"),
+  false,
+  "a plain non-match is still a non-match"
+);
+assert.equal(audienceModelMatches("anything at all", ""), true, "an empty query filters nothing");
+
 const usedList = buildMarketingList([sportster, touringWatcher], {
   filters: { channel: "sms", condition: "used" },
   isPhoneSuppressed: NO_SUPPRESSION,
@@ -172,4 +273,4 @@ const describeNoLlm = mockRes();
 await copilotMarketingListHandler({ user: { role: "manager" }, body: { describe: "touring buyers" } } as any, describeNoLlm as any);
 assert.equal(describeNoLlm.statusCode, 503, "describe path with LLM off degrades, never guesses filters");
 
-console.log("PASS console copilot marketing list eval");
+console.log("PASS console copilot marketing list eval (compliance order + audience filters + trike-class scope, both directions)");
