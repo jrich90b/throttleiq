@@ -14,6 +14,7 @@
  *   4. watchOptOut    — the durable "stop alerting me" conversation flag
  */
 import type { Conversation } from "./conversationStore.js";
+import { trikeClassConflict } from "./modelFamily.js";
 import { isNonSalesConversation } from "./scoringExclusions.js";
 
 export type MarketingListChannel = "sms" | "email";
@@ -21,7 +22,8 @@ export type MarketingListChannel = "sms" | "email";
 export type MarketingListFilters = {
   channel: MarketingListChannel;
   /** Case-insensitive match against watch models/trims, the lead's inquiry vehicle, and
-   *  the unit quoted on a call. */
+   *  the unit quoted on a call — scoped by `audienceModelMatches`, so a trike never lands in a
+   *  two-wheel list (or the reverse) just because one name contains the other. */
   modelQuery?: string | null;
   /** "new" | "used" against the lead vehicle / watch condition. */
   condition?: string | null;
@@ -76,6 +78,39 @@ function lastInboundAt(conv: Conversation): string | null {
     return msg.at;
   }
   return null;
+}
+
+/**
+ * Does one structured model interest satisfy the audience's model query?
+ *
+ * Substring alone is not enough. Joe, 2026-08-06: a list for "anyone who inquired about a new
+ * Street Glide in the last 90 days" came back carrying **Street Glide 3 Limited** — which is a
+ * TRIKE. "street glide" is literally inside that label, so `includes()` said yes. Measured on the
+ * live store the same day: **22 of the 97 leads a "street glide" query matched were trikes** (21×
+ * Street Glide 3 Limited incl. one CVO, 1× Street Glide Trike). Different bike, different buyer,
+ * different pitch.
+ *
+ * The trike/two-wheel line is already settled DATA (Joe's rule 2026-07-04, `modelFamily`
+ * `model_codes_by_family.json`) and the WATCH engine has scoped on it since — this filter simply
+ * never asked. Joe, 2026-08-06: "This should probably use the same logic as the watches."
+ *
+ * Deterministic structured-extraction read (a catalog class lookup), not comprehension: the
+ * customer's meaning is already resolved upstream by the copilot parser into `modelQuery`.
+ *
+ * FAIL DIRECTION — matches this module's law that every filter fails toward a SMALLER list, and
+ * cannot over-narrow: `trikeClassConflict` returns true ONLY when BOTH labels resolve to a class,
+ * so an unknown label, an unknown query, or a same-class pair all fall through to today's
+ * substring behaviour. It can only ever drop a bike that is provably on the far side of the line.
+ */
+export function audienceModelMatches(
+  modelLabel: string | null | undefined,
+  modelQuery: string | null | undefined
+): boolean {
+  const query = String(modelQuery ?? "").trim().toLowerCase();
+  if (!query) return true;
+  const label = String(modelLabel ?? "");
+  if (!label.toLowerCase().includes(query)) return false;
+  return !trikeClassConflict(query, label);
 }
 
 /** Every structured place a model interest can live — never customer prose. */
@@ -165,7 +200,7 @@ export function buildMarketingList(
 
     // ── Audience filters (not compliance — a miss here just narrows the list) ──
     const models = modelInterestCandidates(conv);
-    if (modelQuery && !models.some(m => m.toLowerCase().includes(modelQuery))) continue;
+    if (modelQuery && !models.some(m => audienceModelMatches(m, modelQuery))) continue;
     if (condition && !matchesCondition(conv, condition)) continue;
     const source = conv.lead?.source ?? null;
     if (sourceQuery && !String(source ?? "").toLowerCase().includes(sourceQuery)) continue;
