@@ -649,6 +649,22 @@ export function parserAcceptanceOutranksShortAckSignOff(args: {
   return args.action === "accept_scheduling_ask" || args.action === "accept_offer_of_information";
 }
 
+/**
+ * The whole gate, so BOTH inbound paths ask ONE function and neither can drift: should this turn
+ * end right here as a sign-off? Twilio only — the lexical test is SMS shorthand and was never
+ * meant for ADF or widget bodies, which is why both call sites already checked the provider.
+ */
+export function shouldEndTurnAsShortAckSignOff(args: {
+  provider?: string | null;
+  text?: string | null;
+  accepted: boolean;
+  action?: string | null;
+}): boolean {
+  if (args.provider !== "twilio") return false;
+  if (!isShortAckNoReplyText(args.text)) return false;
+  return !parserAcceptanceOutranksShortAckSignOff({ accepted: args.accepted, action: args.action });
+}
+
 export function shouldRebaseWeekdayReplyToPriorNextWeek(
   inboundTextRaw: string | null | undefined,
   lastOutboundTextRaw: string | null | undefined

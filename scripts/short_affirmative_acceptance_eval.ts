@@ -44,7 +44,7 @@ const {
   resolveAcceptedVisitTimeOffer,
   shouldOfferTimesAfterAcceptance
 } = await import("../services/api/src/domain/schedulingAcceptance.ts");
-const { isShortAckNoReplyText, parserAcceptanceOutranksShortAckSignOff } = await import(
+const { isShortAckNoReplyText, parserAcceptanceOutranksShortAckSignOff, shouldEndTurnAsShortAckSignOff } = await import(
   "../services/api/src/domain/workflowRegressionGuards.ts"
 );
 
@@ -375,10 +375,9 @@ for (const text of ["ok thanks, what time do you close?", "Afternoon would be gr
 //    So assert the DECISION — does the turn get skipped? — never the parser's label.
 // ---------------------------------------------------------------------------
 {
-  // Mirrors the gate expression used in BOTH inbound paths. Section 8 is what catches this
-  // going out of sync with index.ts.
+  // The real gate both paths call — not a re-implementation of it.
   const wouldSkipAsSignOff = (text: string, accepted: boolean, action: string | null) =>
-    isShortAckNoReplyText(text) && !parserAcceptanceOutranksShortAckSignOff({ accepted, action });
+    shouldEndTurnAsShortAckSignOff({ provider: "twilio", text, accepted, action });
 
   const MICHAEL = "That would be great"; // +16076549423, 2026-06-09T21:36Z
 
@@ -411,6 +410,13 @@ for (const text of ["ok thanks, what time do you close?", "Afternoon would be gr
     wouldSkipAsSignOff("Thanks!", true, "no_response_needed") === true,
     "a plain thank-you after a commitment must still end the turn"
   );
+  // The lexical test is SMS shorthand — it must never end an ADF or widget turn.
+  for (const provider of ["sendgrid_adf", "web_widget", "", null]) {
+    ok(
+      shouldEndTurnAsShortAckSignOff({ provider, text: "Thanks!", accepted: false, action: null }) === false,
+      `the sign-off gate must stay Twilio-only, not fire on "${provider}"`
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -422,27 +428,19 @@ for (const text of ["ok thanks, what time do you close?", "Afternoon would be gr
   const { readFileSync } = await import("node:fs");
   const index = readFileSync("services/api/src/index.ts", "utf8");
 
-  const callSites = index.split("parserAcceptanceOutranksShortAckSignOff" + "(").length - 1;
+  const callSites = index.split("shouldEndTurnAsShortAckSignOff" + "(").length - 1;
   ok(
     callSites === 2,
-    `expected exactly 2 sign-off exemption call sites in index.ts — live + regenerate; found ${callSites}`
+    `expected exactly 2 sign-off gate call sites in index.ts — live + regenerate; found ${callSites}`
   );
 
-  const lines = index.split("\n");
-  const gateLines = lines
-    .map((line, i) => ({ line, i }))
-    .filter(entry => entry.line.includes("isShortAckNoReplyText" + "("));
+  // And the raw lexical test must not be reachable from the handler any more: calling it directly
+  // is how the regenerate path ended up with no parser exemption at all.
+  const rawUses = index.split("isShortAckNoReplyText" + "(").length - 1;
   ok(
-    gateLines.length === 2,
-    `expected exactly 2 sign-off gate sites in index.ts; found ${gateLines.length}`
+    rawUses === 0,
+    `index.ts must reach the sign-off test only through the shared gate; found ${rawUses} direct call(s)`
   );
-  for (const gate of gateLines) {
-    const window = lines.slice(gate.i, gate.i + 8).join("\n");
-    ok(
-      window.includes("parserAcceptanceOutranksShortAckSignOff"),
-      `the sign-off gate at index.ts line ${gate.i + 1} is UNGUARDED — the parser cannot outrank it there`
-    );
-  }
 }
 
 console.log(`short_affirmative_acceptance:eval OK (${checks} checks)`);

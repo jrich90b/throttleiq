@@ -931,8 +931,7 @@ import {
   isRideChallengeLeadSignal,
   isRegenerateSchedulingLanguageText,
   scheduleStatusCommitmentOutranksArrivalAck,
-  isShortAckNoReplyText,
-  parserAcceptanceOutranksShortAckSignOff,
+  shouldEndTurnAsShortAckSignOff,
   isStockNumberInventoryInterestText,
   isTakeOffMilwaukeeEightEngineRequestText,
   isCustomerReturningCallText,
@@ -54743,16 +54742,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   if (event.provider === "twilio" && isCloseoutSignoffNoResponseText(event.body ?? "")) {
     return respondRegenerateSkipped("closeout_signoff_no_reply");
   }
-  // Mirror of the live arm, same shared predicate — before this, regenerate had NO parser
-  // exemption at all, so a bare affirmative the live path answers died here on a re-draft.
-  if (
-    event.provider === "twilio" &&
-    isShortAckNoReplyText(event.body ?? "") &&
-    !parserAcceptanceOutranksShortAckSignOff({
-      accepted: isCustomerAckActionParserAccepted(regenCustomerAckActionParse),
-      action: regenCustomerAckActionParse?.action
-    })
-  ) {
+  // Mirror of the live arm — before this, regenerate had NO parser exemption at all, so a bare
+  // affirmative the live path answers died here on a re-draft.
+  if (shouldEndTurnAsShortAckSignOff({ provider: event.provider, text: event.body ?? "", accepted: isCustomerAckActionParserAccepted(regenCustomerAckActionParse), action: regenCustomerAckActionParse?.action })) {
     return respondRegenerateSkipped("short_ack_no_reply");
   }
   if (event.provider === "twilio" && isInventoryBrowseLinkRequest(String(event.body ?? ""))) {
@@ -64006,20 +63998,10 @@ if (authToken && signature) {
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
-  // The lexical sign-off test stays (removing it fails toward replying to every "thanks"), but the
-  // PARSER outranks it in the cases it provably gets wrong: a bare affirmative answering our own
-  // "what day works?" (or our own "want me to send that over?") is an acceptance, not a sign-off,
-  // and dying here is what stranded 18 leads in the funnel's accepted_no_time bucket. The list of
-  // exempt actions is shared with the regenerate path so the two cannot drift. Parser silent or
-  // unaccepted => the word list still wins.
-  if (
-    event.provider === "twilio" &&
-    isShortAckNoReplyText(inboundText) &&
-    !parserAcceptanceOutranksShortAckSignOff({
-      accepted: customerAckActionAccepted,
-      action: customerAckActionParse?.action
-    })
-  ) {
+  // Shared with the regenerate path so the two cannot drift — see the guard for why the lexical
+  // sign-off test is KEPT and which parser actions are allowed to outrank it.
+  const endTurnArgs = { accepted: customerAckActionAccepted, action: customerAckActionParse?.action };
+  if (shouldEndTurnAsShortAckSignOff({ provider: event.provider, text: inboundText, ...endTurnArgs })) {
     discardPendingDrafts(conv, "short_ack_no_reply");
     delete conv.emailDraft;
     saveConversation(conv);
