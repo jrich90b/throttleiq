@@ -18785,19 +18785,6 @@ export default function Home() {
                       />
                     </label>
                   </div>
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={!!dealerProfileForm.testRideRequiresEndorsement}
-                      onChange={e =>
-                        setDealerProfileForm({
-                          ...dealerProfileForm,
-                          testRideRequiresEndorsement: e.target.checked
-                        })
-                      }
-                    />
-                    Test rides require a motorcycle endorsement
-                  </label>
                   <div className="text-xs text-slate-600">
                     Controls replies for course/pricing questions and first-time-rider guidance. If enabled but price is blank, the assistant asks staff to confirm price.
                   </div>
@@ -19518,7 +19505,30 @@ export default function Home() {
                   </div>
 
                   <div>
-                    <div className="text-sm font-medium mb-2">Follow-up: Test Ride</div>
+                    <div className="text-sm font-medium mb-2">Test Rides</div>
+                    {/*
+                      The endorsement rule lives here, with the rest of the test-ride settings, rather
+                      than buried in the Riding Academy block where it used to sit (Joe, 2026-08-07).
+                      Purely where the control is DRAWN — it still saves to the same two profile keys
+                      (policies.firstTimeRider.testRideRequiresEndorsement +
+                      requiresMotorcycleEndorsementForTestRide), so the rule the agent applies is
+                      unchanged. Those keys are read with `!== false`, i.e. an absent value still means
+                      "endorsement required" — the safe direction.
+                    */}
+                    <label className="flex items-center gap-2 text-sm mb-3">
+                      <input
+                        type="checkbox"
+                        checked={!!dealerProfileForm.testRideRequiresEndorsement}
+                        onChange={e =>
+                          setDealerProfileForm({
+                            ...dealerProfileForm,
+                            testRideRequiresEndorsement: e.target.checked
+                          })
+                        }
+                      />
+                      Test rides require a motorcycle endorsement
+                    </label>
+                    <div className="text-sm font-medium mt-4 mb-2 text-slate-600">Follow-up</div>
                     <label className="flex items-center gap-2 text-sm mb-3">
                       <input
                         type="checkbox"
