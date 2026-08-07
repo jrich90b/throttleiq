@@ -1114,6 +1114,7 @@ import {
 } from "./domain/pendingIncomingInventory.js";
 import { buildCustomerReceivedHistory, buildEffectiveHistory } from "./domain/effectiveContext.js";
 import { buildOpenTurnInquiry, getLastInboundBody, getLastInboundMessage, hasMultiMessageOpenTurn } from "./domain/openCustomerTurn.js";
+import { decideRepCallQuietWindow } from "./domain/repCallQuietWindow.js";
 import { resolveReportDir } from "./domain/reportPaths.js";
 import { isWorkerDrivenTicks, isWorkerTickTask, type WorkerTickTask } from "./domain/workerTasks.js";
 import {
@@ -33118,6 +33119,20 @@ async function processDueFollowUpsUnlocked() {
         const { until, indefinite } = parsePauseUntil(lastInbound.body, inboundAt);
         if (indefinite) continue;
         if (until && now < until) setBlockUntil(until);
+      }
+      // A rep PHONING the customer is contact, the same as a rep texting or emailing them. The
+      // staff send endpoint already hushes the cadence for 24h after a manual outbound
+      // (pauseCadenceAfterManualOutbound) and the sales-review bench below reads delivered `human`
+      // rows — the phone was the one channel neither could see, so an automated touch could land
+      // on top of a rep's call: +17164815358 got "Quick follow-up — if timing changed, just let me
+      // know." 48 minutes after Gio left him a voicemail about the three Street Bobs in stock.
+      // Same 24h and the same `!isPostSale` scope as the manual-send pause. See
+      // domain/repCallQuietWindow.ts for the measurement, and why the broader 14-day question is
+      // deliberately left alone. Fail direction: DEFERS via setBlockUntil (bumps nextDueAt, never
+      // advances the step), so the worst case is the same touch a day later.
+      const repCallQuiet = decideRepCallQuietWindow({ messages: conv.messages, nowMs: now.getTime() });
+      if (repCallQuiet.quiet && repCallQuiet.quietUntilMs != null) {
+        setBlockUntil(new Date(repCallQuiet.quietUntilMs));
       }
       const lastDraft = getLastOutbound(conv, ["draft_ai"]);
       const lastSent = getLastOutbound(conv, ["twilio", "human", "sendgrid"]);
