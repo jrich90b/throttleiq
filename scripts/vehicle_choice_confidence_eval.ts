@@ -101,6 +101,61 @@ const coverage: { text: string; expect: "committed" | "open_to_alternatives" | "
   { text: "can I come by Saturday to see it?", expect: "unclear" }
 ];
 
+// A BARE AFFIRMATIVE answers the dealer's LAST line, not an older one. Michael +16076549423,
+// 2026-06-09: an offer of "a simple compare" three days earlier, then an offer of current
+// INCENTIVES, then "That would be great". Reading the whole thread the parser reached back to the
+// compare offer and returned open_to_alternatives (0.83-0.85, over the 0.8 floor, 3 of 4 runs), so
+// a lead already quoted on a specific unit was told "happy to line up a couple of other options"
+// and asked new/used/budget — every one of which he had already answered.
+//
+// These assert the DECISION the referee actually branches on (offer alternatives, or not), never
+// the label: `committed` and `unclear` both stay silent, so either is correct for the targets.
+// The REAL thread, not a stylised one. Measured 2026-08-07: a three-message fixture does NOT
+// reproduce the defect (the unfixed parser passes it 3/3) — it needs the customer's own answers
+// and the check-in framing in the window the parser reads (history.slice(-6)). A fixture that
+// passes on the broken code pins nothing, so this one is the transcript.
+const realThreadPrefix: { direction: "in" | "out"; body: string }[] = [
+  { direction: "in", body: "Interested in the 2026 Street Glide Limited" },
+  { direction: "out", body: "Hey Michael, this is Joe at American H-D. I will get a price worked up for you. Couple questions, what county would you be registering the bike in and do you have a trade?" },
+  { direction: "in", body: "No trade, Steuben county, 5-10k down, credit score over 800" },
+  { direction: "out", body: "ok thanks, thats all i should need" },
+  { direction: "out", body: "Hey Michael, sorry it took a little bit. Here is a quote on that iron horse street glide limited. I have it priced at the billiard gray base color and there are no dealer prep/hd freight charges, so you would just have the taxes and dmv charges. 10k down at just a 60 mo term you would probably be looking around $500/mo" },
+  { direction: "out", body: "Hey Michael, just checking in on the 2026 Street Glide Limited. If helpful, I can send a simple compare and next-step options." }
+];
+const quoteTurn = { direction: "out" as const, body: "Here is a quote on that Street Glide Limited, billiard gray base color. 10k down at a 60 mo term you would be around $500/mo" };
+
+const bareAffirmativeCases: {
+  id: string;
+  text: string;
+  history: { direction: "in" | "out"; body: string }[];
+  offersAlternatives: boolean;
+}[] = [
+  {
+    id: "yes_to_incentives_after_an_older_compare_offer",
+    text: "That would be great",
+    history: [
+      ...realThreadPrefix,
+      { direction: "out", body: "I can also check current incentives on about the Street Glide Limited and send only what applies. Current offers: https://americanharley-davidson.com/l/h-d-national-promotions" }
+    ],
+    offersAlternatives: false
+  },
+  {
+    id: "yes_to_photos_after_an_older_compare_offer",
+    text: "That would be great",
+    history: [
+      ...realThreadPrefix,
+      { direction: "out", body: "I can grab a few photos of that Street Glide and text them over if you want." }
+    ],
+    offersAlternatives: false
+  },
+  {
+    id: "yes_to_an_explicit_other_bikes_offer_still_offers",
+    text: "Yes please",
+    history: [quoteTurn, { direction: "out", body: "Want me to pull a few similar bikes so you can compare?" }],
+    offersAlternatives: true
+  }
+];
+
 // Safety-critical guard: committed/off-topic phrasings must NEVER read as open_to_alternatives.
 // A false positive here is the failure mode the feature is built to avoid.
 const mustNotOffer: string[] = [
@@ -127,6 +182,23 @@ for (const c of coverage) {
   );
 }
 
+let bareRan = 0;
+for (const c of bareAffirmativeCases) {
+  const parsed = await parseVehicleChoiceConfidenceWithLLM({
+    text: c.text,
+    history: [...c.history, { direction: "in", body: c.text }],
+    referencedModel: "Street Glide Limited"
+  });
+  if (!parsed) continue;
+  bareRan += 1;
+  const offers = parsed.stance === "open_to_alternatives";
+  assert.equal(
+    offers,
+    c.offersAlternatives,
+    `[${c.id}] a bare "${c.text}" must ${c.offersAlternatives ? "" : "NOT "}reach the offer-alternatives arm; stance=${parsed.stance} conf=${parsed.confidence}`
+  );
+}
+
 for (const text of mustNotOffer) {
   const parsed = await parseVehicleChoiceConfidenceWithLLM({ text, referencedModel: "Road Glide" });
   if (!parsed) continue;
@@ -139,7 +211,7 @@ for (const text of mustNotOffer) {
 }
 
 console.log(
-  ran === 0 && safetyRan === 0
+  ran === 0 && safetyRan === 0 && bareRan === 0
     ? `PASS vehicle choice confidence eval (source guard + ${rows.length} decision-table rows; LLM coverage skipped — parser disabled)`
-    : `PASS vehicle choice confidence eval (source guard + ${rows.length} decision-table rows + ${ran}/${coverage.length} coverage + ${safetyRan}/${mustNotOffer.length} adversarial false-positive cases)`
+    : `PASS vehicle choice confidence eval (source guard + ${rows.length} decision-table rows + ${ran}/${coverage.length} coverage + ${safetyRan}/${mustNotOffer.length} adversarial false-positive cases + ${bareRan}/${bareAffirmativeCases.length} bare-affirmative last-offer cases)`
 );

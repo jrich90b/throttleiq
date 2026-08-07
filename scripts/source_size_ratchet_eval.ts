@@ -264,14 +264,14 @@ const CEILINGS: Ceiling[] = [
     // applier went straight into domain/firstTimeRiderPolicy.ts beside the enrollment-record readers
     // it uses, rather than inline. index.ts pays one line for the call and nothing for the import —
     // it already imported from that module — so the slice lands a line UNDER what it started at.
-    // 71_026 -> PLACEHOLDER. The lost-sale closeout acknowledgement (Joe, 2026-08-07) collapsed
+    // 71_026 -> 71_008. The lost-sale closeout acknowledgement (Joe, 2026-08-07) collapsed
     // THREE hand-maintained copies of the closeout reply block into applyDispositionCloseoutAndBuildReply
     // and moved the deterministic fallback scan to domain/customerDispositionFallback.ts; the
     // short-ack sign-off gate (+16076549423) then moved wholesale to shouldEndTurnAsShortAckSignOff
     // in workflowRegressionGuards, so each of its two call sites is one line. Three slices landed in
     // the same window, so this is the REAL post-merge count with all of them applied — re-derived
     // against current main, never carried from any branch (the #418 trap).
-    max: PLACEHOLDER,
+    max: 71_008,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
@@ -304,9 +304,13 @@ const CEILINGS: Ceiling[] = [
     // dependence on the turn, so it was never function-local in anything but position. Same shape
     // as inboundReplyActionPrompt.ts and walkInInventoryWant.ts above: the prompt surface that
     // grows every time we teach the parser a new case now grows on its own budget. That paid for
-    // `accept_offer_of_information` (+16076549423) and leaves the ceiling 39 lines lower than it
-    // was, not higher.
-    max: 16_437,
+    // `accept_offer_of_information` (+16076549423) and leaves the ceiling lower than it was.
+    // 16_437 -> 16_399. The vehicle-choice confidence parser's static instruction + few-shot block
+    // moved the same way, to domain/vehicleChoiceConfidencePrompt.ts behind a builder (a bare
+    // exported array breaks llm_parser_contract:eval). That paid for the bare-affirmative rules
+    // (+16076549423). Both halves of that lead's fix ship together, so this is the REAL post-merge
+    // count with both extractions applied — re-derived here, not carried from either branch.
+    max: 16_399,
     note: "every parser prompt + JSON schema; second-largest and on the same trajectory"
   }
 ];
