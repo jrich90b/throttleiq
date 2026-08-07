@@ -163,6 +163,30 @@ function matchesCondition(conv: Conversation, condition: string): boolean {
   });
 }
 
+/**
+ * The name a human reading this list needs to see.
+ *
+ * WHY THIS IS NOT `lead.name` (measured 2026-08-07 on the live americanharley store): `lead.name`
+ * is populated on 563 of 822 conversations, while `firstName` is on 814 and `lastName` on 803. The
+ * list read `lead.name` alone, so roughly a THIRD of every list came out as bare phone numbers with
+ * no name beside them — including all four rows of the first real list a manager pulled (the Riding
+ * Academy audience: Maya, igor, Savannah, Donald all rendered `null`). Same fallback order the
+ * console itself already uses for a lead's display name (`index.ts`, the conversations list).
+ *
+ * Returns null only when we genuinely hold no name — the caller still shows the row, because a
+ * contactable lead with no name on file is a real lead, not a broken one.
+ */
+export function resolveMarketingListName(conv: Conversation): string | null {
+  const joined = [conv.lead?.firstName, conv.lead?.lastName]
+    .map(v => String(v ?? "").trim())
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  if (joined) return joined;
+  const legacy = String(conv.lead?.name ?? "").trim();
+  return legacy || null;
+}
+
 export function buildMarketingList(
   convs: Conversation[],
   opts: {
@@ -261,7 +285,7 @@ export function buildMarketingList(
     rows.push({
       convId: conv.id,
       leadKey: conv.leadKey || conv.id,
-      name: conv.lead?.name ?? null,
+      name: resolveMarketingListName(conv),
       phone,
       email,
       source,

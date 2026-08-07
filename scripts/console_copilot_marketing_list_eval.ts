@@ -317,4 +317,68 @@ const describeNoLlm = mockRes();
 await copilotMarketingListHandler({ user: { role: "manager" }, body: { describe: "touring buyers" } } as any, describeNoLlm as any);
 assert.equal(describeNoLlm.statusCode, 503, "describe path with LLM off degrades, never guesses filters");
 
-console.log("PASS console copilot marketing list eval (compliance order + audience filters + trike-class scope both directions + matched-interest labelling)");
+// ── The NAME on the row (2026-08-07). ──
+// The builder read `lead.name` alone. Measured on the live americanharley store: `lead.name` is
+// populated on 563 of 822 conversations, `firstName` on 814 and `lastName` on 803 — so about a
+// THIRD of every list came out as bare phone numbers with no name beside them, including all four
+// rows of the first real list a manager pulled. A list a human cannot read is not a list.
+{
+  const { resolveMarketingListName } = await import("../services/api/src/domain/marketingLists.ts");
+
+  // The real shape that broke it: firstName/lastName present, `name` absent.
+  const split = lead({});
+  split.lead.name = undefined;
+  split.lead.firstName = "Maya";
+  split.lead.lastName = "Iversen";
+  assert.equal(resolveMarketingListName(split), "Maya Iversen", "first+last is the display name");
+
+  // First name only — still a usable row, and this is the live shape for several leads.
+  const firstOnly = lead({});
+  firstOnly.lead.name = undefined;
+  firstOnly.lead.firstName = "igor";
+  firstOnly.lead.lastName = undefined;
+  assert.equal(resolveMarketingListName(firstOnly), "igor", "a first name alone is still a name");
+
+  // Legacy `name` still works, and still wins when it is the only thing we hold.
+  const legacy = lead({});
+  legacy.lead.firstName = undefined;
+  legacy.lead.lastName = undefined;
+  legacy.lead.name = "Legacy Lead";
+  assert.equal(resolveMarketingListName(legacy), "Legacy Lead", "the legacy field is not dropped");
+
+  // firstName/lastName WIN over a stale `name` — the split fields are the ones the ADF keeps current.
+  const both = lead({});
+  both.lead.name = "Stale Name";
+  both.lead.firstName = "Fresh";
+  both.lead.lastName = "Name";
+  assert.equal(resolveMarketingListName(both), "Fresh Name", "split fields outrank the legacy field");
+
+  // Nothing at all => null, and the row is still LISTED. A contactable lead with no name on file is
+  // a real lead; dropping it would be a silent, compliance-invisible loss of audience.
+  const nameless = lead({});
+  nameless.lead.name = undefined;
+  nameless.lead.firstName = undefined;
+  nameless.lead.lastName = undefined;
+  assert.equal(resolveMarketingListName(nameless), null, "no name on file reads null, not a crash");
+  const namelessList = buildMarketingList([nameless], { filters: { channel: "sms" }, isPhoneSuppressed: NO_SUPPRESSION, nowMs });
+  assert.equal(namelessList.rows.length, 1, "a nameless lead is still on the list");
+  assert.equal(namelessList.rows[0].name, null);
+
+  // Whitespace-only is not a name.
+  const blank = lead({});
+  blank.lead.name = "   ";
+  blank.lead.firstName = "  ";
+  blank.lead.lastName = "";
+  assert.equal(resolveMarketingListName(blank), null, "whitespace is not a name");
+
+  // END-TO-END through the builder itself — the bug was in the row construction, not the helper.
+  const wired = lead({});
+  wired.lead.name = undefined;
+  wired.lead.firstName = "Savannah";
+  wired.lead.lastName = "Reed";
+  const wiredList = buildMarketingList([wired], { filters: { channel: "sms" }, isPhoneSuppressed: NO_SUPPRESSION, nowMs });
+  assert.equal(wiredList.rows.length, 1);
+  assert.equal(wiredList.rows[0].name, "Savannah Reed", "buildMarketingList must USE the resolver, not lead.name");
+}
+
+console.log("PASS console copilot marketing list eval (compliance order + audience filters + trike-class scope both directions + matched-interest labelling + row name fallback)");
