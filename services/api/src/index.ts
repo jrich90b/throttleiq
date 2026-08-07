@@ -984,6 +984,7 @@ import {
   isDuplicateInboundEvent,
   appendOutbound,
   appendUndeliveredOutbound,
+  recordFailedManualSend,
   ensureInitialSmsOptOutFooter,
   listConversations,
   getConversation,
@@ -53423,12 +53424,10 @@ app.post("/conversations/:id/send", async (req, res) => {
       conversation: conv
     });
   } catch (err: any) {
-    // Log the attempted send as human so rep still sees it
+    // Log the attempted send so the rep still sees it — but STAMP IT UNDELIVERED (absent marker =
+    // delivered, so recording it bare made a failed send look sent). See markOutboundUndelivered.
     const hadOutbound = conv.messages.some(m => m.direction === "out");
-    const fin = finalizeDraftAsSent(conv, draftId, smsBody, "human", undefined, actorForOutbound(smsBody));
-    if (!fin.usedDraft) {
-      appendOutbound(conv, "salesperson", to, smsBody, "human", undefined, mediaUrls, actorForOutbound(smsBody));
-    }
+    recordFailedManualSend(conv, { draftId, to, body: smsBody, mediaUrls, actor: actorForOutbound(smsBody) });
     await reconcileManualSmsSendState({ hadOutbound, delivered: false });
     queueTuningLog(null);
     queueTlpLog();

@@ -2736,6 +2736,60 @@ export function appendOutbound(
  * the duplicate-outbound suppressors keep matching them; the marker, not the provider, now says
  * whether it reached anyone. Genuine staff console sends do NOT come through here.
  */
+/**
+ * Stamp an outbound row that the carrier NEVER ACCEPTED, without disturbing anything else about it.
+ *
+ * `appendUndeliveredOutbound` is for sites that are creating the row themselves and can drop the
+ * actor. The staff Send button cannot: it has already finalized the draft (or appended) WITH the
+ * rep's actor stamp, and that stamp is what identifies a staff-authored reply everywhere else. So
+ * this marks the row in place.
+ *
+ * WHY (Maya Iversen, +15854782032, 2026-08-07T01:15:58Z). A deploy was mid-`npm ci`, the twilio
+ * library failed to lazily resolve `dayjs`, and the send threw. The catch recorded the attempt so
+ * the rep would still see it — but via `appendOutbound`, which leaves no marker, and the contract
+ * is "absent marker = delivered". Her thread showed a sent message. She never received it, and
+ * nothing in the console said so.
+ *
+ * FAIL DIRECTION: marking a delivered row as undelivered would make us re-send and annoy a
+ * customer; marking an undelivered row correctly costs a visible failure someone can retry. The
+ * caller only reaches this from a catch, so it is stamped only when the send actually threw.
+ */
+/**
+ * Record a staff Send that the carrier REJECTED: the rep still sees the attempt in the thread, and
+ * the row is stamped undelivered so nothing downstream reads it as a message the customer got.
+ *
+ * One function because the two halves must not drift — before this, the handler finalized the draft
+ * (or appended) and simply forgot the marker, and "absent marker = delivered" did the rest.
+ */
+export function recordFailedManualSend(
+  conv: Conversation,
+  args: {
+    draftId?: string;
+    to: string;
+    body: string;
+    mediaUrls?: string[];
+    actor?: { userId?: string | null; userName?: string | null };
+  }
+): { usedDraft: boolean; message: Message | null } {
+  const fin = finalizeDraftAsSent(conv, args.draftId, args.body, "human", undefined, args.actor);
+  if (!fin.usedDraft) {
+    appendOutbound(conv, "salesperson", args.to, args.body, "human", undefined, args.mediaUrls, args.actor);
+  }
+  return { usedDraft: fin.usedDraft, message: markOutboundUndelivered(conv, fin.usedDraft ? args.draftId : undefined) };
+}
+
+export function markOutboundUndelivered(conv: Conversation, messageId?: string): Message | null {
+  const messages = Array.isArray(conv?.messages) ? conv.messages : [];
+  const byId = messageId ? messages.find(m => m.id === messageId) : null;
+  const target =
+    byId && byId.direction === "out"
+      ? byId
+      : [...messages].reverse().find(m => m.direction === "out") ?? null;
+  if (!target) return null;
+  target.delivered = false;
+  return target;
+}
+
 export function appendUndeliveredOutbound(
   conv: Conversation,
   from: string,
