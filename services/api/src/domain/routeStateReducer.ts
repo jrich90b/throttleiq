@@ -117,6 +117,14 @@ export type NoResponsePolicyInput = {
   hasExplicitAvailabilitySignal?: boolean;
   hasExplicitSchedulingSignal?: boolean;
   hasExplicitCallbackSignal?: boolean;
+  /**
+   * The customer-ack parser read this turn as accepting something WE left pending — an offer to
+   * send information, or an open scheduling ask. Joe, 2026-08-07: that outranks every other
+   * reason to stay quiet, INCLUDING an uncertain read, because the alternative is that a customer
+   * who said yes to our own offer hears nothing. It grants a REPLY and nothing else: no booking,
+   * no state write, no route arm — those all still require the full acceptance confidence.
+   */
+  acceptedPendingOfferSignal?: boolean;
 };
 
 export type NoResponsePolicyDecision = {
@@ -124,6 +132,7 @@ export type NoResponsePolicyDecision = {
   action: NoResponsePolicyAction;
   reason:
     | "not_no_response_fallback"
+    | "accepted_pending_offer"
     | "small_talk_question_ack"
     | "context_only_actionable_guard"
     | "actionable_context_present"
@@ -2444,6 +2453,19 @@ export function resolveNoResponsePolicyDecision(
       applicable: false,
       action: "override",
       reason: "not_no_response_fallback"
+    };
+  }
+  // MEASURED 2026-08-07 on +16076549423, by driving the live handler and reading the recorded
+  // route outcome: this referee — not the lexical sign-off gate, not the response-control gate —
+  // is what actually silenced "That would be great" after our own offer to send incentives. It
+  // returned `no_actionable_context`, because "the customer accepted the thing we offered" was not
+  // in its list of actionable turn contexts (finance, availability, scheduling, callback). Two
+  // earlier fixes to the other two gates changed nothing at all for that reason.
+  if (input.acceptedPendingOfferSignal) {
+    return {
+      applicable: true,
+      action: "override",
+      reason: "accepted_pending_offer"
     };
   }
   if (input.smallTalkQuestionCandidate) {

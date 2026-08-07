@@ -638,15 +638,47 @@ export function isShortAckNoReplyText(textRaw: string | null | undefined): boole
  *    fires on the word "great" and only exempted `accept_scheduling_ask`. The customer said yes
  *    to our own offer and got ten days of cadence and nothing else.
  *
- * Deliberately a CLOSED list of parser actions, not a general "parser wins" rule: an unaccepted
- * or absent parse leaves the word list in charge, which is the safe direction.
+ * Deliberately a CLOSED list of parser actions, not a general "parser wins" rule: an action outside
+ * the pair leaves the word list in charge, which is the safe direction.
+ *
+ * ## THE SUB-FLOOR (Joe, 2026-08-07 — his call, asked and answered)
+ *
+ * Shipping the pair above was not enough. Replayed 6x against the deployed build, Michael's turn
+ * produced a reply ONCE: the parser named `accept_offer_of_information` on 6 probes of 8 — the
+ * comprehension is right — but reported confidence 0.53-0.78, and the acceptance rule every other
+ * consumer uses needs >= 0.74. So the system understood him and then went quiet anyway.
+ *
+ * Joe chose the narrow fix over lowering the global floor: an UNCERTAIN parse is enough to DECLINE
+ * AUTO-SILENCING, and nothing else. `accepted` (the full 0.74 bar) is untouched and still governs
+ * every state write, every booking, and the offer-times arm — a sub-floor parse can only ever stop
+ * this one gate from ending the turn, after which the ordinary draft path runs and staff approve it.
+ *
+ * WHY 0.5 IS SAFE, measured before it was written: 25 real sign-off turns from the live store — a
+ * short ack whose previous DELIVERED outbound was a COMMITMENT or a plain thank-you, never an open
+ * ask — were run through the parser. It named an accept action on **0 of 25**, at every candidate
+ * bar down to 0.40. The ACTION LABEL is what discriminates a sign-off from an acceptance; the
+ * confidence number is the model hedging about a case it has already read correctly. 0.5 keeps a
+ * genuinely confused parse (below half) on the silent side.
+ *
+ * FAIL DIRECTION. Over-fire: a draft appears in the approval queue for someone who was signing off,
+ * and staff discard it — prod is suggest mode, so nothing reaches a customer unreviewed. Under-fire:
+ * a customer who said yes to our own offer hears nothing, ever. Joe weighed those and picked this.
  */
-export function parserAcceptanceOutranksShortAckSignOff(args: {
+export const SHORT_ACK_SIGN_OFF_SUBFLOOR = 0.5;
+
+export function parserAcceptanceDeclinesAutoSilence(args: {
   accepted: boolean;
   action?: string | null;
+  confidence?: number | null;
+  subFloor?: number | null;
 }): boolean {
-  if (!args.accepted) return false;
-  return args.action === "accept_scheduling_ask" || args.action === "accept_offer_of_information";
+  if (args.action !== "accept_scheduling_ask" && args.action !== "accept_offer_of_information") {
+    return false;
+  }
+  if (args.accepted) return true;
+  const subFloor = typeof args.subFloor === "number" ? args.subFloor : SHORT_ACK_SIGN_OFF_SUBFLOOR;
+  const confidence = typeof args.confidence === "number" ? args.confidence : 0;
+  return confidence >= subFloor;
 }
 
 /**
@@ -659,10 +691,15 @@ export function shouldEndTurnAsShortAckSignOff(args: {
   text?: string | null;
   accepted: boolean;
   action?: string | null;
+  confidence?: number | null;
 }): boolean {
   if (args.provider !== "twilio") return false;
   if (!isShortAckNoReplyText(args.text)) return false;
-  return !parserAcceptanceOutranksShortAckSignOff({ accepted: args.accepted, action: args.action });
+  return !parserAcceptanceDeclinesAutoSilence({
+    accepted: args.accepted,
+    action: args.action,
+    confidence: args.confidence
+  });
 }
 
 export function shouldRebaseWeekdayReplyToPriorNextWeek(

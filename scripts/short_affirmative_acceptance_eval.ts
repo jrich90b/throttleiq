@@ -44,7 +44,7 @@ const {
   resolveAcceptedVisitTimeOffer,
   shouldOfferTimesAfterAcceptance
 } = await import("../services/api/src/domain/schedulingAcceptance.ts");
-const { isShortAckNoReplyText, parserAcceptanceOutranksShortAckSignOff, shouldEndTurnAsShortAckSignOff } = await import(
+const { isShortAckNoReplyText, parserAcceptanceDeclinesAutoSilence, shouldEndTurnAsShortAckSignOff, SHORT_ACK_SIGN_OFF_SUBFLOOR } = await import(
   "../services/api/src/domain/workflowRegressionGuards.ts"
 );
 
@@ -376,8 +376,8 @@ for (const text of ["ok thanks, what time do you close?", "Afternoon would be gr
 // ---------------------------------------------------------------------------
 {
   // The real gate both paths call — not a re-implementation of it.
-  const wouldSkipAsSignOff = (text: string, accepted: boolean, action: string | null) =>
-    shouldEndTurnAsShortAckSignOff({ provider: "twilio", text, accepted, action });
+  const wouldSkipAsSignOff = (text: string, accepted: boolean, action: string | null, confidence?: number) =>
+    shouldEndTurnAsShortAckSignOff({ provider: "twilio", text, accepted, action, confidence });
 
   const MICHAEL = "That would be great"; // +16076549423, 2026-06-09T21:36Z
 
@@ -403,8 +403,8 @@ for (const text of ["ok thanks, what time do you close?", "Afternoon would be gr
     );
   }
   ok(
-    wouldSkipAsSignOff(MICHAEL, false, "accept_offer_of_information") === true,
-    "an UNACCEPTED parse must never override the sign-off gate, whatever action it names"
+    wouldSkipAsSignOff(MICHAEL, false, "accept_offer_of_information", 0.2) === true,
+    "a parse below the sub-floor must never override the sign-off gate, whatever action it names"
   );
   ok(
     wouldSkipAsSignOff("Thanks!", true, "no_response_needed") === true,
@@ -416,6 +416,88 @@ for (const text of ["ok thanks, what time do you close?", "Afternoon would be gr
       shouldEndTurnAsShortAckSignOff({ provider, text: "Thanks!", accepted: false, action: null }) === false,
       `the sign-off gate must stay Twilio-only, not fire on "${provider}"`
     );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 7b. THE SUB-FLOOR (Joe, 2026-08-07). Shipping the exemption was still not enough: replayed 6x
+//     against the deployed build, Michael's turn answered ONCE. The parser named the action right
+//     on 6 probes of 8 but reported 0.53-0.78, under the 0.74 every other consumer requires.
+//     Joe chose the narrow fix: an uncertain parse may DECLINE AUTO-SILENCING and nothing else.
+//     0.5 was picked from measurement, not taste — 25 real sign-off turns pulled from the live
+//     store (a short ack after a dealer COMMITMENT, never after an open ask) drew an accept action
+//     0 times out of 25, at every candidate bar down to 0.40. The LABEL discriminates; the number
+//     is the model hedging on a case it has already read correctly.
+// ---------------------------------------------------------------------------
+{
+  const MICHAEL = "That would be great";
+  const skip = (accepted: boolean, action: string | null, confidence?: number) =>
+    shouldEndTurnAsShortAckSignOff({ provider: "twilio", text: MICHAEL, accepted, action, confidence });
+
+  ok(SHORT_ACK_SIGN_OFF_SUBFLOOR === 0.5, "the sub-floor is the measured 0.5, not an ad-hoc number");
+
+  // THE WHOLE POINT: the confidences actually observed on this turn now answer instead of going quiet.
+  for (const confidence of [0.53, 0.57, 0.6, 0.62, 0.65, 0.7, 0.73]) {
+    for (const action of ["accept_offer_of_information", "accept_scheduling_ask"]) {
+      ok(
+        skip(false, action, confidence) === false,
+        `an unaccepted ${action} at ${confidence} must decline to auto-silence — this is the fix`
+      );
+    }
+  }
+  // Below the sub-floor the parser is genuinely confused: stay on the silent side.
+  for (const confidence of [0, 0.2, 0.35, 0.49]) {
+    ok(
+      skip(false, "accept_offer_of_information", confidence) === true,
+      `a parse at ${confidence} is below the sub-floor and must leave the word list in charge`
+    );
+  }
+  // A missing confidence is not a low one by accident — it must read as zero, i.e. silent.
+  ok(skip(false, "accept_offer_of_information", undefined) === true, "an absent confidence must not pass the sub-floor");
+
+  // THE CLOSED LIST STILL RULES. The sub-floor loosens the CONFIDENCE, never the set of actions:
+  // no other action may ride it, at any confidence at all.
+  for (const action of ["no_response_needed", "customer_will_provide_time", "neutral_ack", "none", null]) {
+    for (const confidence of [0.5, 0.74, 0.99]) {
+      ok(
+        skip(false, action, confidence) === true,
+        `${action} at ${confidence} must never ride the sub-floor — it loosens confidence, not the action list`
+      );
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 7c. CONTAINMENT — the sub-floor buys ONE thing: not being auto-silenced. It must never reach a
+//     booking, a state write, or the offer-times arm. Those all key off the FULL 0.74 acceptance
+//     (`customerAckActionAccepted`), which this change does not touch. Proven by driving the
+//     referee directly: unaccepted in, no times arm out, whatever the action or the context.
+// ---------------------------------------------------------------------------
+for (const action of ["accept_scheduling_ask", "accept_offer_of_information"]) {
+  for (const scheduleOfferContext of [true, false]) {
+    for (const scheduleDialogState of [true, false]) {
+      ok(
+        decideSchedulingTurn({
+          ...base,
+          customerAckActionAccepted: false,
+          customerAckAction: action,
+          scheduleOfferContext,
+          scheduleDialogState
+        }).kind !== "offer_times_after_acceptance",
+        `a sub-floor ${action} must NOT reach the offer-times arm (offer=${scheduleOfferContext} dialog=${scheduleDialogState})`
+      );
+      ok(
+        shouldOfferTimesAfterAcceptance({ action, scheduleDialogState, scheduleOfferContext }) ===
+          (decideSchedulingTurn({
+            ...base,
+            customerAckActionAccepted: true,
+            customerAckAction: action,
+            scheduleOfferContext,
+            scheduleDialogState
+          }).kind === "offer_times_after_acceptance"),
+        `both paths must still agree at FULL acceptance for ${action}`
+      );
+    }
   }
 }
 
@@ -440,6 +522,71 @@ for (const text of ["ok thanks, what time do you close?", "Afternoon would be gr
   ok(
     rawUses === 0,
     `index.ts must reach the sign-off test only through the shared gate; found ${rawUses} direct call(s)`
+  );
+
+  // THE SUB-FLOOR IS DEAD IF THE CONFIDENCE NEVER ARRIVES. A call site that omits it passes
+  // undefined, the sub-floor reads it as zero, and the whole of 7b becomes decoration that still
+  // goes green — the exact "correct fix, zero effect" trap this file was rewritten for once today.
+  // So require BOTH sites to hand over the parser's confidence.
+  const lines = index.split("\n");
+  const liveSite = lines.filter(
+    line => line.includes("shouldEndTurnAsShortAckSignOff" + "(") && line.includes("inboundText")
+  );
+  ok(liveSite.length === 1, `expected one live sign-off gate site; found ${liveSite.length}`);
+  ok(
+    liveSite[0].includes("confidence: customerAckActionParse?.confidence"),
+    "the LIVE sign-off gate must be handed the parser's confidence, or the sub-floor never fires"
+  );
+  const regenSite = lines.filter(
+    line => line.includes("shouldEndTurnAsShortAckSignOff" + "(") && line.includes("regenCustomerAckActionParse")
+  );
+  ok(regenSite.length === 1, `expected one regenerate sign-off gate site; found ${regenSite.length}`);
+  ok(
+    regenSite[0].includes("confidence: regenCustomerAckActionParse?.confidence"),
+    "the REGENERATE sign-off gate must be handed the parser's confidence too, or the two paths drift"
+  );
+
+  // THERE ARE TWO SILENCING GATES, AND THE SUB-FLOOR IS WORTHLESS UNLESS IT COVERS BOTH.
+  // MEASURED 2026-08-07: with the sub-floor wired into the sign-off gate ALONE, Michael's turn
+  // still replayed 0 for 6 — WORSE than before. The response-control parser calls the same turn
+  // `no_response` at 0.85-0.86 on 3 probes of 8, and its gate runs EARLIER and keys off the FULL
+  // acceptance (`!customerAckActionAccepted`), so a sub-floor parse never suppressed it.
+  // Fixing one silencer just hands the turn to the next one.
+  const noResponseGate = lines.filter(line => line.includes("llmNoResponse && !customerAckActionAccepted"));
+  ok(
+    noResponseGate.length === 1,
+    `expected one response-control no-response gate; found ${noResponseGate.length}`
+  );
+  ok(
+    noResponseGate[0].includes("parserAcceptanceDeclinesAutoSilence" + "("),
+    "the response-control no-response gate must ALSO honour the sub-floor, or the sign-off fix is dead on arrival"
+  );
+  ok(
+    noResponseGate[0].includes("confidence: customerAckActionParse?.confidence"),
+    "and it must be handed the parser's confidence, not just the action"
+  );
+
+  // AND THE THIRD SILENCER — the one that actually ended this turn. Found 2026-08-07 only by
+  // driving the live handler and reading the recorded route outcome: `resolveNoResponsePolicyDecision`
+  // returned `no_actionable_context`, because "the customer accepted what we offered" was not on
+  // its list. Both paths must feed it the same signal, or the referee silences a turn the two
+  // gates above just agreed to answer.
+  const refereeSites = lines.filter(line => line.includes("acceptedPendingOfferSignal:"));
+  ok(
+    refereeSites.length === 2,
+    `both inbound paths must feed the no-response referee the accepted-offer signal; found ${refereeSites.length}`
+  );
+  ok(
+    refereeSites.some(line => line.includes("customerAckActionParse?.confidence")) &&
+      refereeSites.some(line => line.includes("regenCustomerAckActionParse?.confidence")),
+    "one live and one regenerate, each carrying the parser's own confidence"
+  );
+
+  // Every silencer asks the SAME predicate — one idea, one implementation, no drift.
+  const declineSites = index.split("parserAcceptanceDeclinesAutoSilence" + "(").length - 1;
+  ok(
+    declineSites === 3,
+    `expected 3 direct predicate calls in index.ts — the response-control gate plus both referee sites; the sign-off gate reaches it through shouldEndTurnAsShortAckSignOff. Found ${declineSites}`
   );
 }
 
