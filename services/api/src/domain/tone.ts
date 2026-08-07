@@ -451,6 +451,25 @@ export function formatSmsLayout(text: string): string {
   return out.trim();
 }
 
+/**
+ * Does this body already open with its OWN greeting?
+ *
+ * `formatEmailLayout` prepends "Hi <name>," when the composer didn't write a greeting, so this test
+ * has to recognise every greeting the composer actually writes — not just the "Hi" the prepend
+ * happens to use. It knew only `Hi <name>,` and `Hello <name>,`, and missed two shapes that the
+ * composer produces constantly. Both reached customers as a doubled greeting:
+ *   - `Hey <name>,` — the agent's own voice on every ADF first touch. Michael Hooker
+ *     (+17165481952, 2026-08-07) received *"Hi Michael,\n\nHey Michael, it's Alexandra over at
+ *     American Harley-Davidson."*
+ *   - `Hi, this is <rep>…` — a greeting with no name at all (+17168610158).
+ * Ten more were sitting in the unsent-draft queue when this was found.
+ *
+ * DETECTS "Hey" without rewriting it: the composer chose that word, and this function's job is
+ * layout, not voice. Fail direction is unchanged — an unrecognised opening still gets a greeting
+ * prepended, which is exactly today's behaviour.
+ */
+const EMAIL_BODY_OPENS_WITH_GREETING = /^(hi|hey|hello|hiya)\b\s*(?:,|[^,\n]{1,60},)/i;
+
 export function formatEmailLayout(
   text: string,
   opts?: {
@@ -464,7 +483,7 @@ export function formatEmailLayout(
   const fallbackName = firstToken(opts?.fallbackName ?? "there");
   const greetingName = preferredName !== "there" ? preferredName : fallbackName;
   out = out.replace(/^Hi\s+([^—,\n]+)\s*[—-]\s*/i, (_m, name) => `Hi ${String(name).trim()},\n\n`);
-  if (!/^(Hi|Hello)\s+[^,\n]+,\s*/i.test(out)) {
+  if (!EMAIL_BODY_OPENS_WITH_GREETING.test(out)) {
     out = `Hi ${greetingName},\n\n${out}`;
   }
   out = out.replace(/\n{3,}/g, "\n\n");
