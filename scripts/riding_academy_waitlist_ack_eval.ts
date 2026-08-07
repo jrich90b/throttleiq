@@ -65,10 +65,21 @@ assert.equal(
   "riding_academy_enrollment_ack",
   "enrolled behaviour is unchanged"
 );
+// SUPERSEDED 2026-08-07 by Joe's ruling, and the reason is worth keeping. This used to assert a
+// completion returns "none", so the 2026-08-06 wait-list change could not swallow it — correct then,
+// because no completion copy existed and none had ever arrived. Joe has since chosen that copy
+// (congratulate, and stop) and, more importantly, "none" turned out NOT to be neutral: it hands the
+// turn to generic SALES routing, which is how Maya Iversen's status change was answered with a
+// payments question. Full lane pinned by scripts/riding_academy_status_lane_eval.ts.
 assert.equal(
   decideRidingAcademyTurn({ leadSource: "Riding Academy - Completed", inquiry: "Enrollment Status: Completed" }).kind,
+  "riding_academy_completion_ack",
+  "a completion gets its own congratulation — never a sales opener"
+);
+assert.equal(
+  decideRidingAcademyTurn({ leadSource: "HDMC New Vehicle - Inventory", inquiry: "looking at a Street Bob" }).kind,
   "none",
-  "completions still route normally — this change must not swallow them"
+  "and an ordinary sales lead is still untouched — this must not swallow the rest of the funnel"
 );
 
 // --- 3) The record's own fields, never invented. ---

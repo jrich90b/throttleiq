@@ -66,7 +66,13 @@ import type { InventoryWatch } from "../domain/conversationStore.js";
 import { isSuppressed } from "../domain/suppressionStore.js";
 import { isOptOutKeywordInbound } from "../domain/scoringExclusions.js";
 import { readFirstTimeRiderPolicy, hasRiderCoursePublicInfo } from "../domain/firstTimeRiderPolicy.js";
-import { resolveEnrollmentAckExtras } from "../domain/ridingAcademy.js";
+import {
+  resolveEnrollmentAckExtras,
+  readPriorRidingAcademyStatus,
+  readRidingAcademyRecordFields,
+  isAdfFirstTouchRegen,
+  buildAdfFirstTouchAck
+} from "../domain/ridingAcademy.js";
 import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildRidingAcademyEnrollmentAck, shouldIntroduceOnAdfTouch, stripAgentIntroPhraseForDealer, stripLeadingAgentGreeting, hasCustomerReceivedOutbound, GENERIC_AGENT_DISPLAY_NAME, GENERIC_DEALER_DISPLAY_NAME, resolveDealerAgentName, greetingFirstName } from "../domain/agentVoice.js";
 import { buildAdfResubmissionAck, detectAdfFormResubmission } from "../domain/adfResubmission.js";
 import { buildMarketplaceRelayFirstTouchReply, buildMarketplaceRelayTaskSummary } from "../domain/marketplaceRelay.js";
@@ -9815,22 +9821,60 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   // pricing back at them. Joe's ruling: send an introduction, thank them, and say the agent is here
   // for anything about the course. Most specific of the initial-ADF overrides, so it is checked
   // FIRST; event_promo still wins. INITIAL ADF only — once they text back, normal routing answers.
-  if (
-    isInitialAdf &&
+  //
+  // NOT `isInitialAdf` ANY MORE (Joe, 2026-08-07). The school files a record every time someone's
+  // status CHANGES, so the second record is news about them, not a customer reply — but
+  // `isInitialAdf` is false the moment any outbound exists, so Maya Iversen's (+15854782032) wait
+  // list -> Enrolled notice never reached this branch and generic sales routing answered it with
+  // "I can ballpark payments once I confirm the exact price. If you'd like to stop in, what day and
+  // time works best?" — to someone whose own form says she has never been on a motorcycle, even as a
+  // passenger. The guard that was actually intended ("once they text back, normal routing answers")
+  // is `isAdfFirstTouchRegen`, which asks whether the CUSTOMER has replied — the same predicate the
+  // regen path already used, so this closes a two-path drift as well.
+  const ridingAcademyTurn = decideRidingAcademyTurn({
+    leadSource: conv.lead?.source,
+    inquiry: effectiveInquiry,
+    priorStatus: readPriorRidingAcademyStatus({
+      messages: conv.messages,
+      excludeProviderMessageId: event.providerMessageId
+    })
+  });
+  const ridingAcademyLaneOpen =
+    isAdfFirstTouchRegen({ provider: event.provider, messages: conv.messages }) &&
     decideEventPromoTurn({
       classificationBucket: conv.classification?.bucket,
       classificationCta: conv.classification?.cta
-    }).kind !== "event_promo_ack" &&
-    decideRidingAcademyTurn({
-      leadSource: conv.lead?.source,
-      inquiry: effectiveInquiry
-    }).kind === "riding_academy_enrollment_ack"
+    }).kind !== "event_promo_ack";
+  if (
+    ridingAcademyLaneOpen &&
+    (ridingAcademyTurn.kind === "riding_academy_enrollment_ack" ||
+      ridingAcademyTurn.kind === "riding_academy_waitlist_to_enrolled_ack" ||
+      ridingAcademyTurn.kind === "riding_academy_completion_ack")
   ) {
-    draft = buildRidingAcademyEnrollmentAck(
-      adfAckFirstName(),
-      adfAckAgentName(),
-      adfAckDealerName(),
-      resolveEnrollmentAckExtras(dealerProfile, effectiveInquiry)
+    draft = buildAdfFirstTouchAck(ridingAcademyTurn.kind, {
+      firstName: adfAckFirstName(),
+      agentName: adfAckAgentName(),
+      dealerName: adfAckDealerName(),
+      course: readRidingAcademyRecordFields(effectiveInquiry).course,
+      startDate: readRidingAcademyRecordFields(effectiveInquiry).startDate,
+      // Joe, 2026-08-07: no re-introducing on a second touch — keyed off what the customer has
+      // actually RECEIVED (his 2026-07-16 rule), so a draft that never sent still gets an intro.
+      introduce: shouldIntroduceOnAdfTouch({ isAdfEvent: true, messages: conv.messages }),
+      ...resolveEnrollmentAckExtras(dealerProfile, effectiveInquiry)
+    });
+  } else if (ridingAcademyLaneOpen && ridingAcademyTurn.kind === "riding_academy_unknown_status") {
+    // A rider-training record whose status word we do not know — a cancellation, a transfer, or
+    // whatever H-D adds next. Raise it for a person. Deliberately does NOT set `draft`: this branch
+    // only ADDS a task, so the reply that follows is exactly today's, and the change cannot break
+    // ADF intake. Silencing the generic sales reply for this case is the remaining half and is NOT
+    // wired yet — see the eval, which pins the decision rather than the suppression.
+    addTodo(
+      conv,
+      "other",
+      `Riding Academy record with an unrecognised status - read the lead and reply by hand. Source: ${String(
+        conv.lead?.source ?? ""
+      ).slice(0, 80)}`,
+      event.providerMessageId
     );
   } else if (
     // Non-buyer / passenger survey lead (Elizabeth Klapa, 2026-06-25): a Dealer Lead App survey
