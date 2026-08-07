@@ -117,6 +117,14 @@ export type NoResponsePolicyInput = {
   hasExplicitAvailabilitySignal?: boolean;
   hasExplicitSchedulingSignal?: boolean;
   hasExplicitCallbackSignal?: boolean;
+  /**
+   * The customer-ack parser read this turn as accepting something WE left pending — an offer to
+   * send information, or an open scheduling ask. Joe, 2026-08-07: that outranks every other
+   * reason to stay quiet, INCLUDING an uncertain read, because the alternative is that a customer
+   * who said yes to our own offer hears nothing. It grants a REPLY and nothing else: no booking,
+   * no state write, no route arm — those all still require the full acceptance confidence.
+   */
+  acceptedPendingOfferSignal?: boolean;
 };
 
 export type NoResponsePolicyDecision = {
@@ -124,6 +132,7 @@ export type NoResponsePolicyDecision = {
   action: NoResponsePolicyAction;
   reason:
     | "not_no_response_fallback"
+    | "accepted_pending_offer"
     | "small_talk_question_ack"
     | "context_only_actionable_guard"
     | "actionable_context_present"
@@ -2444,6 +2453,19 @@ export function resolveNoResponsePolicyDecision(
       applicable: false,
       action: "override",
       reason: "not_no_response_fallback"
+    };
+  }
+  // MEASURED 2026-08-07 on +16076549423, by driving the live handler and reading the recorded
+  // route outcome: this referee — not the lexical sign-off gate, not the response-control gate —
+  // is what actually silenced "That would be great" after our own offer to send incentives. It
+  // returned `no_actionable_context`, because "the customer accepted the thing we offered" was not
+  // in its list of actionable turn contexts (finance, availability, scheduling, callback). Two
+  // earlier fixes to the other two gates changed nothing at all for that reason.
+  if (input.acceptedPendingOfferSignal) {
+    return {
+      applicable: true,
+      action: "override",
+      reason: "accepted_pending_offer"
     };
   }
   if (input.smallTalkQuestionCandidate) {
@@ -8400,4 +8422,72 @@ export function decideSaleTradeJourneyBucket(
     return { applies: true, bucket: "trade_in_sell", cta: "value_my_trade" };
   }
   return { applies: true, bucket: "inventory_interest", cta: "check_availability" };
+}
+
+/**
+ * THE LAST OF FOUR SILENCERS on a customer's "yes" (+16076549423, found 2026-08-07).
+ *
+ * Three near-identical `if (…) return empty TwiML` blocks sat in a row in the inbound handler,
+ * ending the turn with NO route outcome recorded — invisible to decision tracing, to the route
+ * outcome log, to the replay harness, to everything. Finding this one needed temporary markers
+ * bisected through 3,700 lines, because nothing about it was observable.
+ *
+ * Two things are wrong with that and both are fixed here:
+ *
+ * 1. THE DECISION IS NOW ONE PLACE AND IT IS PURE. Three hand-maintained copies of the same idea
+ *    could not be reasoned about or tested; this can.
+ *
+ * 2. `lastOutboundAskedQuestion` IS A WORD LIST, and our own offer phrasing is not in it. It tests
+ *    for a trailing "?" or `want me to|should i|can i|would you like|does that work|…`. We had
+ *    written *"**I can also** check current incentives and send only what applies"* — no question
+ *    mark, and "I can" is not "can i" — so the handler decided we had asked nothing, read his
+ *    "That would be great" as politeness, and said nothing back. **The phrasing our own agent uses
+ *    to make an offer was missing from the list that decides whether we are waiting on an answer.**
+ *    Widening that list is the anti-pattern that built all four silencers, so it stays exactly as
+ *    it is and the PARSER outranks it — the same closed two-action exemption, at the same measured
+ *    sub-floor, that the other three silencers now honour (Joe, 2026-08-07).
+ *
+ * FAIL DIRECTION. Every rule below other than the acceptance is unchanged, so a parser miss lands
+ * on exactly today's behaviour. An over-fire puts a draft in the approval queue for someone who
+ * was signing off, and staff discard it.
+ */
+export type ShortAckTurnEndInput = {
+  provider?: string | null;
+  shortAck: boolean;
+  schedulingBlocked: boolean;
+  ackOnlyCloseTurn: boolean;
+  lastOutboundAskedQuestion: boolean;
+  hasPendingWatch: boolean;
+  hasPendingSlot: boolean;
+  hasReschedulePending: boolean;
+  /** The customer-ack parser read this as accepting something WE left pending. */
+  acceptedPendingOffer: boolean;
+};
+
+export type ShortAckTurnEndDecision = {
+  end: boolean;
+  reason:
+    | "not_twilio"
+    | "accepted_pending_offer"
+    | "scheduling_blocked_short_ack"
+    | "ack_only_close_turn"
+    | "short_ack_no_pending_question"
+    | "turn_continues";
+};
+
+export function decideShortAckTurnEnd(input: ShortAckTurnEndInput): ShortAckTurnEndDecision {
+  if (input.provider !== "twilio") return { end: false, reason: "not_twilio" };
+  // The acceptance outranks every reason below to go quiet — that is the whole ruling.
+  if (input.acceptedPendingOffer) return { end: false, reason: "accepted_pending_offer" };
+  if (input.schedulingBlocked && input.shortAck) {
+    return { end: true, reason: "scheduling_blocked_short_ack" };
+  }
+  const somethingPending =
+    input.hasPendingWatch || input.hasPendingSlot || input.hasReschedulePending;
+  if (somethingPending || input.lastOutboundAskedQuestion) {
+    return { end: false, reason: "turn_continues" };
+  }
+  if (input.ackOnlyCloseTurn) return { end: true, reason: "ack_only_close_turn" };
+  if (input.shortAck) return { end: true, reason: "short_ack_no_pending_question" };
+  return { end: false, reason: "turn_continues" };
 }

@@ -82,5 +82,6 @@ export {
   decideHealthRecoveryPause,
   decideStaffReopenResidue,
   resolveInventoryWatchDefaults,
-  decideLostSaleCloseoutAck
+  decideLostSaleCloseoutAck,
+  decideShortAckTurnEnd
 } from "./routeStateReducer.js";

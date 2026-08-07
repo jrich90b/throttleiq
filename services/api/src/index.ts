@@ -827,6 +827,7 @@ import {
   nextActionFromState,
   reduceStaleStateForInbound,
   resolveNoResponsePolicyDecision,
+  decideShortAckTurnEnd,
   resolveRoutingParserDecision,
   shouldTreatInboundAsTestRideBikeSelection
 } from "./domain/routerV2.js";
@@ -931,7 +932,7 @@ import {
   isRideChallengeLeadSignal,
   isRegenerateSchedulingLanguageText,
   scheduleStatusCommitmentOutranksArrivalAck,
-  shouldEndTurnAsShortAckSignOff,
+  shouldEndTurnAsShortAckSignOff, parserAcceptanceDeclinesAutoSilence,
   isStockNumberInventoryInterestText,
   isTakeOffMilwaukeeEightEngineRequestText,
   isCustomerReturningCallText,
@@ -54744,7 +54745,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   }
   // Mirror of the live arm — before this, regenerate had NO parser exemption at all, so a bare
   // affirmative the live path answers died here on a re-draft.
-  if (shouldEndTurnAsShortAckSignOff({ provider: event.provider, text: event.body ?? "", accepted: isCustomerAckActionParserAccepted(regenCustomerAckActionParse), action: regenCustomerAckActionParse?.action })) {
+  if (shouldEndTurnAsShortAckSignOff({ provider: event.provider, text: event.body ?? "", accepted: isCustomerAckActionParserAccepted(regenCustomerAckActionParse), action: regenCustomerAckActionParse?.action, confidence: regenCustomerAckActionParse?.confidence })) {
     return respondRegenerateSkipped("short_ack_no_reply");
   }
   if (event.provider === "twilio" && isInventoryBrowseLinkRequest(String(event.body ?? ""))) {
@@ -57277,7 +57278,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       hasExplicitFinanceSignal: regenExplicitFinanceSignal || regenFinanceFollowUpAffirmativeAck,
       hasExplicitAvailabilitySignal: regenExplicitAvailabilitySignal,
       hasExplicitSchedulingSignal: regenExplicitSchedulingSignal,
-      hasExplicitCallbackSignal: regenExplicitCallbackSignal
+      hasExplicitCallbackSignal: regenExplicitCallbackSignal,
+      acceptedPendingOfferSignal: parserAcceptanceDeclinesAutoSilence({ accepted: isCustomerAckActionParserAccepted(regenCustomerAckActionParse), action: regenCustomerAckActionParse?.action, confidence: regenCustomerAckActionParse?.confidence })
     });
     const regenLegacyAction = regenNoResponseDecision.shouldSkipNoResponse
       ? "skip"
@@ -60705,7 +60707,7 @@ if (authToken && signature) {
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
-  if ((customerAckNoResponse || customerWillProvideTimeFallback || (llmNoResponse && !customerAckActionAccepted)) && conv.mode !== "human") {
+  if ((customerAckNoResponse || customerWillProvideTimeFallback || (llmNoResponse && !customerAckActionAccepted && !parserAcceptanceDeclinesAutoSilence({ accepted: customerAckActionAccepted, action: customerAckActionParse?.action, confidence: customerAckActionParse?.confidence }))) && conv.mode !== "human") {
     discardPendingDrafts(conv, "response_control_no_response");
     delete conv.emailDraft;
     saveConversation(conv);
@@ -63998,10 +64000,8 @@ if (authToken && signature) {
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
-  // Shared with the regenerate path so the two cannot drift — see the guard for why the lexical
-  // sign-off test is KEPT and which parser actions are allowed to outrank it.
-  const endTurnArgs = { accepted: customerAckActionAccepted, action: customerAckActionParse?.action };
-  if (shouldEndTurnAsShortAckSignOff({ provider: event.provider, text: inboundText, ...endTurnArgs })) {
+  // Shared with regenerate so the two cannot drift — the guard owns why the lexical test is KEPT.
+  if (shouldEndTurnAsShortAckSignOff({ provider: event.provider, text: inboundText, accepted: customerAckActionAccepted, action: customerAckActionParse?.action, confidence: customerAckActionParse?.confidence })) {
     discardPendingDrafts(conv, "short_ack_no_reply");
     delete conv.emailDraft;
     saveConversation(conv);
@@ -66043,7 +66043,8 @@ if (authToken && signature) {
       hasExplicitFinanceSignal: routeExecPricing,
       hasExplicitAvailabilitySignal: routeExecAvailability,
       hasExplicitSchedulingSignal: routeExecScheduling,
-      hasExplicitCallbackSignal: routeExecCallback
+      hasExplicitCallbackSignal: routeExecCallback,
+      acceptedPendingOfferSignal: parserAcceptanceDeclinesAutoSilence({ accepted: customerAckActionAccepted, action: customerAckActionParse?.action, confidence: customerAckActionParse?.confidence })
     });
     const legacyNoResponseAction = noResponseContextDecision.shouldSkipNoResponse
       ? manualHandoffNoResponseQuestion
@@ -67987,31 +67988,23 @@ if (authToken && signature) {
       }
     }
   }
-  if (event.provider === "twilio" && schedulingBlocked && shortAck) {
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-    return res.status(200).type("text/xml").send(twiml);
-  }
-  if (
-    event.provider === "twilio" &&
-    !lastOutboundAskedQuestion &&
-    !conv.inventoryWatchPending &&
-    !conv.scheduler?.pendingSlot &&
-    !conv.appointment?.reschedulePending &&
-    isAckOnlyCloseTurn(event.body, lastOutboundText)
-  ) {
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-    return res.status(200).type("text/xml").send(twiml);
-  }
-  if (
-    event.provider === "twilio" &&
-    shortAck &&
-    !lastOutboundAskedQuestion &&
-    !conv.inventoryWatchPending &&
-    !conv.scheduler?.pendingSlot &&
-    !conv.appointment?.reschedulePending
-  ) {
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+  // Was THREE hand-maintained copies of "end the turn here", all returning empty TwiML with NOTHING
+  // recorded — the fourth and last silencer on +16076549423, and the only one no instrument could
+  // see. One referee now, and it logs why.
+  const shortAckTurnEnd = decideShortAckTurnEnd({
+    provider: event.provider,
+    shortAck,
+    schedulingBlocked,
+    ackOnlyCloseTurn: isAckOnlyCloseTurn(event.body, lastOutboundText),
+    lastOutboundAskedQuestion,
+    hasPendingWatch: !!conv.inventoryWatchPending,
+    hasPendingSlot: !!conv.scheduler?.pendingSlot,
+    hasReschedulePending: !!conv.appointment?.reschedulePending,
+    acceptedPendingOffer: parserAcceptanceDeclinesAutoSilence({ accepted: customerAckActionAccepted, action: customerAckActionParse?.action, confidence: customerAckActionParse?.confidence })
+  });
+  if (shortAckTurnEnd.end) {
+    logRouteOutcome("short_ack_turn_end", { reason: shortAckTurnEnd.reason });
+    return res.status(200).type("text/xml").send(emptyTwilioWebhookResponse());
   }
 
   if (

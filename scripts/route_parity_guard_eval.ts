@@ -49,6 +49,11 @@ const MIRRORED_LOCALS_BASELINE = 252;
 // best-effort classification — re-verify (and either wire into both paths or re-justify)
 // whenever the symbol's call site changes.
 const SINGLE_PATH_BASELINE: Record<string, { path: "live" | "regen"; reason: string }> = {
+  decideShortAckTurnEnd: {
+    path: "live",
+    reason:
+      "decides whether an INBOUND turn ends without a reply; regenerate is a staff member explicitly asking for a draft, and refusing to produce one because the customer's last message was a short ack would be wrong. The asymmetry predates this referee — it replaced three live-only returns. The parser exemption inside it IS in both paths, via shouldEndTurnAsShortAckSignOff and the no-response referee"
+  },
   decideInProcessDealTurn: {
     path: "live",
     reason:
