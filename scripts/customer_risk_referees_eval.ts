@@ -231,9 +231,9 @@ for (const nonAnswer of ["unknown", "any"]) {
   const d = watch({ semanticCondition: "unknown" });
   eq(d.condition, undefined, "a parser non-answer with nothing behind it leaves the condition blank");
 }
-// THE PRESERVED DIVERGENCE. Three of the four call sites pass no parser rung at all; they must land
-// on the lead record exactly as they did before this un-stacking. Pinned so the follow-up behaviour
-// fix (adopting the parser rung everywhere) is a deliberate, visible change and not a silent drift.
+// A LANE THAT ASKS NOBODY still falls to the lead record. Kept because it is the exact failure
+// ruling 24 closed: a lane that stops supplying the parser rung goes back to letting a possibly
+// stale STORED condition decide which arriving unit texts the customer.
 {
   const legacy = watch({ semanticCondition: undefined, conditionFromLead: "new" });
   eq(legacy.conditionSource, "lead_record", "a lane passing no parser rung still falls to the lead record");
@@ -284,6 +284,22 @@ for (const nonAnswer of ["unknown", "any"]) {
     /resolveInventoryWatchDefaults\s*\(/.test(store),
     "applyInventoryWatchDefaults must ask resolveInventoryWatchDefaults, not decide for itself"
   );
+
+  // RULING 24 — EVERY lane supplies the parser rung, not just the live inbound one. Counting the
+  // calls (above) cannot see this: a lane that hands the referee `semanticCondition: undefined`
+  // still counts as wired while quietly taking its condition from a stale stored field. So each
+  // call site's own argument object is read, and a lane that stops asking the parser goes red.
+  const serving_index = fs.readFileSync(path.resolve("services/api/src/index.ts"), "utf8");
+  const watchDefaultsArgs = serving_index
+    .split("applyInventoryWatchDefaults(")
+    .slice(1)
+    .map(chunk => chunk.slice(0, Math.max(0, chunk.indexOf("});"))));
+  eq(watchDefaultsArgs.length, 4, "all four watch-defaults call sites are read back for the parser rung");
+  for (const [i, args] of watchDefaultsArgs.entries()) {
+    const rung = (args.split("semanticCondition:")[1] ?? "").split(",")[0].trim();
+    eq(rung.length > 0, true, `watch-defaults lane ${i + 1} passes a semanticCondition rung at all`);
+    eq(rung === "undefined", false, `watch-defaults lane ${i + 1} asks the parser, not a stale stored condition`);
+  }
 }
 
 console.log(`PASS customer_risk_referees:eval — ${checks} checks across 4 referees + the wiring guard`);

@@ -61382,7 +61382,7 @@ if (authToken && signature) {
               leadMake: leadVehicle.make,
               leadTrim: leadVehicle.trim,
               conditionFromText: normalizeWatchCondition(humanModeTextLower) ?? null,
-              semanticCondition: undefined,
+              semanticCondition: humanModeWatch?.condition,
               conditionFromLead: normalizeWatchCondition(leadVehicle.condition) ?? null
             });
             applyInventoryWatchConfirmation(conv, pref.watch, { scope: "live" });
@@ -63844,7 +63844,7 @@ if (authToken && signature) {
           leadMake: leadVehicle.make,
           leadTrim: leadVehicle.trim,
           conditionFromText: normalizeWatchCondition(textLower) ?? null,
-          semanticCondition: undefined,
+          semanticCondition: semanticWatch?.condition,
           conditionFromLead: normalizeWatchCondition(leadVehicle.condition) ?? null
         });
         applyInventoryWatchConfirmation(conv, pref.watch, { scope: "live" });
@@ -67180,7 +67180,7 @@ if (authToken && signature) {
           leadMake: leadVehicle.make,
           leadTrim: leadVehicle.trim,
           conditionFromText: normalizeWatchCondition(textLower) ?? null,
-          semanticCondition: undefined,
+          semanticCondition: semanticWatch?.condition,
           conditionFromLead: normalizeWatchCondition(leadVehicle.condition) ?? null
         });
         applyInventoryWatchConfirmation(conv, pref.watch, { scope: "live" });
@@ -67956,7 +67956,6 @@ if (authToken && signature) {
       if (pref.action === "set" && pref.watch) {
         // One owner for the blank-filling ladder (pinned by customer_risk_referees:eval): this state
         // decides WHICH ARRIVING UNIT TEXTS THIS CUSTOMER, and four lanes each hand-wrote it before.
-        // This lane ALONE passes the parser rung — the preserved divergence (see the referee).
         applyInventoryWatchDefaults(pref.watch, {
           leadMake: leadVehicle.make,
           leadTrim: leadVehicle.trim,
