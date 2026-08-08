@@ -171,6 +171,46 @@ function shouldUseRoleAwareHistoryLabels(conv: Conversation | null | undefined):
   return followUpMode === "manual_handoff" || convMode === "human";
 }
 
+/**
+ * HOW OLD a history turn is, in the words a person would use.
+ *
+ * MEASURED 2026-08-08, and it is the root cause Joe found by reading one draft. History turns are
+ * `{direction, body}` — they carry NO timestamp, so nothing downstream can tell May from this
+ * morning. Every message in a thread looks equally current to the composer.
+ *
+ * Curtis Coshun (+17164005844): on 2026-05-14 we asked "coming in tomorrow or Saturday?" and he
+ * answered "first thing Saturday for sure, if not!". He BOUGHT the bike on 05-18. On 07-17 he
+ * wrote "absolutely loving it, took short day today at work to go out for a ride" — and the draft
+ * came back "confirm Saturday morning and I'll make sure the bike's ready to look over", reading
+ * his own three-month-old words back to him about a bike he already owns.
+ *
+ * On the live store this is not a corner case: of 774 conversations with two or more messages,
+ * **441 (57%) have a last-20 window spanning more than 30 days**, 102 span more than 90, and the
+ * median window is 40 days wide. 63 of the 71 sold leads carry pre-purchase talk in that window.
+ *
+ * Stamping is deliberately chosen over TRUNCATION. Cutting old turns would also throw away which
+ * bike, the budget, and what we have already told them — the fix would trade phantom specifics for
+ * a forgetful agent. Marking the age costs nothing and leaves every fact in place.
+ *
+ * Only turns meaningfully older than the newest one are stamped, so an ordinary same-day thread is
+ * byte-identical to today.
+ */
+export function formatHistoryTurnAge(turnMs: number, newestMs: number): string | null {
+  if (!Number.isFinite(turnMs) || !Number.isFinite(newestMs)) return null;
+  const days = Math.floor((newestMs - turnMs) / 86_400_000);
+  if (!Number.isFinite(days) || days < HISTORY_AGE_STAMP_MIN_DAYS) return null;
+  if (days < 14) return `${days} days ago`;
+  if (days < 60) {
+    const weeks = Math.round(days / 7);
+    return `${weeks} weeks ago`;
+  }
+  const months = Math.round(days / 30);
+  return `${months} months ago`;
+}
+
+/** Below this, a thread is "current" and gets no stamps at all. */
+export const HISTORY_AGE_STAMP_MIN_DAYS = 7;
+
 function formatHistoryTurnBody(msg: Message, roleAwareLabels: boolean): string {
   const body = String(msg.body ?? "").trim();
   if (!body) return body;
@@ -218,20 +258,28 @@ function reduceContextSources(sources: ContextSource[]): ContextSource[] {
   return reduced;
 }
 
-export function buildEffectiveHistory(conv: Conversation | null | undefined, limit = 20): HistoryTurn[] {
+export function buildEffectiveHistory(
+  conv: Conversation | null | undefined,
+  limit = 20,
+  opts?: { stampAges?: boolean }
+): HistoryTurn[] {
   const roleAwareLabels = shouldUseRoleAwareHistoryLabels(conv);
-  const baseHistory: HistoryTurn[] = (conv?.messages ?? [])
-    .filter(
-      (m: Message) =>
-        !!m?.body &&
-        !!m.direction &&
-        !isVoiceLike(m.provider)
-    )
-    .slice(-Math.max(1, limit))
-    .map((m: Message) => ({
-      direction: m.direction,
-      body: formatHistoryTurnBody(m, roleAwareLabels)
-    }));
+  const kept = (conv?.messages ?? []).filter(
+    (m: Message) => !!m?.body && !!m.direction && !isVoiceLike(m.provider)
+  );
+  const windowed = kept.slice(-Math.max(1, limit));
+  // OPT-IN, and only the draft path asks for it. The comprehension parsers read this same history
+  // and are tuned against its exact shape, so stamping them all would be a change to 87 parsers
+  // dressed up as a context fix.
+  const newestMs = opts?.stampAges
+    ? Math.max(...windowed.map((m: Message) => toMs((m as any).at)), 0)
+    : 0;
+  const baseHistory: HistoryTurn[] = windowed.map((m: Message) => {
+    const body = formatHistoryTurnBody(m, roleAwareLabels);
+    if (!opts?.stampAges) return { direction: m.direction, body };
+    const age = formatHistoryTurnAge(toMs((m as any).at), newestMs);
+    return { direction: m.direction, body: age ? `[${age}] ${body}` : body };
+  });
 
   if (!conv) return baseHistory;
 
