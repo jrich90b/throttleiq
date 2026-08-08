@@ -620,7 +620,10 @@ import {
   isHumanThreadNudgeAutosendEnabled,
   humanThreadNudgeQuietDays,
   humanThreadNudgeMaxCount,
-  humanThreadNudgeSpacingDays
+  humanThreadNudgeSpacingDays,
+  resolveHumanThreadNudgeComposeGate,
+  selectHumanThreadNudgeThread,
+  hasOpenFutureDatedTodo
 } from "./domain/humanThreadNudge.js";
 import { referencesPastDatedEvent } from "./domain/pastEventGuard.js";
 import { stripLeadingVinCodes, stripLeadingMakeName, normalizeWatchModelsVin, modelLabelHasVinCode } from "./domain/watchModelVinCodes.js";
@@ -32020,20 +32023,13 @@ async function processDueFollowUpsUnlocked() {
     const nudgeMaxCount = humanThreadNudgeMaxCount();
     const nudgeSpacingDays = humanThreadNudgeSpacingDays();
     let humanNudges = 0;
+    // The budget is the LLM CALL: count compositions ATTEMPTED, never bumps that survived (2026-07-31).
+    let nudgeCompositions = 0;
     for (const conv of convs) {
-      if (humanNudges >= 10) break;
+      if (nudgeCompositions >= 10) break;
       if (!isHumanThreadNudgeEligibleClass((conv as any).mode, conv.followUp?.mode)) continue;
-      const delivered = (conv.messages ?? []).filter(
-        (m: any) =>
-          ["twilio", "human", "sendgrid", "web_widget", "sendgrid_adf"].includes(String(m?.provider ?? "")) &&
-          String(m?.body ?? "").trim()
-      );
-      const lastMsg: any = delivered[delivered.length - 1] ?? null;
-      const openFutureTodo = openTodos.some((t: any) => {
-        if (t?.convId !== conv.id) return false;
-        const dueMs = Date.parse(String(t?.dueAt ?? ""));
-        return Number.isFinite(dueMs) && dueMs > now.getTime();
-      });
+      const { thread: delivered, last: lastMsg } = selectHumanThreadNudgeThread(conv.messages);
+      const openFutureTodo = hasOpenFutureDatedTodo(openTodos, conv.id, now.getTime());
       const nudgeDecision = decideHumanThreadNudge({
         conversationMode: (conv as any).mode ?? null,
         followUpMode: conv.followUp?.mode ?? null,
@@ -32056,35 +32052,36 @@ async function processDueFollowUpsUnlocked() {
         spacingDays: nudgeSpacingDays
       });
       if (!nudgeDecision.nudge) continue;
+      const nudgeAnchors = delivered.slice(-8);
+      const nudgeTo = normalizeSmsPhone(conv.lead?.phone ?? conv.leadKey ?? "");
+      // Everything knowable WITHOUT paying for a composition. Reasoning lives in the module.
+      const nudgeGate = resolveHumanThreadNudgeComposeGate({ toE164: nudgeTo, anchors: nudgeAnchors, nowMs: now.getTime() });
+      if (!nudgeGate.compose) {
+        if (nudgeGate.reason === "past_dated_anchor") {
+          recordRouteOutcome("manual", "human_thread_nudge_past_event_suppressed", {
+            convId: conv.id,
+            leadKey: conv.leadKey
+          });
+        }
+        continue;
+      }
+      nudgeCompositions += 1;
       const nudgeText = await composeHumanThreadNudgeWithLLM({
         firstName: conv.lead?.firstName,
-        recentMessages: delivered.slice(-8).map((m: any) => ({
+        recentMessages: nudgeAnchors.map((m: any) => ({
           direction: m.direction === "in" ? ("in" as const) : ("out" as const),
           body: String(m.body ?? "")
         }))
       });
       if (!nudgeText) continue;
-      // PAST-DATED-EVENT GUARD (Joe ruling 2026-07-22): a bump continues the thread's last
-      // exchange, so if that anchor was an invite to something already behind us the bump
-      // re-issues it — Don Soto (+17167134185) got "circling back on the Taste of Country
-      // pre-party invite… still planning to come by Saturday?" five weeks after the June 20th
-      // party. The bump itself carried no date, only the blast it continued did, so BOTH the
-      // composed text and the anchor messages are checked. Shared pure helper (same one the
-      // cadence lanes call — no mirrored locals). Fail direction: silence.
-      if (
-        referencesPastDatedEvent(
-          [nudgeText, ...delivered.slice(-8).map((m: any) => String(m?.body ?? ""))],
-          { nowMs: now.getTime() }
-        )
-      ) {
+      // The composed text can name a date the anchors never did, so the same guard runs on it too.
+      if (referencesPastDatedEvent([nudgeText], { nowMs: now.getTime() })) {
         recordRouteOutcome("manual", "human_thread_nudge_past_event_suppressed", {
           convId: conv.id,
           leadKey: conv.leadKey
         });
         continue;
       }
-      const nudgeTo = normalizePhone(conv.lead?.phone ?? conv.leadKey ?? "");
-      if (!nudgeTo.startsWith("+")) continue;
       const nudgeMessage = ensureInitialSmsOptOutFooter(conv, nudgeText, {
         provider: "twilio",
         from: process.env.TWILIO_FROM_NUMBER ?? "salesperson",
