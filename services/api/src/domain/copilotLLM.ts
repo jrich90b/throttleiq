@@ -68,7 +68,8 @@ const MARKETING_LIST_FILTER_JSON_SCHEMA: { [key: string]: unknown } = {
     "condition",
     "source",
     "activeWithinDays",
-    "includeClosed"
+    "includeClosed",
+    "unsupportedCriteria"
   ],
   properties: {
     channel: { type: "string", enum: ["sms", "email"] },
@@ -80,7 +81,12 @@ const MARKETING_LIST_FILTER_JSON_SCHEMA: { [key: string]: unknown } = {
     condition: { type: ["string", "null"], description: "new | used | null" },
     source: { type: ["string", "null"] },
     activeWithinDays: { type: ["integer", "null"] },
-    includeClosed: { type: "boolean" }
+    includeClosed: { type: "boolean" },
+    unsupportedCriteria: {
+      type: ["string", "null"],
+      description:
+        "The part of the request that CANNOT be expressed by the filters above, quoted back in the manager's own words. Null only when every part of the request is covered."
+    }
   }
 };
 
@@ -94,6 +100,7 @@ export async function parseMarketingListRequestWithLLM(args: {
   source: string | null;
   activeWithinDays: number | null;
   includeClosed: boolean;
+  unsupportedCriteria: string | null;
 } | null> {
   const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
   if (!useLLM) return null;
@@ -119,6 +126,15 @@ export async function parseMarketingListRequestWithLLM(args: {
     "- source: a lead source named (e.g. \"Facebook\"), else null.",
     "- activeWithinDays: a stated recency window in days (\"last 90 days\" = 90), else null.",
     "- includeClosed: true only if the manager asks to include closed/lost/old leads.",
+    "- unsupportedCriteria: THE MOST IMPORTANT FIELD. The filters above are the ONLY things this",
+    "  system can search on. If any part of the description asks for something they cannot express",
+    "  — a credit or approval status, whether someone bought, a budget or payment amount, a licence",
+    "  or riding experience, a location, a trade-in, an appointment or test ride, anything at all",
+    "  that is not one of the fields above — quote that part back here in the manager's own words.",
+    "  Null ONLY when every part of the request is genuinely covered by the fields above.",
+    "  A deliberately broad request (\"everyone\", \"all my leads\") IS covered: that is null.",
+    "  WHEN IN DOUBT, FILL THIS IN. Saying we cannot do something costs the manager one message;",
+    "  staying silent hands them a list of every customer in the database labelled as their answer.",
     "",
     `DESCRIPTION: ${args.request}`
   ].join("\n");
@@ -140,7 +156,11 @@ export async function parseMarketingListRequestWithLLM(args: {
       condition: typeof parsed.condition === "string" ? parsed.condition : null,
       source: typeof parsed.source === "string" ? parsed.source : null,
       activeWithinDays: Number.isFinite(parsed.activeWithinDays) ? Number(parsed.activeWithinDays) : null,
-      includeClosed: parsed.includeClosed === true
+      includeClosed: parsed.includeClosed === true,
+      unsupportedCriteria:
+        typeof parsed.unsupportedCriteria === "string" && parsed.unsupportedCriteria.trim()
+          ? parsed.unsupportedCriteria.trim()
+          : null
     };
   } catch {
     return null;

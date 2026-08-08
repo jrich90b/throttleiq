@@ -485,6 +485,59 @@ const describeNoLlm = mockRes();
 await copilotMarketingListHandler({ user: { role: "manager" }, body: { describe: "touring buyers" } } as any, describeNoLlm as any);
 assert.equal(describeNoLlm.statusCode, 503, "describe path with LLM off degrades, never guesses filters");
 
+// ── The describe path REFUSES what the filters cannot express (2026-08-08). ────────────────────
+// The filters are a fixed set. A request for anything outside them — credit status, whether they
+// bought, a budget, a licence, a location — used to come back with every filter null, which builds
+// a list of EVERY reachable lead and presents it as the answer under the name the manager typed.
+// MEASURED on the live parser that day: "anyone who is approved but hasn't bought yet" produced
+// all-null filters => 449 people. Now that a described list can be SAVED and campaigned to, that is
+// the most expensive failure this feature has, so the parser must declare what it could not express
+// and the handler must refuse. Same law as every filter here: fail toward the SMALLER list, and
+// refusing is smaller than everyone.
+//
+// The parser side is LLM-backed and lives in copilot_describe_refusal:eval (which spends calls).
+// THIS pins the deterministic half: given a parse that reports unsupported criteria, the handler
+// must refuse and must NOT build. Stubbed so it is free and cannot flake.
+{
+  // BEHAVIOUR, not a source pin. The refusal is checked after the filters are resolved, whatever
+  // produced them, so it is reachable here without spending an LLM call. A first cut of this eval
+  // asserted `src.includes("filters.unsupportedCriteria")` instead — and `if (false && ...)` sailed
+  // straight through it. A guard that matches a substring proves the substring, not the behaviour.
+  const refused = mockRes();
+  await copilotMarketingListHandler(
+    {
+      user: { role: "manager" },
+      body: { filters: { channel: "sms", unsupportedCriteria: "credit approval status" } }
+    } as any,
+    refused as any
+  );
+  assert.equal(refused.statusCode, 422, "a request we cannot express is REFUSED, not answered with everyone");
+  assert.ok(!refused.body?.result, "…and no list is built at all");
+  assert.equal(
+    refused.body?.unsupportedCriteria,
+    "credit approval status",
+    "…and the refusal names what it could not do, so the manager can rephrase"
+  );
+
+  // The mirror image: the SAME filters minus that field must still build. Without this, a handler
+  // that refused everything would pass the assertions above.
+  const stillBuilds = mockRes();
+  await copilotMarketingListHandler(
+    { user: { role: "manager" }, body: { filters: { channel: "sms" } } } as any,
+    stillBuilds as any
+  );
+  assert.equal(stillBuilds.statusCode, 200, "a supported request still builds — the guard must not eat the feature");
+  assert.ok(stillBuilds.body?.result?.rows, "…and still returns rows");
+
+  // The parser must be REQUIRED to answer the question; an optional field gets silently omitted and
+  // the handler would then never see a refusal to act on.
+  const llmSrc = fs.readFileSync("services/api/src/domain/copilotLLM.ts", "utf8");
+  assert.ok(
+    /required:[\s\S]{0,400}"unsupportedCriteria"/.test(llmSrc),
+    "unsupportedCriteria is a REQUIRED schema field — an optional one gets silently omitted"
+  );
+}
+
 // ── The NAME on the row (2026-08-07). ──
 // The builder read `lead.name` alone. Measured on the live americanharley store: `lead.name` is
 // populated on 563 of 822 conversations, `firstName` on 814 and `lastName` on 803 — so about a
