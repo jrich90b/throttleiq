@@ -20,7 +20,9 @@ import {
   distinct883ModelConflict,
   specific883ModelToken,
   distinctSportsterModelConflict,
-  modernSportsterModelToken
+  modernSportsterModelToken,
+  modelMatches,
+  stripLeadingHarleyModelCode
 } from "../services/api/src/domain/inventoryFeed.ts";
 import { watchLabelIsBareFamilyUmbrella } from "../services/api/src/domain/watchFamilyScope.ts";
 
@@ -184,4 +186,28 @@ assert.match(idx, /unitIsDistinctModelFromWatch\(watch\.model, item\.model\)/, "
 assert.match(idx, /distinct883ModelConflict\(item\.model, watch\.model\)/, "engine matcher must apply the distinct-883-model guard");
 assert.match(idx, /distinctSportsterModelConflict\(item\.model, watch\.model\)/, "engine matcher must apply the modern-Sportster guard");
 
-console.log("PASS watch model-match eval — directional (unit⊇watch): trim-specific watches no longer fire on base units (forward + reverse guards); base/exact matches preserved; engine matcher guarded.");
+// ---------------------------------------------------------------------------------------------
+// DMS PLATFORM CODES (Mike Wolf +17164323990, 2026-08-07). ADF leads arrive as CODE + NAME —
+// "FLHD Deadwood", "FLHX Street Glide" — because that is how the dealer's DMS writes them, while
+// the inventory feed lists the bike by NAME. Directionality then matched NOTHING: the feed's
+// "Deadwood" does not contain "flhd deadwood". Measured against the live americanharley store +
+// feed 2026-08-08: 12 distinct lead/watch labels (29 references) matched ZERO in-stock units and
+// matched real ones the moment the leading code was dropped.
+assert.equal(modelMatches("Deadwood", "FLHD Deadwood"), true, "a CODE+NAME ask must match the feed's NAME-only unit (Mike Wolf)");
+assert.equal(modelMatches("Street Glide", "FLHX Street Glide"), true, "FLHX Street Glide must match a Street Glide");
+assert.equal(modelMatches("Road Glide", "FLTRX Road Glide"), true, "FLTRX Road Glide must match a Road Glide");
+assert.equal(modelMatches("Street Bob", "Fxbb Street Bob"), true, "the code is matched case-insensitively (the DMS writes it either way)");
+
+// The relaxation is TARGET-side and leading-token only; every existing guard still binds.
+assert.equal(modelMatches("Street Glide", "FLHXSE CVO Street Glide"), false, "dropping the code must leave the CVO ask intact — a base unit still fails it");
+assert.equal(modelMatches("Street Glide", "FLHXS Street Glide Special"), false, "a trim-specific ask must NOT collapse to its base family just because it carried a code");
+assert.equal(modelMatches("Street Glide 2024 FLHX U902-24 Vivid Black", "Deadwood"), false, "a code buried mid-label is not a leading code and grants nothing");
+
+// A model whose NAME is its code must not degrade to a bare displacement free to match anything.
+assert.equal(stripLeadingHarleyModelCode("Fxdr 114"), "", "stripping must refuse when no model NAME survives ('114' would match any 114)");
+assert.equal(modelMatches("Road Glide 114", "Fxdr 114"), false, "so an FXDR ask never matches a Road Glide 114");
+assert.equal(stripLeadingHarleyModelCode("FLHD"), "", "a bare code alone strips to nothing");
+assert.equal(stripLeadingHarleyModelCode("Street Glide"), "", "a plain model name has no leading code to drop");
+assert.equal(stripLeadingHarleyModelCode("FLHD Deadwood"), "deadwood", "the surviving name is what we search on");
+
+console.log("PASS watch model-match eval — directional (unit⊇watch): trim-specific watches no longer fire on base units (forward + reverse guards); base/exact matches preserved; a leading DMS platform code no longer hides the whole floor; engine matcher guarded.");

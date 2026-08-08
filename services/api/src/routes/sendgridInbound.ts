@@ -7478,6 +7478,32 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         note: "walk_in_callback_requested"
       });
     }
+    let hasUsedMatch = false;
+    let hasNewMatch = false;
+    // Kept rather than discarded: the watch arm below needs to know which COLOURS these units come
+    // in before it stamps one onto a watch. Same lookup, no extra feed call.
+    let modelLabelMatches: Array<{ color?: string | null }> = [];
+    // Null until the lookup actually answers: a feed timeout must read as "we don't know what's on
+    // the floor", never as "the floor is empty" (Mike Wolf, +17164323990). Runs here rather than
+    // where it used to sit, ~100 lines down, because the watch referee below is now one of its
+    // readers; the callback-request lane returns above this point, so it costs no extra feed call.
+    let modelInStockNow: boolean | null = null;
+    if (modelLabel) {
+      try {
+        const matches = await findInventoryMatches({ year: null, model: modelLabel });
+        modelLabelMatches = matches;
+        modelInStockNow = matches.length > 0;
+        if (matches.length) {
+          hasUsedMatch = matches.some(m => String(m.condition ?? "").toLowerCase().includes("used"));
+          hasNewMatch = matches.some(
+            m =>
+              !String(m.condition ?? "")
+                .toLowerCase()
+                .includes("used")
+          );
+        }
+      } catch {}
+    }
     const hasWatchIntentFromText =
       hasWatchIntentPhrase(commentLower) || !!watchDirectiveSegment;
     // ONE referee for "should this walk-in note start a watch" (decideWalkInInventoryWatchTurn).
@@ -7497,6 +7523,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       wantParserEnabled: walkInWantParserEnabled,
       modelLabel,
       familyOnlyModel: isFamilyOnlyModelLabel(modelLabel),
+      modelInStockNow,
       walkInState
     });
     // Shadow: what the dark arm WOULD have added, so a week of these can be read before flipping.
@@ -7583,26 +7610,6 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       yearMax: yearRange?.max ?? null
     });
     const rangeLabel = yearRangeLabel ? `${yearRangeLabel} ` : "";
-    let hasUsedMatch = false;
-    let hasNewMatch = false;
-    // Kept rather than discarded: the watch arm below needs to know which COLOURS these units come
-    // in before it stamps one onto a watch. Same lookup, no extra feed call.
-    let modelLabelMatches: Array<{ color?: string | null }> = [];
-    if (modelLabel) {
-      try {
-        const matches = await findInventoryMatches({ year: null, model: modelLabel });
-        modelLabelMatches = matches;
-        if (matches.length) {
-          hasUsedMatch = matches.some(m => String(m.condition ?? "").toLowerCase().includes("used"));
-          hasNewMatch = matches.some(
-            m =>
-              !String(m.condition ?? "")
-                .toLowerCase()
-                .includes("used")
-          );
-        }
-      } catch {}
-    }
     if (!conv.lead) {
       conv.lead = {};
     }

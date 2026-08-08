@@ -1260,6 +1260,44 @@ const walkInWatchCases: WalkInWatchCase[] = [
     expectWatch: true,
     expectSource: "explicit_phrase",
     expectParserArm: false
+  },
+  // --- the floor answers, not just the note (Mike Wolf +17164323990, 2026-08-07) ---------------
+  // He walked in to look at a new Deadwood. The note never says whether we have one, so the parser
+  // answered `wantIsSatisfiableFromNote: false` — true of the NOTE — and the arm armed a watch and
+  // told him "I'll keep an eye out ... and let you know if one comes in" about a bike on our own
+  // floor. Reproduced 5/5 against the live parser on 2026-08-08 before this guard existed.
+  {
+    id: "mike_wolf_in_stock_now_vetoes_the_parser_arm",
+    input: { ...LARRY_WANT, modelLabel: "FLHD Deadwood", modelInStockNow: true },
+    expectWatch: false,
+    expectSource: "none",
+    expectParserArm: false
+  },
+  {
+    // The same note with an EMPTY floor is still Larry's watch — the guard removes nothing else.
+    id: "not_in_stock_still_watches",
+    input: { ...LARRY_WANT, modelLabel: "FLHD Deadwood", modelInStockNow: false },
+    expectWatch: true,
+    expectSource: "want_parser",
+    expectParserArm: true
+  },
+  {
+    // A feed timeout hands in null. Unknown must read as unknown — never as "the floor is empty"
+    // and never as "we have one" — so it collapses to the behavior that shipped before the guard.
+    id: "unknown_stock_leaves_todays_behavior_alone",
+    input: { ...LARRY_WANT, modelLabel: "FLHD Deadwood", modelInStockNow: null },
+    expectWatch: true,
+    expectSource: "want_parser",
+    expectParserArm: true
+  },
+  {
+    // In stock or not, an explicit "let me know when one comes in" is still honoured — the customer
+    // may want a different colour or year than the one on the floor. The KEEP arm has no vetoes.
+    id: "keep_arm_survives_the_in_stock_veto",
+    input: { ...LARRY_WANT, explicitWatchPhrase: true, modelInStockNow: true },
+    expectWatch: true,
+    expectSource: "explicit_phrase",
+    expectParserArm: false
   }
 ];
 
