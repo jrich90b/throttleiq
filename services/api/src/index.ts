@@ -836,7 +836,7 @@ import {
   resolveRoutingParserDecision,
   shouldTreatInboundAsTestRideBikeSelection
 } from "./domain/routerV2.js";
-import { formatBusinessHoursForReply, mayStateTokenAsWorkable, statableTimeReply } from "./domain/businessHoursGuard.js";
+import { formatBusinessHoursForReply, formatPreferredTimeForReply, mayStateTokenAsWorkable, preferredDateTimeNotedTail, statablePreferredTimeText, statableTimeReply, type BusinessWeekHours } from "./domain/businessHoursGuard.js";
 import {
   resolveAcceptedVisitTimeOffer,
   shouldOfferTimesAfterAcceptance
@@ -15952,12 +15952,7 @@ function formatPreferredDateForReply(value: string | null | undefined): string |
   }).format(date);
 }
 
-function isOpenPreferredTime(value: string | null | undefined): boolean {
-  const raw = String(value ?? "").trim();
-  return !raw || /^(any|anytime|flexible|open|no preference|n\/a|na)$/i.test(raw);
-}
-
-function buildTestRidePreferredDateReply(conv: any): string | null {
+function buildTestRidePreferredDateReply(conv: any, businessHours?: BusinessWeekHours): string | null {
   const preferredDateLabel = formatPreferredDateForReply(conv?.lead?.preferredDate);
   if (!preferredDateLabel) return null;
   const rawModel =
@@ -15968,31 +15963,26 @@ function buildTestRidePreferredDateReply(conv: any): string | null {
   const modelLabel = /full line/i.test(String(rawModel)) ? "" : formatModelLabel(conv?.lead?.vehicle?.year ?? null, rawModel);
   const modelClause = modelLabel ? ` on the ${modelLabel}` : "";
   const preferredTime = String(conv?.lead?.preferredTime ?? "").trim();
-  if (!isOpenPreferredTime(preferredTime)) {
-    return `Thanks — I saw you’re interested in a test ride${modelClause}. I have ${preferredDateLabel} at ${preferredTime} noted. I’ll confirm availability and get that lined up.`;
-  }
-  return `Thanks — I saw you’re interested in a test ride${modelClause}. I have ${preferredDateLabel} noted. What time works best for you?`;
-}
-
-function formatPreferredTimeForReply(value: string | null | undefined): string {
-  const raw = String(value ?? "").trim();
-  if (!raw) return "";
-  return raw.replace(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i, (_m, hour, minute, meridiem) => {
-    const suffix = String(meridiem).toUpperCase();
-    return `${hour}${minute ? `:${minute}` : ""} ${suffix}`;
+  const tail = preferredDateTimeNotedTail({
+    dateLabel: preferredDateLabel,
+    preferredTime,
+    businessHours
   });
+  return `Thanks — I saw you’re interested in a test ride${modelClause}. ${tail}`;
 }
 
-function buildJumpStartPreferredDateReply(conv: any): string {
+function buildJumpStartPreferredDateReply(conv: any, businessHours?: BusinessWeekHours): string {
   const preferredDateLabel = formatPreferredDateForReply(conv?.lead?.preferredDate);
-  const preferredTime = formatPreferredTimeForReply(conv?.lead?.preferredTime);
+  // Named for what it is: the form's time ONLY when the store is open then, "" otherwise, so the
+  // clause degrades to the date-only wording beside it (+16397209755 picked 8:00 Pm; we close at 6).
+  const statableTime = statablePreferredTimeText(formatPreferredTimeForReply(conv?.lead?.preferredTime), businessHours);
   const inquiry = String(conv?.lead?.inquiry ?? "").toLowerCase();
   const party = /\b(my wife|wife|spouse|partner|we|both of us)\b/.test(inquiry)
     ? "you and your wife"
     : "you";
   const dateLine =
-    preferredDateLabel && preferredTime
-      ? ` I have ${preferredDateLabel} at ${preferredTime} noted.`
+    preferredDateLabel && statableTime
+      ? ` I have ${preferredDateLabel} at ${statableTime} noted.`
       : preferredDateLabel
         ? ` I have ${preferredDateLabel} noted.`
         : "";
@@ -16060,7 +16050,7 @@ function normalizeLeadLabel(conv: any): string | null {
   return formatModelLabel(year, raw);
 }
 
-function buildInitialEmailDraft(conv: any, dealerProfile: any): string {
+function buildInitialEmailDraft(conv: any, dealerProfile: any, businessHours?: BusinessWeekHours): string {
   const rawName = conv?.lead?.firstName?.trim() || conv?.lead?.name?.trim() || "there";
   const name = rawName.split(" ")[0] || "there";
   const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
@@ -16085,9 +16075,11 @@ function buildInitialEmailDraft(conv: any, dealerProfile: any): string {
   if (isTestRide && preferredDateLabel) {
     const preferredTime = String(conv?.lead?.preferredTime ?? "").trim();
     const modelClause = label ? ` on the ${label}` : "";
-    const dateLine = isOpenPreferredTime(preferredTime)
-      ? `I have ${preferredDateLabel} noted. What time works best for you?`
-      : `I have ${preferredDateLabel} at ${preferredTime} noted. I’ll confirm availability and get that lined up.`;
+    const dateLine = preferredDateTimeNotedTail({
+      dateLabel: preferredDateLabel,
+      preferredTime,
+      businessHours
+    });
     return formatEmailLayout(
       `Hi ${name},\n\nThanks for your interest in a test ride${modelClause}. This is ${agentName} at ${dealerName}. ${dateLine}\n\nIf a walkaround or extra photos would help before then, just let me know.`,
       { firstName: name, fallbackName: "there" }
@@ -59112,11 +59104,14 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       // we don't have" + alternate/inventory + "want me to keep an eye out?"). No time, no appointment.
       reply = buildBlockedTestRideInventoryDraft(testRideInventoryGate);
     } else {
+      // The lead form's own preferred time is stated back as a slot; hand in the real hours so the
+      // invariant guard can refuse one the store is shut for (+16397209755, "8:00 Pm").
+      const preferredHours = (await getSchedulerConfig()).businessHours;
       const preferredDateReply =
         jumpStartLead
-          ? buildJumpStartPreferredDateReply(conv)
+          ? buildJumpStartPreferredDateReply(conv, preferredHours)
           : sourceIsTestRide || classificationIsTestRide
-            ? buildTestRidePreferredDateReply(conv)
+            ? buildTestRidePreferredDateReply(conv, preferredHours)
             : null;
       const shouldForceTestRideCopy = shouldForceInitialTestRideSourceScheduleCopy({
         isInitialAdf: true,

@@ -134,6 +134,7 @@ import type {
 } from "../domain/llmDraft.js";
 import type { InboundMessageEvent } from "../domain/types.js";
 import { getSchedulerConfig, getPreferredSalespeople } from "../domain/schedulerConfig.js";
+import { formatPreferredTimeForReply, preferredDateTimeNotedTail, statablePreferredTimeText, type BusinessWeekHours } from "../domain/businessHoursGuard.js";
 import { resolveStaffFollowUpTimingPhrase } from "../domain/staffFollowUpTiming.js";
 import { getAuthedCalendarClient, insertEvent, queryFreeBusy } from "../domain/googleCalendar.js";
 import {
@@ -1774,11 +1775,6 @@ function formatPreferredDateForReply(value: string | null | undefined): string |
   }).format(date);
 }
 
-function isOpenPreferredTime(value: string | null | undefined): boolean {
-  const raw = String(value ?? "").trim();
-  return !raw || /^(any|anytime|flexible|open|no preference|n\/a|na)$/i.test(raw);
-}
-
 function buildStructuredTestRideInquiryFromLead(lead: {
   vehicleModel?: string;
   vehicleDescription?: string;
@@ -1795,7 +1791,7 @@ function buildStructuredTestRideInquiryFromLead(lead: {
   return parts.join(" ").trim();
 }
 
-function buildInitialTestRidePreferredDateReply(conv: any): string | null {
+function buildInitialTestRidePreferredDateReply(conv: any, businessHours?: BusinessWeekHours): string | null {
   const preferredDateLabel = formatPreferredDateForReply(conv?.lead?.preferredDate);
   if (!preferredDateLabel) return null;
   const rawModel =
@@ -1806,10 +1802,12 @@ function buildInitialTestRidePreferredDateReply(conv: any): string | null {
   const modelLabel = /full line/i.test(String(rawModel)) ? "" : formatModelLabel(conv?.lead?.vehicle?.year ?? null, rawModel);
   const modelClause = modelLabel ? ` on the ${modelLabel}` : "";
   const preferredTime = String(conv?.lead?.preferredTime ?? "").trim();
-  if (!isOpenPreferredTime(preferredTime)) {
-    return `Thanks — I saw you’re interested in a test ride${modelClause}. I have ${preferredDateLabel} at ${preferredTime} noted. I’ll confirm availability and get that lined up.`;
-  }
-  return `Thanks — I saw you’re interested in a test ride${modelClause}. I have ${preferredDateLabel} noted. What time works best for you?`;
+  const tail = preferredDateTimeNotedTail({
+    dateLabel: preferredDateLabel,
+    preferredTime,
+    businessHours
+  });
+  return `Thanks — I saw you’re interested in a test ride${modelClause}. ${tail}`;
 }
 
 async function buildInitialAdfDealerLocationReply(args: {
@@ -1885,25 +1883,18 @@ function canUseAdfInboundReplyActionFallback(args: {
   return confidence < Number(process.env.LLM_INBOUND_REPLY_ACTION_CONFIDENCE_MIN ?? 0.74);
 }
 
-function formatPreferredTimeForReply(value: string | null | undefined): string {
-  const raw = String(value ?? "").trim();
-  if (!raw) return "";
-  return raw.replace(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i, (_m, hour, minute, meridiem) => {
-    const suffix = String(meridiem).toUpperCase();
-    return `${hour}${minute ? `:${minute}` : ""} ${suffix}`;
-  });
-}
-
-function buildInitialJumpStartPreferredDateReply(conv: any): string | null {
+function buildInitialJumpStartPreferredDateReply(conv: any, businessHours?: BusinessWeekHours): string | null {
   const preferredDateLabel = formatPreferredDateForReply(conv?.lead?.preferredDate);
-  const preferredTime = formatPreferredTimeForReply(conv?.lead?.preferredTime);
+  // Named for what it is: the form's time ONLY when the store is open then, "" otherwise, so the
+  // clause degrades to the date-only wording beside it (+16397209755 picked 8:00 Pm; we close at 6).
+  const statableTime = statablePreferredTimeText(formatPreferredTimeForReply(conv?.lead?.preferredTime), businessHours);
   const inquiry = String(conv?.lead?.inquiry ?? "").toLowerCase();
   const party = /\b(my wife|wife|spouse|partner|we|both of us)\b/.test(inquiry)
     ? "you and your wife"
     : "you";
   const dateLine =
-    preferredDateLabel && preferredTime
-      ? ` I have ${preferredDateLabel} at ${preferredTime} noted.`
+    preferredDateLabel && statableTime
+      ? ` I have ${preferredDateLabel} at ${statableTime} noted.`
       : preferredDateLabel
         ? ` I have ${preferredDateLabel} noted.`
         : "";
@@ -1918,6 +1909,7 @@ function buildInitialEmailDraft(
   options?: {
     inventoryStatus?: "in_stock" | "on_hold" | "sold" | "not_found" | "unknown";
     testRideInventoryStatus?: "in_stock" | "on_hold" | "sold" | "not_found" | "unknown";
+    businessHours?: BusinessWeekHours;
   }
 ): string {
   const rawName =
@@ -1953,9 +1945,11 @@ function buildInitialEmailDraft(
   if (isTestRide && preferredDateLabel) {
     const preferredTime = String(conv?.lead?.preferredTime ?? "").trim();
     const modelClause = model ? ` on the ${model}` : "";
-    const dateLine = isOpenPreferredTime(preferredTime)
-      ? `I have ${preferredDateLabel} noted. What time works best for you?`
-      : `I have ${preferredDateLabel} at ${preferredTime} noted. I’ll confirm availability and get that lined up.`;
+    const dateLine = preferredDateTimeNotedTail({
+      dateLabel: preferredDateLabel,
+      preferredTime,
+      businessHours: options?.businessHours
+    });
     const draft = `Hi ${name},\n\nThanks for your interest in a test ride${modelClause}. It's ${agentName} over at ${dealerName}. ${dateLine}\n\nIf a walkaround or extra photos would help before then, just let me know.`;
     return formatEmailLayout(draft, { firstName: name, fallbackName: "there" });
   }
@@ -8859,7 +8853,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     conv.dialogState = { name, updatedAt } as any;
   };
   if (initialAdfJumpStartExperience) {
-    let ack = buildInitialJumpStartPreferredDateReply(conv);
+    let ack = buildInitialJumpStartPreferredDateReply(conv, (await getSchedulerConfig()).businessHours);
     if (!ack) {
       ack = "Thanks — I saw you’re looking to do the Jumpstart experience before the course. I’ll have the team confirm availability and get that lined up.";
     }
@@ -9040,7 +9034,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     publishAdfEmailDraft(
       buildInitialEmailDraft(conv, profile, inventoryNote, buildInventoryAvailable, {
         inventoryStatus: initialAvailability,
-        testRideInventoryStatus: initialAvailability
+        testRideInventoryStatus: initialAvailability,
+        // The form's own preferred time is stated back as a slot — hand in the real hours so the
+        // invariant guard can refuse one the store is shut for (+16397209755 got "8:00 Pm" here too).
+        businessHours: (await getSchedulerConfig()).businessHours
       })
     );
   } else {
@@ -9499,7 +9496,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     // (the unavailable-inventory watch for not_found/sold, else the availability line / force-copy branch).
     // Fail-safe direction: when unsure, never promise a ride.
     initialAvailability === "in_stock"
-      ? buildInitialTestRidePreferredDateReply(conv)
+      ? buildInitialTestRidePreferredDateReply(conv, (await getSchedulerConfig()).businessHours)
       : null;
   if (preferredTestRideDateReply) {
     draft = preferredTestRideDateReply;
