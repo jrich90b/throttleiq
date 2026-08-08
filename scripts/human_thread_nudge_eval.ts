@@ -26,7 +26,10 @@ import {
   humanThreadNudgeQuietDays,
   humanThreadNudgeMaxCount,
   humanThreadNudgeSpacingDays,
-  HUMAN_THREAD_NUDGE_MAX_QUIET_DAYS_DEFAULT
+  HUMAN_THREAD_NUDGE_MAX_QUIET_DAYS_DEFAULT,
+  resolveHumanThreadNudgeComposeGate,
+  selectHumanThreadNudgeThread,
+  hasOpenFutureDatedTodo
 } from "../services/api/src/domain/humanThreadNudge.ts";
 
 const failures: string[] = [];
@@ -175,7 +178,12 @@ eq("no_anchor_no", D({ ...base, lastMessageAtMs: NaN }), { nudge: false, reason:
 // --- source pins -------------------------------------------------------------
 const idx = fs.readFileSync(path.join(process.cwd(), "services/api/src/index.ts"), "utf8");
 const laneIdx = idx.indexOf("if (isHumanThreadNudgeEnabled()) {");
-const lane = laneIdx >= 0 ? idx.slice(laneIdx, laneIdx + 5200) : "";
+// Bounded by the block that actually FOLLOWS, not a character count. A window standing in for
+// "inside this block" silently stops being true the moment the block grows past it — which is how
+// two other evals went stale on 2026-08-08.
+const laneEndIdx = idx.indexOf("// Scheduling-leak safety net:", laneIdx);
+const lane = laneIdx >= 0 && laneEndIdx > laneIdx ? idx.slice(laneIdx, laneEndIdx) : "";
+eq("tick_lane_bounded_by_the_next_block", laneEndIdx > laneIdx, true);
 eq("tick_lane_exists_flag_gated", laneIdx >= 0, true);
 // The lane's pre-filter is the SHARED eligible-class helper, not a restatement that can drift from
 // the pure decision's first branch.
@@ -189,6 +197,74 @@ eq("draft_mode_lands_in_queue", /appendOutbound\(conv, "salesperson", nudgeTo, n
 eq("autosend_behind_second_flag", /if \(isHumanThreadNudgeAutosendEnabled\(\)\) \{/.test(lane), true);
 eq("ledger_records_count_and_lastAt", /conv\.humanThreadNudge = \{\s*\n\s*count: \(conv\.humanThreadNudge\?\.count \?\? 0\) \+ 1,\s*\n\s*lastAt: nowIso\(\)/.test(lane), true);
 eq("duplicate_guard_present", /isRecentDuplicateOutbound\(conv, nudgeTo, nudgeMessage/.test(lane), true);
+
+// ---------------------------------------------------------------------------
+// THE COST BOUND (incident 2026-07-31). Enabling this feature took the one-minute follow-up tick
+// from ~13s to 150-220s: the per-tick cap counted only nudges that fully SUCCEEDED, so every
+// rejected composition was a free, uncounted LLM call and one tick could compose across the whole
+// store. Only 16 threads were ever nudged while every tick burned three minutes.
+// ---------------------------------------------------------------------------
+
+// (a) What can be known WITHOUT paying — executed, not read.
+const COST_NOW = Date.parse("2026-08-08T12:00:00Z");
+const gate = (over: Record<string, unknown> = {}) =>
+  resolveHumanThreadNudgeComposeGate({ toE164: "+17165551234", anchors: [], nowMs: COST_NOW, ...over });
+
+eq("gate_clean_thread_composes", gate().compose, true);
+eq("gate_unroutable_phone_blocks", gate({ toE164: "7165551234" }).compose, false);
+eq("gate_unroutable_reason", (gate({ toE164: "" }) as any).reason, "unroutable_phone");
+eq("gate_missing_phone_blocks", gate({ toE164: null }).compose, false);
+// The Don Soto miss: the ANCHOR carried the stale date, not the bump. Known before composing.
+const staleAnchor = [{ body: "Come by for the Taste of Country pre-party on June 20th!" }];
+eq("gate_past_dated_anchor_blocks", gate({ anchors: staleAnchor }).compose, false);
+eq("gate_past_dated_reason", (gate({ anchors: staleAnchor }) as any).reason, "past_dated_anchor");
+// Any-of over the anchors, so splitting the old single call into anchors-here / composed-text-there
+// is exactly equivalent — one stale row anywhere in the thread is enough.
+eq(
+  "gate_scans_every_anchor_not_just_the_last",
+  gate({ anchors: [...staleAnchor, { body: "sounds good" }] }).compose,
+  false
+);
+eq("gate_future_date_is_fine", gate({ anchors: [{ body: "see you December 24th, 2099" }] }).compose, true);
+eq("gate_junk_anchors_do_not_throw", gate({ anchors: "not-an-array" as never }).compose, true);
+
+// (b) The thread a bump is written FROM excludes rows the customer never received.
+const picked = selectHumanThreadNudgeThread([
+  { provider: "twilio", body: "first" },
+  { provider: "draft_ai", body: "a draft nobody approved" },
+  { provider: "voice_transcript", body: "internal log" },
+  { provider: "human", body: "  " },
+  { provider: "human", body: "last real one" }
+]);
+eq("thread_keeps_only_delivered_rows", picked.thread.length, 2);
+eq("thread_last_is_the_newest_delivered", String(picked.last?.body), "last real one");
+eq("thread_drops_empty_bodies", picked.thread.every((m: any) => String(m.body).trim().length > 0), true);
+eq("thread_handles_missing_messages", selectHumanThreadNudgeThread(undefined).last, null);
+
+// (c) A future-dated staff promise owns the follow-up.
+const todos = [{ convId: "+1", dueAt: new Date(COST_NOW + 86_400_000).toISOString() }];
+eq("future_dated_todo_blocks", hasOpenFutureDatedTodo(todos, "+1", COST_NOW), true);
+eq("past_dated_todo_does_not", hasOpenFutureDatedTodo([{ convId: "+1", dueAt: new Date(COST_NOW - 1).toISOString() }], "+1", COST_NOW), false);
+eq("other_thread_todo_ignored", hasOpenFutureDatedTodo(todos, "+2", COST_NOW), false);
+eq("undated_todo_ignored", hasOpenFutureDatedTodo([{ convId: "+1", dueAt: "" }], "+1", COST_NOW), false);
+
+// (d) The loop itself cannot be invoked from here, so its ORDER is asserted against the bounded
+// lane. These are the three facts the incident turned on.
+const composeIdx = lane.indexOf("await composeHumanThreadNudgeWithLLM(");
+const counterIdx = lane.indexOf("nudgeCompositions += 1;");
+const gateIdx = lane.indexOf("resolveHumanThreadNudgeComposeGate({");
+eq("lane_composes", composeIdx > 0, true);
+eq("lane_counts_compositions_BEFORE_paying", counterIdx > 0 && counterIdx < composeIdx, true);
+eq("lane_gates_certain_rejects_BEFORE_paying", gateIdx > 0 && gateIdx < composeIdx, true);
+eq("lane_break_tests_the_composition_counter", /if \(nudgeCompositions >= 10\) break;/.test(lane), true);
+eq("lane_break_no_longer_tests_successes", /if \(humanNudges >= 10\) break;/.test(lane), false);
+// Deliberate: the near-duplicate check needs the composed body, so it stays downstream. The counter
+// is what bounds it now — this asserts the choice is still the choice, not an oversight.
+eq(
+  "near_duplicate_check_remains_after_compose",
+  lane.indexOf("isRecentDuplicateOutbound(") > composeIdx,
+  true
+);
 
 const llm = fs.readFileSync(path.join(process.cwd(), "services/api/src/domain/llmDraft.ts"), "utf8");
 const compIdx = llm.indexOf("export async function composeHumanThreadNudgeWithLLM");

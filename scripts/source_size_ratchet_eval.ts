@@ -284,7 +284,11 @@ const CEILINGS: Ceiling[] = [
     // RE-DERIVED 2026-08-08 on rebase (the #418 trap): this branch was proven against a 71_007 main
     // eight commits earlier and proposed 70_889. Both numbers are re-measured against the REBASED
     // tree — the branch's own figures were never carried across.
-    max: 70_896,
+    // 70_896 -> 70_893. The quiet-thread nudge's cost bound (2026-07-31 incident). The tick's
+    // thread selection and its future-dated-todo check moved to domain/humanThreadNudge.ts beside
+    // the decision they feed, and the pre-composition gate went with them — so the lane pays one
+    // line per call instead of carrying the reasoning inline. The fix lands NET SMALLER.
+    max: 70_893,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

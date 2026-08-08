@@ -57,6 +57,8 @@ export const HUMAN_THREAD_NUDGE_SPACING_DAYS_DEFAULT = 5;
  */
 export const HUMAN_THREAD_NUDGE_MAX_QUIET_DAYS_DEFAULT = 30;
 
+import { referencesPastDatedEvent } from "./pastEventGuard.js";
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function envFlag(name: string, fallback = "0"): boolean {
@@ -69,6 +71,89 @@ function envNum(name: string, fallback: number): number {
   if (!raw) return fallback; // Number("") is 0 — an unset env must fall to the default
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+/**
+ * The messages a bump is written FROM: real, delivered, non-empty traffic, newest last.
+ *
+ * The provider allowlist is the point — a `draft_ai` row is a draft staff may never approve, and the
+ * voice/payment rows are internal log entries. Reading one as "our last message" would start the
+ * quiet clock from something the customer never saw. Lives here rather than inline in the tick so
+ * the thread the decision reads and the thread the composer is shown are the same list.
+ */
+const NUDGE_THREAD_PROVIDERS = new Set(["twilio", "human", "sendgrid", "web_widget", "sendgrid_adf"]);
+
+export function selectHumanThreadNudgeThread(messages?: unknown): { thread: any[]; last: any | null } {
+  const rows = Array.isArray(messages) ? (messages as any[]) : [];
+  const thread = rows.filter(
+    m => NUDGE_THREAD_PROVIDERS.has(String(m?.provider ?? "")) && String(m?.body ?? "").trim()
+  );
+  return { thread, last: thread[thread.length - 1] ?? null };
+}
+
+/**
+ * Does this thread already have a staff task dated in the FUTURE? If so the bump stays quiet — a
+ * dated promise ("I'll send numbers Monday") owns the follow-up, and "just checking in" over the top
+ * of it reads as the left hand not knowing what the right is doing.
+ */
+export function hasOpenFutureDatedTodo(
+  openTodos: unknown,
+  convId: string | null | undefined,
+  nowMs: number
+): boolean {
+  const rows = Array.isArray(openTodos) ? (openTodos as any[]) : [];
+  return rows.some(t => {
+    if (t?.convId !== convId) return false;
+    const dueMs = Date.parse(String(t?.dueAt ?? ""));
+    return Number.isFinite(dueMs) && dueMs > nowMs;
+  });
+}
+
+/**
+ * Is it worth PAYING to compose a bump for this thread?
+ *
+ * Everything here is cheap and certain, and it all used to run AFTER the LLM composition, which is
+ * how the 2026-07-31 incident happened: enabling the feature took the one-minute follow-up tick from
+ * ~13s to 150-220s. The per-tick cap counted only nudges that fully SUCCEEDED, so every rejected
+ * composition was a free, uncounted LLM call and the loop could compose across all ~830
+ * conversations. Only 16 threads were ever nudged while every tick burned three minutes.
+ *
+ * Two answers can be known for certain before spending anything:
+ *
+ * - **An unroutable phone.** No text can be sent to it, so a composed draft is pure waste.
+ * - **A past-dated ANCHOR.** A bump continues the thread's last exchange, so if that exchange
+ *   invited the customer to something already behind us, the bump re-issues it — Don Soto
+ *   (+17167134185) got "circling back on the Taste of Country pre-party invite… still planning to
+ *   come by Saturday?" five weeks after the June 20th party. The anchors are known before the bump
+ *   exists, so this half of the guard costs nothing to run first.
+ *
+ * The COMPOSED TEXT still has to be checked against the same guard afterwards — it can name a date
+ * the anchors never did — and `referencesPastDatedEvent` is a plain any-of over the texts it is
+ * given, so checking anchors here and the composed text there is exactly the single combined call
+ * it replaces. What it is NOT is the near-duplicate check: that genuinely needs the composed body,
+ * so it stays downstream. Bounding it is the composition COUNTER's job, not this gate's.
+ *
+ * FAIL DIRECTION unchanged: anything uncertain returns compose:false ⇒ silence.
+ */
+export type HumanThreadNudgeComposeGate =
+  | { compose: true }
+  | { compose: false; reason: "unroutable_phone" | "past_dated_anchor" };
+
+export function resolveHumanThreadNudgeComposeGate(input: {
+  /** Already E.164-normalised by the caller; "" when the lead has no sendable number. */
+  toE164?: string | null;
+  /** The thread rows from selectHumanThreadNudgeThread — this module owns what "anchor text" means. */
+  anchors?: unknown;
+  nowMs: number;
+}): HumanThreadNudgeComposeGate {
+  if (!String(input.toE164 ?? "").startsWith("+")) return { compose: false, reason: "unroutable_phone" };
+  const anchorBodies = (Array.isArray(input.anchors) ? (input.anchors as any[]) : []).map(m =>
+    String(m?.body ?? "")
+  );
+  if (referencesPastDatedEvent(anchorBodies, { nowMs: input.nowMs })) {
+    return { compose: false, reason: "past_dated_anchor" };
+  }
+  return { compose: true };
 }
 
 export function isHumanThreadNudgeEnabled(): boolean {
