@@ -8,6 +8,8 @@ import OpenAI from "openai";
 import type { Conversation } from "./conversationStore.js";
 import { dataPath } from "./dataDir.js";
 import { buildSelfHealSteering } from "./selfHealSteering.js";
+import { buildChannelRules, advanceEveryReplyEnabled, advanceEveryReplySuppressed } from "./draftChannelRules.js";
+export { advanceEveryReplyEnabled, advanceEveryReplySuppressed };
 import { isFabricatedGratitudeLeadIn, isEchoedInboundOpening } from "./leadInGuards.js";
 import { CUSTOMER_ACK_ACTION_EXEMPLARS } from "./customerAckActionExemplars.js";
 import { buildVehicleChoiceConfidencePrompt } from "./vehicleChoiceConfidencePrompt.js";
@@ -338,6 +340,10 @@ export type DraftContext = {
   // the draft must lead with a brief, genuine acknowledgment and drop any scarcity/urgency push.
   // A deterministic backstop (hardshipEmpathyAck.ts) also prepends an acknowledgment at finalize.
   needsEmpathy?: boolean | null;
+
+  // The customer is CLOSING this lead out this turn (response-control read "not interested"). The
+  // salesperson arm must not ask them anything — see advanceEveryReplySuppressed.
+  dispositionClosing?: boolean | null;
 
   // Inventory verification inputs (optional)
   stockId?: string | null;
@@ -15856,31 +15862,7 @@ export async function generateDraftWithLLM(ctx: DraftContext): Promise<string> {
   const manualIntentHint = inferManualIntentHintFromDraftContext(ctx);
   const manualReplyExamplesBlock = buildManualReplyExamplesPromptBlock(manualIntentHint);
 
-  const isEmail = ctx.channel === "email";
-  const channelRules = isEmail
-    ? `
-EMAIL RULES (strict):
-- 4–6 sentences. Warm, professional, complete sentences.
-- No emojis. No bullet lists.
-- Do NOT include a signature; the system will append it.
-- If dealerProfile.bookingUrl exists, include exactly: "You can book an appointment here: <bookingUrl>".
-- If not first outbound, do NOT repeat the intro.
-`
-    : `
-SMS RULES (strict):
-- BE BRIEF. Default to 1–2 short sentences; 3 only if truly needed. Answer ONLY what the customer
-  asked THIS turn — do not pile on extra options, facts, offers, or multiple questions they didn't
-  ask for. At most ONE question per message. If you have more to say, save it for their reply.
-  (Staff's #1 complaint is replies that say too much — when in doubt, cut it.)
-- No signatures.
-- If not first outbound, do NOT repeat the intro.
-- Do NOT offer appointment times unless the customer explicitly asks to schedule or stop in.
-- Do NOT mention email unless the customer explicitly asked to email.
-- If the customer says "later/next month/next year/I’ll let you know", acknowledge and say you’re here when they’re ready. Do NOT ask to set reminders.
-- If the customer asks for a phone call today/now and dealerClosedToday is true, say we’re closed today and someone will call tomorrow. Do NOT offer appointment times.
-- If the customer asks for a phone call today/now and dealerClosedToday is false, acknowledge and confirm someone can call today.
-`;
-
+  const channelRules = buildChannelRules(ctx);
   const hardshipRules = ctx.needsEmpathy
     ? `
 HARDSHIP (the customer disclosed a personal hardship or serious situation — illness, injury, hospitalization, grief/loss, a family or financial emergency):

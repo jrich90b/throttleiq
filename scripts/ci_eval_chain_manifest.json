@@ -137,6 +137,7 @@
     "feedback_diagnosis:eval",
     "agent_correction_rate:eval",
     "draft_brevity:eval",
+    "advance_every_reply:eval",
     "voice_cadence_facts:eval",
     "voice_next_step:eval",
     "voice_next_step_promise:eval",
