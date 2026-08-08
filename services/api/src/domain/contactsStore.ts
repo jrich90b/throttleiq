@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { dataPath } from "./dataDir.js";
 import { readJsonStoreText, writeJsonStoreText } from "./storePersistence.js";
+import { normalizePhone as normalizeSuppressionPhone } from "./suppressionStore.js";
 
 export type ContactEntry = {
   id: string;
@@ -52,15 +53,20 @@ function makeId() {
   return `contact_${Math.random().toString(16).slice(2)}_${Date.now()}`;
 }
 
+/**
+ * ONE phone normalization, shared with the STOP list.
+ *
+ * This was a byte-identical second copy of `suppressionStore.normalizePhone`. Two copies of the key
+ * that decides "is this the same person" is a drift waiting to happen, and it matters most where a
+ * lead is resolved to a contact: if the two ever disagreed, a list could match a contact under one
+ * spelling of a number while the suppression check reads another, and a suppressed customer could be
+ * matched into an audience. Delegating means the agreement is structural rather than coincidental.
+ *
+ * The `undefined`-for-blank contract is this store's, not the STOP list's (which returns ""), so it
+ * is preserved here — every caller below relies on it.
+ */
 function normalizePhone(input?: string): string | undefined {
-  if (!input) return undefined;
-  const raw = String(input).trim();
-  if (!raw) return undefined;
-  if (raw.startsWith("+")) return raw;
-  const digits = raw.replace(/\D/g, "");
-  if (digits.length === 10) return `+1${digits}`;
-  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
-  return raw;
+  return normalizeSuppressionPhone(String(input ?? "")) || undefined;
 }
 
 function normalizeEmail(input?: string): string | undefined {

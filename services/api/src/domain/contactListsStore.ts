@@ -12,9 +12,20 @@ export type ContactListFilter = {
 export type ContactListEntry = {
   id: string;
   name: string;
-  source?: "manual" | "csv" | "filter";
+  /**
+   * "snapshot" is a described list saved from the Copilot builder: the people it found at a moment
+   * in time. It deliberately carries NO `filter`, so it can never start re-resolving — a description
+   * is interpreted by a model, and a re-running model rule would silently change who receives a
+   * campaign with nobody deciding it (#585/#587 already showed list matching looser than it looked).
+   * "filter" lists stay live exactly as they are; they are deterministic, so they can be.
+   */
+  source?: "manual" | "csv" | "filter" | "snapshot";
   contactIds?: string[];
   filter?: ContactListFilter;
+  /** For a snapshot: the plain-English request it was built from, kept for provenance. */
+  description?: string;
+  /** For a snapshot: when the people in it were found. */
+  builtAt?: string;
   createdAt: string;
   updatedAt: string;
   lastImportAt?: string;
@@ -122,17 +133,24 @@ export function getContactList(id: string): ContactListEntry | null {
 
 export function createContactList(input: {
   name: string;
-  source?: "manual" | "csv" | "filter";
+  source?: "manual" | "csv" | "filter" | "snapshot";
   contactIds?: string[];
   filter?: ContactListFilter;
+  description?: string;
+  builtAt?: string;
 }): ContactListEntry {
   const now = nowIso();
+  const isSnapshot = input.source === "snapshot";
   const entry: ContactListEntry = {
     id: makeId(),
     name: String(input.name ?? "").trim() || "Untitled list",
     source: input.source ?? "manual",
     contactIds: uniqIds(input.contactIds),
-    filter: normalizeFilter(input.filter),
+    // A snapshot NEVER takes a filter, even if one is passed: that is the whole difference between
+    // the two kinds of list, and enforcing it here means no caller can erode it by accident.
+    filter: isSnapshot ? undefined : normalizeFilter(input.filter),
+    description: isSnapshot ? String(input.description ?? "").trim() || undefined : undefined,
+    builtAt: isSnapshot ? input.builtAt ?? now : undefined,
     createdAt: now,
     updatedAt: now
   };

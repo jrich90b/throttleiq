@@ -197,7 +197,9 @@ await copilotAskHandler({ user: { role: "manager" }, body: { question: "hot lead
 assert.equal(noLlmAsk.statusCode, 503, "LLM off = unavailable, not a made-up answer");
 
 // registerCopilotRoutes registers every copilot endpoint — behavior-tested with a mock app,
-// so index.ts's single registration line provably carries all three routes.
+// so index.ts's single registration line provably carries all of them. The exact list is pinned on
+// purpose: index.ts registers copilot with ONE call, so an endpoint that never made it into this
+// function would be silently unreachable in production while its own eval passed.
 const { registerCopilotRoutes } = await import("../services/api/src/routes/copilot.ts");
 const registered: string[] = [];
 registerCopilotRoutes({
@@ -206,7 +208,13 @@ registerCopilotRoutes({
 } as any);
 assert.deepEqual(
   registered,
-  ["GET /copilot/insights", "POST /copilot/ask", "POST /copilot/marketing-list"],
+  [
+    "GET /copilot/insights",
+    "POST /copilot/ask",
+    "POST /copilot/marketing-list",
+    // Phase 3 (2026-08-08): saving a described list as a customer list.
+    "POST /copilot/marketing-list/save"
+  ],
   "registerCopilotRoutes carries all copilot endpoints"
 );
 
