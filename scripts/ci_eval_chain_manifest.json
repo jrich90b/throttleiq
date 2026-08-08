@@ -255,6 +255,7 @@
     "cadence_quality_consensus:eval",
     "cadence_quality_sold_unit:eval",
     "context_fidelity:eval",
+    "history_shows_its_age:eval",
     "context_fidelity_hold:eval",
     "context_fidelity_visit_anchor:eval",
     "phantom_visit_intro:eval",

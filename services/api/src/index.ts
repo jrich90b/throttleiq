@@ -21623,6 +21623,11 @@ function buildHistory(conv: any, limit = 20) {
   return buildEffectiveHistory(conv, limit);
 }
 
+/** History for the DRAFT, ages stamped. Why, and why not for the parsers: formatHistoryTurnAge. */
+function buildDraftHistory(conv: any, limit = 20) {
+  return buildEffectiveHistory(conv, limit, { stampAges: true });
+}
+
 /**
  * Thread context for the DRAFT-QUALITY JUDGE only — received turns only. The judge asks "is this
  * draft right for this customer, given what they've heard from us"; an unsent `draft_ai` row is
@@ -59059,7 +59064,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     String(event.body ?? ""),
     regenInboundDepartmentIntent
   );
-  const result = await safeOrchestrateInbound("regen", event, history, {
+  const result = await safeOrchestrateInbound("regen", event, buildDraftHistory(conv, 20), {
     // Same open turn the live path answers — both paths stay in lockstep (CLAUDE.md rule 5).
     openTurnInquiry: buildOpenTurnInquiry(conv.messages),
     staffCorrections: collectRecentStaffCorrections(conv, new Date().toISOString()),
@@ -68988,7 +68993,7 @@ if (authToken && signature) {
   );
   // The only production signal that the widened `inquiry` reaches the composer. Low-volume by construction.
   if (hasMultiMessageOpenTurn(conv.messages)) recordRouteOutcome("live", "open_turn_multi_message_answered", { convId: conv.id, leadKey: conv.leadKey });
-  const result = await safeOrchestrateInbound("twilio_inbound", event, history, {
+  const result = await safeOrchestrateInbound("twilio_inbound", event, buildDraftHistory(conv, 20), {
     // Every inbound since the last outbound they RECEIVED — a pending draft is not an answer (Joe, 8/4).
     openTurnInquiry: buildOpenTurnInquiry(conv.messages),
     staffCorrections: collectRecentStaffCorrections(conv, new Date().toISOString()),
