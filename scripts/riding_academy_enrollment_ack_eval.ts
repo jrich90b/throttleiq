@@ -37,6 +37,7 @@ import fs from "node:fs";
 
 import { decideRidingAcademyTurn } from "../services/api/src/domain/routeStateReducer.ts";
 import { buildRidingAcademyEnrollmentAck } from "../services/api/src/domain/agentVoice.ts";
+import { resolveAdfAckFirstName } from "../services/api/src/domain/agentVoice.ts";
 import {
   resolveEnrollmentJumpstartInvite,
   resolveEnrollmentAckExtras,
@@ -500,6 +501,32 @@ assert.ok(claimIdx < courseBranchIdx, "the claim must be resolved BEFORE the bra
 assert.ok(
   sendgrid.indexOf("if (academyAdfClaim.liveReplyKind) {") > courseBranchIdx,
   "and the ack itself is still composed downstream, from the SAME claim object"
+);
+
+// ---------------------------------------------------------------------------
+// THE ACK MUST GREET THEM BY NAME. Verifying the fix above on the box produced "Hey there, it's
+// Alexandra…" for Ulises, whose record plainly carries firstName "Ulises": the ack branches read
+// `lead.name`, which the ADF parser never writes. 255 of the 825 leads in the live store have a
+// firstName and NO name, and the intro prefix on the very same message reads firstName — so two
+// readers of one fact disagreed, and about a third of ADF leads were greeted by nobody.
+// ---------------------------------------------------------------------------
+assert.equal(
+  resolveAdfAckFirstName({ firstName: "Ulises", lastName: "HernandezPerez" }),
+  "Ulises",
+  "the ack reads the field the ADF parser actually writes"
+);
+assert.equal(
+  resolveAdfAckFirstName({ firstName: "", name: "Donald Rawson" }),
+  "Donald",
+  "a record that only has `name` still works — this adds a reader, it does not swap one"
+);
+assert.equal(resolveAdfAckFirstName({ firstName: "ULISES" }), "Ulises", "a shouting ADF is not shouted back at");
+assert.equal(resolveAdfAckFirstName({ firstName: "  Maya  " }), "Maya", "padding is trimmed");
+assert.equal(resolveAdfAckFirstName({}), null, "no name at all stays null, so the copy says 'Hey there'");
+assert.equal(resolveAdfAckFirstName(null), null, "and a missing lead does not throw");
+assert.ok(
+  sendgrid.includes("const adfAckFirstName = () => resolveAdfAckFirstName(activeAdfLeadProfile ?? conv.lead)"),
+  "all three ADF ack branches share that ONE resolver, off the same profile the intro prefix reads"
 );
 
 const ackCount = rows.filter(r => r.ack).length;

@@ -74,7 +74,7 @@ import {
   resolveRidingAcademyAdfLaneClaim,
   buildAdfFirstTouchAck
 } from "../domain/ridingAcademy.js";
-import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildRidingAcademyEnrollmentAck, shouldIntroduceOnAdfTouch, stripAgentIntroPhraseForDealer, stripLeadingAgentGreeting, hasCustomerReceivedOutbound, GENERIC_AGENT_DISPLAY_NAME, GENERIC_DEALER_DISPLAY_NAME, resolveDealerAgentName, greetingFirstName } from "../domain/agentVoice.js";
+import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildRidingAcademyEnrollmentAck, shouldIntroduceOnAdfTouch, stripAgentIntroPhraseForDealer, stripLeadingAgentGreeting, hasCustomerReceivedOutbound, GENERIC_AGENT_DISPLAY_NAME, GENERIC_DEALER_DISPLAY_NAME, resolveDealerAgentName, greetingFirstName, resolveAdfAckFirstName } from "../domain/agentVoice.js";
 import { buildAdfResubmissionAck, detectAdfFormResubmission } from "../domain/adfResubmission.js";
 import { buildMarketplaceRelayFirstTouchReply, buildMarketplaceRelayTaskSummary } from "../domain/marketplaceRelay.js";
 import { isHtmlClientNoticeOnly } from "../domain/inboundMailActionability.js";
@@ -9836,7 +9836,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const adfAckDealerFallback = "American Harley-Davidson";
   const adfAckAgentName = () => String(dealerProfile?.agentName ?? "").trim() || "Sales Team";
   const adfAckDealerName = () => String(dealerProfile?.dealerName ?? "").trim() || adfAckDealerFallback;
-  const adfAckFirstName = () => String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null;
+  // Reads the field the ADF parser writes. See resolveAdfAckFirstName — `lead.name` is empty on
+  // 255 of the 825 leads in the store, which greeted every one of them "Hey there".
+  const adfAckFirstName = () => resolveAdfAckFirstName(activeAdfLeadProfile ?? conv.lead);
   // Riding Academy ENROLLMENT lead (Joe, 2026-08-05): the rider-training school files an ADF when
   // someone REGISTERS for a course. They already signed up, so the generic opener quoted course
   // pricing back at them. Joe's ruling: send an introduction, thank them, and say the agent is here

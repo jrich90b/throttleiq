@@ -98,6 +98,33 @@ export function buildAgentSelfIntroPattern(agentName: string | null | undefined)
  * No evidence → null → the caller keeps exactly today's behaviour. The fail direction is
  * "stay with the persona", which is the status quo.
  */
+/**
+ * The customer's first name for an ADF acknowledgement.
+ *
+ * Reads `firstName`, which is where the ADF parser actually puts it. The ack branches used to read
+ * `lead.name` — a field the ADF parser never writes: **255 of 825 leads in the live store carry a
+ * firstName and no name at all**, so every one of them was greeted "Hey there" while the intro
+ * prefix on the very same message said "Hey Ulises" off `firstName`. Two readers of one fact,
+ * disagreeing. This is the one both now use.
+ *
+ * `name` is still honoured as a fallback for any record that has it, and the display-case pass
+ * matches the intro's, so an ADF that shouts "ULISES" is not shouted back at.
+ */
+export function resolveAdfAckFirstName(leadProfile: any): string | null {
+  // `||`, not `??`: an EMPTY firstName must fall through to `name`. `??` only catches null/undefined,
+  // and a blank string is the shape a partial ADF actually arrives in.
+  const raw =
+    String(leadProfile?.firstName ?? "").trim() || String(leadProfile?.name ?? "").trim();
+  if (!raw) return null;
+  const first = raw.split(/\s+/)[0] ?? "";
+  if (!first) return null;
+  const letters = first.replace(/[^A-Za-z]/g, "");
+  if (!letters) return first;
+  return letters === letters.toUpperCase()
+    ? first.charAt(0).toUpperCase() + first.slice(1).toLowerCase()
+    : first;
+}
+
 export function resolveIntroducedOwnerFirstName(args: {
   ownerName?: string | null;
   messages:
