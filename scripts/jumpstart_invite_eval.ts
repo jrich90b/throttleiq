@@ -234,9 +234,12 @@ assert.ok(/no license needed/i.test(invite), "the invite must say the rig itself
 const index = fs.readFileSync("services/api/src/index.ts", "utf8");
 const reducer = fs.readFileSync("services/api/src/domain/routeStateReducer.ts", "utf8");
 const policyMod = fs.readFileSync("services/api/src/domain/firstTimeRiderPolicy.ts", "utf8");
+// The two reply BUILDERS left index.ts for a domain module (2026-08-08) — index.ts still holds the
+// three call sites, which is what the counts below check. Builder-shape checks read the builder.
+const replyMod = fs.readFileSync("services/api/src/domain/firstTimeRiderReply.ts", "utf8");
 
 assert.ok(
-  /decideJumpstartInviteTurn\(\{\s*dealerHasJumpstart: policy\.jumpstartEnabled,/.test(index),
+  /decideJumpstartInviteTurn\(\{\s*dealerHasJumpstart: policy\.jumpstartEnabled,/.test(replyMod),
   "the reply builder must ask the reducer, gated on the profile capability, by exact call shape"
 );
 assert.ok(
@@ -252,7 +255,7 @@ assert.equal(
 );
 // The invite rides on the beginner branches only — never on the course-price answer, and never on
 // the reply to someone who already told us they are endorsed.
-const beginnerBranch = index.slice(index.indexOf("function buildFirstTimeRiderGuidanceReply"));
+const beginnerBranch = replyMod.slice(replyMod.indexOf("function buildFirstTimeRiderGuidanceReply"));
 // Only the endorsed-rider RETURN LINE itself — slicing further runs into the beginner branches
 // below it, which do carry the invite.
 const endorsedReply = beginnerBranch
@@ -272,8 +275,13 @@ assert.ok(
   !/\$\{jumpstartInvite\}/.test(String(coursePriceReply)),
   "the course-price reply must not carry the Jumpstart invite"
 );
+// Bounded by where the function actually ENDS, not by a character count. The 4000-char window this
+// used to use was a proxy for "inside this function" that silently stopped being true the moment the
+// body grew past it (2026-08-08) — a window that has to be re-tuned is not a boundary.
+const guidanceBody = beginnerBranch.slice(0, beginnerBranch.indexOf("\nexport function buildInitialAdf"));
+assert.ok(guidanceBody.length > 0, "the guidance builder must be followed by the ADF variant");
 assert.equal(
-  (beginnerBranch.slice(0, 4000).match(/buildFirstTimeRiderBeginnerReply\(\{/g) ?? []).length,
+  (guidanceBody.match(/buildFirstTimeRiderBeginnerReply\(\{/g) ?? []).length,
   3,
   "exactly the three beginner-facing replies are composed through the shared builder"
 );

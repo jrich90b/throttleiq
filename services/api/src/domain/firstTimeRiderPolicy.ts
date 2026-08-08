@@ -1,5 +1,6 @@
 import { decideRiderExperiencePersist, resolveRiderExperienceLevel } from "./routeStateReducer.js";
 import type { FirstTimeRiderGuidanceParse } from "./llmDraft.js";
+import type { RiderCourseClassRow } from "./riderCourseSchedule.js";
 
 /**
  * The dealer's FIRST-TIME-RIDER policy, read once.
@@ -23,6 +24,12 @@ export type FirstTimeRiderPolicy = {
   coursePrice: string;
   /** Does a test ride require a motorcycle endorsement here? Defaults to YES. */
   requiresEndorsement: boolean;
+  /**
+   * Upcoming classes with per-day times and places. EMPTY today — no feed exists yet, and Joe
+   * (2026-08-07) does not want a hand-maintained table. Empty means every class-logistics question
+   * hands off to a person, which is the safe default and what happens now.
+   */
+  classSchedule: RiderCourseClassRow[];
   /**
    * Does this store have a JUMPSTART on site (Joe, 2026-08-05)? The H-D Jumpstart is a real bike
    * locked onto a stationary rig: a rider works the clutch, throttle and gears and feels the bike
@@ -81,6 +88,7 @@ export function readFirstTimeRiderPolicy(dealerProfile: any): FirstTimeRiderPoli
     coursePrice:
       String(p.riderCoursePrice ?? "").trim() || String(p.trainingCoursePrice ?? "").trim(),
     // Both legacy keys must be explicitly false to drop the requirement (unchanged behaviour).
+    classSchedule: Array.isArray(p.classSchedule) ? (p.classSchedule as RiderCourseClassRow[]) : [],
     requiresEndorsement:
       p.requiresMotorcycleEndorsementForTestRide !== false && p.testRideRequiresEndorsement !== false,
     jumpstartEnabled: p.jumpstartEnabled === true,

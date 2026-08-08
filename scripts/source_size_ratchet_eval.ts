@@ -274,7 +274,17 @@ const CEILINGS: Ceiling[] = [
     // 71_008 -> 71_007. Ruling 24: the three legacy watch-defaults lanes now pass their own lane's
     // parsed condition instead of `undefined`, which is a same-line edit, and the comment claiming
     // one lane was ALONE in asking the parser stopped being true and went.
-    max: 71_007,
+    // 71_007 -> 70_896. The enrolled-student class-logistics hand-off arrived +49 OVER, so the slice
+    // funded itself and then some: the whole first-time-rider REPLY surface left the handler for
+    // domain/firstTimeRiderReply.ts — both builders (buildFirstTimeRiderGuidanceReply,
+    // buildInitialAdfFirstTimeRiderGuidanceReply) and the two text guards they read, moved verbatim
+    // with nothing but an `export` added, plus the shared asksRiderCourseLogistics predicate and one
+    // task constant so neither reply path holds a local of its own (route_parity_guard counts those).
+    // Reply COMPOSITION belongs next to the policy it reads, not in the inbound handler.
+    // RE-DERIVED 2026-08-08 on rebase (the #418 trap): this branch was proven against a 71_007 main
+    // eight commits earlier and proposed 70_889. Both numbers are re-measured against the REBASED
+    // tree — the branch's own figures were never carried across.
+    max: 70_896,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
@@ -316,7 +326,13 @@ const CEILINGS: Ceiling[] = [
     // 16_399 -> 16_381. The per-channel rule block and the advance-arm flag helpers moved to
     // domain/draftChannelRules.ts. That surface changes every time we learn something about voice,
     // so it now grows on its own budget — which is what paid for the salesperson arm (Joe, 8/7).
-    max: 16_381,
+    // 16_381 -> 16_365. The first-time-rider guidance parser's few-shots moved to
+    // domain/firstTimeRiderGuidanceExamples.ts, the same split as the five prompt surfaces above,
+    // which funded the four enrolled-student exemplars (D6-D9, Maya Iversen +15854782032).
+    // RE-DERIVED ON REBASE, and this is exactly why: the branch proposed 16_383 against a 16_399
+    // ceiling, but main had since ratcheted to 16_381 — landing the branch's number verbatim would
+    // have RAISED the ceiling and undone the draftChannelRules extraction. The #418 trap, live.
+    max: 16_365,
     note: "every parser prompt + JSON schema; second-largest and on the same trajectory"
   }
 ];

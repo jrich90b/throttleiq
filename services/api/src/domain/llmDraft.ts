@@ -58,6 +58,7 @@ import { decideDraftModelArm, type DraftModelArm } from "./routeStateReducer.js"
 import { passesModelRelevanceGuard } from "./turnUnderstandingAuthority.js";
 import { appendParserCaptureRecord, buildParserCaptureRecord } from "./parserCapture.js";
 import { formatCadenceQualityUnitFacts, type CadenceQualityInventoryFacts } from "./cadenceQualityFacts.js";
+import { FIRST_TIME_RIDER_GUIDANCE_EXAMPLES } from "./firstTimeRiderGuidanceExamples.js";
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -2471,12 +2472,22 @@ export type FirstTimeRiderGuidanceParse = {
     | "no_motorcycle_endorsement"
     | "beginner_bike_advice"
     | "rider_course_info"
+    /**
+     * They are ALREADY IN a class and are asking about the class itself — what to bring, when to
+     * arrive, where to go, what happens on the day. Distinct from `rider_course_info`, which is
+     * someone deciding whether to sign up and is answered with price + link. Answering an enrolled
+     * student with "the course is the best place to start, the current price is $321" tells someone
+     * who has already paid where to sign up (Maya Iversen +15854782032, 2026-08-07).
+     */
+    | "enrolled_class_logistics"
     | "none";
   explicitRequest: boolean;
   hasEndorsement?: boolean | null;
   asksTestRide?: boolean;
   asksBeginnerBike?: boolean;
   asksRiderCourse?: boolean;
+  /** True when the question is about attending a class they already hold a seat in. */
+  asksClassLogistics?: boolean;
   confidence?: number;
 };
 
@@ -3825,6 +3836,7 @@ const FIRST_TIME_RIDER_GUIDANCE_PARSER_JSON_SCHEMA: { [key: string]: unknown } =
         "no_motorcycle_endorsement",
         "beginner_bike_advice",
         "rider_course_info",
+        "enrolled_class_logistics",
         "none"
       ]
     },
@@ -3833,6 +3845,7 @@ const FIRST_TIME_RIDER_GUIDANCE_PARSER_JSON_SCHEMA: { [key: string]: unknown } =
     asks_test_ride: { type: "boolean" },
     asks_beginner_bike: { type: "boolean" },
     asks_rider_course: { type: "boolean" },
+    asks_class_logistics: { type: "boolean" },
     confidence: { type: "number" }
   }
 };
@@ -7586,38 +7599,6 @@ export async function parseFirstTimeRiderGuidanceWithLLM(args: {
 
   const history = (args.history ?? []).slice(-8).map(h => `${h.direction}: ${h.body}`);
   const lead = args.lead ?? {};
-  const examples = [
-    `EXAMPLE A
-inbound: "This would be my first bike. What do you recommend?"
-output: {"intent":"first_time_rider","explicit_request":true,"endorsement_status":"unknown","asks_test_ride":false,"asks_beginner_bike":true,"asks_rider_course":false,"confidence":0.97}`,
-    `EXAMPLE B
-inbound: "I've never ridden before but can I test ride the Nightster?"
-output: {"intent":"first_time_rider","explicit_request":true,"endorsement_status":"unknown","asks_test_ride":true,"asks_beginner_bike":false,"asks_rider_course":false,"confidence":0.98}`,
-    `EXAMPLE C
-inbound: "I don't have my motorcycle license yet. Can I ride it?"
-output: {"intent":"no_motorcycle_endorsement","explicit_request":true,"endorsement_status":"no","asks_test_ride":true,"asks_beginner_bike":false,"asks_rider_course":false,"confidence":0.98}`,
-    `EXAMPLE D
-inbound: "Do you know where I can take the rider course?"
-output: {"intent":"rider_course_info","explicit_request":true,"endorsement_status":"unknown","asks_test_ride":false,"asks_beginner_bike":false,"asks_rider_course":true,"confidence":0.96}`,
-    `EXAMPLE D2
-inbound: "Your course and price"
-output: {"intent":"rider_course_info","explicit_request":true,"endorsement_status":"unknown","asks_test_ride":false,"asks_beginner_bike":false,"asks_rider_course":true,"confidence":0.97}`,
-    `EXAMPLE D3
-inbound: "How much is the Riding Academy course?"
-output: {"intent":"rider_course_info","explicit_request":true,"endorsement_status":"unknown","asks_test_ride":false,"asks_beginner_bike":false,"asks_rider_course":true,"confidence":0.98}`,
-    `EXAMPLE D4
-inbound: "Yes, I'm looking for a course motorcycle so I can get my license."
-output: {"intent":"rider_course_info","explicit_request":true,"endorsement_status":"no","asks_test_ride":false,"asks_beginner_bike":false,"asks_rider_course":true,"confidence":0.97}`,
-    `EXAMPLE D5
-inbound: "I need a motorcycle course to get my license."
-output: {"intent":"rider_course_info","explicit_request":true,"endorsement_status":"no","asks_test_ride":false,"asks_beginner_bike":false,"asks_rider_course":true,"confidence":0.98}`,
-    `EXAMPLE E
-inbound: "I have my endorsement but I'm a new rider and want something manageable."
-output: {"intent":"beginner_bike_advice","explicit_request":true,"endorsement_status":"yes","asks_test_ride":false,"asks_beginner_bike":true,"asks_rider_course":false,"confidence":0.97}`,
-    `EXAMPLE F
-inbound: "I used to ride years ago and want to get back into it."
-output: {"intent":"none","explicit_request":false,"endorsement_status":"unknown","asks_test_ride":false,"asks_beginner_bike":false,"asks_rider_course":false,"confidence":0.82}`
-  ];
 
   const prompt = [
     "You are a strict parser for first-time motorcycle rider guidance at a Harley-Davidson dealership.",
@@ -7627,7 +7608,8 @@ output: {"intent":"none","explicit_request":false,"endorsement_status":"unknown"
     "- first_time_rider: customer says this is their first bike, first motorcycle, first time riding, or they have never ridden.",
     "- no_motorcycle_endorsement: customer says they do not have a motorcycle license, motorcycle endorsement, permit, or are not licensed yet.",
     "- beginner_bike_advice: customer asks for a good beginner/first bike, manageable bike, easy bike, low seat/weight, or rider fit advice.",
-    "- rider_course_info: customer asks about learning to ride, riding school, MSF, Riding Academy, a license class, or a course.",
+    "- rider_course_info: customer is DECIDING whether to take a course — asks about learning to ride, riding school, MSF, Riding Academy, a license class, or what it costs.",
+    "- enrolled_class_logistics: customer ALREADY HAS A SEAT and asks about attending — what to bring, what to wear, gear, when to arrive, where to go, parking, what happens on the day. Choose this over rider_course_info whenever the question is about attending rather than signing up.",
     "- none: message is not about first-time rider guidance.",
     "",
     "Fields:",
@@ -7639,7 +7621,7 @@ output: {"intent":"none","explicit_request":false,"endorsement_status":"unknown"
     "- Do not classify returning riders as first-time riders unless they explicitly say they are new or never rode.",
     "- confidence is 0..1.",
     "",
-    ...examples,
+    ...FIRST_TIME_RIDER_GUIDANCE_EXAMPLES,
     "",
     `Known lead info: ${JSON.stringify({
       model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
@@ -7673,7 +7655,8 @@ output: {"intent":"none","explicit_request":false,"endorsement_status":"unknown"
     rawIntent === "first_time_rider" ||
     rawIntent === "no_motorcycle_endorsement" ||
     rawIntent === "beginner_bike_advice" ||
-    rawIntent === "rider_course_info"
+    rawIntent === "rider_course_info" ||
+    rawIntent === "enrolled_class_logistics"
       ? rawIntent
       : "none";
   const endorsementStatus = String(parsed.endorsement_status ?? "unknown").toLowerCase();
@@ -7690,6 +7673,7 @@ output: {"intent":"none","explicit_request":false,"endorsement_status":"unknown"
     asksTestRide: !!parsed.asks_test_ride,
     asksBeginnerBike: !!parsed.asks_beginner_bike,
     asksRiderCourse: !!parsed.asks_rider_course,
+    asksClassLogistics: !!parsed.asks_class_logistics,
     confidence
   };
 }
