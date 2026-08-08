@@ -34,6 +34,7 @@ type TrikeLookup = {
   allCodes: Set<string>;
   familyKeys: Set<string>; // normalized family-node names ("trike", "touring", ...)
   familyCodeCountByKey: Map<string, number>; // family key -> number of member codes
+  codesByFamilyKey: Map<string, Set<string>>; // family key -> its member codes
 };
 
 let trikeLookupCache: TrikeLookup | null | undefined;
@@ -104,11 +105,14 @@ function loadTrikeLookup(): TrikeLookup | null {
   }
   const familyKeys = new Set<string>();
   const familyCodeCountByKey = new Map<string, number>();
+  const codesByFamilyKey = new Map<string, Set<string>>();
   for (const [family, codes] of Object.entries(parsed.families ?? {})) {
     const key = normalizeFamilyModelKey(family);
     if (!key) continue;
     familyKeys.add(key);
-    familyCodeCountByKey.set(key, (codes ?? []).map(normalizeFamilyCode).filter(Boolean).length);
+    const members = (codes ?? []).map(normalizeFamilyCode).filter(Boolean);
+    familyCodeCountByKey.set(key, members.length);
+    codesByFamilyKey.set(key, new Set(members));
   }
   trikeLookupCache = {
     trikeCodes,
@@ -116,7 +120,8 @@ function loadTrikeLookup(): TrikeLookup | null {
     aliasKeysByLength: [...aliasByKey.keys()].sort((a, b) => b.length - a.length),
     allCodes,
     familyKeys,
-    familyCodeCountByKey
+    familyCodeCountByKey,
+    codesByFamilyKey
   };
   return trikeLookupCache;
 }
@@ -183,6 +188,47 @@ const FAMILY_LABEL_NOISE_WORDS = new Set([
   "harley", "davidson", "hd", "motorcycle", "motorcycles", "bike", "bikes", "model"
 ]);
 
+/**
+ * Is this model label a TOURING-class model? true / false / null (catalog can't tell).
+ *
+ * Joe asked for a touring audience the same evening as the trike one (2026-08-06). Touring is
+ * NOT as clean an axis as TRIKE, and the two contaminations are named here rather than left for
+ * someone to rediscover:
+ *
+ *  1. TRIKE overlap — 2 codes sit in both TOURING and TRIKE (FLTRT Road Glide 3, FLHTCUTG Tri
+ *     Glide Ultra). A trike is never a touring bike for list purposes, so trike-class wins.
+ *  2. SOFTAIL overlap — exactly ONE code, FLHC (Heritage Classic), is filed under both. A
+ *     Heritage Classic is a Softail. Any Softail code disqualifies, which removes precisely that
+ *     model and nothing else (measured: TOURING ∩ SOFTAIL = {FLHC}).
+ *
+ * The CVO overlap (33 codes) is deliberately KEPT: a CVO Street Glide really is a touring bike.
+ * SIDECAR (3 codes) is kept for the same reason — the rig is a touring model.
+ *
+ * Membership is `some` rather than `every` on purpose: the umbrella alias "road glide" resolves
+ * to 23 codes, one of which is the trike FLTRT, and the umbrella must still read as touring.
+ * Rule 1 above is what keeps the actual trike out.
+ *
+ * Deterministic structured extraction over catalog/inventory model LABELS (never customer free
+ * text), same as its trike sibling. Fail direction: no catalog, or a label the catalog cannot
+ * resolve, returns null and infers NOTHING.
+ */
+export function isTouringClassModel(modelText: string | null | undefined): boolean | null {
+  const lookup = loadTrikeLookup();
+  if (!lookup) return null;
+  const touring = lookup.codesByFamilyKey.get("touring");
+  if (!touring || !touring.size) return null;
+  // A trike is never a touring bike here, even though 2 of its codes are cross-listed.
+  if (isTrikeClassModel(modelText) === true) return false;
+  const key = normalizeFamilyModelKey(modelText);
+  if (!key) return null;
+  const codes = resolveCodesForModelText(key, lookup);
+  if (!codes.length) return null; // unknown to the catalog → infer nothing
+  if (!codes.some(c => touring.has(c))) return false;
+  const softail = lookup.codesByFamilyKey.get("softail");
+  if (softail && codes.some(c => softail.has(c))) return false; // Heritage Classic
+  return true;
+}
+
 function familyKeySet(): Set<string> | null {
   const lookup = loadTrikeLookup();
   if (!lookup) return null;
@@ -220,30 +266,34 @@ export function isFamilyOnlyModelLabel(label: string | null | undefined): boolea
 }
 
 /**
- * Is this text a bare request for the TRIKE CLASS itself ("trike", "trikes", "a new trike")
- * rather than for a named model? Joe, 2026-08-06, on the marketing-list audience filter: asking
- * for trikes must collect Street Glide 3 Limited / Tri Glide / Freewheeler, none of which contain
- * the word "trike" anywhere in their label.
+ * Which model CLASS is this text a bare request for — "trike", "touring", or none? Joe,
+ * 2026-08-06, on the marketing-list audience filter: asking for trikes must collect Street Glide
+ * 3 Limited / Tri Glide / Freewheeler, none of which contain the word "trike" anywhere in their
+ * label, and asking for touring bikes must not hand back either a trike or a Heritage Classic.
  *
- * WHY ONLY TRIKE, and not a general "match the named family" — the same reason this module
- * discriminates trike-class membership instead of family disjointness (see the file header):
- * the catalog CROSS-LISTS. 62 of its 278 codes sit in more than one family; FLTRT (Road Glide 3)
- * is in BOTH TOURING and TRIKE. So "everything in the TOURING family" would drag the trikes right
- * back in — the audience bug in reverse. TRIKE is the one clean form-factor axis (7 codes, and
- * membership requires EVERY code to be a trike code).
+ * ONLY THESE TWO CLASSES, and that is a data judgement, not laziness. The catalog CROSS-LISTS —
+ * 62 of its 278 codes sit in more than one family — so "match whatever family was named" is not
+ * sound in general. These two are supportable because their contamination is small, named and
+ * measured (see isTrikeClassModel and isTouringClassModel). Adding a third class means doing
+ * that measurement for it first; an unmeasured class lane will quietly hand back the wrong bikes.
  *
  * Reuses isFamilyOnlyModelLabel's whole-label equality, so it can never fire on a specific model:
- * "Street Glide Trike" is a MODEL, not the class, and reads false.
+ * "Street Glide Trike" is a MODEL, not the class, and reads null.
  *
- * Fail direction: no catalog, an unrecognised word, or any specific model → false → the caller
- * keeps its existing matching. This only ever ADDS a class lane; it narrows nothing.
+ * Fail direction: no catalog, an unrecognised word, or any specific model → null → the caller
+ * keeps its existing matching. This only ever ADDS class lanes; it narrows nothing.
  */
-export function isBareTrikeClassRequest(text: string | null | undefined): boolean {
-  if (!isFamilyOnlyModelLabel(text)) return false;
+export type BareModelClassRequest = "trike" | "touring" | null;
+
+const CLASS_REQUEST_KEYS: ReadonlySet<string> = new Set(["trike", "touring"]);
+
+export function bareModelClassRequest(text: string | null | undefined): BareModelClassRequest {
+  if (!isFamilyOnlyModelLabel(text)) return null;
   const stripped = stripFamilyLabelNoise(normalizeFamilyModelKey(text));
-  if (!stripped) return false;
-  if (stripped === "trike") return true;
-  return stripped.split(" ").map(singularizeFamilyWord).join(" ") === "trike";
+  if (!stripped) return null;
+  if (CLASS_REQUEST_KEYS.has(stripped)) return stripped as BareModelClassRequest;
+  const singular = stripped.split(" ").map(singularizeFamilyWord).join(" ");
+  return CLASS_REQUEST_KEYS.has(singular) ? (singular as BareModelClassRequest) : null;
 }
 
 /**

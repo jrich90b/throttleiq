@@ -61,10 +61,22 @@ export async function answerCopilotQuestionWithLLM(args: {
 const MARKETING_LIST_FILTER_JSON_SCHEMA: { [key: string]: unknown } = {
   type: "object",
   additionalProperties: false,
-  required: ["channel", "modelQuery", "condition", "source", "activeWithinDays", "includeClosed"],
+  required: [
+    "channel",
+    "modelQuery",
+    "excludeModelQuery",
+    "condition",
+    "source",
+    "activeWithinDays",
+    "includeClosed"
+  ],
   properties: {
     channel: { type: "string", enum: ["sms", "email"] },
     modelQuery: { type: ["string", "null"] },
+    excludeModelQuery: {
+      type: ["string", "null"],
+      description: "a model or class the manager wants KEPT OUT, else null"
+    },
     condition: { type: ["string", "null"], description: "new | used | null" },
     source: { type: ["string", "null"] },
     activeWithinDays: { type: ["integer", "null"] },
@@ -77,6 +89,7 @@ export async function parseMarketingListRequestWithLLM(args: {
 }): Promise<{
   channel: "sms" | "email";
   modelQuery: string | null;
+  excludeModelQuery: string | null;
   condition: string | null;
   source: string | null;
   activeWithinDays: number | null;
@@ -90,10 +103,18 @@ export async function parseMarketingListRequestWithLLM(args: {
     "Translate the description into filters. Rules:",
     "- channel: sms unless the manager says email.",
     "- modelQuery: the bike model/family named (e.g. \"street glide\", \"touring\"), else null.",
-    "  When the manager asks for a whole FORM FACTOR rather than a model — three-wheelers, trikes,",
-    "  three wheel bikes — answer with the single word \"trike\". The audience filter matches that",
-    "  against the model catalog's own trike class, which is how a Street Glide 3 Limited or a Tri",
-    "  Glide is found; those labels do not contain the word \"trike\" for a text search to hit.",
+    "  When the manager asks for a whole CLASS of bike rather than a model, answer with the one",
+    "  catalog word for that class, because the filter matches a class against the model catalog",
+    "  instead of by name (a Street Glide 3 Limited does not contain the word \"trike\", and a",
+    "  Street Glide does not contain the word \"touring\", so a text search finds neither):",
+    "    three-wheelers / trikes / three wheel bikes  -> \"trike\"",
+    "    touring bikes / baggers / full dressers      -> \"touring\"",
+    "  Only those two classes are supported. Any other grouping is a model name, so pass the words",
+    "  the manager used and let the filter match by name.",
+    "- excludeModelQuery: a model or class the manager wants KEPT OUT — \"but not trikes\",",
+    "  \"except touring bikes\", \"no baggers\" — using the same class words as modelQuery. Null",
+    "  unless something is explicitly excluded. A description can use both: \"everyone from the",
+    "  last 90 days except touring bikes\" is modelQuery null + excludeModelQuery \"touring\".",
     "- condition: \"new\" or \"used\" only when stated, else null.",
     "- source: a lead source named (e.g. \"Facebook\"), else null.",
     "- activeWithinDays: a stated recency window in days (\"last 90 days\" = 90), else null.",
@@ -107,13 +128,15 @@ export async function parseMarketingListRequestWithLLM(args: {
       prompt,
       schemaName: "marketing_list_filters",
       schema: MARKETING_LIST_FILTER_JSON_SCHEMA,
-      maxOutputTokens: 120,
+      maxOutputTokens: 160,
       debugTag: "copilot_marketing_list"
     });
     if (!parsed || (parsed.channel !== "sms" && parsed.channel !== "email")) return null;
     return {
       channel: parsed.channel,
       modelQuery: typeof parsed.modelQuery === "string" ? parsed.modelQuery : null,
+      excludeModelQuery:
+        typeof parsed.excludeModelQuery === "string" ? parsed.excludeModelQuery : null,
       condition: typeof parsed.condition === "string" ? parsed.condition : null,
       source: typeof parsed.source === "string" ? parsed.source : null,
       activeWithinDays: Number.isFinite(parsed.activeWithinDays) ? Number(parsed.activeWithinDays) : null,

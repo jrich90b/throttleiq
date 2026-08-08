@@ -14,7 +14,12 @@
  *   4. watchOptOut    — the durable "stop alerting me" conversation flag
  */
 import type { Conversation } from "./conversationStore.js";
-import { isBareTrikeClassRequest, isTrikeClassModel, trikeClassConflict } from "./modelFamily.js";
+import {
+  bareModelClassRequest,
+  isTouringClassModel,
+  isTrikeClassModel,
+  trikeClassConflict
+} from "./modelFamily.js";
 import { isNonSalesConversation } from "./scoringExclusions.js";
 
 export type MarketingListChannel = "sms" | "email";
@@ -25,6 +30,13 @@ export type MarketingListFilters = {
    *  the unit quoted on a call — scoped by `audienceModelMatches`, so a trike never lands in a
    *  two-wheel list (or the reverse) just because one name contains the other. */
   modelQuery?: string | null;
+  /** The opposite of modelQuery: drop a lead when ANY of its model interests matches this
+   *  (Joe, 2026-08-06 — "everyone in the last 90 days except touring bikes"). Deliberately
+   *  asymmetric with modelQuery's `some`: an exclusion asks "is this customer a touring
+   *  customer at all", and one touring interest is enough to say yes. Applied AFTER modelQuery,
+   *  so "street glide but not trikes" is expressible, and it can only ever SHRINK the list —
+   *  the same law every other filter here obeys. */
+  excludeModelQuery?: string | null;
   /** "new" | "used" against the lead vehicle / watch condition. */
   condition?: string | null;
   /** Substring match on the lead source (e.g. "Facebook", "HDFS"). */
@@ -123,9 +135,12 @@ export function audienceModelMatches(
   // A bare CLASS request is not a name to search for (Joe, 2026-08-06 — the mirror of the Street
   // Glide 3 defect). "anyone interested in a trike" must collect Street Glide 3 Limited, Tri
   // Glide and Freewheeler, and not one of those labels contains the word "trike"; a substring
-  // test finds nobody. Only the TRIKE axis gets this lane — see isBareTrikeClassRequest for why a
-  // general family lane would re-introduce the very bug this fixes.
-  if (isBareTrikeClassRequest(query)) return isTrikeClassModel(label) === true;
+  // test finds nobody. Touring is the same shape: no Street Glide says "touring" either.
+  // TRIKE and TOURING are the only two classes with measured contamination — see
+  // bareModelClassRequest before adding a third.
+  const classRequest = bareModelClassRequest(query);
+  if (classRequest === "trike") return isTrikeClassModel(label) === true;
+  if (classRequest === "touring") return isTouringClassModel(label) === true;
   if (!label.toLowerCase().includes(query)) return false;
   return !trikeClassConflict(query, label);
 }
@@ -230,6 +245,7 @@ export function buildMarketingList(
   }
 
   const modelQuery = (filters.modelQuery ?? "").trim().toLowerCase();
+  const excludeModelQuery = (filters.excludeModelQuery ?? "").trim().toLowerCase();
   const sourceQuery = (filters.source ?? "").trim().toLowerCase();
   const condition = (filters.condition ?? "").trim();
   const windowDays = filters.activeWithinDays ?? null;
@@ -254,6 +270,10 @@ export function buildMarketingList(
       ? models.find(m => audienceModelMatches(m, modelQuery)) ?? null
       : null;
     if (modelQuery && !matchedModel) continue;
+    // "…except touring bikes." ANY matching interest disqualifies: the question an exclusion asks
+    // is whether this is a touring customer at all, and one touring interest answers yes. Runs
+    // after modelQuery so "street glides but not trikes" works.
+    if (excludeModelQuery && models.some(m => audienceModelMatches(m, excludeModelQuery))) continue;
     if (condition && !matchesCondition(conv, condition)) continue;
     const source = conv.lead?.source ?? null;
     if (sourceQuery && !String(source ?? "").toLowerCase().includes(sourceQuery)) continue;

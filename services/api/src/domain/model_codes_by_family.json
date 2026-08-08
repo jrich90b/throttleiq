@@ -230,13 +230,16 @@
       "FLHXSE3",
       "FLHXSEANV",
       "FLHXST",
+      "FLHXSTSE",
       "FLHXU",
       "FLTC",
+      "FLTCU",
       "FLTCUI",
       "FLTR",
       "FLTR3",
       "FLTRI",
       "FLTRK",
+      "FLTRKSE",
       "FLTRKSEANV",
       "FLTRSE",
       "FLTRSE3",
@@ -249,16 +252,16 @@
       "FLTRX-103",
       "FLTRXL",
       "FLTRXP",
+      "FLTRXRRSE",
       "FLTRXS",
       "FLTRXSANV",
       "FLTRXSE",
       "FLTRXSE2",
       "FLTRXST",
+      "FLTRXSTSE",
       "RLE",
       "TLE",
-      "TLEU",
-      "FLHXSTSE",
-      "FLTCU"
+      "TLEU"
     ],
     "TRIKE": [
       "FLHLT",
@@ -343,7 +346,7 @@
       "VRSCSE",
       "VRSCSE2",
       "VRXSE",
-      " FLHXSTSE"
+      "FLHXSTSE"
     ],
     "FXR": [
       "FXR",
