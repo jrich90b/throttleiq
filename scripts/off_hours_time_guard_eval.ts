@@ -34,7 +34,10 @@ const {
   parseTimeTokenToClock,
   statableTimeReply,
   widestOpenWindow,
-  formatBusinessHoursForReply
+  formatBusinessHoursForReply,
+  openHoursReAskSentence,
+  preferredDateTimeNotedTail,
+  statablePreferredTimeText
 } = await import("../services/api/src/domain/businessHoursGuard.ts");
 
 let checks = 0;
@@ -210,5 +213,100 @@ ok(
   mayStateTimeAsWorkable({ hour24: 14, minute: 30, businessHours: HOURS, dayKey: "SATURDAY" }) === true,
   "day keys must be case-insensitive"
 );
+
+// ---------------------------------------------------------------------------
+// 8. THE THIRD DOOR — the lead form's OWN time, echoed back as a slot we promise to line up.
+//
+//    +16397209755 (lakshya, 2026-07-15, Room58 "Book test ride", ref 11632). The form carried
+//    preferredDate "7/22/2026" / preferredTime "8:00 Pm" and the ack read
+//      "I have Wednesday, July 22 at 8:00 Pm noted. I'll confirm availability and get that lined up."
+//    SENT on SMS at 10:07 and again by email at 13:28. We close at 6. No parser was wrong — the
+//    customer really picked 8:00 PM on a form that let them — so the two guarded sites above never
+//    saw it. Verified in the live store 2026-08-08, both channels.
+// ---------------------------------------------------------------------------
+{
+  const tail = (preferredTime: any, businessHours: any = HOURS) =>
+    preferredDateTimeNotedTail({ dateLabel: "Wednesday, July 22", preferredTime, businessHours });
+
+  const shut = tail("8:00 Pm");
+  ok(!shut.includes("8:00 Pm"), "the impossible form time must not survive into the ack");
+  ok(shut.includes("I have Wednesday, July 22 noted."), "the DATE they picked is still acknowledged");
+  ok(shut.includes("9:00 AM") && shut.includes("6:00 PM"), "the replacement names the real hours");
+  ok(shut.trim().endsWith("?"), "the ack still ends in one advancing question (charter C1.7)");
+
+  // In-hours and open-ended forms must be byte-identical to today's copy.
+  ok(
+    tail("2:00 pm") === "I have Wednesday, July 22 at 2:00 pm noted. I’ll confirm availability and get that lined up.",
+    "an in-hours form time keeps today's copy exactly"
+  );
+  for (const openEnded of ["", "anytime", "flexible", "no preference", null, undefined]) {
+    ok(
+      tail(openEnded) === "I have Wednesday, July 22 noted. What time works best for you?",
+      `an open-ended form time keeps today's no-time copy: ${JSON.stringify(openEnded)}`
+    );
+  }
+
+  // FAIL DIRECTION at this door too: only a POSITIVELY shut time is refused.
+  ok(tail("1:30").includes("at 1:30 noted"), "an ambiguous bare time is stated, not refused");
+  ok(tail("8:00 Pm", null).includes("at 8:00 Pm noted"), "no hours config must never change the ack");
+  ok(tail("8:00 Pm", {}).includes("at 8:00 Pm noted"), "empty hours config must never change the ack");
+
+  // The Jumpstart shape only interpolates a time and has no re-ask to offer, so it degrades to the
+  // date-only wording that already sits beside it.
+  ok(statablePreferredTimeText("8:00 PM", HOURS) === "", "a shut form time drops out of the Jumpstart clause");
+  ok(statablePreferredTimeText("10:00 AM", HOURS) === "10:00 AM", "an open form time is stated");
+  ok(statablePreferredTimeText("8:00 PM", null) === "8:00 PM", "no hours config leaves the clause alone");
+
+  // The refusal sentence is defined ONCE and shared with statableTimeReply — if they ever drift, the
+  // customer reads two different apologies for the same invariant.
+  ok(
+    openHoursReAskSentence(HOURS) === statableTimeReply("8:00pm", HOURS, null, "PREFERRED"),
+    "the refusal sentence must be the same one statableTimeReply emits"
+  );
+  ok(openHoursReAskSentence({}) === null, "no usable hours => no sentence, so callers keep today's copy");
+}
+
+// ---------------------------------------------------------------------------
+// 9. WIRING. The guard is PURE, so nothing above can see whether the reply sites call it (trap 2:
+//    the ratchet cannot prove wiring). Read the two handlers and count the doors directly, with an
+//    EXPECTED COUNT — a new `at ${preferredTime} noted` template must fail here, not ship.
+// ---------------------------------------------------------------------------
+{
+  const { readFileSync } = await import("node:fs");
+  const files = [
+    { path: "services/api/src/index.ts", tails: 2, jumpstart: 1 },
+    { path: "services/api/src/routes/sendgridInbound.ts", tails: 2, jumpstart: 1 }
+  ];
+  for (const f of files) {
+    const src = readFileSync(new URL(`../${f.path}`, import.meta.url), "utf8");
+    const count = (needle: string) => src.split(needle).length - 1;
+
+    ok(
+      count("preferredDateTimeNotedTail") === f.tails + 1,
+      `${f.path}: expected ${f.tails} preferredDateTimeNotedTail call sites plus the import, saw ${count("preferredDateTimeNotedTail")}`
+    );
+    ok(
+      count("statablePreferredTimeText") === f.jumpstart + 1,
+      `${f.path}: expected ${f.jumpstart} statablePreferredTimeText call site plus the import`
+    );
+    // The raw template is the bug. No copy of it may remain, in either handler.
+    ok(
+      count("at ${preferredTime} noted") === 0,
+      `${f.path}: a preferred time is still interpolated into an ack without the hours guard`
+    );
+    // And the guard must be handed REAL hours — a call site that passes nothing silently fails open
+    // forever, which is exactly the shape that let this ship (deleting the argument still compiles).
+    ok(
+      src.includes("getSchedulerConfig()).businessHours"),
+      `${f.path}: the preferred-time reply sites must hand in the live business hours, not undefined`
+    );
+    // Both helpers moved OUT of the handlers; a re-introduced local copy would shadow the shared one
+    // and drift (they were hand-maintained duplicates in both files before this slice).
+    ok(
+      count("function isOpenPreferredTime") === 0 && count("function formatPreferredTimeForReply") === 0,
+      `${f.path}: the preferred-time helpers must live in domain/businessHoursGuard.ts, not here`
+    );
+  }
+}
 
 console.log(`off_hours_time_guard:eval OK (${checks} checks)`);

@@ -59,7 +59,14 @@ assert.ok(
 );
 // The gate is checked BEFORE buildTestRidePreferredDateReply in the same block (order = stock-check-first).
 const gateIdx = indexSrc.indexOf("evaluateTestRideInventoryGate({ lead: conv.lead, dealerProfile })");
-const timeReplyIdx = indexSrc.indexOf("buildTestRidePreferredDateReply(conv)");
+// Anchored WITHOUT the closing paren on purpose: the invariant is WHERE the call sits, not how many
+// arguments it takes. The exact-shape anchor red-lined a full gate the first time this builder took a
+// second argument (business hours, 2026-08-08) while the ordering it guards was never touched.
+// `conv[,)]` and NOT a bare prefix, because a bare prefix matches the DECLARATION (`conv: any`) which
+// sits above the gate — the loose version would have read as "gate is last" and passed for the wrong
+// reason. The "still called at all" assert below is what keeps this honest.
+const timeReplyIdx = indexSrc.search(/buildTestRidePreferredDateReply\(conv[,)]/);
+assert.ok(timeReplyIdx > 0, "the ADF path still calls buildTestRidePreferredDateReply");
 assert.ok(gateIdx > 0 && timeReplyIdx > gateIdx, "the inventory gate is evaluated BEFORE the time-first test-ride reply (stock-check-first)");
 
 // ── WIRING (source-grep): the PRIMARY generation path is routes/sendgridInbound.ts (the live ADF
@@ -98,11 +105,11 @@ assert.ok(
 // The time-first test-ride reply is produced ONLY when the bike is CONFIRMED in stock — never on
 // not_found / sold / on_hold / unknown (fail-safe: never promise a ride on a bike we can't confirm).
 assert.ok(
-  /initialAvailability === "in_stock"[\s\S]{0,120}buildInitialTestRidePreferredDateReply\(conv\)/.test(sgSrc),
+  /initialAvailability === "in_stock"[\s\S]{0,120}buildInitialTestRidePreferredDateReply\(conv[,)]/.test(sgSrc),
   "the time-first test-ride reply fires ONLY when initialAvailability === 'in_stock'"
 );
 assert.ok(
-  !/initialAvailability !== "on_hold"[\s\S]{0,120}buildInitialTestRidePreferredDateReply\(conv\)/.test(sgSrc),
+  !/initialAvailability !== "on_hold"[\s\S]{0,120}buildInitialTestRidePreferredDateReply\(conv[,)]/.test(sgSrc),
   "the weaker on_hold-only gate is gone (replaced by in-stock-only)"
 );
 

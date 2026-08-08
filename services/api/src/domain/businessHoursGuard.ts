@@ -120,8 +120,18 @@ export function statableTimeReply(
   const clock = parseTimeTokenToClock(token);
   if (!clock) return preferred;
   if (mayStateTimeAsWorkable({ ...clock, businessHours, dayKey })) return preferred;
+  return openHoursReAskSentence(businessHours) ?? preferred;
+}
+
+/**
+ * The ONE sentence we use whenever we refuse to state a time: name the real hours and re-ask.
+ * Defined once so every refusing site says the same thing — byte-identical to what
+ * `statableTimeReply` has been sending since this guard shipped. Null when the config carries no
+ * usable hours, which every caller must read as "keep today's copy" (fail direction above).
+ */
+export function openHoursReAskSentence(businessHours: BusinessWeekHours): string | null {
   const window = widestOpenWindow(businessHours);
-  if (!window) return preferred;
+  if (!window) return null;
   return `We're open ${formatClock(window.open)} to ${formatClock(window.close)} — what time in there works best for you?`;
 }
 
@@ -174,6 +184,69 @@ export function widestOpenWindow(
   };
 }
 
+
+/**
+ * Did the form leave the time OPEN? ("", "anytime", "flexible", …) — i.e. there is no concrete time
+ * to state, so nothing for the hours invariant to judge. Was a hand-maintained copy in BOTH
+ * index.ts and routes/sendgridInbound.ts; it belongs beside the invariant that now reads it.
+ */
+export function isOpenPreferredTime(value: string | null | undefined): boolean {
+  const raw = String(value ?? "").trim();
+  return !raw || /^(any|anytime|flexible|open|no preference|n\/a|na)$/i.test(raw);
+}
+
+/** "8:00 Pm" -> "8:00 PM". The other half of the same mirrored pair. */
+export function formatPreferredTimeForReply(value: string | null | undefined): string {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  return raw.replace(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i, (_m, hour, minute, meridiem) => {
+    const suffix = String(meridiem).toUpperCase();
+    return `${hour}${minute ? `:${minute}` : ""} ${suffix}`;
+  });
+}
+
+/**
+ * THE LEAD FORM'S OWN TIME, echoed back as a slot we promise to line up.
+ *
+ * `+16397209755` (lakshya, 2026-07-15, Room58 "Book test ride", ref 11632) is why these two exist.
+ * The form carried `preferredDate: "7/22/2026"` / `preferredTime: "8:00 Pm"` and the ack read
+ * "I have Wednesday, July 22 at 8:00 Pm noted. I'll confirm availability and get that lined up."
+ * — SENT on SMS at 10:07 and again by email at 13:28. We close at 6. Nothing was misread: the
+ * customer really did pick 8:00 PM on a web form that let them. The reply sites simply restated the
+ * field verbatim, so the two guarded sites (`Got it — X can work`, `X should work. Want me to lock
+ * that in?`) never saw it. Same invariant, third door.
+ *
+ * The tail for the "I have <date> [at <time>] noted" reply shape. Statable time => today's copy,
+ * byte for byte. Positively shut => keep the date, drop the impossible time, and re-ask with the
+ * real hours. No usable hours config => the plain re-ask, i.e. today's no-time copy.
+ */
+export function preferredDateTimeNotedTail(args: {
+  dateLabel: string;
+  preferredTime: string | null | undefined;
+  businessHours: BusinessWeekHours;
+}): string {
+  const raw = String(args.preferredTime ?? "").trim();
+  const time = isOpenPreferredTime(raw) ? "" : raw;
+  if (time && mayStateTokenAsWorkable(time, args.businessHours)) {
+    return `I have ${args.dateLabel} at ${time} noted. I’ll confirm availability and get that lined up.`;
+  }
+  const reAsk = (time ? openHoursReAskSentence(args.businessHours) : null) ?? "What time works best for you?";
+  return `I have ${args.dateLabel} noted. ${reAsk}`;
+}
+
+/**
+ * The same invariant for reply shapes that only INTERPOLATE the time and have no re-ask to offer
+ * (the Jumpstart ack). Returns the time text when we may state it, "" when the store is positively
+ * shut — so the clause degrades to the date-only wording that already exists beside it.
+ */
+export function statablePreferredTimeText(
+  token: string | null | undefined,
+  businessHours: BusinessWeekHours
+): string {
+  const raw = String(token ?? "").trim();
+  if (!raw) return "";
+  return mayStateTokenAsWorkable(raw, businessHours) ? raw : "";
+}
 
 /** Token-level convenience for the reply sites: unreadable/ambiguous tokens are never refused. */
 export function mayStateTokenAsWorkable(

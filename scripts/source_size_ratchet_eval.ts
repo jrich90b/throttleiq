@@ -288,7 +288,12 @@ const CEILINGS: Ceiling[] = [
     // thread selection and its future-dated-todo check moved to domain/humanThreadNudge.ts beside
     // the decision they feed, and the pre-composition gate went with them — so the lane pays one
     // line per call instead of carrying the reasoning inline. The fix lands NET SMALLER.
-    max: 70_893,
+    // 70_893 -> 70_888. The lead form's own preferred time (+16397209755, "8:00 Pm") now goes through
+    // the business-hours invariant guard. index.ts was sitting EXACTLY on the ceiling again, so the
+    // slice funded itself: isOpenPreferredTime and formatPreferredTimeForReply were hand-maintained
+    // copies in BOTH index.ts and routes/sendgridInbound.ts and moved verbatim into
+    // domain/businessHoursGuard.ts beside the invariant that now reads them.
+    max: 70_888,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
