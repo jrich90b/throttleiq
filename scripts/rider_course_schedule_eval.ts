@@ -235,19 +235,22 @@ const adfEnrolled = R.buildInitialAdfFirstTimeRiderGuidanceReply({
 ok(!adfEnrolled.includes("$321"), "the ADF first-touch variant does not quote the price either");
 
 // The task that makes the hand-off's promise true.
-ok(
-  R.riderCourseLogisticsTodoSummary({ intent: "enrolled_class_logistics" })?.includes("Riding Academy student") === true,
-  "the hand-off mints a staff task"
-);
-ok(R.riderCourseLogisticsTodoSummary({ intent: "rider_course_info" }) === null, "and no other intent does");
-ok(R.riderCourseLogisticsTodoSummary(null) === null, "a missing decision mints nothing");
+ok(R.asksRiderCourseLogistics({ intent: "enrolled_class_logistics" }) === true, "the hand-off mints a staff task");
+ok(R.asksRiderCourseLogistics({ intent: "none", asksClassLogistics: true }) === true, "the boolean alone is enough");
+ok(R.asksRiderCourseLogistics({ intent: "rider_course_info" }) === false, "and no other intent does");
+ok(R.asksRiderCourseLogistics(null) === false, "a missing decision mints nothing");
+ok(/Riding Academy student/.test(R.RIDER_COURSE_LOGISTICS_TODO), "the task names the class, so staff know what to confirm");
 
 // Route-parity law: the task has to fire in BOTH paths. Only source can count call SITES.
 const fs = await import("node:fs");
 const api = fs.readFileSync(new URL("../services/api/src/index.ts", import.meta.url), "utf8");
 ok(
-  api.split("riderCourseLogisticsTodoSummary(").length - 1 === 2,
-  "the task helper is CALLED exactly twice — live and regenerate (the import carries no paren)"
+  api.split("asksRiderCourseLogistics(").length - 1 === 2,
+  "the predicate is CALLED exactly twice — live and regenerate (the import carries no paren)"
+);
+ok(
+  api.split("RIDER_COURSE_LOGISTICS_TODO,").length - 1 === 2,
+  "and both paths raise the SAME task text — one constant, so they cannot drift"
 );
 ok(
   api.split("readRidingAcademyRecordFields(conv.lead?.inquiry).startDate").length - 1 === 2,

@@ -12,16 +12,21 @@ import { decideJumpstartInviteTurn } from "./routeStateReducer.js";
 import { buildJumpstartOneOnOneInvite, buildFirstTimeRiderBeginnerReply } from "./agentVoice.js";
 import { resolveRiderCourseLogisticsReply } from "./riderCourseSchedule.js";
 
+/** The staff task that makes the class-logistics hand-off's promise of a person true. */
+export const RIDER_COURSE_LOGISTICS_TODO =
+  "Riding Academy student asked about their class (time, place or what to bring) - confirm and reply.";
+
 /**
- * The class-logistics reply hands the question to a person; this is the staff task that makes that
- * promise true. Null for every other first-time-rider intent, so the caller stays two lines.
+ * Is this turn the enrolled-student class question? A predicate rather than a "build me the todo"
+ * helper on purpose: both reply paths ask it and then do the IDENTICAL thing, so neither path needs
+ * a local of its own to hold the answer — and a per-path local is exactly the hand-mirrored drift
+ * surface route_parity_guard:eval counts.
  */
-export function riderCourseLogisticsTodoSummary(
+export function asksRiderCourseLogistics(
   decision: { intent?: string | null; asksClassLogistics?: boolean } | null | undefined
-): string | null {
-  if (!decision) return null;
-  if (decision.intent !== "enrolled_class_logistics" && !decision.asksClassLogistics) return null;
-  return "Riding Academy student asked about their class (time, place or what to bring) - confirm and reply.";
+): boolean {
+  if (!decision) return false;
+  return decision.intent === "enrolled_class_logistics" || !!decision.asksClassLogistics;
 }
 
 export function hasExplicitRiderCourseInfoText(text: string | null | undefined): boolean {

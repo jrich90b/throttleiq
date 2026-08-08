@@ -17,7 +17,7 @@ import { orchestrateInbound, evaluateTestRideInventoryGate, buildBlockedTestRide
 import { resolveWatchOptOutOutcome } from "./domain/watchOptOutTurn.js";
 import { resolveAdfFirstTouchAckKind, buildAdfFirstTouchAck, resolveEnrollmentAckExtras } from "./domain/ridingAcademy.js";
 import { readFirstTimeRiderPolicy, hasRiderCoursePublicInfo, readEnrollmentRidingHistory, applyRiderExperienceState } from "./domain/firstTimeRiderPolicy.js";
-import { buildFirstTimeRiderGuidanceReply, buildInitialAdfFirstTimeRiderGuidanceReply, hasExplicitRiderCourseInfoText, hasAmbiguousRiderCourseInfoText, riderCourseLogisticsTodoSummary } from "./domain/firstTimeRiderReply.js";
+import { buildFirstTimeRiderGuidanceReply, buildInitialAdfFirstTimeRiderGuidanceReply, hasExplicitRiderCourseInfoText, hasAmbiguousRiderCourseInfoText, asksRiderCourseLogistics, RIDER_COURSE_LOGISTICS_TODO } from "./domain/firstTimeRiderReply.js";
 import { readRidingAcademyRecordFields } from "./domain/ridingAcademy.js";
 import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildRidingAcademyEnrollmentAck, buildJumpstartOneOnOneInvite, buildFirstTimeRiderBeginnerReply, buildAcquiredVehicleAck, buildWatchAvailableReply, buildCholoWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, resolveIntroducedOwnerFirstName, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, hasCustomerReceivedOutbound, hasRecentDeliveredHumanOutbound } from "./domain/agentVoice.js";
 import {
@@ -55743,8 +55743,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const profile = await getDealerProfileHot();
     applyFirstTimeRiderGuidanceState(conv, regenFirstTimeRiderDecision);
     // The class-logistics hand-off promises a person; the task is what makes that promise true.
-    const regenClassLogisticsTodo = riderCourseLogisticsTodoSummary(regenFirstTimeRiderDecision);
-    if (regenClassLogisticsTodo) addTodo(conv, "other", regenClassLogisticsTodo, undefined, undefined, undefined, "followup");
+    if (asksRiderCourseLogistics(regenFirstTimeRiderDecision)) {
+      addTodo(conv, "other", RIDER_COURSE_LOGISTICS_TODO, undefined, undefined, undefined, "followup");
+    }
     const reply = buildFirstTimeRiderGuidanceReply({
       parsed: regenFirstTimeRiderDecision,
       dealerProfile: profile,
@@ -61495,8 +61496,9 @@ if (authToken && signature) {
     const dealerProfile = await getDealerProfileHot();
     applyFirstTimeRiderGuidanceState(conv, firstTimeRiderDecision);
     // The class-logistics hand-off promises a person; the task is what makes that promise true.
-    const liveClassLogisticsTodo = riderCourseLogisticsTodoSummary(firstTimeRiderDecision);
-    if (liveClassLogisticsTodo) addTodo(conv, "other", liveClassLogisticsTodo, undefined, undefined, undefined, "followup");
+    if (asksRiderCourseLogistics(firstTimeRiderDecision)) {
+      addTodo(conv, "other", RIDER_COURSE_LOGISTICS_TODO, undefined, undefined, undefined, "followup");
+    }
     const reply = buildFirstTimeRiderGuidanceReply({
       parsed: firstTimeRiderDecision,
       dealerProfile,
