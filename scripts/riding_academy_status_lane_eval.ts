@@ -165,31 +165,90 @@ ok(
   ),
   "the live Riding Academy branch is no longer gated on isInitialAdf — that gate is what dropped Maya's record"
 );
+// RE-PINNED 2026-08-08: these two asserted the inline shapes `const ridingAcademyLaneOpen = …` and
+// `priorStatus: readPriorRidingAcademyStatus({ … })` in the live file. Both moved into the shared
+// resolver when the course-price branch stopped outranking an enrolled student, so both pins went
+// stale describing code that had legitimately moved. The PROPERTIES they were protecting are what
+// matter, and those are executed below instead of read.
+const adfRecord = (status: string, id: string) => ({
+  direction: "in",
+  provider: "sendgrid_adf",
+  providerMessageId: id,
+  body: `WEB LEAD (ADF)\nSource: Riding Academy - ${status}\n\nInquiry:\nEnrollment Status: ${status}-Course: New Rider Course-Class Start Date: 8/22/2026`
+});
+const laneClaim = (over: Record<string, unknown> = {}) =>
+  RA.resolveRidingAcademyAdfLaneClaim({
+    provider: "sendgrid_adf",
+    messages: [adfRecord("Enrolled", "adf_1")],
+    excludeProviderMessageId: "adf_1",
+    eventPromoKind: null,
+    leadSource: "Riding Academy - Enrolled",
+    inquiry: "Enrollment Status: Enrolled-Course: New Rider Course-Class Start Date: 8/22/2026",
+    ...over
+  });
+
+// "Has the CUSTOMER replied yet" — not "has anything been sent", which is the gate that dropped
+// Maya's second record. An outbound of ours must NOT close the lane; a customer SMS must.
+ok(laneClaim().laneOpen === true, "a school record with no customer reply keeps the lane open");
 ok(
-  /const ridingAcademyLaneOpen =\s*\n\s*isAdfFirstTouchRegen\(\{ provider: event\.provider, messages: conv\.messages \}\)/.test(
-    live
-  ),
-  "it asks the shared predicate instead: has the CUSTOMER replied yet"
+  laneClaim({ messages: [adfRecord("Enrolled", "adf_1"), { direction: "out", provider: "draft_ai", body: "Hi" }] })
+    .laneOpen === true,
+  "an outbound of OURS does not close the lane — that is the isInitialAdf gate that lost Maya"
 );
 ok(
-  /priorStatus: readPriorRidingAcademyStatus\(\{\s*messages: conv\.messages,\s*excludeProviderMessageId: event\.providerMessageId\s*\}\)/.test(
-    live
-  ),
-  "the live path feeds the reducer the thread's prior status"
+  laneClaim({ messages: [adfRecord("Enrolled", "adf_1"), { direction: "in", provider: "twilio", body: "how much?" }] })
+    .laneOpen === false,
+  "once the CUSTOMER texts back, normal routing answers"
+);
+// The thread's PRIOR status is read, and the record being answered is excluded from it — otherwise
+// a second record reads its own status as the prior one and the transition disappears.
+ok(
+  laneClaim({
+    messages: [adfRecord("Wait List", "adf_1"), adfRecord("Enrolled", "adf_2")],
+    excludeProviderMessageId: "adf_2"
+  }).kind === "riding_academy_waitlist_to_enrolled_ack",
+  "wait list -> Enrolled is read as the TRANSITION, using the thread's prior record"
+);
+// The exclusion has to work by ID, not by "drop the newest row". Live, the record being answered IS
+// the newest, so the two are indistinguishable — but REGENERATE re-runs an older record, and there
+// the id is the only thing that identifies it. A fixture where the answered record is not last is
+// the only one that can tell a real exclusion from the positional fallback.
+// A deliberately synthetic thread — the answered record is in the MIDDLE, and the rows on either
+// side carry different statuses. It is a mechanism test, not a customer journey: excluding by ID
+// reads "wait list" from the row after it, while the positional "drop the newest" fallback would
+// read "enrolled" from the row before. Any fixture whose answered record is last cannot tell those
+// two apart, which is why an earlier version of this survived having the exclusion deleted.
+ok(
+  laneClaim({
+    messages: [adfRecord("Enrolled", "adf_1"), adfRecord("Enrolled", "adf_2"), adfRecord("Wait List", "adf_3")],
+    excludeProviderMessageId: "adf_2"
+  }).kind === "riding_academy_waitlist_to_enrolled_ack",
+  "excluding by ID is what makes regenerating an OLDER record read the right prior status"
 );
 ok(
   /introduce: shouldIntroduceOnAdfTouch\(\{ isAdfEvent: true, messages: conv\.messages \}\)/.test(live),
   "and keys the intro off what the customer RECEIVED (Joe 2026-07-16), not off the ADF count"
 );
 ok(
-  live.includes('ridingAcademyTurn.kind === "riding_academy_unknown_status"') && live.includes("addTodo("),
+  live.includes('academyAdfClaim.kind === "riding_academy_unknown_status"') && live.includes("addTodo("),
   "an unknown status raises a staff task"
+);
+ok(
+  laneClaim({ inquiry: "Enrollment Status: Cancelled-Course: New Rider Course" }).kind ===
+    "riding_academy_unknown_status",
+  "and an unrecognised status is what reaches that branch"
 );
 
 const shared = fs.readFileSync(path.join(here, "../services/api/src/domain/ridingAcademy.ts"), "utf8");
+// Both paths or neither: the regen resolver DELEGATES to the same lane claim the live path uses, so
+// there is exactly one place the prior status is read and one decision to keep correct.
 ok(
-  /priorStatus: readPriorRidingAcademyStatus\(\{ messages: input\.messages \}\)/.test(shared),
-  "the REGEN path feeds the same prior status — both paths or neither"
+  shared.split("decideRidingAcademyTurn({").length - 1 === 1,
+  "exactly ONE riding-academy decision in the module — two is how the paths drifted"
+);
+ok(
+  shared.includes("const academy = resolveRidingAcademyAdfLaneClaim({"),
+  "the REGEN path reaches it through the same resolver as live"
 );
 ok(
   /if \(academy\.kind !== "none"\) \{\s*\n\s*return \{ isAdfFirstTouch, kind: academy\.kind \};/.test(shared),
