@@ -118,11 +118,8 @@ export function resolveAdfAckFirstName(leadProfile: any): string | null {
   if (!raw) return null;
   const first = raw.split(/\s+/)[0] ?? "";
   if (!first) return null;
-  const letters = first.replace(/[^A-Za-z]/g, "");
-  if (!letters) return first;
-  return letters === letters.toUpperCase()
-    ? first.charAt(0).toUpperCase() + first.slice(1).toLowerCase()
-    : first;
+  // ONE casing rule for customer names, shared with the greeting that renders them.
+  return normalizeGreetingNameCase(first) || null;
 }
 
 export function resolveIntroducedOwnerFirstName(args: {
@@ -159,8 +156,35 @@ export function buildMarketingUnsubscribeFooter(dealerName?: string | null): str
 }
 
 /** Casual greeting, no em-dash. "Hey {name}, " or "Hey there, " when the name is unknown. */
+/**
+ * The customer's name, cased the way a person would write it in a text.
+ *
+ * ADF forms take whatever the customer typed, so the store holds "igor", "DONALD" and "MD"
+ * alongside 767 perfectly ordinary names — **52 of 819 leads (6.3%) measured 2026-08-08**. The
+ * greeting rendered them verbatim: "Hey igor,", "Hey DONALD,".
+ *
+ * MIXED CASE IS LEFT ALONE, and that is the important half: "DeShawn", "O'Brien" and "McDonald"
+ * are how those names are actually spelled, and no rule that "fixes" them is an improvement. Only a
+ * name with NO case information at all — entirely lower or entirely upper — is touched, and then
+ * only at word boundaries (start, hyphen, apostrophe, space), so "jean-luc" reads "Jean-Luc".
+ *
+ * It is imperfect by design: "mcdonald" becomes "Mcdonald", not "McDonald". Recovering that needs a
+ * name dictionary, and guessing wrong at a customer is worse than a plain capital.
+ */
+export function normalizeGreetingNameCase(raw?: string | null): string {
+  const name = String(raw ?? "").trim();
+  const letters = name.replace(/[^A-Za-z]/g, "");
+  if (!letters) return name;
+  const allLower = letters === letters.toLowerCase();
+  const allUpper = letters === letters.toUpperCase();
+  if (!allLower && !allUpper) return name;
+  return name
+    .toLowerCase()
+    .replace(/(^|[\s'’-])([a-z])/g, (_m, boundary: string, ch: string) => `${boundary}${ch.toUpperCase()}`);
+}
+
 export function buildAgentGreeting(firstName?: string | null): string {
-  const name = String(firstName ?? "").trim();
+  const name = normalizeGreetingNameCase(firstName);
   return name ? `Hey ${name}, ` : "Hey there, ";
 }
 
