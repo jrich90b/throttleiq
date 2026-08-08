@@ -53,6 +53,11 @@ ok(
   "hardship must suppress the arm — never sell into grief"
 );
 ok(
+  advanceEveryReplySuppressed({ alreadyPurchased: true }),
+  "a customer who already bought must suppress the arm — found by SAMPLING: an owner who wrote " +
+    "\"absolutely loving it\" was asked whether to swing by tomorrow after work"
+);
+ok(
   advanceEveryReplySuppressed({ dispositionClosing: true }),
   "a customer closing the lead out must suppress the arm — do not ask a man who just bought elsewhere to keep shopping"
 );
@@ -71,7 +76,7 @@ for (const appt of [
 // --- 3) AND IT MUST NOT SUPPRESS THE ORDINARY SELLING TURN, or the whole change is inert.
 ok(!advanceEveryReplySuppressed({}), "an empty context must NOT suppress — that is the selling turn");
 ok(
-  !advanceEveryReplySuppressed({ needsEmpathy: false, dispositionClosing: false, appointment: null }),
+  !advanceEveryReplySuppressed({ needsEmpathy: false, dispositionClosing: false, alreadyPurchased: false, appointment: null }),
   "explicit falses must NOT suppress"
 );
 ok(
@@ -103,6 +108,10 @@ const orchestrator = fs.readFileSync("services/api/src/domain/orchestrator.ts", 
 ok(
   orchestrator.includes("dispositionClosing: ctx?.dispositionClosing ?? null"),
   "the orchestrator hands dispositionClosing to the draft context"
+);
+ok(
+  orchestrator.includes("alreadyPurchased: !!ctx?.sale"),
+  "the orchestrator derives alreadyPurchased from the sale record it already receives"
 );
 
 // --- 5) The prompt arm still carries the caveat as a SECOND line of defence, and still says BE BRIEF.

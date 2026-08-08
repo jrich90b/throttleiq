@@ -2264,6 +2264,8 @@ export async function orchestrateInbound(
     needsEmpathy?: boolean | null;
     /** Customer is closing the lead out this turn — suppresses the salesperson arm. */
     dispositionClosing?: boolean | null;
+    /** Lead already bought — suppresses the salesperson arm. */
+    alreadyPurchased?: boolean | null;
     // The FULL open customer turn — every message they sent that we have not answered yet — built
     // by `buildOpenTurnInquiry` (openCustomerTurn.ts) at the call site, where conv.messages is in
     // hand. Feeds the draft composer's `inquiry` ONLY: routing and the typed parsers keep reading
@@ -5217,6 +5219,7 @@ export async function orchestrateInbound(
         memorySummary: ambiguousFlow ? ctx?.memorySummary ?? null : null,
         needsEmpathy: ctx?.needsEmpathy ?? null,
         dispositionClosing: ctx?.dispositionClosing ?? null,
+        alreadyPurchased: !!ctx?.sale,
         staffCorrections: ctx?.staffCorrections ?? null
       };
       const baseDraft = await generateDraftWithLLM(draftCtx);

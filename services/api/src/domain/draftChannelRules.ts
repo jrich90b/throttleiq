@@ -43,6 +43,12 @@ export function advanceEveryReplyEnabled(): boolean {
  * stays only as a second line of defence:
  *  - needsEmpathy — the affect parser confidently read a hardship this turn. Never sell into grief.
  *  - a booked appointment — the thread is settled; confirm it, do not re-open it with a new ask.
+ *  - alreadyPurchased — they already bought. FOUND BY SAMPLING, not by reasoning: across 25 real
+ *    reply-turns a customer who had just taken delivery and wrote "absolutely loving it, took a
+ *    short day today at work to go out for a ride" was answered with "Do you want to aim for
+ *    tomorrow after work or first thing Saturday to swing by?" Inviting an owner in, for nothing.
+ *    Same class as the June ride-home-warmth miss. Post-sale threads get warmth and service, not
+ *    an appointment push.
  *  - dispositionClosing — the customer said they are not interested. I first assumed routing caught
  *    this before the composer; CHECKED, and it does not: that early branch only fires for
  *    contactPreference "call_only" leads. On an ordinary SMS lead the turn reaches here, and the
@@ -51,10 +57,12 @@ export function advanceEveryReplyEnabled(): boolean {
 export function advanceEveryReplySuppressed(ctx: {
   needsEmpathy?: boolean | null;
   dispositionClosing?: boolean | null;
+  alreadyPurchased?: boolean | null;
   appointment?: any;
 }): boolean {
   if (ctx.needsEmpathy) return true;
   if (ctx.dispositionClosing) return true;
+  if (ctx.alreadyPurchased) return true;
   const appt = ctx.appointment;
   if (appt && typeof appt === "object") {
     const status = String(appt.status ?? "").toLowerCase();
