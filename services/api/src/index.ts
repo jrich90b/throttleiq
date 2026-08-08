@@ -52469,11 +52469,11 @@ app.post("/conversations/:id/send", async (req, res) => {
       process.env.MANUAL_PROMISE_NEXT_STEP_ENABLED !== "0" &&
       process.env.LLM_ENABLED === "1" &&
       !!process.env.OPENAI_API_KEY &&
-      hasManualPromiseHint(text) &&
-      // TYPED BY STAFF is load-bearing — an unedited agent draft released here is the agent's
-      // copy, not a person's commitment. draftTextForLog = the draft body BEFORE the send.
-      isHumanAuthoredOutbound({ pendingDraftBody: draftTextForLog, sentBody: text })
+      hasManualPromiseHint(text)
     ) {
+      // WHO typed it decides the OUTCOME, not whether we look: a person's promise gets a dated
+      // task and a cadence hold, the agent's gets one owner task, because the agent cannot do it.
+      const promiseHumanAuthored = isHumanAuthoredOutbound({ pendingDraftBody: draftTextForLog, sentBody: text });
       const promiseSourceMessageId = opts?.sourceMessageId ? String(opts.sourceMessageId) : undefined;
       const promiseChannel = opts?.channel ?? null;
       void (async () => {
@@ -52492,8 +52492,15 @@ app.post("/conversations/:id/send", async (req, res) => {
             dueDate: dueText ? parseRequestedDateOnly(dueText, schedulerTimezone) : null,
             confidenceMin: resolveVoiceNextStepConfidenceMin(
               process.env.VOICE_NEXT_STEP_CONFIDENCE_MIN
-            )
+            ),
+            humanAuthored: promiseHumanAuthored
           });
+          if (promiseDecision.kind === "agent_promise_owner_task") {
+            const ownerTask = addTodo(conv, "other", promiseDecision.taskSummary, promiseSourceMessageId, undefined, undefined, "reminder");
+            recordRouteOutcome("manual", "agent_promise_owner_task", { convId: conv.id, leadKey: conv.leadKey, channel: promiseChannel, taskCreated: !!ownerTask });
+            saveConversation(conv);
+            return;
+          }
           if (promiseDecision.kind !== "staff_task") return;
           const promiseTask = addTodo(
             conv,
