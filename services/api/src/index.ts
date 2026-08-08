@@ -17,7 +17,7 @@ import { orchestrateInbound, evaluateTestRideInventoryGate, buildBlockedTestRide
 import { resolveWatchOptOutOutcome } from "./domain/watchOptOutTurn.js";
 import { resolveAdfFirstTouchAckKind, buildAdfFirstTouchAck, resolveEnrollmentAckExtras } from "./domain/ridingAcademy.js";
 import { readFirstTimeRiderPolicy, hasRiderCoursePublicInfo, readEnrollmentRidingHistory, applyRiderExperienceState } from "./domain/firstTimeRiderPolicy.js";
-import { resolveRiderCourseLogisticsReply } from "./domain/riderCourseSchedule.js";
+import { buildFirstTimeRiderGuidanceReply, buildInitialAdfFirstTimeRiderGuidanceReply, hasExplicitRiderCourseInfoText, hasAmbiguousRiderCourseInfoText, riderCourseLogisticsTodoSummary } from "./domain/firstTimeRiderReply.js";
 import { readRidingAcademyRecordFields } from "./domain/ridingAcademy.js";
 import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildRidingAcademyEnrollmentAck, buildJumpstartOneOnOneInvite, buildFirstTimeRiderBeginnerReply, buildAcquiredVehicleAck, buildWatchAvailableReply, buildCholoWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, resolveIntroducedOwnerFirstName, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, hasCustomerReceivedOutbound, hasRecentDeliveredHumanOutbound } from "./domain/agentVoice.js";
 import {
@@ -27323,33 +27323,6 @@ function buildAppointmentWeatherTimingReply(text: string): string {
   return "No problem — we can set up another time.";
 }
 
-function hasExplicitRiderCourseInfoText(text: string | null | undefined): boolean {
-  const t = String(text ?? "").toLowerCase().replace(/\s+/g, " ").trim();
-  if (!t) return false;
-  return (
-    /\b(msf|riding academy|rider academy|learn to ride|riding school|rider school|riding course|rider course|motorcycle class|motorcycle course)\b/.test(
-      t
-    ) ||
-    /\b(course|class)\b[\s\S]{0,80}\b(?:get|getting|obtain|earn)\s+(?:my\s+|a\s+)?(?:motorcycle\s+)?(?:license|licence|endorsement|permit)\b/.test(
-      t
-    ) ||
-    /\b(?:motorcycle\s+)?(?:license|licence|endorsement|permit)\b[\s\S]{0,80}\b(course|class)\b/.test(
-      t
-    ) ||
-    /\bcourse\s+motorcycle\b/.test(t)
-  );
-}
-
-function hasAmbiguousRiderCourseInfoText(text: string | null | undefined): boolean {
-  const t = String(text ?? "").toLowerCase().replace(/\s+/g, " ").trim();
-  if (!t || hasExplicitRiderCourseInfoText(t)) return false;
-  return (
-    /\b(?:your|the|this|that|our)\s+course\b/.test(t) ||
-    /\bcourse\b[\s\S]{0,50}\b(price|pricing|cost|how much|tuition|fee|fees|rate)\b/.test(t) ||
-    /\b(price|pricing|cost|how much|tuition|fee|fees|rate)\b[\s\S]{0,50}\bcourse\b/.test(t)
-  );
-}
-
 function hasRiderCourseInfoInquiryText(text: string | null | undefined): boolean {
   return hasExplicitRiderCourseInfoText(text) || hasAmbiguousRiderCourseInfoText(text);
 }
@@ -27427,123 +27400,6 @@ function resolveFirstTimeRiderGuidanceDecision(
   if (source === "parser") return parsed;
   if (source === "none") return null;
   return parseFirstTimeRiderGuidanceFallback(text);
-}
-
-function buildFirstTimeRiderGuidanceReply(args: {
-  parsed: FirstTimeRiderGuidanceParse;
-  dealerProfile: any;
-  text?: string | null;
-  ridingHistory?: string | null;
-  /** For the class-logistics hand-off below. Both optional — absent degrades to a hand-off. */
-  firstName?: string | null;
-  studentClassDate?: string | null;
-}): string {
-  const parsed = args.parsed;
-  const policy = readFirstTimeRiderPolicy(args.dealerProfile);
-  const requiresEndorsement = policy.requiresEndorsement;
-  const courseName = policy.courseName || "a motorcycle safety course";
-  const courseUrl = policy.courseUrl;
-  const courseText = courseUrl ? `${courseName}: ${courseUrl}` : courseName;
-  const courseDetails = courseUrl ? ` Course details are here: ${courseUrl}` : "";
-  const coursePrice = policy.coursePrice;
-  // Joe, 2026-08-05: a store with a Jumpstart offers an inexperienced rider 1-on-1 time on it.
-  const jumpstartInvite =
-    decideJumpstartInviteTurn({
-      dealerHasJumpstart: policy.jumpstartEnabled,
-      riderIntent: parsed.intent,
-      hasEndorsement: parsed.hasEndorsement ?? null,
-      ridingHistory: args.ridingHistory ?? null
-    }).kind === "jumpstart_one_on_one_invite"
-      ? buildJumpstartOneOnOneInvite()
-      : "";
-
-  // ALREADY IN A CLASS, asking about the class itself. Checked BEFORE rider_course_info, which is
-  // SIGN-UP copy: an enrolled student asking "what time do I show up?" was answered with "the Riding
-  // Academy course is the best place to start. The current price is $321." — quoting the price at
-  // somebody who has already paid (Maya Iversen, +15854782032, 2026-08-07). With no class table
-  // configured (today) this always hands off to a person, which needs no schedule data at all; if a
-  // feed ever fills the rows in, the same call starts answering from them with no other change.
-  const classLogistics = resolveRiderCourseLogisticsReply({
-    intent: parsed.intent,
-    asksClassLogistics: parsed.asksClassLogistics,
-    firstName: args.firstName ?? null,
-    rows: policy.classSchedule,
-    studentClassDate: args.studentClassDate ?? null,
-    nowMs: Date.now()
-  });
-  if (classLogistics.handled) return classLogistics.reply;
-
-  if (parsed.intent === "rider_course_info" || parsed.asksRiderCourse) {
-    const isAmbiguous = hasAmbiguousRiderCourseInfoText(args.text);
-    const ambiguousPriceLine = coursePrice
-      ? `the current price is ${coursePrice}.`
-      : courseUrl
-        ? `course details and pricing are here: ${courseUrl}`
-        : "I’ll have the team confirm current class pricing and availability and follow up.";
-    if (isAmbiguous) {
-      return `Good question. If you mean our ${courseName}, ${ambiguousPriceLine}${coursePrice ? courseDetails : ""}`;
-    }
-    const intro = courseName.match(/^(a|an|the)\b/i)
-      ? courseName
-      : `the ${courseName}`;
-    const introSentence = intro.charAt(0).toUpperCase() + intro.slice(1);
-    const directPriceLine = coursePrice
-      ? ` The current price is ${coursePrice}.`
-      : courseUrl
-        ? ` Course details and pricing are here: ${courseUrl}`
-        : " I’ll have the team confirm current class pricing and availability and follow up.";
-    return `Good question. ${introSentence} is the best place to start.${directPriceLine}${coursePrice ? courseDetails : ""}`;
-  }
-  if (parsed.hasEndorsement === false || parsed.intent === "no_motorcycle_endorsement") {
-    const requirement = requiresEndorsement
-      ? "For test rides, we do need a motorcycle endorsement."
-      : "Before a test ride, I’d still want to make sure the bike is a safe fit for your experience.";
-    return buildFirstTimeRiderBeginnerReply({
-      branch: "no_endorsement",
-      jumpstartInvite,
-      requirement,
-      courseText
-    });
-  }
-  if (parsed.hasEndorsement === true) {
-    return "That makes sense. Since you have your endorsement, I’d still start by making sure the bike feels manageable: seat height, weight, and comfort. What kind of riding are you hoping to do?";
-  }
-  if (parsed.asksTestRide) {
-    return buildFirstTimeRiderBeginnerReply({ branch: "asks_test_ride", jumpstartInvite });
-  }
-  return buildFirstTimeRiderBeginnerReply({ branch: "general", jumpstartInvite });
-}
-
-function buildInitialAdfFirstTimeRiderGuidanceReply(args: {
-  parsed: FirstTimeRiderGuidanceParse;
-  dealerProfile: any;
-  text?: string | null;
-  ridingHistory?: string | null;
-}): string {
-  const parsed = args.parsed;
-  const adfPolicy = readFirstTimeRiderPolicy(args.dealerProfile);
-  const courseName = adfPolicy.courseName || "Riding Academy course";
-  const coursePrice = adfPolicy.coursePrice;
-  const courseUrl = adfPolicy.courseUrl;
-  if (parsed.intent === "rider_course_info" || parsed.asksRiderCourse) {
-    const isAmbiguous = hasAmbiguousRiderCourseInfoText(args.text);
-    const ambiguousPriceLine = coursePrice
-      ? `the current price is ${coursePrice}.`
-      : courseUrl
-        ? `course details and pricing are here: ${courseUrl}`
-        : "I’ll have the team confirm current class pricing and availability and follow up shortly.";
-    const urlLine = courseUrl ? ` Course details are here: ${courseUrl}` : "";
-    if (isAmbiguous) {
-      return `Thanks for asking. If you mean our ${courseName}, ${ambiguousPriceLine}${coursePrice ? urlLine : ""}`;
-    }
-    const directPriceLine = coursePrice
-      ? `The current price is ${coursePrice}.`
-      : courseUrl
-        ? `Course details and pricing are here: ${courseUrl}`
-        : "I’ll have the team confirm current class pricing and availability and follow up shortly.";
-    return `Thanks for asking about our ${courseName}. ${directPriceLine}${coursePrice ? urlLine : ""}`;
-  }
-  return buildFirstTimeRiderGuidanceReply(args);
 }
 
 function hasRiderCourseCustomerFacingInfo(dealerProfile: any): boolean {
@@ -55886,18 +55742,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   if (regenFirstTimeRiderDecision) {
     const profile = await getDealerProfileHot();
     applyFirstTimeRiderGuidanceState(conv, regenFirstTimeRiderDecision);
-    // The class-logistics hand-off promises a person; this is what makes that promise true.
-    if (regenFirstTimeRiderDecision?.intent === "enrolled_class_logistics" || regenFirstTimeRiderDecision?.asksClassLogistics) {
-      addTodo(
-        conv,
-        "other",
-        "Riding Academy student asked about their class (time, place or what to bring) - confirm and reply.",
-        undefined,
-        undefined,
-        undefined,
-        "followup"
-      );
-    }
+    // The class-logistics hand-off promises a person; the task is what makes that promise true.
+    const regenClassLogisticsTodo = riderCourseLogisticsTodoSummary(regenFirstTimeRiderDecision);
+    if (regenClassLogisticsTodo) addTodo(conv, "other", regenClassLogisticsTodo, undefined, undefined, undefined, "followup");
     const reply = buildFirstTimeRiderGuidanceReply({
       parsed: regenFirstTimeRiderDecision,
       dealerProfile: profile,
@@ -61647,18 +61494,9 @@ if (authToken && signature) {
   if (firstTimeRiderDecision) {
     const dealerProfile = await getDealerProfileHot();
     applyFirstTimeRiderGuidanceState(conv, firstTimeRiderDecision);
-    // The class-logistics hand-off promises a person; this is what makes that promise true.
-    if (firstTimeRiderDecision?.intent === "enrolled_class_logistics" || firstTimeRiderDecision?.asksClassLogistics) {
-      addTodo(
-        conv,
-        "other",
-        "Riding Academy student asked about their class (time, place or what to bring) - confirm and reply.",
-        undefined,
-        undefined,
-        undefined,
-        "followup"
-      );
-    }
+    // The class-logistics hand-off promises a person; the task is what makes that promise true.
+    const liveClassLogisticsTodo = riderCourseLogisticsTodoSummary(firstTimeRiderDecision);
+    if (liveClassLogisticsTodo) addTodo(conv, "other", liveClassLogisticsTodo, undefined, undefined, undefined, "followup");
     const reply = buildFirstTimeRiderGuidanceReply({
       parsed: firstTimeRiderDecision,
       dealerProfile,

@@ -180,38 +180,78 @@ const stale = ask({ rows: [{ ...CLASS, updatedAt: ago(45) }], studentClassDate: 
 ok(stale.needsTodo === true && /I don't want to guess/.test(stale.reply), "a stale feed reverts to a person");
 
 // ---------------------------------------------------------------------------
-// THE WIRING — checked BEFORE the sign-up branch, in the shared builder
+// THE WIRING — EXECUTED, not read. The shared builder is what the live path and the regenerate
+// path both call, so running it here runs the real decision. (An earlier draft of this section
+// asserted on index.ts source text; source text cannot prove a branch ordering actually holds,
+// and it goes stale the moment the function is moved — which is exactly what happened.)
 // ---------------------------------------------------------------------------
+const R = await import("../services/api/src/domain/firstTimeRiderReply.ts");
+
+/**
+ * A dealer who HAS published sign-up facts — the configuration that produced the original bug.
+ * KEY NAMES ARE THE REAL ONES read by readFirstTimeRiderPolicy (`riderCoursePrice`, not
+ * `coursePrice`): with invented keys the price is blank, and every "never quotes the price"
+ * assertion below passes because there is no price to quote. The fixture IS the measurement.
+ */
+const PROFILE_WITH_SIGNUP_COPY = {
+  policies: {
+    firstTimeRider: {
+      riderCourseName: "Riding Academy course",
+      riderCoursePrice: "$321",
+      riderCourseUrl: "https://example-dealer.test/riding-academy"
+    }
+  }
+};
+const guidance = (parsed: Record<string, unknown>, text = "what do I need to bring to class?") =>
+  R.buildFirstTimeRiderGuidanceReply({
+    parsed: { explicitRequest: true, ...parsed } as never,
+    dealerProfile: PROFILE_WITH_SIGNUP_COPY,
+    text,
+    firstName: "Maya",
+    studentClassDate: null
+  });
+
+// The bug, reproduced through the real builder: an enrolled student asking about their class.
+const enrolled = guidance({ intent: "enrolled_class_logistics", asksClassLogistics: true });
+ok(!enrolled.includes("$321"), "an enrolled student is never quoted the sign-up price");
+ok(!/best place to start/.test(enrolled), "and never gets the sign-up pitch");
+ok(/I don't want to guess/.test(enrolled), "they get the hand-off instead");
+
+// ORDERING, executed: a turn the sign-up branch would ALSO claim still hands off. If the
+// class-logistics check ran after it, the price answer would win and nothing would change.
+const both = guidance({ intent: "enrolled_class_logistics", asksClassLogistics: true, asksRiderCourse: true });
+ok(/I don't want to guess/.test(both) && !both.includes("$321"), "class-logistics outranks the sign-up branch");
+
+// ...and someone genuinely SIGNING UP is untouched: they still get the price.
+const signup = guidance({ intent: "rider_course_info", asksRiderCourse: true }, "how much is the riding academy?");
+ok(signup.includes("$321"), "a real sign-up question still gets the price");
+
+// The ADF variant funnels into the same builder, so it inherits the same ordering.
+const adfEnrolled = R.buildInitialAdfFirstTimeRiderGuidanceReply({
+  parsed: { explicitRequest: true, intent: "enrolled_class_logistics", asksClassLogistics: true } as never,
+  dealerProfile: PROFILE_WITH_SIGNUP_COPY,
+  text: "what do I need to bring to class?"
+});
+ok(!adfEnrolled.includes("$321"), "the ADF first-touch variant does not quote the price either");
+
+// The task that makes the hand-off's promise true.
+ok(
+  R.riderCourseLogisticsTodoSummary({ intent: "enrolled_class_logistics" })?.includes("Riding Academy student") === true,
+  "the hand-off mints a staff task"
+);
+ok(R.riderCourseLogisticsTodoSummary({ intent: "rider_course_info" }) === null, "and no other intent does");
+ok(R.riderCourseLogisticsTodoSummary(null) === null, "a missing decision mints nothing");
+
+// Route-parity law: the task has to fire in BOTH paths. Only source can count call SITES.
 const fs = await import("node:fs");
 const api = fs.readFileSync(new URL("../services/api/src/index.ts", import.meta.url), "utf8");
-
 ok(
-  api.includes('import { resolveRiderCourseLogisticsReply } from "./domain/riderCourseSchedule.js";'),
-  "index.ts imports the resolver"
-);
-const callIdx = api.indexOf("const classLogistics = resolveRiderCourseLogisticsReply({");
-const signupIdx = api.indexOf('if (parsed.intent === "rider_course_info" || parsed.asksRiderCourse) {');
-ok(callIdx > 0, "the shared guidance builder calls it");
-ok(
-  callIdx < signupIdx,
-  "and calls it BEFORE the rider_course_info branch — otherwise the price answer wins and nothing changes"
+  api.split("riderCourseLogisticsTodoSummary(").length - 1 === 2,
+  "the task helper is CALLED exactly twice — live and regenerate (the import carries no paren)"
 );
 ok(
-  /if \(classLogistics\.handled\) return classLogistics\.reply;/.test(api),
-  "the result is consumed — a decision nothing returns is the bug, not the fix"
-);
-ok(
-  api.split("resolveRiderCourseLogisticsReply(").length - 1 === 1,
-  "exactly ONE call site — both reply paths reach it through the one shared builder, so they cannot drift"
-);
-// The task must fire wherever the hand-off can, in BOTH paths (route-parity law).
-ok(
-  api.split("Riding Academy student asked about their class").length - 1 === 2,
-  "the task is raised at BOTH call sites — live and regenerate"
-);
-ok(
-  /studentClassDate: readRidingAcademyRecordFields\(conv\.lead\?\.inquiry\)\.startDate/.test(api),
-  "the student's own class date is threaded in, so a feed could match their class"
+  api.split("readRidingAcademyRecordFields(conv.lead?.inquiry).startDate").length - 1 === 2,
+  "the student's own class date is threaded in from both paths, so a feed could match their class"
 );
 
 console.log(`rider_course_schedule_eval: PASS (${n} assertions)`);

@@ -242,6 +242,7 @@
     "dealer_lead_survey_ack:eval",
     "riding_academy_enrollment_ack:eval",
     "riding_academy_waitlist_ack:eval",
+    "rider_course_schedule:eval",
     "riding_academy_status_lane:eval",
     "finance_process_handoff:eval",
     "finance_hardship_handoff:eval",
