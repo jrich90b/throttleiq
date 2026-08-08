@@ -701,7 +701,15 @@ export function buildRidingAcademyWaitlistToEnrolledAck(
   // ROLE is the same over-explaining as repeating the introduction, so the light line is used in BOTH
   // variants — including the introduce path, where the name and dealership are new but the role
   // sentence would still be a repeat.
-  const contact = " I'm here if you need anything.";
+  //
+  // 2026-08-08: Joe's suggested wording ("maybe just say...") is itself on the Agent Voice Charter's
+  // banned-filler list, so this template failed the release gate the first time it fired for real
+  // (+15853170121, 2026-08-07 21:36Z — template-sourced charter violation, and the gate's threshold
+  // for those is zero). The charter is the general law and his line was a "maybe", so the INTENT is
+  // kept — one light closer instead of repeating the role sentence — in wording our reps actually
+  // use ("just text me", per the charter's own prescribed alternatives). It also now invites a reply
+  // rather than closing the door, which is the direction of his 2026-08-07 advancing-reply ruling.
+  const contact = " Just text me here if any questions come up.";
 
   return `${opener}a seat opened up and you're registered for ${classPhrase}.${contact}${note ? ` ${note}` : ""}`;
 }

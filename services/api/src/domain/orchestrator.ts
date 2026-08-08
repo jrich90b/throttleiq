@@ -171,7 +171,9 @@ function buildDealershipFaqReply(args: {
   const bikeLabel = `${yearLabel}${normalizeModelLabel(modelRaw)}`.trim();
   switch (args.topic) {
     case "pricing_cost_range":
-      return "New Harley-Davidson models usually run from about $11,000 to $45,000+, depending on model, trim, and options. Want me to narrow it down to the exact bike you want?";
+      // "narrow it down" is on the Agent Voice Charter's banned-filler list (2026-08-08 sweep): the
+      // advancing question stays, only the corporate phrasing goes.
+      return "New Harley-Davidson models usually run from about $11,000 to $45,000+, depending on model, trim, and options. Want me to nail down the exact bike you want?";
     case "price_negotiation":
       return "Yes — we can talk through price, promotions, trade value, and financing options on in-stock bikes. Want me to pull numbers on your preferred model?";
     case "fees_out_the_door":
@@ -180,7 +182,7 @@ function buildDealershipFaqReply(args: {
       if (!isUnknownModel(modelRaw)) {
         return `We can check exactly what’s in stock now and what’s inbound for ${bikeLabel}. Are you looking for new or used?`;
       }
-      return "We can check exactly what’s in stock now and what’s inbound. Start with style (Grand American Touring, Cruiser, Sport, or Adventure Touring) and whether you want new or used, and I’ll narrow it down.";
+      return "We can check exactly what’s in stock now and what’s inbound. Start with style (Grand American Touring, Cruiser, Sport, or Adventure Touring) and whether you want new or used, and I’ll pull what fits.";
     case "custom_order":
       return "Yes — we can place a factory order and spec it with genuine Harley-Davidson options. If you want, we can map your build today.";
     case "factory_order_timing":

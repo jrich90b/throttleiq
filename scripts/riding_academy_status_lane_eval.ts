@@ -121,12 +121,17 @@ ok(trans(true).includes("it's Alexandra over at American Harley-Davidson"), "fir
 // "We already told her the agent is her contact - maybe just say I'm here if you need anything."
 // This message ONLY ever follows a wait-list ack, which already carries the role sentence in full, so
 // the light line replaces it in BOTH variants — not only when the intro is suppressed.
+//
+// 2026-08-08: his suggested wording was itself charter-banned filler, and the FIRST real send of this
+// template (+15853170121) dirtied the release gate for it. The intent — one light closer, no repeated
+// role sentence — is what is pinned now; the wording is the charter's own prescribed alternative.
 ok(!trans(false).includes("over at American Harley-Davidson"), "a second touch does not re-announce the dealership");
 ok(trans(false).startsWith("Hey Maya, good news"), "it still opens warmly, lower-case after the comma");
 for (const introduce of [true, false]) {
   const t = trans(introduce);
   ok(!t.includes("I'm your contact"), "never repeats the contact-role sentence the wait-list ack already sent");
-  ok(t.includes("I'm here if you need anything."), "says the light line Joe chose instead");
+  ok(t.includes("Just text me here if any questions come up."), "says one light closer instead of the role sentence");
+  ok(!/here if you need anything/i.test(t), "and that closer is not the charter-banned filler");
   ok(t.includes("a seat opened up and you're registered"), "the news is that the wait ended");
   ok(t.includes("the New Rider Course starting 8/15/2026"), "names the class and date off the record");
   ok(t.includes(NOTE), "carries the dealer's e-course sentence — the same registration moment");

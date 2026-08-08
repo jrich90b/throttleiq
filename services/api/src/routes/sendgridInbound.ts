@@ -2397,7 +2397,9 @@ function buildTrafficLogProWalkInTail(args: {
   };
 
   if (step >= 9) {
-    return withTopic("Thanks again for working with us - enjoy the new bike. I'm here if you need anything.");
+    // Charter-banned filler ("I'm here if you need anything") replaced 2026-08-08 — see
+    // buildRidingAcademyWaitlistToEnrolledAck in domain/agentVoice.ts for the full reasoning.
+    return withTopic("Thanks again for working with us - enjoy the new bike. Just text me here if anything comes up.");
   }
   if (step === 8) {
     if (followUpTopic) {
@@ -7795,7 +7797,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         walkInDelayDays = 5;
       }
     }
-    let tail = "Thanks for the update — I’m here if you need anything.";
+    // Charter-banned filler replaced 2026-08-08 (same sweep as the post-sale tail above).
+    let tail = "Thanks for the update — just text me here if anything comes up.";
     if (hasCreditCosignerSignal) {
       tail = "I saw the credit app note and I’ll have our finance team follow up about the co-signer.";
     } else if (hasDealProgressSignal) {
