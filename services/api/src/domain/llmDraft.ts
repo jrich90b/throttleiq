@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import OpenAI from "openai";
 import type { Conversation } from "./conversationStore.js";
 import { dataPath } from "./dataDir.js";
+import { buildSelfHealSteering } from "./selfHealSteering.js";
 import { isFabricatedGratitudeLeadIn, isEchoedInboundOpening } from "./leadInGuards.js";
 import { CUSTOMER_ACK_ACTION_EXEMPLARS } from "./customerAckActionExemplars.js";
 import { buildVehicleChoiceConfidencePrompt } from "./vehicleChoiceConfidencePrompt.js";
@@ -15787,9 +15788,7 @@ export async function selfHealDraftWithLLM(args: {
     }
     // The PATCH: regenerate with steering so the re-draft fixes what was wrong. An echoed opening gets
     // an explicit anti-parrot instruction (it dominates, since the judge often rates the echo "good").
-    const steering = echoesInbound
-      ? "Do NOT open by repeating the customer's own words back — rewrite the opening in your own words (e.g. 'Tomorrow after work works great —'), keeping the same meaning."
-      : String(v1?.steering || v1?.reason || "").trim();
+    const steering = buildSelfHealSteering({ original, judgeSteering: String(v1?.steering || v1?.reason || ""), echoesInbound });
     const steered = String((await generateDraftWithLLM({ ...args.ctx, steering })) ?? "").trim();
     if (!steered || steered === original.trim()) {
       cacheSelfHealVerdict(inbound, original, v1); // returned draft is the bad original → gate reuses v1 to hold
