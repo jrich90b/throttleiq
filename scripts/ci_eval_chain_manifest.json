@@ -90,6 +90,7 @@
     "followup_duplicate_guard:eval",
     "cadence_inventory_specificity_guard:eval",
     "inventory_note_year_scope:eval",
+    "inventory_note_reply_fallback:eval",
     "cadence_watch_offer_instock_guard:eval",
     "cadence_lead_unit_gone_from_feed:eval",
     "cadence_reaction_model_guard:eval",
