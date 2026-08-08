@@ -11,6 +11,7 @@ import {
   buildAgentIntroPhrase,
   firstNameCollidesWithAgentName,
   greetingFirstName,
+  resolveAdfAckFirstName,
   hasCustomerReceivedOutbound,
   shouldIntroduceOnAdfTouch,
   stripLeadingAgentGreeting
@@ -201,5 +202,43 @@ assert.ok(
   greetingHelperUses >= 8,
   `expected >=8 greetingFirstName(...) sites in sendgridInbound.ts, found ${greetingHelperUses}`
 );
+
+// ---------------------------------------------------------------------------
+// THE GREETING CASES THE NAME (2026-08-08). ADF forms record whatever the customer typed, so the
+// store holds "igor" and "DONALD" — 52 of 819 leads (6.3%) measured — and the greeting rendered them
+// verbatim: "Hey igor,". buildAgentGreeting is the ONE place "Hey {name}, " is written, so the rule
+// lives there and no second reader can disagree with it.
+// ---------------------------------------------------------------------------
+{
+  const greet = (n: string | null | undefined) => buildAgentGreeting(n);
+  assert.equal(greet("igor"), "Hey Igor, ", "an all-lowercase name is capitalised");
+  assert.equal(greet("DONALD"), "Hey Donald, ", "a SHOUTING name is calmed down");
+  assert.equal(greet("jean-luc"), "Hey Jean-Luc, ", "and word boundaries include the hyphen");
+  assert.equal(greet("o'brien"), "Hey O'Brien, ", "and the apostrophe");
+
+  // The important half: a name that CARRIES case information is how that name is spelled.
+  for (const asTyped of ["DeShawn", "O'Brien", "McDonald", "LaToya", "van Dyke"]) {
+    assert.equal(
+      greet(asTyped),
+      `Hey ${asTyped}, `,
+      `a mixed-case name must survive untouched — "fixing" ${asTyped} is not an improvement`
+    );
+  }
+
+  // Degenerate shapes stay safe rather than clever.
+  assert.equal(greet("B"), "Hey B, ", "a single initial is left as an initial");
+  assert.equal(greet(""), "Hey there, ", "no name still greets");
+  assert.equal(greet(null), "Hey there, ", "and a missing name does not throw");
+  assert.equal(greet("  igor  "), "Hey Igor, ", "padding is trimmed before casing");
+
+  // One rule, not two: the ADF ack resolver must produce exactly what the greeting would render.
+  for (const raw of ["igor", "DONALD", "jean-luc", "DeShawn"]) {
+    assert.equal(
+      `Hey ${resolveAdfAckFirstName({ firstName: raw })}, `,
+      greet(raw),
+      `the ADF ack name and the greeting must agree on "${raw}" — two readers of one fact is the bug class`
+    );
+  }
+}
 
 console.log("PASS agent voice intro eval (+ ADF first-received intro gate + r2r/finance both-path guard + email-lane name-collision guard)");
