@@ -40,18 +40,17 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 
+// The parse moved to its own side-effect-free module so `ci_eval_runner.ts` can execute exactly the
+// chain this guard protects. Re-exported here because this file's own unit cases (below) pin it,
+// and because callers already import it from here.
+import { parseCiEvalChain } from "./ci_eval_chain.ts";
+
+export { parseCiEvalChain };
+
 const PKG_PATH = "package.json";
 const MANIFEST_PATH = "scripts/ci_eval_chain_manifest.json";
 
 type Manifest = { _why?: string; required: string[] };
-
-export function parseCiEvalChain(ciEval: string): string[] {
-  return String(ciEval ?? "")
-    .split("&&")
-    .map(part => part.trim())
-    .filter(Boolean)
-    .map(part => part.replace(/^npm run /, "").trim());
-}
 
 /** Entries the manifest requires that the chain no longer runs. Empty is the only healthy answer. */
 export function findDroppedEntries(chain: string[], required: string[]): string[] {
