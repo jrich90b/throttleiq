@@ -39,7 +39,7 @@ import {
   modelDiscontinuationReplyEnabled
 } from "./modelDiscontinuation.js";
 import { findMsrpPricing, getMsrpColorNames } from "./msrpPriceList.js";
-import { getInventoryNote } from "./inventoryNotes.js";
+import { getInventoryNote, resolveInventoryNoteForReply } from "./inventoryNotes.js";
 import { getDealerProfile } from "./dealerProfile.js";
 import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildPriceObjectionCheaperWatchReply, GENERIC_AGENT_DISPLAY_NAME } from "./agentVoice.js";
 import {
@@ -5197,7 +5197,22 @@ export async function orchestrateInbound(
 
       const stockForNote = ctx?.lead?.vehicle?.stockId ?? stockId ?? null;
       const vinForNote = ctx?.lead?.vehicle?.vin ?? null;
-      const inventoryNote = await getInventoryNote(stockForNote, vinForNote);
+      // A promotion typed onto the MODEL must reach a customer asking about that model, not only the
+      // one whose record happens to point at the exact unit it was typed on — the same year+model
+      // fallback the price path above already does. Scope/attribution policy stays in inventoryNotes.
+      const noteModel = ctx?.lead?.vehicle?.model ?? null;
+      const noteYear = ctx?.lead?.vehicle?.year ? String(ctx.lead.vehicle.year) : null;
+      const inventoryNote = await resolveInventoryNoteForReply({
+        stockId: stockForNote,
+        vin: vinForNote,
+        fallbackItems:
+          noteModel && !isUnknownModel(noteModel)
+            ? await findInventoryMatches({ year: noteYear, model: noteModel })
+            : [],
+        model: noteModel,
+        leadYear: noteYear,
+        leadCondition: ctx?.lead?.vehicle?.condition ?? null
+      });
 
       // Phase 2 (2026-07-11): hand the discussed unit's FEED FACTS to the composer so it can ANSWER
       // price/mileage/photo asks instead of hedging (the biggest data-punt bucket). Only when we
