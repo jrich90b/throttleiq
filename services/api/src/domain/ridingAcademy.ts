@@ -103,6 +103,65 @@ export function isAdfFirstTouchRegen(input: {
 }
 
 /**
+ * The three ack kinds that COMPOSE the whole reply on a live ADF first touch. `waitlist_ack` is
+ * deliberately absent: the live intake path does not build it today (only regen does), so listing it
+ * here would hand it a turn nobody answers. `unknown_status` is absent for the opposite reason — it
+ * raises a task and deliberately leaves the reply exactly as it was.
+ */
+const ACADEMY_KINDS_THAT_OWN_THE_LIVE_REPLY: ReadonlySet<AdfFirstTouchAckKind> = new Set([
+  "riding_academy_enrollment_ack",
+  "riding_academy_waitlist_to_enrolled_ack",
+  "riding_academy_completion_ack"
+]);
+
+/**
+ * Does the Riding Academy lane OWN this live ADF first touch?
+ *
+ * ONE decision with TWO consumers, and that is the whole point. The live intake path composes its
+ * riding-academy ack ~960 lines after an earlier branch that answers a rider-course question and
+ * then RETURNS — so the academy reply, correct all along, was never reached. Ulises HernandezPerez
+ * (+17167857284, 2026-08-08) registered for a course, his payment FAILED, and the school's record
+ * was answered with "Thanks for asking about our Riding Academy course. The current price is $321."
+ * Five of the six riding-academy leads we have ever had got that same sign-up pitch, and the
+ * enrollment acknowledgement Joe approved on 2026-08-05 had never once reached a customer.
+ *
+ * The regenerate path already gets this right (`resolveAdfFirstTouchAckKind` runs before its
+ * first-time-rider branch), so this closes a two-path drift rather than inventing a precedence.
+ *
+ * FAIL DIRECTION: `ownsLiveReply` is true only for a record the school itself marked with a status
+ * we act on. Anything unclear is false and the turn routes exactly as it does today.
+ */
+export function resolveRidingAcademyAdfLaneClaim(input: {
+  provider?: string | null;
+  messages?: unknown;
+  excludeProviderMessageId?: string | null;
+  eventPromoKind?: string | null;
+  leadSource?: string | null;
+  inquiry?: string | null;
+}): {
+  laneOpen: boolean;
+  kind: AdfFirstTouchAckKind;
+  /** The ack to build, or null when this lane does not compose the reply. Narrowed so the caller needs no cast. */
+  liveReplyKind: Exclude<AdfFirstTouchAckKind, "none"> | null;
+} {
+  const laneOpen =
+    isAdfFirstTouchRegen({ provider: input.provider, messages: input.messages }) &&
+    String(input.eventPromoKind ?? "") !== "event_promo_ack";
+  const kind = laneOpen
+    ? decideRidingAcademyTurn({
+        leadSource: input.leadSource,
+        inquiry: input.inquiry,
+        priorStatus: readPriorRidingAcademyStatus({
+          messages: input.messages,
+          excludeProviderMessageId: input.excludeProviderMessageId
+        })
+      }).kind
+    : "none";
+  const ownsLiveReply = laneOpen && ACADEMY_KINDS_THAT_OWN_THE_LIVE_REPLY.has(kind);
+  return { laneOpen, kind, liveReplyKind: ownsLiveReply ? (kind as Exclude<AdfFirstTouchAckKind, "none">) : null };
+}
+
+/**
  * WHICH approved ack replaces the generic sales opener on an ADF FIRST touch — one ordered
  * decision instead of a chain of near-identical inline gates. The riding-academy enrollment wins
  * over the non-buyer survey ack: a course registration is the more specific fact about the lead,
@@ -118,18 +177,20 @@ export function resolveAdfFirstTouchAckKind(input: {
   inquiry?: string | null;
   purchaseTimeframe?: string | null;
 }): { isAdfFirstTouch: boolean; kind: AdfFirstTouchAckKind } {
-  const isAdfFirstTouch =
-    isAdfFirstTouchRegen({ provider: input.provider, messages: input.messages }) &&
-    String(input.eventPromoKind ?? "") !== "event_promo_ack";
-  if (!isAdfFirstTouch) return { isAdfFirstTouch, kind: "none" };
-  const academy = decideRidingAcademyTurn({
+  // DELEGATES to the live lane's resolver rather than repeating the decision. Two copies of
+  // "is this a riding-academy first touch, and which one" in ONE module is precisely how the live
+  // and regen answers drifted apart in the first place; there is now exactly one.
+  // (A SECOND record from the school is news about her status, not a customer reply, so the wait
+  // list -> a seat transition stays visible here too — that lives in the resolver's priorStatus.)
+  const academy = resolveRidingAcademyAdfLaneClaim({
+    provider: input.provider,
+    messages: input.messages,
+    eventPromoKind: input.eventPromoKind,
     leadSource: input.leadSource,
-    inquiry: input.inquiry,
-    // A SECOND record from the school is news about her status, not a customer reply — so the
-    // transition (wait list -> a seat) has to be visible here too, or regen would answer Maya's
-    // "Enrolled" notice as if it were her first.
-    priorStatus: readPriorRidingAcademyStatus({ messages: input.messages })
+    inquiry: input.inquiry
   });
+  const isAdfFirstTouch = academy.laneOpen;
+  if (!isAdfFirstTouch) return { isAdfFirstTouch, kind: "none" };
   if (academy.kind !== "none") {
     return { isAdfFirstTouch, kind: academy.kind };
   }

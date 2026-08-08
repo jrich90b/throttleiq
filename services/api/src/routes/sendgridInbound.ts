@@ -71,6 +71,7 @@ import {
   readPriorRidingAcademyStatus,
   readRidingAcademyRecordFields,
   isAdfFirstTouchRegen,
+  resolveRidingAcademyAdfLaneClaim,
   buildAdfFirstTouchAck
 } from "../domain/ridingAcademy.js";
 import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildRidingAcademyEnrollmentAck, shouldIntroduceOnAdfTouch, stripAgentIntroPhraseForDealer, stripLeadingAgentGreeting, hasCustomerReceivedOutbound, GENERIC_AGENT_DISPLAY_NAME, GENERIC_DEALER_DISPLAY_NAME, resolveDealerAgentName, greetingFirstName } from "../domain/agentVoice.js";
@@ -8878,7 +8879,24 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       jumpStartExperience: true
     });
   }
-  if (initialAdfRiderCourseDecision) {
+  // ONE riding-academy decision for this turn, resolved HERE because the branch immediately below
+  // answers a rider-course question and then RETURNS — which is why the academy ack composed ~960
+  // lines further down had never once been reached (Ulises HernandezPerez +17167857284, and four
+  // leads before him). A record the school marked Enrolled/Completed is not somebody wondering what
+  // a course costs, so it outranks the course-price answer. Same object feeds the ack branch below,
+  // so the guard and the reply can never disagree about whose turn this is.
+  const academyAdfClaim = resolveRidingAcademyAdfLaneClaim({
+    provider: event.provider,
+    messages: conv.messages,
+    excludeProviderMessageId: event.providerMessageId,
+    eventPromoKind: decideEventPromoTurn({
+      classificationBucket: conv.classification?.bucket,
+      classificationCta: conv.classification?.cta
+    }).kind,
+    leadSource: conv.lead?.source,
+    inquiry: effectiveInquiry
+  });
+  if (initialAdfRiderCourseDecision && !academyAdfClaim.liveReplyKind) {
     const profile = await getInitialDealerProfile();
     let ack = buildInitialAdfRiderCourseInfoReply(profile, effectiveInquiry);
     ack = await applyInitialAdfPrefix(ack);
@@ -9831,27 +9849,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   // passenger. The guard that was actually intended ("once they text back, normal routing answers")
   // is `isAdfFirstTouchRegen`, which asks whether the CUSTOMER has replied — the same predicate the
   // regen path already used, so this closes a two-path drift as well.
-  const ridingAcademyTurn = decideRidingAcademyTurn({
-    leadSource: conv.lead?.source,
-    inquiry: effectiveInquiry,
-    priorStatus: readPriorRidingAcademyStatus({
-      messages: conv.messages,
-      excludeProviderMessageId: event.providerMessageId
-    })
-  });
-  const ridingAcademyLaneOpen =
-    isAdfFirstTouchRegen({ provider: event.provider, messages: conv.messages }) &&
-    decideEventPromoTurn({
-      classificationBucket: conv.classification?.bucket,
-      classificationCta: conv.classification?.cta
-    }).kind !== "event_promo_ack";
-  if (
-    ridingAcademyLaneOpen &&
-    (ridingAcademyTurn.kind === "riding_academy_enrollment_ack" ||
-      ridingAcademyTurn.kind === "riding_academy_waitlist_to_enrolled_ack" ||
-      ridingAcademyTurn.kind === "riding_academy_completion_ack")
-  ) {
-    draft = buildAdfFirstTouchAck(ridingAcademyTurn.kind, {
+  //
+  // The decision itself was taken ONCE, before the rider-course branch that used to return ahead of
+  // it (`academyAdfClaim`). Re-deciding it here is what let the two disagree in the first place.
+  if (academyAdfClaim.liveReplyKind) {
+    draft = buildAdfFirstTouchAck(academyAdfClaim.liveReplyKind, {
       firstName: adfAckFirstName(),
       agentName: adfAckAgentName(),
       dealerName: adfAckDealerName(),
@@ -9862,7 +9864,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       introduce: shouldIntroduceOnAdfTouch({ isAdfEvent: true, messages: conv.messages }),
       ...resolveEnrollmentAckExtras(dealerProfile, effectiveInquiry)
     });
-  } else if (ridingAcademyLaneOpen && ridingAcademyTurn.kind === "riding_academy_unknown_status") {
+  } else if (academyAdfClaim.laneOpen && academyAdfClaim.kind === "riding_academy_unknown_status") {
     // A rider-training record whose status word we do not know — a cancellation, a transfer, or
     // whatever H-D adds next. Raise it for a person. Deliberately does NOT set `draft`: this branch
     // only ADDS a task, so the reply that follows is exactly today's, and the change cannot break
