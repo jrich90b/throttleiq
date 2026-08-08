@@ -1,3 +1,5 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
 import {
   buildNoResponseFallbackReply,
   buildNoResponseFallbackTodoSummary,
@@ -1323,3 +1325,30 @@ if (walkInWatchPassed !== walkInWatchCases.length) {
 }
 
 console.log(`\nAll ${walkInWatchCases.length} walk-in inventory-watch checks passed.`);
+
+// --- WIRING: a referee nobody hands the fact to is a referee that decides nothing --------------
+// The in-stock veto lives in a pure function, so every case above passes whether or not the ADF
+// lane actually PASSES `modelInStockNow`. Deleting that one argument compiles clean, keeps the
+// whole decision table green, and silently restores the bug. So execute the wiring: read the real
+// call site, and prove the feed lookup both exists and runs BEFORE the decision it feeds.
+const walkInLaneSrc = fs.readFileSync("services/api/src/routes/sendgridInbound.ts", "utf8");
+const decideCallAt = walkInLaneSrc.indexOf("decideWalkInInventoryWatchTurn({");
+assert.ok(decideCallAt > 0, "the ADF walk-in lane must still call decideWalkInInventoryWatchTurn");
+const decideArgsEnd = walkInLaneSrc.indexOf("});", decideCallAt);
+assert.ok(decideArgsEnd > decideCallAt, "could not find the end of the decideWalkInInventoryWatchTurn call");
+const decideArgs = walkInLaneSrc.slice(decideCallAt, decideArgsEnd);
+assert.ok(
+  decideArgs.includes("modelInStockNow,"),
+  "the walk-in lane must hand the referee what is on the floor (modelInStockNow) — without it the Mike Wolf guard is dead code"
+);
+const stockAssignAt = walkInLaneSrc.indexOf("modelInStockNow = matches.length > 0;");
+assert.ok(stockAssignAt > 0, "modelInStockNow must be answered by the lane's own findInventoryMatches lookup");
+assert.ok(
+  stockAssignAt < decideCallAt,
+  "the inventory lookup must run BEFORE the watch decision — below it, the referee reads the initial null and the veto never fires"
+);
+const stockDeclAt = walkInLaneSrc.indexOf("let modelInStockNow: boolean | null = null;");
+assert.ok(stockDeclAt > 0, "modelInStockNow must start as null so a feed failure reads as UNKNOWN, never as an empty floor");
+assert.ok(stockDeclAt < stockAssignAt, "the null default must precede the lookup that may or may not answer");
+
+console.log("PASS walk-in in-stock veto is wired: the ADF lane looks up the floor before the referee decides, and hands it in.");

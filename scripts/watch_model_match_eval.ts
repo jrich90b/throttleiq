@@ -198,10 +198,14 @@ assert.equal(modelMatches("Street Glide", "FLHX Street Glide"), true, "FLHX Stre
 assert.equal(modelMatches("Road Glide", "FLTRX Road Glide"), true, "FLTRX Road Glide must match a Road Glide");
 assert.equal(modelMatches("Street Bob", "Fxbb Street Bob"), true, "the code is matched case-insensitively (the DMS writes it either way)");
 
-// The relaxation is TARGET-side and leading-token only; every existing guard still binds.
-assert.equal(modelMatches("Street Glide", "FLHXSE CVO Street Glide"), false, "dropping the code must leave the CVO ask intact — a base unit still fails it");
+// The relaxation is TARGET-side and LEADING-token only; every existing guard still binds.
+assert.equal(modelMatches("Street Glide", "FLHXSE CVO Street Glide"), false, "dropping the code must not manufacture a base match for a CVO ask");
 assert.equal(modelMatches("Street Glide", "FLHXS Street Glide Special"), false, "a trim-specific ask must NOT collapse to its base family just because it carried a code");
-assert.equal(modelMatches("Street Glide 2024 FLHX U902-24 Vivid Black", "Deadwood"), false, "a code buried mid-label is not a leading code and grants nothing");
+// Leading-only is load-bearing, not decoration. FLTRXS is the Road Glide SPECIAL: a matcher that
+// dropped codes ANYWHERE in the label would reduce this ask to the bare base family and fire on
+// all 17 base Road Glides the dealer stocks.
+assert.equal(modelMatches("Road Glide", "Road Glide FLTRXS"), false, "a code must only be dropped from the FRONT — mid/trailing codes carry the specificity");
+assert.equal(stripLeadingHarleyModelCode("Road Glide FLTRXS"), "", "…and the helper refuses it outright");
 
 // A model whose NAME is its code must not degrade to a bare displacement free to match anything.
 assert.equal(stripLeadingHarleyModelCode("Fxdr 114"), "", "stripping must refuse when no model NAME survives ('114' would match any 114)");
