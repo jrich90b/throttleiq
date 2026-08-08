@@ -468,11 +468,14 @@ assert.ok(
 );
 
 // Everything the claim must NOT take over — each one keeps today's behaviour exactly.
+// Wait List joined the owning kinds on 2026-08-08 (Joe: "build it"). It was excluded for exactly one
+// deploy on the false premise that the live path had no wait-list copy — it always had.
+// The wait-list reply's own content is pinned by riding_academy_waitlist_ack:eval.
 assert.equal(
   claim({ inquiry: ULISES_RECORD.replace("Enrolled-Course", "Wait List-Course"), leadSource: "Riding Academy - Wait List" })
     .liveReplyKind,
-  null,
-  "a Wait List record does not own the live reply — the live path has no waitlist copy to build"
+  "riding_academy_waitlist_ack",
+  "a Wait List record owns the live reply too — otherwise the course-price branch answers it"
 );
 const cancelled = claim({ inquiry: ULISES_RECORD.replace("Enrolled-Course", "Cancelled-Course") });
 assert.equal(cancelled.kind, "riding_academy_unknown_status", "an unrecognised status stays unknown");

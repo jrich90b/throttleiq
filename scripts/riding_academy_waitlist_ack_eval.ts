@@ -21,7 +21,10 @@ import assert from "node:assert/strict";
 import { decideRidingAcademyTurn } from "../services/api/src/domain/routeStateReducer.ts";
 import {
   isJumpStartExperienceRequestText,
-  readRidingAcademyRecordFields
+  readRidingAcademyRecordFields,
+  resolveRidingAcademyAdfLaneClaim,
+  buildAdfFirstTouchAck,
+  resolveEnrollmentAckExtras
 } from "../services/api/src/domain/ridingAcademy.ts";
 import { buildRidingAcademyWaitlistAck, buildJumpstartRegistrationInvite } from "../services/api/src/domain/agentVoice.ts";
 
@@ -124,6 +127,101 @@ const plain = buildRidingAcademyWaitlistAck("igor", "Alexandra", "American Harle
   startDate: fields.startDate
 });
 assert.ok(/wait list/i.test(plain) && !/jumpstart/i.test(plain), `no Jumpstart configured ⇒ no Jumpstart sentence: ${plain}`);
+
+// ---------------------------------------------------------------------------
+// AND IT HAS TO REACH A CUSTOMER (Joe, 2026-08-08: "build it").
+//
+// All of the above was true and none of it shipped. On LIVE intake the wait-list ack was not in the
+// set of kinds allowed to compose the reply, so a rider-course branch answered first and returned:
+// Maya Iversen (+15854782032, 8/06) and Andrei Kavalchuk (+15853170121, 8/07) both went on the wait
+// list and were told the course costs $321 — Andrei's actually SENT. The regen path had been
+// building this ack correctly the whole time.
+// ---------------------------------------------------------------------------
+// The same wait-list record, plus the payment field the live extras key off.
+const UNPAID_WAITLIST_RECORD = `${IGOR}-Payment Status: Failed`;
+const seatExtras = resolveEnrollmentAckExtras(
+  { policies: { firstTimeRider: { unpaidSeatPaymentMethods: "at the dealership or over the phone" } } },
+  UNPAID_WAITLIST_RECORD
+);
+assert.ok(
+  seatExtras.unpaidSeatLine.includes("paid yet"),
+  "the fixture must actually PRODUCE a settlement line, or the assertions below prove nothing"
+);
+
+const waitlistRow = (id: string) => ({
+  direction: "in",
+  provider: "sendgrid_adf",
+  providerMessageId: id,
+  body: `WEB LEAD (ADF)\nSource: Riding Academy - Wait List\n\nInquiry:\n${IGOR}`
+});
+const waitlistClaim = (over: Record<string, unknown> = {}) =>
+  resolveRidingAcademyAdfLaneClaim({
+    provider: "sendgrid_adf",
+    messages: [waitlistRow("adf_1")],
+    excludeProviderMessageId: "adf_1",
+    eventPromoKind: null,
+    leadSource: "Riding Academy - Wait List",
+    inquiry: IGOR,
+    ...over
+  });
+
+assert.equal(
+  waitlistClaim().liveReplyKind,
+  "riding_academy_waitlist_ack",
+  "a wait-list record OWNS the live reply — otherwise the course-price branch answers it first"
+);
+
+// The whole reply, composed the way live intake composes it — including the extras it passes.
+const liveWaitlistReply = buildAdfFirstTouchAck(waitlistClaim().liveReplyKind!, {
+  firstName: "Igor",
+  agentName: "Alexandra",
+  dealerName: "Dealer Motorcycles",
+  course: fields.course,
+  startDate: fields.startDate,
+  introduce: true,
+  // UNPAID on purpose. igor's real record carries no Payment Status at all, so extras.unpaidSeatLine
+  // would be "" and every "no payment talk" assertion below would pass with nothing to leak — the
+  // vacuous-fixture trap. This variant forces the line to EXIST so dropping it is what gets tested.
+  ...resolveEnrollmentAckExtras(
+    {
+      policies: {
+        firstTimeRider: {
+          riderCourseName: "Riding Academy course",
+          riderCoursePrice: "$321",
+          unpaidSeatPaymentMethods: "at the dealership or over the phone",
+          registrationNote: "Our Riding Academy Manager will send your e-course link."
+        }
+      }
+    },
+    UNPAID_WAITLIST_RECORD
+  )
+});
+assert.ok(!liveWaitlistReply.includes("$321"), "a wait-listed rider is never quoted the sign-up price");
+assert.ok(/wait list/i.test(liveWaitlistReply), "they are told plainly that they are on the wait list");
+// The extras are for a seat. He has not got one, so neither may reach him — the live path passes
+// them all in regardless, so this is the assertion that keeps that safe.
+assert.ok(
+  !/paid yet|take care of that/i.test(liveWaitlistReply),
+  "no seat means no payment talk — he is not being asked to settle something he does not have"
+);
+assert.ok(
+  !/e-course link/i.test(liveWaitlistReply),
+  "and no registration note either, which is written for somebody who is IN the class"
+);
+
+// The two kinds that must NOT have changed with it.
+assert.equal(
+  waitlistClaim({ inquiry: IGOR.replace("Wait List", "Cancelled"), leadSource: "Riding Academy - Cancelled" })
+    .liveReplyKind,
+  null,
+  "an unrecognised status still composes nothing — it raises a task and leaves the reply alone"
+);
+assert.equal(
+  waitlistClaim({ messages: [waitlistRow("adf_1"), { direction: "in", provider: "twilio", body: "hi" }] })
+    .liveReplyKind,
+  null,
+  "and once the customer has texted back, normal routing answers"
+);
 
 console.log("PASS riding academy waitlist ack eval — field labels are not a request, wait list is its own state, invite offered not attributed");
 console.log(`   reply: ${reply}`);

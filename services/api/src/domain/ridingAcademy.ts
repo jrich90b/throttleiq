@@ -103,13 +103,21 @@ export function isAdfFirstTouchRegen(input: {
 }
 
 /**
- * The three ack kinds that COMPOSE the whole reply on a live ADF first touch. `waitlist_ack` is
- * deliberately absent: the live intake path does not build it today (only regen does), so listing it
- * here would hand it a turn nobody answers. `unknown_status` is absent for the opposite reason — it
- * raises a task and deliberately leaves the reply exactly as it was.
+ * The ack kinds that COMPOSE the whole reply on a live ADF first touch.
+ *
+ * `waitlist_ack` JOINED THEM on 2026-08-08 (Joe: "build it"). It was held back for one deploy on the
+ * belief that the live path had no wait-list copy to build — untrue: `buildAdfFirstTouchAck` has
+ * always built it, and the regen path has always used it. So Maya Iversen (+15854782032) and Andrei
+ * Kavalchuk (+15853170121) went on the wait list and were told what a course COSTS. The copy itself
+ * is Joe's, ruled 2026-08-06 down to the promise it makes ("we'll follow up", never "I'll let you
+ * know the moment a seat opens" — nobody is watching that list).
+ *
+ * `unknown_status` stays out, and for a different reason: it raises a task and deliberately leaves
+ * the reply exactly as it was, so handing it the reply would be a behaviour change nobody approved.
  */
 const ACADEMY_KINDS_THAT_OWN_THE_LIVE_REPLY: ReadonlySet<AdfFirstTouchAckKind> = new Set([
   "riding_academy_enrollment_ack",
+  "riding_academy_waitlist_ack",
   "riding_academy_waitlist_to_enrolled_ack",
   "riding_academy_completion_ack"
 ]);
