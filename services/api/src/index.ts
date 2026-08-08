@@ -59104,9 +59104,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     dealerProfile,
     agentNameOverride: resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile)),
     needsEmpathy: regenAcceptedAffect?.needsEmpathy ?? null,
-    dispositionClosing:
-      (regenResponseControlAccepted && regenResponseControlParse?.intent === "not_interested") ||
-      isNotInterested(event.body ?? ""),
+    dispositionClosing: (regenResponseControlAccepted && regenResponseControlParse?.intent === "not_interested") || isNotInterested(event.body ?? ""),
     customerReceivedOutbound: hasCustomerReceivedOutbound(conv.messages)
   });
 
