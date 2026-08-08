@@ -137,7 +137,44 @@ export function hasOpenFutureDatedTodo(
  */
 export type HumanThreadNudgeComposeGate =
   | { compose: true }
-  | { compose: false; reason: "unroutable_phone" | "past_dated_anchor" };
+  | { compose: false; reason: "unroutable_phone" | "past_dated_anchor" | "nothing_to_continue" };
+
+/**
+ * The compliance footer is on almost every outbound and says nothing about the deal, so it must not
+ * count as substance. Matches the sentence `INITIAL_SMS_OPTOUT_FOOTER` adds and its common variants.
+ */
+const OPT_OUT_FOOTER_SENTENCE = /\b(?:reply\s+(?:stop|unsubscribe)|text\s+stop)\b[^.!?]*[.!?]?/gi;
+
+/**
+ * How much real text a thread must carry before a bump can "continue" it.
+ *
+ * 40 characters, and the number is picked from a GAP in the live data rather than taste. Measured
+ * 2026-08-08 over all 363 eligible threads, longest footer-stripped message in the last 8:
+ * **2 threads under 20 · 2 at 20-39 · ZERO at 40-59 · 7 at 60-99 · 352 at 100+** (p5 = 146).
+ * Every thread below the line is a signature or an opt-out and nothing else — "Scott Hartrich
+ * American H-D" (x2), a bare "STOP", and "stone from harley".
+ *
+ * That last one is why this exists. Dennis Kowalczyk (+17163459354): his entire thread was
+ * *"stone from harley Reply STOP to opt out."* — a rep announcing himself. With nothing to continue,
+ * the composer manufactured **"You still getting those messages or want me to stop them, Dennis?"**,
+ * inviting a customer to unsubscribe from a conversation that never happened.
+ *
+ * FAIL DIRECTION: too thin ⇒ NO bump. A missed nudge on a threadbare thread costs nothing — there
+ * was no thread to continue. Inventing one costs a customer.
+ */
+export const HUMAN_THREAD_NUDGE_MIN_ANCHOR_CHARS = 40;
+
+/** Is there enough real text in these anchors to continue? Footer and whitespace do not count. */
+export function anchorsHaveSomethingToContinue(anchors?: unknown): boolean {
+  const rows = Array.isArray(anchors) ? (anchors as any[]) : [];
+  return rows.some(
+    m =>
+      String(m?.body ?? "")
+        .replace(OPT_OUT_FOOTER_SENTENCE, " ")
+        .replace(/\s+/g, " ")
+        .trim().length >= HUMAN_THREAD_NUDGE_MIN_ANCHOR_CHARS
+  );
+}
 
 export function resolveHumanThreadNudgeComposeGate(input: {
   /** Already E.164-normalised by the caller; "" when the lead has no sendable number. */
@@ -152,6 +189,9 @@ export function resolveHumanThreadNudgeComposeGate(input: {
   );
   if (referencesPastDatedEvent(anchorBodies, { nowMs: input.nowMs })) {
     return { compose: false, reason: "past_dated_anchor" };
+  }
+  if (!anchorsHaveSomethingToContinue(input.anchors)) {
+    return { compose: false, reason: "nothing_to_continue" };
   }
   return { compose: true };
 }

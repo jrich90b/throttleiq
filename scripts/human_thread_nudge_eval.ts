@@ -29,7 +29,9 @@ import {
   HUMAN_THREAD_NUDGE_MAX_QUIET_DAYS_DEFAULT,
   resolveHumanThreadNudgeComposeGate,
   selectHumanThreadNudgeThread,
-  hasOpenFutureDatedTodo
+  hasOpenFutureDatedTodo,
+  anchorsHaveSomethingToContinue,
+  HUMAN_THREAD_NUDGE_MIN_ANCHOR_CHARS
 } from "../services/api/src/domain/humanThreadNudge.ts";
 
 const failures: string[] = [];
@@ -207,15 +209,18 @@ eq("duplicate_guard_present", /isRecentDuplicateOutbound\(conv, nudgeTo, nudgeMe
 
 // (a) What can be known WITHOUT paying — executed, not read.
 const COST_NOW = Date.parse("2026-08-08T12:00:00Z");
+// A substantive default thread: with `anchors: []` every case below would trip the "nothing to
+// continue" rule instead of the one it means to test.
+const REAL_ANCHOR = [{ body: "Looks like you were approved contingent, they just want proof of income before we go further." }];
 const gate = (over: Record<string, unknown> = {}) =>
-  resolveHumanThreadNudgeComposeGate({ toE164: "+17165551234", anchors: [], nowMs: COST_NOW, ...over });
+  resolveHumanThreadNudgeComposeGate({ toE164: "+17165551234", anchors: REAL_ANCHOR, nowMs: COST_NOW, ...over });
 
 eq("gate_clean_thread_composes", gate().compose, true);
 eq("gate_unroutable_phone_blocks", gate({ toE164: "7165551234" }).compose, false);
 eq("gate_unroutable_reason", (gate({ toE164: "" }) as any).reason, "unroutable_phone");
 eq("gate_missing_phone_blocks", gate({ toE164: null }).compose, false);
 // The Don Soto miss: the ANCHOR carried the stale date, not the bump. Known before composing.
-const staleAnchor = [{ body: "Come by for the Taste of Country pre-party on June 20th!" }];
+const staleAnchor = [{ body: "Come by for the Taste of Country pre-party on June 20th, food and demo rides all afternoon!" }];
 eq("gate_past_dated_anchor_blocks", gate({ anchors: staleAnchor }).compose, false);
 eq("gate_past_dated_reason", (gate({ anchors: staleAnchor }) as any).reason, "past_dated_anchor");
 // Any-of over the anchors, so splitting the old single call into anchors-here / composed-text-there
@@ -225,8 +230,54 @@ eq(
   gate({ anchors: [...staleAnchor, { body: "sounds good" }] }).compose,
   false
 );
-eq("gate_future_date_is_fine", gate({ anchors: [{ body: "see you December 24th, 2099" }] }).compose, true);
-eq("gate_junk_anchors_do_not_throw", gate({ anchors: "not-an-array" as never }).compose, true);
+eq(
+  "gate_future_date_is_fine",
+  gate({ anchors: [{ body: "Great — see you December 24th, 2099 for the test ride we talked about, bring your endorsement." }] })
+    .compose,
+  true
+);
+// Junk anchors must not throw — and now they BLOCK rather than compose, because an unreadable
+// thread is indistinguishable from no thread. Fail direction: silence.
+eq("gate_junk_anchors_do_not_throw", gate({ anchors: "not-an-array" as never }).compose, false);
+eq("gate_junk_anchors_reason", (gate({ anchors: "not-an-array" as never }) as any).reason, "nothing_to_continue");
+
+// (a2) A BUMP CONTINUES A CONVERSATION — so there has to be one (Dennis Kowalczyk +17163459354).
+// His entire thread was "stone from harley Reply STOP to opt out." — a rep announcing himself. With
+// nothing to continue, the composer manufactured "You still getting those messages or want me to
+// stop them, Dennis?", inviting a customer to unsubscribe from a conversation that never happened.
+const DENNIS_THREAD = [{ body: "stone from harley Reply STOP to opt out." }];
+eq("dennis_thread_has_nothing_to_continue", anchorsHaveSomethingToContinue(DENNIS_THREAD), false);
+eq("dennis_thread_blocks_the_compose", gate({ anchors: DENNIS_THREAD }).compose, false);
+eq("dennis_reason", (gate({ anchors: DENNIS_THREAD }) as any).reason, "nothing_to_continue");
+
+// The other three below the line in the live store, all correctly excluded.
+eq("bare_signature_is_not_a_conversation", anchorsHaveSomethingToContinue([{ body: "Scott Hartrich American H-D" }]), false);
+eq("bare_stop_is_not_a_conversation", anchorsHaveSomethingToContinue([{ body: "STOP" }]), false);
+eq("empty_thread_is_not_a_conversation", anchorsHaveSomethingToContinue([]), false);
+eq("junk_anchors_do_not_throw", anchorsHaveSomethingToContinue("nope" as never), false);
+
+// The footer must not COUNT as substance — otherwise every outbound clears the bar on boilerplate.
+const footerOnly = [{ body: "Reply STOP to opt out. Reply STOP to opt out. Reply STOP to opt out." }];
+eq("the_compliance_footer_is_not_substance", anchorsHaveSomethingToContinue(footerOnly), false);
+// ...but a real message still qualifies WITH the footer attached, which is how they actually arrive.
+eq(
+  "a_real_message_with_a_footer_still_qualifies",
+  anchorsHaveSomethingToContinue([
+    { body: "Looks like you were approved contingent, they just want proof of income. Reply STOP to opt out." }
+  ]),
+  true
+);
+// One substantive message anywhere in the thread is enough — it need not be the last.
+eq(
+  "one_substantive_message_anywhere_is_enough",
+  anchorsHaveSomethingToContinue([{ body: "We will probably ask $21,495 for the 2019 Road Glide you asked about" }, { body: "ok" }]),
+  true
+);
+// The threshold is picked from a GAP in the live data (2026-08-08: zero threads at 40-59 chars,
+// 352 at 100+, p5 = 146). Moving it is a data decision, so the number is pinned.
+eq("threshold_is_the_measured_forty", HUMAN_THREAD_NUDGE_MIN_ANCHOR_CHARS, 40);
+eq("just_under_the_bar_is_blocked", anchorsHaveSomethingToContinue([{ body: "x".repeat(39) }]), false);
+eq("exactly_the_bar_qualifies", anchorsHaveSomethingToContinue([{ body: "x".repeat(40) }]), true);
 
 // (b) The thread a bump is written FROM excludes rows the customer never received.
 const picked = selectHumanThreadNudgeThread([
