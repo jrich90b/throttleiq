@@ -37,7 +37,11 @@ const prePassSplit =
   preBlock.includes('stopFollowUpCadence(conv, "manual_handoff")');
 
 // --- terminal ack branch: prequal starts the standard cadence; credit app keeps the handoff ---
-const termStart = route.indexOf("let ack = isPrequalLead");
+// Anchored on the ack ASSIGNMENT, whatever builds it. It used to be an inline six-variant ternary
+// ("let ack = isPrequalLead ? ..."); on 2026-08-08 that copy moved into the shared
+// buildFinanceSubmissionAck so the live and regenerate lanes cannot drift. The routing behaviour
+// below is what this eval exists to pin, and none of it moved — but the anchor had to.
+const termStart = route.indexOf("let ack = buildFinanceSubmissionAck");
 const termBlock = termStart >= 0 ? route.slice(termStart, termStart + 3200) : "";
 const prequalStartsCadence =
   termBlock.includes("if (isPrequalLead) {") &&
@@ -55,7 +59,21 @@ const creditAppKeepsHandoff =
   /\} else \{\s*\n\s*addTodo\(conv, "approval", event\.body \?\? "Credit application", event\.providerMessageId\);\s*\n\s*setFollowUpMode\(conv, "manual_handoff", "credit_app"\);\s*\n\s*stopFollowUpCadence\(conv, "manual_handoff"\);/.test(
     termBlock
   );
-const prequalAckUnchanged = termBlock.includes("received your pre-qualification submission");
+// The prequal ack still SAYS it is a pre-qualification (Joe's ruling is that a prequal keeps its own
+// routing identity, and the copy is how the customer sees that). Executed against the builder rather
+// than grepped out of the route file — the copy lives in the shared builder now, and calling it also
+// proves the branch that produces it still exists.
+const { buildFinanceSubmissionAck } = await import("../services/api/src/domain/workflowRegressionGuards.ts");
+const prequalAck = buildFinanceSubmissionAck({ kind: "prequal", introduce: true, firstName: "Dylan", when: "shortly" });
+const creditAck = buildFinanceSubmissionAck({ kind: "credit_app", introduce: true, firstName: "Dylan", when: "shortly" });
+const prequalAckUnchanged =
+  prequalAck.includes("received your pre-qualification submission") &&
+  !prequalAck.includes("credit application") &&
+  creditAck.includes("received your credit application") &&
+  !creditAck.includes("pre-qualification");
+// ...and the route file still calls that builder with the prequal/credit split intact, so the two
+// cannot silently collapse into one ack.
+const routeSplitsPrequalFromCreditApp = termBlock.includes('kind: isPrequalLead ? "prequal" : "credit_app"');
 
 const checks: Check[] = [
   check("payments_handoff_dialog_state_is_credit_app_only", dialogStateCreditOnly, true),
@@ -63,7 +81,8 @@ const checks: Check[] = [
   check("prequal_terminal_branch_starts_standard_cadence", prequalStartsCadence, true),
   check("prequal_terminal_branch_has_no_approval_todo_or_handoff", prequalSkipsApprovalTodoAndHandoff, true),
   check("real_credit_app_keeps_full_handoff_treatment", creditAppKeepsHandoff, true),
-  check("prequal_ack_copy_unchanged", prequalAckUnchanged, true)
+  check("prequal_ack_copy_unchanged", prequalAckUnchanged, true),
+  check("route_still_splits_prequal_from_credit_app", routeSplitsPrequalFromCreditApp, true)
 ];
 
 const failures = checks.filter(c => JSON.stringify(c.actual) !== JSON.stringify(c.expected));

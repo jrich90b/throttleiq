@@ -71,8 +71,10 @@ import {
   isBusinessHoursQuestionText,
   isStockNumberInventoryInterestText,
   buildHiringManagerInquiryReply,
-  buildTakeOffMilwaukeeEightEngineReply
+  buildTakeOffMilwaukeeEightEngineReply,
+  buildFinanceAckVisitQuestion
 } from "./workflowRegressionGuards.js";
+import { advanceEveryReplySuppressed } from "./draftChannelRules.js";
 import { getSchedulerConfig, dayKey, getPreferredSalespeople } from "./schedulerConfig.js";
 import { getAuthedCalendarClient, queryFreeBusy } from "./googleCalendar.js";
 import {
@@ -2617,7 +2619,15 @@ export async function orchestrateInbound(
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const bikeLabel = `${yearLabel}${modelLabel}`.trim() || "the bike";
     const isPrequalSubmission = financeSubmissionType === "prequal";
-    const draft = isPrequalSubmission
+    // Charter C1.7 — this ack ends with one advancing question, unless the same referee the composer
+    // uses says not to push. The copy already names the bike, so the advancing move is the visit.
+    const advanceTail = advanceEveryReplySuppressed({
+      alreadyPurchased: !!ctx?.sale,
+      appointment: ctx?.appointment
+    })
+      ? ""
+      : ` ${buildFinanceAckVisitQuestion()}`;
+    const draftBody = isPrequalSubmission
       ? hasPriorOutbound
         ? `Perfect, thanks ${leadFirst} — we just saw your pre-qualification submission come through for ${bikeLabel}. ` +
           "Our business manager will review it and follow up shortly to go over options and next steps."
@@ -2630,6 +2640,7 @@ export async function orchestrateInbound(
         : `Hi ${leadFirst} — thanks for your interest in the ${bikeLabel}. ` +
           `This is ${agentName} at ${dealerName}. We received your online credit application. ` +
           "I’ll have our business manager follow up to go over your options.";
+    const draft = `${draftBody}${advanceTail}`;
     return finalize({
       intent: "FINANCING",
       stage: "ENGAGED",

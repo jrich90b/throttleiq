@@ -239,7 +239,8 @@ import {
   shouldSuppressInitialAvailabilityLineAppend,
   shouldSuppressInitialInventoryPhotoAppend,
   shouldTreatAdfAsWalkInContext,
-  hasAdfFinanceApplicationContext
+  hasAdfFinanceApplicationContext,
+  buildFinanceSubmissionAck
 } from "../domain/workflowRegressionGuards.js";
 
 function isAdfConversationStateParserAccepted(parsed: ConversationStateParse | null): boolean {
@@ -7202,17 +7203,17 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     // killian #11649 + Roger McCleskey #11650 both arrived ~4:45pm Saturday, past the 3pm close, and
     // staff deleted "shortly" from both before sending). Resolve the real next-open time instead.
     const when = await resolveStaffFollowUpTimingPhrase();
-    let ack = isPrequalLead
-      ? shouldIntroduceOnAdf
-        ? `Thanks — I received your pre-qualification submission. I’ll have our finance team reach out ${when} to review options.`
-        : firstName
-          ? `Thanks ${firstName} — we just received your pre-qualification submission. Our finance team will reach out ${when} to review options and next steps.`
-          : `Thanks — we just received your pre-qualification submission. Our finance team will reach out ${when} to review options and next steps.`
-      : shouldIntroduceOnAdf
-        ? `Thanks — I received your credit application. I’ll have our finance team reach out ${when}.`
-        : firstName
-          ? `Thanks ${firstName} — we just received your online credit application. Our finance team will reach out ${when} to go over options.`
-          : `Thanks — we just received your online credit application. Our finance team will reach out ${when} to go over options.`;
+    // ONE builder, shared with the regenerate lane (index.ts), so the two paths can't drift. It also
+    // carries the charter-C1.7 advancing question: these are first-touch messages on the warmest
+    // traffic we get, and they used to close on "we'll get back to you".
+    let ack = buildFinanceSubmissionAck({
+      kind: isPrequalLead ? "prequal" : "credit_app",
+      introduce: shouldIntroduceOnAdf,
+      firstName,
+      when,
+      bikeLabel: conv.lead?.vehicle?.model ?? null,
+      suppression: { appointment: conv.appointment, alreadyPurchased: !!conv.sale }
+    });
     if (shouldIntroduceOnAdf) {
       ack = await applyInitialAdfPrefix(ack);
     }
