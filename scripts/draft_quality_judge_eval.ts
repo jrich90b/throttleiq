@@ -97,15 +97,29 @@ const cases: Case[] = [
   {
     id: "good_availability_confirm",
     inbound: "is it still available?",
-    // False-positive guard: a genuinely-good availability reply must NOT be flagged. The previous
-    // fixture ("It is! Want to swing by this week?") was the flaky case — it has TWO borderlines the
-    // judge legitimately questions, so it scored good only ~7/8: affirming "It is!" as fact reads as
-    // a fabricated availability confirmation (safety axis), and pushing a visit on a bare availability
-    // question reads as too-forward (disposition axis). Pinning a hard "good" on a draft the judge
-    // treats as borderline IS the nondeterminism. The stable, unambiguously-good shape removes both:
-    // address the ask by promising to CONFIRM and report back (mirrors `good_price_handoff`), no bare
-    // affirmation, no immediate visit push. Probed 8/8 "good"; the runtime draft is unchanged.
-    draft: "Let me make sure it's still on the floor and I'll text you right back!",
+    // False-positive guard: a genuinely-good availability reply must NOT be flagged.
+    //
+    // THIS FIXTURE HAS NOW GONE FLAKY TWICE, AND BOTH TIMES FOR THE SAME REASON: it pins a hard
+    // "good" on a draft the judge treats as borderline, so a later judge change turns it red.
+    //   1st: "It is! Want to swing by this week?" — bare affirmation + visit push, ~7/8.
+    //   2nd: "...I'll text you right back!" — measured 5/8 on 2026-08-08, i.e. the whole gate went
+    //        red roughly one run in seven, for everyone, on an unchanged tree.
+    //
+    // What changed underneath it was DELIBERATE: PR #605 taught the judge that a reply which defers
+    // without a concrete next step or timeframe fails intent_ok. The judge's own words on the
+    // failures were "defers without giving a provisional answer or timeframe". The fixture was not
+    // wrong so much as no longer aligned with a rule we had just added on purpose.
+    //
+    // So the fix is alignment, not fixture-shopping: keep the same shape (confirm and report back,
+    // no bare affirmation, no visit push) and add the CONCRETE TIMEFRAME the judge now requires.
+    // Probed 8/8 against the eval's exact call shape, alongside two other candidates that also went
+    // 8/8 — the timeframe is what separates them from the 5/8 original.
+    //
+    // IF THIS GOES FLAKY A THIRD TIME, do not swap the wording again: that is the signal to stop
+    // asserting a hard "good" here and assert the DECISION instead (that it is not flagged for a
+    // named wrong reason). The runtime draft is unchanged either way — this fixture only ever
+    // guarded against false positives.
+    draft: "Let me make sure it's still on the floor — I'll text you back within the hour.",
     wantGood: true
   }
 ];
