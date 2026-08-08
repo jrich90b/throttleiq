@@ -6895,6 +6895,15 @@ export function decideCadenceLifecycle(input: CadenceLifecycleInput): CadenceLif
  * A family-only label ("trike models", "a Sportster") never mints a watch on the parser arm —
  * we would be guessing which bike, so we ask (Joe ruling 2026-07-11 #4). The explicit arm keeps
  * its existing pending-clarify path for that case downstream.
+ *
+ * AND the parser arm asks the INVENTORY, not just the note. Mike Wolf (+17164323990, 2026-08-07)
+ * walked in to look at a new Deadwood; the note never says whether we have one, the parser answered
+ * `wantIsSatisfiableFromNote: false` — which is literally true of the NOTE — and the arm armed a
+ * watch and told him "I'll keep an eye out for new FLHD Deadwood and let you know if one comes in"
+ * about a bike on our own floor. Silence in the note is not evidence of an empty floor, so when the
+ * model is in stock right now the parser arm stands down. Fail direction: no watch and no promise
+ * to text — the safe side, and the KEEP arm is untouched, so a customer who literally asked to be
+ * notified still gets the watch whatever the floor holds.
  */
 export type WalkInInventoryWatchInput = {
   /** A literal notify verb was found in the note. The KEEP arm — wins on its own. */
@@ -6919,6 +6928,12 @@ export type WalkInInventoryWatchInput = {
   modelLabel?: string | null;
   /** The label names a family, not a model ("trike", "Sportster") — ask rather than guess. */
   familyOnlyModel?: boolean | null;
+  /**
+   * We have at least one of this model in stock RIGHT NOW (the lane's own feed lookup). True vetoes
+   * the parser arm — you cannot have an unmet open search for a bike we can show you today. Null or
+   * undefined means the lookup never ran or failed, which must read as "unknown", never as "empty".
+   */
+  modelInStockNow?: boolean | null;
   /** Accepted walk-in outcome state; a deal in motion is not a shopping list. */
   walkInState?: string | null;
 };
@@ -6959,6 +6974,8 @@ export function decideWalkInInventoryWatchTurn(
   const parserArmWouldWatch =
     want === "open_search" &&
     input.wantSatisfiableFromNote !== true &&
+    // Mike Wolf: the note is silent, the floor is not. Only a POSITIVE in-stock answer vetoes.
+    input.modelInStockNow !== true &&
     confidence !== null &&
     confidence >= floor &&
     !!String(input.modelLabel ?? "").trim() &&
@@ -6997,7 +7014,9 @@ export function decideWalkInInventoryWatchTurn(
     why: parserArmWouldWatch
       ? "want parser would watch, but the flag is off — shadow only, today's behavior stands"
       : want === "open_search"
-        ? "open search, but it did not clear the guards (confidence / model / family-only / deal in motion / already ours)"
+        ? input.modelInStockNow === true
+          ? `open search for "${String(input.modelLabel ?? "").trim()}", but we have one in stock right now — nothing to watch for`
+          : "open search, but it did not clear the guards (confidence / model / family-only / deal in motion / already ours)"
         : `no watchable want (${want || "unclassified"}) and no explicit notify verb`
   };
 }

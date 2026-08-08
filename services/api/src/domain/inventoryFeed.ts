@@ -334,6 +334,42 @@ export function normalizeModel(s: string): string {
   return raw;
 }
 
+/**
+ * Harley platform codes — the factory designation ("FLHX", "FLTRXS", "FXBB", "XL1200C") for a bike
+ * the inventory feed lists by NAME ("Street Glide"). Anchored to the real platform prefixes rather
+ * than "any short uppercase token" so a trim word can never be eaten.
+ */
+const HARLEY_MODEL_CODE_TOKEN = /^(?:fl|fx|xl|rh|vrsc|xg)[a-z0-9]{1,6}$/;
+
+/**
+ * A lead's model label with a LEADING platform code dropped — "" when there is nothing to drop.
+ *
+ * ADF leads routinely arrive as CODE + NAME ("FLHD Deadwood", "FLHX Street Glide"), because that is
+ * how the dealer's DMS writes them. `modelMatches` is deliberately directional (a trim-specific ask
+ * must never collapse to its base family), so the feed's "Deadwood" does not contain "flhd deadwood"
+ * and such a lead matches NOTHING — we tell the customer we have none of a bike sitting on the floor.
+ *
+ * MEASURED against the live americanharley store + feed 2026-08-08: of 189 distinct lead/watch model
+ * labels, 12 matched ZERO in-stock units and matched real ones the moment the leading code was
+ * dropped — "FLHX Street Glide" -> 9 units, "FLTRX Road Glide" -> 17, "FLHD Deadwood" -> 1 — across
+ * 29 lead/watch references.
+ *
+ * Two deliberate limits keep this from widening into a guess:
+ *  - LEADING token only. Every one of the 12 carries the code first; the long DMS descriptions that
+ *    bury a code mid-string ("Street Glide 2024 FLHX U902-24 Vivid Black") gain nothing from it.
+ *  - A model NAME must survive. "Fxdr 114" is a model whose name IS the code, and stripping it would
+ *    leave the bare displacement "114" — free to match any 114 in the feed. No surviving alphabetic
+ *    word => refuse.
+ */
+export function stripLeadingHarleyModelCode(modelRaw: string | undefined | null): string {
+  const tokens = normalizeModel(String(modelRaw ?? "")).split(" ").filter(Boolean);
+  if (tokens.length < 2) return "";
+  if (!HARLEY_MODEL_CODE_TOKEN.test(tokens[0])) return "";
+  const rest = tokens.slice(1);
+  if (!rest.some(token => /[a-z]/.test(token))) return "";
+  return rest.join(" ");
+}
+
 export function modelMatches(candidateRaw: string | undefined, targetRaw: string): boolean {
   if (!candidateRaw) return false;
   const candidate = normalizeModel(candidateRaw);
@@ -346,7 +382,13 @@ export function modelMatches(candidateRaw: string | undefined, targetRaw: string
   if (candidate === target) return true;
   // Keep matching directional so trim-specific asks do not collapse to base families:
   // target="street glide limited" should NOT match candidate="street glide".
-  return candidate.includes(target);
+  if (candidate.includes(target)) return true;
+  // Last: the same ask with the DMS platform code dropped. The stripped label carries no leading
+  // code, so this recurses exactly once, and every guard above (CVO, directionality) re-applies to
+  // it unchanged — dropping "FLHXSE" still leaves "cvo street glide".
+  const targetWithoutCode = stripLeadingHarleyModelCode(targetRaw);
+  if (!targetWithoutCode || targetWithoutCode === target) return false;
+  return modelMatches(candidateRaw, targetWithoutCode);
 }
 
 // Suffix tokens that denote a DISTINCT Harley model, not a trim/color of a base
