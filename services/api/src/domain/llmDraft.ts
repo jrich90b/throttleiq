@@ -341,9 +341,10 @@ export type DraftContext = {
   // A deterministic backstop (hardshipEmpathyAck.ts) also prepends an acknowledgment at finalize.
   needsEmpathy?: boolean | null;
 
-  // The customer is CLOSING this lead out this turn (response-control read "not interested"). The
-  // salesperson arm must not ask them anything — see advanceEveryReplySuppressed.
+  // Turns the salesperson arm must never see — closing the lead out, and already bought.
+  // Why each, with the measured over-fire, is in advanceEveryReplySuppressed.
   dispositionClosing?: boolean | null;
+  alreadyPurchased?: boolean | null;
 
   // Inventory verification inputs (optional)
   stockId?: string | null;
