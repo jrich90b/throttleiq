@@ -44,11 +44,25 @@ assert.equal(exceedsSmsBrevityBudget(short, { maxSentences: 1 }), true, "stricte
 
 // --- 2) Source guard: the generator prompt carries the brevity directive + the shadow hook. ---
 const llm = fs.readFileSync("services/api/src/domain/llmDraft.ts", "utf8");
+// The channel-rule block moved to its own module so llmDraft.ts could stay under its size ceiling.
+// Read the rule pins from where the rules actually are.
+const rules = fs.readFileSync("services/api/src/domain/draftChannelRules.ts", "utf8");
 assert.match(llm, /export function exceedsSmsBrevityBudget/, "the brevity helper must be exported");
-assert.match(llm, /SMS RULES \(strict\):/, "the SMS rules block must exist");
-assert.match(llm, /BE BRIEF\./, "the SMS rules must carry the strengthened brevity directive");
-assert.match(llm, /Answer ONLY what the customer/, "the rules must scope the reply to the actual ask");
-assert.match(llm, /At most ONE question per message/, "the rules must cap questions");
+assert.match(rules, /SMS RULES \(strict\):/, "the SMS rules block must exist");
+assert.match(rules, /BE BRIEF\./, "the SMS rules must carry the strengthened brevity directive");
+assert.match(rules, /Answer ONLY what the customer/, "the rules must scope the reply to the actual ask");
+assert.match(rules, /At most ONE question per message/, "the rules must cap questions");
+// BOTH arms must stay brief. The salesperson arm (DRAFT_ADVANCE_EVERY_REPLY, Joe 2026-08-07) has
+// its own wording, so pinning only the legacy phrasing would let flipping the flag silently drop
+// the guarantee this eval exists to protect — verbosity was staff's #1 complaint.
+assert.ok(
+  rules.includes("Be brief and warm"),
+  "the salesperson arm must carry its own brevity directive — advancing is not a licence to pile on"
+);
+assert.ok(
+  rules.includes("1-3 short"),
+  "the salesperson arm must bound its length, like the legacy arm does"
+);
 assert.match(llm, /\[draft-brevity-shadow\]/, "the brevity shadow signal must be wired");
 assert.match(llm, /DRAFT_BREVITY_SHADOW/, "the shadow signal must have a kill switch");
 
