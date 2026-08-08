@@ -39,7 +39,10 @@ import { decideRidingAcademyTurn } from "../services/api/src/domain/routeStateRe
 import { buildRidingAcademyEnrollmentAck } from "../services/api/src/domain/agentVoice.ts";
 import {
   resolveEnrollmentJumpstartInvite,
-  resolveEnrollmentAckExtras
+  resolveEnrollmentAckExtras,
+  resolveRidingAcademyAdfLaneClaim,
+  buildAdfFirstTouchAck,
+  readRidingAcademyRecordFields
 } from "../services/api/src/domain/ridingAcademy.ts";
 import { resolveInitialAdfCadencePlan } from "../services/api/src/domain/conversationStore.ts";
 
@@ -280,15 +283,33 @@ const store = fs.readFileSync("services/api/src/domain/conversationStore.ts", "u
 // now opens on `isAdfFirstTouchRegen` — "has the CUSTOMER replied yet" — which is the guard the
 // comment always described and the one the regen path already used, so this also closes a two-path
 // drift. Full behaviour pinned by scripts/riding_academy_status_lane_eval.ts.
+//
+// RE-PINNED AGAIN 2026-08-08. The two assertions here pinned the inline call shape
+// `decideRidingAcademyTurn({ leadSource: …, inquiry: … })` in this file. The live path now reaches
+// that reducer through the shared resolver instead — the same one regen uses — so both pins went
+// stale describing code that had legitimately moved. Same trap as the 4,000-character window in
+// jumpstart_invite:eval: a pin on WHERE code sits cannot survive the code sitting somewhere better.
+// What matters is that live intake feeds the resolver BOTH structured fields and nothing else, which
+// is asserted on the call itself; the decision's own shape is asserted in domain/ridingAcademy.ts
+// below, and the resulting BEHAVIOUR is executed further down.
+const liveClaimCall = sendgrid.slice(
+  sendgrid.indexOf("const academyAdfClaim = resolveRidingAcademyAdfLaneClaim({"),
+  // The GUARDED branch specifically — `if (initialAdfRiderCourseDecision` alone first matches an
+  // unrelated line ~3,700 lines earlier and slices an empty string, which passes nothing.
+  sendgrid.indexOf("if (initialAdfRiderCourseDecision && !academyAdfClaim.liveReplyKind) {")
+);
+assert.ok(liveClaimCall.length > 0, "the claim must be resolved before the branch it guards");
 assert.ok(
-  /decideRidingAcademyTurn\(\{\s*leadSource: conv\.lead\?\.source,\s*inquiry: effectiveInquiry,/.test(sendgrid),
-  "live intake must decide from the lead source AND the enrollment record, by exact call shape"
+  liveClaimCall.includes("leadSource: conv.lead?.source,") && liveClaimCall.includes("inquiry: effectiveInquiry"),
+  "live intake must decide from the lead source AND the enrollment record"
 );
 assert.ok(
-  /const ridingAcademyLaneOpen =\s*\n\s*isAdfFirstTouchRegen\(/.test(sendgrid) &&
-    /ridingAcademyTurn\.kind === "riding_academy_enrollment_ack"/.test(sendgrid) &&
-    /draft = buildAdfFirstTouchAck\(ridingAcademyTurn\.kind,/.test(sendgrid),
-  "live intake must override the draft with the enrollment ack, gated on the customer not having replied"
+  liveClaimCall.includes("excludeProviderMessageId: event.providerMessageId"),
+  "and must exclude the record being answered, or a second record reads its own status as the prior one"
+);
+assert.ok(
+  sendgrid.includes("draft = buildAdfFirstTouchAck(academyAdfClaim.liveReplyKind,"),
+  "live intake must override the draft with the ack from that same claim"
 );
 // Regen twin: same decision, gated to an ADF first touch with no customer SMS reply yet. The gate
 // and the reply choice live in domain/ridingAcademy.ts (the source-size ratchet keeps new logic out
@@ -334,16 +355,152 @@ assert.ok(
 // Both paths must reach the ONE reducer: the live lane calls it directly, the regen lane through
 // the shared resolver. Neither may grow a second copy of the enrollment test.
 const callSites = (src: string) => src.split("decideRidingAcademyTurn({").length - 1;
+// The live path used to call the reducer inline. It now reaches it through the SAME shared resolver
+// the regen path uses (resolveRidingAcademyAdfLaneClaim), which is what makes the two paths unable
+// to disagree — so zero direct call sites here is the correct number, not a missing one.
 assert.equal(
   callSites(sendgrid),
+  0,
+  "the live path must reach the reducer through domain/ridingAcademy.ts, not an inline copy"
+);
+assert.equal(
+  sendgrid.split("resolveRidingAcademyAdfLaneClaim({").length - 1,
   1,
-  "the live path must call decideRidingAcademyTurn exactly once — no second inline copy"
+  "and it must resolve the academy claim exactly ONCE per turn — two calls is how the guard and the reply drift"
 );
 assert.ok(
   callSites(index) === 0 && /from "\.\/domain\/ridingAcademy\.js"/.test(index),
   "the regen path must reach the reducer through domain/ridingAcademy.ts, not re-implement the test"
 );
 assert.equal(callSites(adfFirstTouch), 1, "the shared resolver must call decideRidingAcademyTurn exactly once");
+
+// ---------------------------------------------------------------------------
+// THE COURSE-PRICE BRANCH MUST NOT OUTRANK AN ENROLLMENT (Ulises HernandezPerez +17167857284,
+// 2026-08-08). His registration — payment FAILED — was answered with "Thanks for asking about our
+// Riding Academy course. The current price is $321." Five of the six riding-academy leads we have
+// ever had got that same sign-up pitch, because the live intake path answers a rider-course
+// question and RETURNS ~960 lines before the academy ack is composed. Executed here, not grepped.
+// ---------------------------------------------------------------------------
+const ULISES_RECORD =
+  "Enrollment Status: Enrolled-Course: New Rider Course - eCourse + Range-Class Start Date: 8/22/2026-" +
+  "Gender: Male-Motivation: Obtain a license-Motorcycle Riding History: I have operated an on-road " +
+  "motorcycle within the last 12 months-Training Experience: Yes, Other Program-Payment Status: Failed-" +
+  "Future Motorcycle Purchase Expectation: Yes in 3-12 months-Accepted Terms and Conditions: true";
+const adfRow = (body: string, id = "adf_1") => ({
+  direction: "in",
+  provider: "sendgrid_adf",
+  providerMessageId: id,
+  body: `WEB LEAD (ADF)\nSource: Riding Academy - Enrolled\n\nInquiry:\n${body}`
+});
+const claim = (over: Record<string, unknown> = {}) =>
+  resolveRidingAcademyAdfLaneClaim({
+    provider: "sendgrid_adf",
+    messages: [adfRow(ULISES_RECORD)],
+    excludeProviderMessageId: "adf_1",
+    eventPromoKind: null,
+    leadSource: "Riding Academy - Enrolled",
+    inquiry: ULISES_RECORD,
+    ...over
+  });
+
+const enrolled = claim();
+assert.equal(
+  enrolled.liveReplyKind,
+  "riding_academy_enrollment_ack",
+  "an Enrolled record OWNS the live reply — the course-price branch must not answer it"
+);
+
+// Joe, 2026-08-08: "Tell them how to settle it." A seat the school marked unpaid must carry the
+// dealer's own settlement wording — and it must come from the profile, never invented here.
+const settlementProfile = {
+  policies: {
+    firstTimeRider: {
+      riderCourseName: "Riding Academy course",
+      riderCoursePrice: "$321",
+      unpaidSeatPaymentMethods: "at the dealership or over the phone"
+    }
+  }
+};
+const enrolledReply = buildAdfFirstTouchAck(enrolled.liveReplyKind!, {
+  firstName: "Ulises",
+  agentName: "Alexandra",
+  dealerName: "Dealer Motorcycles",
+  course: readRidingAcademyRecordFields(ULISES_RECORD).course,
+  startDate: readRidingAcademyRecordFields(ULISES_RECORD).startDate,
+  introduce: true,
+  ...resolveEnrollmentAckExtras(settlementProfile, ULISES_RECORD)
+});
+assert.ok(
+  enrolledReply.includes("isn't showing as paid yet"),
+  "an unpaid seat is flagged to the student (Joe, 2026-08-08)"
+);
+assert.ok(
+  enrolledReply.includes("at the dealership or over the phone"),
+  "and settled the way the DEALER PROFILE says, never a method this code made up"
+);
+assert.ok(
+  !enrolledReply.includes("$321") && !enrolledReply.includes("best place to start"),
+  "and it still never quotes the sign-up price at somebody already enrolled"
+);
+// A paid seat says nothing about money at all.
+const paidRecord = ULISES_RECORD.replace("Payment Status: Failed", "Payment Status: Paid");
+assert.ok(
+  !buildAdfFirstTouchAck("riding_academy_enrollment_ack", {
+    firstName: "Ulises",
+    agentName: "Alexandra",
+    dealerName: "Dealer Motorcycles",
+    introduce: true,
+    ...resolveEnrollmentAckExtras(settlementProfile, paidRecord)
+  }).includes("paid yet"),
+  "a settled seat is never told about payment"
+);
+// A dealer who has not written a settlement method never has words put in its mouth.
+assert.ok(
+  !buildAdfFirstTouchAck("riding_academy_enrollment_ack", {
+    firstName: "Ulises",
+    agentName: "Alexandra",
+    dealerName: "Dealer Motorcycles",
+    introduce: true,
+    ...resolveEnrollmentAckExtras({ policies: { firstTimeRider: {} } }, ULISES_RECORD)
+  }).includes("paid yet"),
+  "portability: with no settlement method configured the agent raises payment not at all"
+);
+
+// Everything the claim must NOT take over — each one keeps today's behaviour exactly.
+assert.equal(
+  claim({ inquiry: ULISES_RECORD.replace("Enrolled-Course", "Wait List-Course"), leadSource: "Riding Academy - Wait List" })
+    .liveReplyKind,
+  null,
+  "a Wait List record does not own the live reply — the live path has no waitlist copy to build"
+);
+const cancelled = claim({ inquiry: ULISES_RECORD.replace("Enrolled-Course", "Cancelled-Course") });
+assert.equal(cancelled.kind, "riding_academy_unknown_status", "an unrecognised status stays unknown");
+assert.equal(cancelled.liveReplyKind, null, "and composes no reply — it only raises a task");
+assert.equal(cancelled.laneOpen, true, "but the lane is still OPEN, so that task is still raised");
+assert.equal(
+  claim({ messages: [adfRow(ULISES_RECORD), { direction: "in", provider: "twilio", body: "how much?" }] }).liveReplyKind,
+  null,
+  "once the CUSTOMER has texted back, normal routing answers — this is a first-touch lane only"
+);
+assert.equal(claim({ eventPromoKind: "event_promo_ack" }).liveReplyKind, null, "event_promo still outranks");
+assert.equal(claim({ provider: "twilio" }).liveReplyKind, null, "a non-ADF event is not a first touch");
+assert.equal(
+  claim({ leadSource: "Room58 - Book test ride", inquiry: "Test ride request for Road Glide." }).liveReplyKind,
+  null,
+  "an ordinary sales ADF is untouched"
+);
+
+// THE ORDERING. The claim has to be resolved BEFORE the rider-course branch that returns, and that
+// branch has to be guarded on it — otherwise the reply above is composed and never reached.
+const claimIdx = sendgrid.indexOf("const academyAdfClaim = resolveRidingAcademyAdfLaneClaim({");
+const courseBranchIdx = sendgrid.indexOf("if (initialAdfRiderCourseDecision && !academyAdfClaim.liveReplyKind) {");
+assert.ok(claimIdx > 0, "the live path resolves the academy claim");
+assert.ok(courseBranchIdx > 0, "and the rider-course branch is guarded on it");
+assert.ok(claimIdx < courseBranchIdx, "the claim must be resolved BEFORE the branch that returns");
+assert.ok(
+  sendgrid.indexOf("if (academyAdfClaim.liveReplyKind) {") > courseBranchIdx,
+  "and the ack itself is still composed downstream, from the SAME claim object"
+);
 
 const ackCount = rows.filter(r => r.ack).length;
 console.log(
