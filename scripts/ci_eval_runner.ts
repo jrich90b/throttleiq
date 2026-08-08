@@ -50,25 +50,48 @@ import { parseCiEvalChain } from "./ci_eval_chain.ts";
 /**
  * Entries that must run ALONE, with everything before them finished first.
  *
- * MEASURED, not guessed. `--audit-writes` runs the whole chain sequentially and records, for every
- * entry, which files under the shared trees (`reports/`, `data/`) it created or modified. An entry
- * belongs here when it touches shared state that another entry also touches — that is the only way
- * two independent processes can interfere.
+ * MEASURED, not guessed. `--audit-writes` ran the whole chain sequentially on 2026-08-08 and
+ * recorded, for every one of the 457 entries, which files under the shared trees (`reports/`,
+ * `data/`) it created or modified. Nine distinct files were touched. Seven of them have exactly
+ * ONE owner, so no other process can interfere with them. Two are shared:
  *
- * Things that turned out NOT to need it, each checked by reading the code:
+ *   - **`data/conversations.json` — 7 entries** (the seven below). A shared JSON store that each
+ *     one reads, modifies and writes back. Two of those overlapping is a genuine lost update, and
+ *     a reader could see a half-written file. THIS is what the list is for. All seven finish in
+ *     under 1.2s, so the barriers cost ~nothing.
+ *
+ *   - **`data/openai_usage/2026-08.jsonl` — 49 entries.** Deliberately NOT here. It is an
+ *     append-only accounting ledger: `openaiUsageLogger.ts` writes one line per API call with
+ *     `fs.appendFileSync` (O_APPEND, so the offset update is atomic) and swallows every error by
+ *     design — "usage logging is accounting support only; never block customer workflows".
+ *     Nothing in the chain reads it: `openai_usage_pricing:eval` asserts on the logger's SOURCE,
+ *     not on its output. Concurrent appends therefore cannot change any eval's verdict.
+ *
+ * Things that also turned out NOT to need it, each checked by reading the code:
  *   - `worker_dispatch:eval` binds a port, but `server.listen(0)` takes an ephemeral one.
  *   - The report-writing audits (`answer_correctness`, `context_fidelity`, `intent_handled`,
  *     `compliance`, `voice_charter`, `booking_funnel`, …) all run with `--self-test` in the chain,
- *     which returns before the report-writing path. In the gate they touch nothing shared.
+ *     which returns before the report-writing path. In the gate they touch nothing shared — the
+ *     write audit confirms it: not one of them appears in the touched-file list.
  *   - The ~55 evals that set `CONVERSATIONS_DB_PATH` point it at `os.tmpdir()` under their own
  *     distinct name, and the root `.env` does not pin that variable, so there is no shared store.
  *   - `ci_eval_chain_guard:eval` only writes its manifest under `--update`, which the chain never
  *     passes.
  *
- * Keep this list SHORT and each line justified. An entry added "just to be safe" costs wall clock
- * on every gate run for everyone, forever.
+ * Keep this list SHORT and each line justified, and re-derive it with `--audit-writes` rather than
+ * adding to it on a hunch. An entry added "just to be safe" costs wall clock on every gate run for
+ * everyone, forever.
  */
-export const SEQUENTIAL_ENTRIES: readonly string[] = [];
+export const SEQUENTIAL_ENTRIES: readonly string[] = [
+  // All seven read-modify-write the shared `data/conversations.json`.
+  "finance_rate_policy:eval",
+  "parts_turn_precedence:eval",
+  "test_ride_stock_check_first:eval",
+  "failed_manual_send_provenance:eval",
+  "manual_quote_followup:eval",
+  "cadence_manual_advance:eval",
+  "meta_promo_followup_cadence:eval",
+];
 
 export type ChainEntry = { name: string; command: string; sequential: boolean };
 export type Batch = { kind: "concurrent" | "sequential"; entries: ChainEntry[] };

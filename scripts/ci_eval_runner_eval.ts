@@ -95,14 +95,52 @@ check("an entry with no script behind it is a hard error, never a silent skip", 
 
 // --- 2. The declared sequential set is real -----------------------------------------------------
 
+const realPkg = () => JSON.parse(fs.readFileSync("package.json", "utf8")) as { scripts: { [k: string]: string } };
+
 check("every name in SEQUENTIAL_ENTRIES is actually in the chain", () => {
-  const chain = new Set(parseCiEvalChain(JSON.parse(fs.readFileSync("package.json", "utf8")).scripts["ci:eval"]));
+  const chain = new Set(parseCiEvalChain(realPkg().scripts["ci:eval"]));
   const stale = SEQUENTIAL_ENTRIES.filter(name => !chain.has(name));
   assert.deepEqual(
     stale,
     [],
     `SEQUENTIAL_ENTRIES names ${stale.join(", ")}, which the chain no longer runs — a renamed eval ` +
       "would otherwise keep a barrier that protects nothing while reading as if it did"
+  );
+});
+
+check("the seven evals sharing data/conversations.json really are barriers in the REAL plan", () => {
+  // Measured 2026-08-08 by `--audit-writes`: these seven read-modify-write one shared JSON store.
+  // Asserting on the PLAN, not on the constant, so a wiring bug between the two is caught too.
+  const SHARED_STORE_EVALS = [
+    "finance_rate_policy:eval",
+    "parts_turn_precedence:eval",
+    "test_ride_stock_check_first:eval",
+    "failed_manual_send_provenance:eval",
+    "manual_quote_followup:eval",
+    "cadence_manual_advance:eval",
+    "meta_promo_followup_cadence:eval",
+  ];
+  const pkg = realPkg();
+  const batches = planBatches(buildEntries(parseCiEvalChain(pkg.scripts["ci:eval"]), pkg.scripts));
+  const alone = new Set(
+    batches.filter(b => b.kind === "sequential" && b.entries.length === 1).map(b => b.entries[0].name)
+  );
+  const overlapping = SHARED_STORE_EVALS.filter(name => !alone.has(name));
+  assert.deepEqual(
+    overlapping,
+    [],
+    `${overlapping.join(", ")} would run beside another eval while sharing data/conversations.json — ` +
+      "a lost update, or a read of a half-written store"
+  );
+});
+
+check("the real chain still parses into a plan that runs every entry exactly once", () => {
+  const pkg = realPkg();
+  const chain = parseCiEvalChain(pkg.scripts["ci:eval"]);
+  assert.deepEqual(
+    batchOrder(planBatches(buildEntries(chain, pkg.scripts))),
+    chain,
+    "the runner's plan for the live chain is the live chain, in order — no drops, no reordering"
   );
 });
 
