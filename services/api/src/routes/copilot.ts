@@ -9,7 +9,10 @@ import { buildCopilotSnapshot, renderCopilotSnapshotForLLM } from "../domain/cop
 import { answerCopilotQuestionWithLLM, parseMarketingListRequestWithLLM } from "../domain/copilotLLM.js";
 import { getAllConversations, listOpenTodos } from "../domain/conversationStore.js";
 import { buildMarketingList } from "../domain/marketingLists.js";
-import { isSuppressed } from "../domain/suppressionStore.js";
+import { isSuppressed, normalizePhone } from "../domain/suppressionStore.js";
+import { saveMarketingListRowsAsContacts } from "../domain/marketingListSave.js";
+import { listContacts, upsertContact } from "../domain/contactsStore.js";
+import { createContactList } from "../domain/contactListsStore.js";
 
 function requireManagerUser(req: Request, res: Response): boolean {
   const user = (req as any).user ?? null;
@@ -97,9 +100,57 @@ export async function copilotMarketingListHandler(req: Request, res: Response) {
   res.json({ ok: true, filters, result });
 }
 
+/**
+ * Save a built marketing list as a real customer list (phase 3).
+ *
+ * REBUILDS the list server-side from the filters rather than trusting rows posted by the browser:
+ * the compliance exclusions live in buildMarketingList and must not be bypassable by anything a
+ * client can send. The saved list is a SNAPSHOT — no filter, so it can never start re-resolving.
+ */
+export async function copilotMarketingListSaveHandler(req: Request, res: Response) {
+  if (!requireManagerUser(req, res)) return;
+  const name = String(req.body?.name ?? "").trim();
+  if (!name) return res.status(400).json({ ok: false, error: "name is required" });
+  const filters = req.body?.filters ?? null;
+  if (!filters || (filters.channel !== "sms" && filters.channel !== "email")) {
+    return res.status(400).json({ ok: false, error: "filters.channel must be sms or email" });
+  }
+  const description = String(req.body?.description ?? "").trim() || null;
+  const built = buildMarketingList(getAllConversations(), {
+    filters,
+    isPhoneSuppressed: isSuppressed,
+    nowMs: Date.now()
+  });
+  const at = new Date().toISOString();
+  const saved = saveMarketingListRowsAsContacts(
+    built.rows,
+    { listContacts, upsertContact, normalizePhone },
+    { description, listName: name, at }
+  );
+  const list = createContactList({
+    name,
+    source: "snapshot",
+    contactIds: saved.contactIds,
+    description: description ?? undefined,
+    builtAt: at
+  });
+  res.json({
+    ok: true,
+    list,
+    saved: {
+      matched: saved.matched,
+      created: saved.created,
+      unresolvable: saved.unresolvable,
+      total: saved.total
+    },
+    excluded: built.excluded
+  });
+}
+
 /** One-line registration for index.ts (which sits at its size-ratchet ceiling). */
 export function registerCopilotRoutes(app: Pick<Express, "get" | "post">) {
   app.get("/copilot/insights", copilotInsightsHandler);
   app.post("/copilot/ask", copilotAskHandler);
   app.post("/copilot/marketing-list", copilotMarketingListHandler);
+  app.post("/copilot/marketing-list/save", copilotMarketingListSaveHandler);
 }
