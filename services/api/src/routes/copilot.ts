@@ -92,6 +92,25 @@ export async function copilotMarketingListHandler(req: Request, res: Response) {
   if (!filters || (filters.channel !== "sms" && filters.channel !== "email")) {
     return res.status(400).json({ ok: false, error: "filters.channel must be sms or email" });
   }
+  // REFUSE what we cannot express, rather than quietly answering a different question.
+  // The filters are a fixed set; a request for something outside them (credit status, whether they
+  // bought, a budget, a licence, a location) used to come back with every filter null, which builds
+  // a list of EVERY reachable lead. Measured 2026-08-08: "anyone who is approved but hasn't bought
+  // yet" returned all-null filters -> 449 people, presented as the answer, with a name the manager
+  // typed on it; the true answer was 11. Now that a described list can be SAVED and campaigned to,
+  // a silent "everyone" is the most expensive failure this feature has. Same law as every filter in
+  // marketingLists: fail toward the SMALLER list, and refusing is smaller than everyone.
+  //
+  // Checked AFTER the filters are resolved, so it covers every path into the builder rather than
+  // only the describe branch — which also makes it provable without spending an LLM call.
+  if (filters.unsupportedCriteria) {
+    return res.status(422).json({
+      ok: false,
+      error: "unsupported criteria",
+      unsupportedCriteria: String(filters.unsupportedCriteria),
+      message: `This builder can only search on model, new/used, lead source, how recently they replied, and open vs closed. It cannot search on: ${String(filters.unsupportedCriteria)}. Nothing was built — try describing the list using what it can search on, or use the filters directly.`
+    });
+  }
   const result = buildMarketingList(getAllConversations(), {
     filters,
     isPhoneSuppressed: isSuppressed,
