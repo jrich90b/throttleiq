@@ -1,6 +1,7 @@
 # Console Copilot Phase 3 — a described list becomes a real customer list
 
-**Status:** SPEC, approve-first (Lane 2). Written 2026-08-08 from Joe's question: *"Should we move
+**Status:** SPEC — **fully ruled, ready to build** (Lane 2; §8 carries Joe's answers to the two
+questions this spec opened). Written 2026-08-08 from Joe's question: *"Should we move
 the marketing list in copilot to the customer list section instead so we can build the marketing
 list out right there?"* Answer: yes — but the move is the small half. The value is the **save**.
 
@@ -121,12 +122,36 @@ Deterministic evals, wired into `ci:eval`:
 `apps/web/src/app/page.tsx` is 25k lines and on the size ratchet: the new panel goes in its own
 component file, not into `page.tsx`.
 
-## 8. Open for Joe
+## 8. RULED by Joe, 2026-08-08 — nothing here is open
 
-1. When a described list finds someone with no contact record — create the contact (recommended) or
-   leave them out?
-2. Should the described-list builder stay on the `/copilot` page as well, or move entirely into the
-   Customer List section? (Recommend: move it. One place to build a list is the point of the
-   change; Copilot keeps ask + insights.)
+*"Go with your recommendation and should probably remove from the co pilot page."*
+
+1. **A described-list member with no contact record GETS ONE CREATED.** The group is complete, the
+   saved size matches the preview, and the address book grows from real leads instead of silently
+   dropping them. What follows from that:
+   - stamp the origin on the created contact (which list, which description, when), so a contact
+     nobody typed can always be traced back;
+   - create at SAVE, never at preview — describing a list must stay free of side effects;
+   - report both numbers on save ("48 added · 6 new contact records created"), per §4;
+   - **a created contact is never a way around compliance.** It inherits nothing that would let it
+     be messaged; the send path still re-checks the STOP list and status per §6, and a row already
+     excluded at build time is never created in the first place.
+2. **The builder MOVES — it leaves `/copilot` entirely.** One place to build a list is the point;
+   two doorways into the same feature is the confusion this change exists to remove. Copilot keeps
+   ask + insights.
+   - The `/copilot` "Marketing lists" panel is DELETED, not hidden behind a flag. The API route
+     (`/api/copilot/marketing-list` → `POST /copilot/marketing-list`) and `buildMarketingList` are
+     **kept and reused** by the Customer List section: the engine moves, the doorway closes.
+   - Whoever has that page bookmarked must land somewhere honest — say where it went rather than
+     leaving a shorter page and no explanation.
+   - Pin it so it cannot quietly return on both surfaces: the described-list builder renders in the
+     contacts section and NOT on the copilot page.
+
+## 9. Sequencing, for whoever builds it
+
+**Ship the save before deleting the panel.** Save-as-list is the whole value and carries all the
+risk (§4); closing the old doorway is cosmetic next to it. Removing it first — or in the same
+change — means any problem with lead→contact resolution arrives at the exact moment the dealer's
+only existing way to build these lists disappears.
 
 Related: `docs/console_copilot_phase1.md`, `docs/console_copilot_phase2.md`.
