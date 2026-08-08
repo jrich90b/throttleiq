@@ -457,6 +457,7 @@
     "console_copilot_insights:eval",
     "console_copilot_marketing_list:eval",
     "rider_experience_persist:eval",
-    "sale_trade_journey_bucket:eval"
+    "sale_trade_journey_bucket:eval",
+    "ci_eval_runner:eval"
   ]
 }
