@@ -920,6 +920,7 @@ import {
   isDealerLeadAppConfirmedDemoRideAdfText,
   extractDealerLeadAppDemoBikeLabel,
   buildInventoryOnlineCompletenessReply,
+  buildFinanceSubmissionAck,
   isDirectInventoryAvailabilityQuestionText,
   isInventoryOnlineCompletenessQuestionText,
   isInventoryBrowseLinkRequestText,
@@ -57658,17 +57659,16 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     // Hours-aware timing, mirroring the live ADF path (routes/sendgridInbound.ts) so regenerating a
     // credit-app ack can't re-introduce an after-hours "shortly" the live path already avoids.
     const financeFollowUpWhen = await resolveStaffFollowUpTimingPhrase();
-    let reply = latestInboundIsPrequalAdf
-      ? hasPriorOutbound
-        ? firstName
-          ? `Thanks ${firstName} — we just received your pre-qualification submission. Our finance team will reach out ${financeFollowUpWhen} to review options and next steps.`
-          : `Thanks — we just received your pre-qualification submission. Our finance team will reach out ${financeFollowUpWhen} to review options and next steps.`
-        : `${buildAgentIntro(firstName, agentName, dealerName)}Thanks — I received your pre-qualification submission. I’ll have our finance team reach out ${financeFollowUpWhen} to review options.`
-      : hasPriorOutbound
-        ? firstName
-          ? `Thanks ${firstName} — we just received your online credit application. Our finance team will reach out ${financeFollowUpWhen} to go over options.`
-          : `Thanks — we just received your online credit application. Our finance team will reach out ${financeFollowUpWhen} to go over options.`
-        : `${buildAgentIntro(firstName, agentName, dealerName)}Thanks — I received your credit application. I’ll have our finance team reach out ${financeFollowUpWhen}.`;
+    // ONE builder, shared with the live ADF lane so the paths can't drift; carries C1.7's question.
+    let reply = buildFinanceSubmissionAck({
+      kind: latestInboundIsPrequalAdf ? "prequal" : "credit_app",
+      introduce: !hasPriorOutbound,
+      firstName,
+      when: financeFollowUpWhen,
+      intro: hasPriorOutbound ? "" : buildAgentIntro(firstName, agentName, dealerName),
+      bikeLabel: conv.lead?.vehicle?.model ?? null,
+      suppression: { appointment: conv.appointment, alreadyPurchased: !!conv.sale }
+    });
     if (asksIfInventoryIsAllOnline) {
       reply = `${reply} ${buildInventoryOnlineCompletenessReply()}`;
     }

@@ -1,4 +1,6 @@
 import { GENERIC_AGENT_DISPLAY_NAME } from "./agentVoice.js";
+import { advanceEveryReplySuppressed } from "./draftChannelRules.js";
+import { isPlaceholderModel } from "./modelDeflection.js";
 import { extractStockIdFromText, getLearnedStockIdShapes } from "./stockIdShapes.js";
 
 export type RequestedScheduleWindowMode = "after" | "before" | "any_time" | "window" | "none";
@@ -868,6 +870,91 @@ export function isInventoryOnlineCompletenessQuestionText(textRaw: string | null
 
 export function buildInventoryOnlineCompletenessReply(): string {
   return "We do have some bikes here that may not be on the website yet. Is there a certain model you’re looking for?";
+}
+
+/**
+ * The advancing question that closes a finance-submission acknowledgement (charter C1.7).
+ *
+ * The prequal/credit acks are hardcoded templates, so the salesperson arm that went live on
+ * 2026-08-08 — every reply ends with one question that advances the lead — could not reach them:
+ * it acts on the LLM draft path only. Measured over the 30 days to 2026-08-08: 16 credit/prequal
+ * ADF acks went out ending in a statement, on the warmest first-touch traffic we get, and the ONE
+ * that asked anything was Joe's own hand-edit of exactly this template on 8/7 — he replaced
+ * "I'll have our finance team reach out shortly to review options" with "What bike do you have
+ * your eye on?". This function is that edit, generalized.
+ *
+ * The question never ASSERTS what the customer told us (charter C1.4: an ADF form field is not the
+ * customer speaking), so a lead-record model is asked about, never attributed — which is also why
+ * the known-bike form is an either/or rather than "still the X?".
+ *
+ * Placeholder detection goes through the existing `isPlaceholderModel` referee rather than a second
+ * local rule. It is load-bearing here, not decoration: measured over the 30 days to 2026-08-08, all
+ * 41 finance acks carried a lead vehicle but 7 of them read "Harley-Davidson Full Line" — and Joe's
+ * own hand-edit was on one of these placeholder leads, which is precisely why he asked which bike.
+ */
+export function buildFinanceAckAdvancingQuestion(bikeLabelRaw?: string | null): string {
+  const bike = String(bikeLabelRaw ?? "").trim();
+  if (!bike || isPlaceholderModel(bike)) return "What bike do you have your eye on?";
+  return `Are you looking at the ${bike}, or open to a couple of options?`;
+}
+
+/**
+ * The C1.7 question for a finance ack whose copy ALREADY names the bike (the orchestrator's older
+ * "thanks for your interest in the 2025 Road Glide" shape). Re-asking which bike there would read as
+ * if we hadn't listened, so the advancing move is the visit — a choice of two, both of which are a
+ * visit, which is what the offered-a-time funnel metric measures.
+ */
+export function buildFinanceAckVisitQuestion(): string {
+  return "Do you want to come see it this week, or is the weekend easier?";
+}
+
+export type FinanceSubmissionAckArgs = {
+  /** A pre-qualification submission reads differently from a submitted credit application. */
+  kind: "prequal" | "credit_app";
+  /** Has the customer received anything from us yet? Drives BOTH the wording and the intro. */
+  introduce: boolean;
+  firstName?: string | null;
+  /** Hours-aware next-open phrase — "shortly" after close is a promise we can't keep. */
+  when: string;
+  /** Optional intro prefix (the live ADF lane applies its own prefix afterwards instead). */
+  intro?: string | null;
+  /** Lead-record model, already normalized by the caller; blank when we don't know one. */
+  bikeLabel?: string | null;
+  /**
+   * The C1.7 exceptions, judged by the SAME referee the composer uses
+   * (`advanceEveryReplySuppressed`) rather than a second rule that could drift from it. Suppressed
+   * means DO NOT PUSH: the ack stays the plain statement it has always been.
+   */
+  suppression?: {
+    needsEmpathy?: boolean | null;
+    dispositionClosing?: boolean | null;
+    alreadyPurchased?: boolean | null;
+    appointment?: unknown;
+  };
+};
+
+/**
+ * ONE builder for the finance-submission ack, called by the live ADF lane
+ * (routes/sendgridInbound.ts) and the regenerate lane (index.ts). It used to be two hand-maintained
+ * copies of the same six-variant ternary, which is how the live lane and the regenerate lane drift.
+ */
+export function buildFinanceSubmissionAck(args: FinanceSubmissionAckArgs): string {
+  const firstName = String(args.firstName ?? "").trim();
+  const intro = String(args.intro ?? "");
+  const body =
+    args.kind === "prequal"
+      ? args.introduce
+        ? `Thanks — I received your pre-qualification submission. I’ll have our finance team reach out ${args.when} to review options.`
+        : firstName
+          ? `Thanks ${firstName} — we just received your pre-qualification submission. Our finance team will reach out ${args.when} to review options and next steps.`
+          : `Thanks — we just received your pre-qualification submission. Our finance team will reach out ${args.when} to review options and next steps.`
+      : args.introduce
+        ? `Thanks — I received your credit application. I’ll have our finance team reach out ${args.when}.`
+        : firstName
+          ? `Thanks ${firstName} — we just received your online credit application. Our finance team will reach out ${args.when} to go over options.`
+          : `Thanks — we just received your online credit application. Our finance team will reach out ${args.when} to go over options.`;
+  if (advanceEveryReplySuppressed(args.suppression ?? {})) return `${intro}${body}`;
+  return `${intro}${body} ${buildFinanceAckAdvancingQuestion(args.bikeLabel)}`;
 }
 
 export function isRideChallengeLeadSignal(args: {

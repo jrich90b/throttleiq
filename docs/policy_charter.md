@@ -106,6 +106,24 @@ exposure; changes to this charter's boundary rules.
 - **C1.6** Walk-in acks recap the LOGGED SPEC from parsed slots only — never staff-note
   prose, and never a dollar figure from a walk-in note (could be a trade appraisal).
   *(7/28 #4)*
+- **C1.7** **Every customer-facing reply ends with ONE question that advances the lead**,
+  fitted to what the customer just said and preferring a choice of two ("cash or finance?",
+  "Saturday afternoon or Monday evening?"). The agent's job is a salesperson's: drive
+  appointments and sales, politely. "At most one question per message" is a CEILING, never a
+  floor. Four structural exceptions, and they are decided in CODE, never in prompt text (as
+  prompt caveats they lost 3 of 3 probes, including asking a newly bereaved customer to
+  schedule): `needsEmpathy`, `dispositionClosing` (not interested), `alreadyPurchased`, and a
+  booked appointment. A suppressed turn means DO NOT PUSH, not never ask — it falls back to
+  the legacy rules, which still ask when the thread calls for it. **This rule binds our
+  deterministic TEMPLATES exactly as it binds the LLM composer**: a hardcoded ack that ends
+  in a statement is out of compliance with it, the same way template copy must pass our own
+  voice charter. *(Joe 8/7, option 3 of three: "Treat this as you are a human salesman
+  looking to be polite like the ai in the example and your main job is to drive appointments
+  and sales" · "Must be appropriate questions to the conversation" · "Asking questions would
+  really be a way to control the flow of the conversation". Built as PR #606 `a939baca`; Joe
+  approved turning it on 8/8 — "Ok approve d deploy" — and `DRAFT_ADVANCE_EVERY_REPLY=1` has
+  been live in the runtime env since 2026-08-08T12:35:55Z. The baseline it moves: only 65 of
+  383 replies, 17%, ended by asking anything in the prior 30 days.)*
 
 ## C2 — When to stay silent
 

@@ -33,6 +33,16 @@ export function isPlaceholderModel(label?: string | null): boolean {
   if (t === "other" || /\bother\b/.test(t) || /\bfull\s*line(up)?\b/.test(t)) return true;
   // Bare make with no model ("harley-davidson", "harley davidson", "harley").
   if (/^harley[-\s]?davidson$/.test(t) || t === "harley") return true;
+  // A CATEGORY DESCRIPTION, not a model. Lead forms let people describe what they're after instead
+  // of picking one: "Harley sportster/sports-style bike", "FXR/LS/WX model", "mid-sized Harley
+  // (Softail/heritage-style)". Naming one of these back at the customer reads as if we hadn't
+  // listened — asking which bike is the right move, and asking is this module's fail direction
+  // anyway. Two shapes: a trailing generic noun, or a "-style" descriptor. MEASURED BLAST RADIUS
+  // 2026-08-08: 3 of the 548 conversations that carry a lead model. Deliberately NOT a slash rule —
+  // "Ultra Limited Peace Officer / Firefighter / Shrine Special Edition" (7 leads) is a real,
+  // bookable model and has to stay specific.
+  if (/\b(?:model|bike|motorcycle)$/.test(t)) return true;
+  if (/[-\s]style\b/.test(t)) return true;
   return false;
 }
 

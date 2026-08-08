@@ -94,6 +94,108 @@ ok(
 );
 
 // ---------------------------------------------------------------------------
+// LAYER 1b — charter C1.7: our TEMPLATES end with an advancing question too
+// ---------------------------------------------------------------------------
+/**
+ * The salesperson arm (every reply ends with one question that advances the lead) went live on the
+ * LLM draft path 2026-08-08. The finance-submission acks are hardcoded templates, so it could not
+ * reach them: measured over the 30 days to 8/8, 41 credit/prequal acks went out and only 5 asked
+ * anything — and one of those five was Joe hand-editing this very template to add "What bike do you
+ * have your eye on?". Same blind spot this file was created for, one rule along.
+ *
+ * These assert the DECISION (does the ack end by asking something that advances the lead, and does
+ * it STOP asking when the shared suppression referee says don't push), never the wording — except
+ * for the placeholder case, where the wording IS the ruling: Joe's own edit.
+ */
+const G = await import("../services/api/src/domain/workflowRegressionGuards.ts");
+const M = await import("../services/api/src/domain/modelDeflection.ts");
+
+const REAL_MODEL = "Road Glide Special";
+for (const kind of ["prequal", "credit_app"] as const) {
+  for (const introduce of [true, false]) {
+    const ack = G.buildFinanceSubmissionAck({
+      kind,
+      introduce,
+      firstName: "Ryan",
+      when: "Monday morning",
+      bikeLabel: REAL_MODEL
+    });
+    // POSITIVE: the ack must still BE an acknowledgement — a builder that returned only a question
+    // (or an empty string) would satisfy any "ends with ?" assertion on its own.
+    ok(
+      ack.includes(kind === "prequal" ? "pre-qualification submission" : "credit application"),
+      `${kind}(introduce=${introduce}) must still acknowledge the submission: ${ack}`
+    );
+    ok(ack.includes("finance team"), `${kind}(introduce=${introduce}) must still name the handoff: ${ack}`);
+    ok(ack.includes("Monday morning"), `${kind}(introduce=${introduce}) must still carry the timing phrase: ${ack}`);
+    // THE DECISION: it ends by asking, and asks exactly once.
+    ok(ack.trim().endsWith("?"), `charter C1.7: ${kind}(introduce=${introduce}) must end with a question: ${ack}`);
+    ok(
+      (ack.match(/\?/g) ?? []).length === 1,
+      `charter C1.7 asks exactly ONE question, ${kind}(introduce=${introduce}) asked ${(ack.match(/\?/g) ?? []).length}: ${ack}`
+    );
+    ok(ack.includes(REAL_MODEL), `a known model is asked about by name: ${ack}`);
+    const hits = charterHits(ack);
+    ok(hits.length === 0, `${kind}(introduce=${introduce}) must be charter-clean, found: ${hits.map(h => h.check).join(", ")}`);
+  }
+}
+
+// A placeholder/description model asks WHICH bike — Joe's own hand-edit, 2026-08-07, on the lead
+// whose vehicle field read "Harley sportster/sports-style bike". The wording is the ruling here.
+for (const placeholder of ["", "Harley-Davidson Full Line", "Other", "FXR/LS/WX model", "Harley sportster/sports-style bike"]) {
+  ok(
+    G.buildFinanceAckAdvancingQuestion(placeholder) === "What bike do you have your eye on?",
+    `a non-specific lead model (${JSON.stringify(placeholder)}) must ask which bike, not name it back`
+  );
+}
+ok(
+  G.buildFinanceAckAdvancingQuestion(REAL_MODEL).includes(REAL_MODEL),
+  "a specific lead model is named in the question rather than asked for"
+);
+
+// The suppression referee is the SAME one the composer uses — a template that kept asking after a
+// booking would push a customer who is already coming in.
+for (const suppression of [
+  { appointment: { status: "booked", startLocal: "2026-08-11T10:00" } },
+  { appointment: { status: "confirmed" } },
+  { alreadyPurchased: true },
+  { needsEmpathy: true },
+  { dispositionClosing: true }
+]) {
+  const ack = G.buildFinanceSubmissionAck({
+    kind: "credit_app",
+    introduce: true,
+    firstName: "Dale",
+    when: "Monday morning",
+    bikeLabel: REAL_MODEL,
+    suppression
+  });
+  ok(ack.includes("credit application"), `a suppressed ack is still an acknowledgement: ${ack}`);
+  ok(!ack.includes("?"), `charter C1.7 suppression (${Object.keys(suppression)[0]}) must not push a question: ${ack}`);
+}
+
+// The visit question used where the copy already names the bike (orchestrator's finance ack).
+ok(G.buildFinanceAckVisitQuestion().trim().endsWith("?"), "the visit question must be a question");
+ok(charterHits(G.buildFinanceAckVisitQuestion()).length === 0, "the visit question must be charter-clean");
+
+// The placeholder referee must keep REAL models specific — widening it to catch category
+// descriptions is what makes the question right, and over-widening would silently stop ~7 sites
+// from naming a bike they legitimately know. Measured 2026-08-08: exactly 3 of 548 live leads flip.
+for (const real of [
+  "Ultra Limited Peace Officer / Firefighter / Shrine Special Edition", // slash-separated, REAL
+  "Road Glide Special",
+  "Pan America 1250 ST",
+  "Low Rider S",
+  "Street Bob",
+  "Nightster"
+]) {
+  ok(M.isSpecificModel(real), `"${real}" is a real bookable model and must stay specific`);
+}
+for (const desc of ["FXR/LS/WX model", "Harley sportster/sports-style bike", "mid-sized Harley (Softail/heritage-style)"]) {
+  ok(M.isPlaceholderModel(desc), `"${desc}" is a category description, not a bookable model`);
+}
+
+// ---------------------------------------------------------------------------
 // LAYER 2 — source sweep over the reply-copy modules
 // ---------------------------------------------------------------------------
 /**
@@ -104,7 +206,9 @@ ok(
 const COPY_MODULES = [
   "services/api/src/domain/agentVoice.ts",
   "services/api/src/domain/orchestrator.ts",
-  "services/api/src/routes/sendgridInbound.ts"
+  "services/api/src/routes/sendgridInbound.ts",
+  // Holds the finance-submission ack copy (2026-08-08), so it now returns sentences we send.
+  "services/api/src/domain/workflowRegressionGuards.ts"
 ];
 
 /** Strip comments so a comment ABOUT a banned phrase (like this file's own header) never fires. */
