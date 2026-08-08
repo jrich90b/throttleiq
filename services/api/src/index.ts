@@ -59104,6 +59104,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     dealerProfile,
     agentNameOverride: resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile)),
     needsEmpathy: regenAcceptedAffect?.needsEmpathy ?? null,
+    dispositionClosing:
+      (regenResponseControlAccepted && regenResponseControlParse?.intent === "not_interested") ||
+      isNotInterested(event.body ?? ""),
     customerReceivedOutbound: hasCustomerReceivedOutbound(conv.messages)
   });
 
@@ -69032,6 +69035,7 @@ if (authToken && signature) {
     dealerProfile: weatherProfile,
     agentNameOverride: resolveConversationAgentName(conv, resolveDealerAgentName(weatherProfile)),
     needsEmpathy: acceptedAffect?.needsEmpathy ?? null,
+    dispositionClosing: llmNotInterested || isNotInterested(event.body ?? ""),
     customerReceivedOutbound: hasCustomerReceivedOutbound(conv.messages)
   });
   logRouteTiming("orchestrator", orchestratorStartedAt, {

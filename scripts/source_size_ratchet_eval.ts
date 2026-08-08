@@ -313,7 +313,10 @@ const CEILINGS: Ceiling[] = [
     // exported array breaks llm_parser_contract:eval). That paid for the bare-affirmative rules
     // (+16076549423). Both halves of that lead's fix ship together, so this is the REAL post-merge
     // count with both extractions applied — re-derived here, not carried from either branch.
-    max: 16_399,
+    // 16_399 -> 16_381. The per-channel rule block and the advance-arm flag helpers moved to
+    // domain/draftChannelRules.ts. That surface changes every time we learn something about voice,
+    // so it now grows on its own budget — which is what paid for the salesperson arm (Joe, 8/7).
+    max: 16_381,
     note: "every parser prompt + JSON schema; second-largest and on the same trajectory"
   }
 ];
