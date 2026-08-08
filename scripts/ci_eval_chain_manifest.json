@@ -264,6 +264,7 @@
     "draft_held_gate:eval",
     "held_draft_release:eval",
     "draft_auto_regenerate:eval",
+    "self_heal_keeps_the_ask:eval",
     "draft_held_bridge:eval",
     "held_draft_backstop:eval",
     "outcome_state_consistency:eval",
