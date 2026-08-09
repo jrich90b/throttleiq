@@ -8443,6 +8443,69 @@ export function decideSaleTradeJourneyBucket(
   return { applies: true, bucket: "inventory_interest", cta: "check_availability" };
 }
 
+// ---------------------------------------------------------------------------
+// Website text-widget SALES classification (Beverly Hennig, +17169839279, operator note
+// 2026-08-06: "Someone selling us their bike should not carry an availability tag").
+//
+// She wrote, through the Sales widget: "Do you take used Harley's on consignment or buy outright?
+// I have a 2008 Superglide in excellent condition for sale." — a SELLER. The lead was stamped
+// {bucket: inventory_interest, cta: check_availability} because the old classifier read the
+// DEPARTMENT and nothing else: every Sales-department widget lead was a buyer asking about stock
+// before one word of the customer's message was read. The cta is not just a console badge —
+// salesTopicHint maps check_availability -> the "availability" topic hint that goes INTO the draft.
+//
+// So the sell-side answer comes from the typed widget-sales parser that ALREADY ran on this exact
+// turn (parseWebTextWidgetSalesLeadWithLLM, intent: "sell_or_trade") — no new round-trip, and no
+// keyword scan for "sell"/"consignment", which would be the manufactured-confidence anti-pattern.
+// The bucket/cta pair it lands on (trade_in_sell / value_my_trade) is the SAME pair the ADF/email
+// lane already produces, so this routes into a lane the drafting prompt and the KPI split already
+// understand; it invents nothing.
+//
+// FAIL DIRECTION: unsure => the buy side, which is today's behaviour. Treating a seller as a buyer
+// costs a wrong tag and a wrong topic hint (the reported miss); treating a BUYER as a seller costs
+// us not answering the availability question they actually asked — strictly worse. So sell-side
+// needs a positive, accepted parser verdict AND the parser finding no bike they want to buy: an
+// unaccepted parse, any other intent, or a requested vehicle all fall back to the buy side.
+// ---------------------------------------------------------------------------
+export type WebTextWidgetDepartmentInput = "sales" | "service" | "parts" | "apparel";
+
+export type WebTextWidgetSalesClassificationInput = {
+  department: WebTextWidgetDepartmentInput;
+  /** parseWebTextWidgetSalesLeadWithLLM's own intent for THIS turn; null when it was not accepted. */
+  parserIntent?: string | null;
+  /** The PARSER's requestedVehicle — never the regex extractor's, which is what minted "Outright". */
+  parserHasRequestedVehicle?: boolean;
+};
+
+export type WebTextWidgetSalesClassificationDecision = {
+  bucket: "inventory_interest" | "trade_in_sell" | "service" | "parts" | "apparel";
+  cta:
+    | "check_availability"
+    | "value_my_trade"
+    | "service_request"
+    | "parts_request"
+    | "apparel_request";
+  /** True only on a positive sell-side parser verdict. Also blanks the extractor's phantom bike. */
+  sellSide: boolean;
+};
+
+export function decideWebTextWidgetSalesClassification(
+  input: WebTextWidgetSalesClassificationInput
+): WebTextWidgetSalesClassificationDecision {
+  if (input.department === "service") {
+    return { bucket: "service", cta: "service_request", sellSide: false };
+  }
+  if (input.department === "parts") {
+    return { bucket: "parts", cta: "parts_request", sellSide: false };
+  }
+  if (input.department === "apparel") {
+    return { bucket: "apparel", cta: "apparel_request", sellSide: false };
+  }
+  const sellSide = input.parserIntent === "sell_or_trade" && !input.parserHasRequestedVehicle;
+  if (sellSide) return { bucket: "trade_in_sell", cta: "value_my_trade", sellSide: true };
+  return { bucket: "inventory_interest", cta: "check_availability", sellSide: false };
+}
+
 /**
  * THE LAST OF FOUR SILENCERS on a customer's "yes" (+16076549423, found 2026-08-07).
  *
