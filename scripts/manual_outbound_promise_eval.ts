@@ -10,6 +10,7 @@ import {
   hasManualPromiseHint,
   isActionablePromiseKind,
   isHumanAuthoredOutbound,
+  resolveManualPromiseApplyPlan,
   type ManualOutboundPromiseInput
 } from "../services/api/src/domain/manualOutboundPromise.ts";
 import type { ManualOutboundPromiseParse } from "../services/api/src/domain/llmDraft.ts";
@@ -38,6 +39,9 @@ function base(overrides: Partial<ManualOutboundPromiseInput>): ManualOutboundPro
     followUpMode: "active",
     conversationStatus: "open",
     dueDate: null,
+    // Every fixture below models a PERSON typing. The agent-authored branch is exercised
+    // explicitly at the bottom, so a fixture can never drift into the wrong author by accident.
+    humanAuthored: true,
     ...overrides
   };
 }
@@ -273,14 +277,143 @@ for (const t of HINT_NO) check(`hint_no:${t.slice(0, 34)}`, !hasManualPromiseHin
   // SMS and email in lockstep. Fails loudly if the gate is renamed rather than reading -1.
   const fs3 = await import("node:fs");
   const index = fs3.readFileSync("services/api/src/index.ts", "utf8");
-  const gateAt = index.indexOf("hasManualPromiseHint(text) &&");
+  const gateAt = index.indexOf("hasManualPromiseHint(text)");
   if (gateAt < 0) {
     console.error("could not find the manual-promise gate in services/api/src/index.ts");
     failures += 1;
-  } else if (!/isHumanAuthoredOutbound\(/.test(index.slice(gateAt, gateAt + 500))) {
+  } else if (!/isHumanAuthoredOutbound\(/.test(index.slice(gateAt, gateAt + 900))) {
     console.error("the manual-promise gate must consult isHumanAuthoredOutbound before arming a task");
     failures += 1;
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// THE AGENT'S OWN PROMISE NEEDS AN OWNER (Joe, 2026-08-07).
+//
+// #450 stopped an unedited agent draft from arming a dated staff task, correctly: 8 of the 20
+// "Promised over text" tasks on the box were the agent's boilerplate, not a person's commitment.
+// But it dropped the promise entirely. On 2026-08-07 the agent began answering an accepted offer
+// with "I'll pull the current incentives that apply to the 2026 Street Glide Limited and text you
+// the exact breakdown" — and the system has NO incentives data (domain/offers.ts resolves a URL to
+// the promotions page, nothing more). It promised a person's work and told nobody.
+//
+// Same parse, same confidence gate, same excluded kinds — only the OUTCOME differs by author.
+// ---------------------------------------------------------------------------------------------
+{
+  const incentives = parse({
+    kind: "send_info",
+    action: "send the current incentives that apply to the Street Glide Limited"
+  });
+
+  const human = decideManualOutboundPromise(base({ parse: incentives, humanAuthored: true }));
+  check(
+    "human_promise_still_dated_task",
+    human.kind === "staff_task",
+    `a person's promise must still get today's dated task, got ${JSON.stringify(human)}`
+  );
+
+  const agent = decideManualOutboundPromise(base({ parse: incentives, humanAuthored: false }));
+  check(
+    "agent_promise_raises_owner_task",
+    agent.kind === "agent_promise_owner_task",
+    `the agent's own promise must raise an owner task, got ${JSON.stringify(agent)}`
+  );
+  check(
+    "agent_promise_task_names_the_promise",
+    agent.kind === "agent_promise_owner_task" && /incentives/.test(agent.taskSummary),
+    "the owner task must say WHAT was promised, or nobody knows what to do"
+  );
+  check(
+    "agent_promise_carries_no_due_or_hold",
+    agent.kind === "agent_promise_owner_task" &&
+      !("taskDueIso" in agent) &&
+      !("holdUntilIso" in agent),
+    "the agent's promise is not evidence about when a HUMAN will act: no due pressure, no cadence hold"
+  );
+
+  // EVERY OTHER GATE STILL APPLIES TO THE AGENT BRANCH — it loosens the AUTHOR, nothing else.
+  for (const [id, over] of [
+    ["agent_low_confidence_still_nothing", { parse: parse({ confidence: 0.4 }) }],
+    ["agent_inventory_notify_still_nothing", { parse: parse({ kind: "inventory_notify", action: "text when a Street Bob arrives" }) }],
+    ["agent_appointment_still_nothing", { parse: parse({ kind: "appointment" }) }],
+    ["agent_no_promise_still_nothing", { parse: parse({ promisePresent: false, kind: "none" }) }],
+    ["agent_closed_lead_still_nothing", { conversationStatus: "closed" }]
+  ] as const) {
+    const d = decideManualOutboundPromise(base({ ...(over as any), humanAuthored: false }));
+    check(id, d.kind === "none", `expected none, got ${JSON.stringify(d)}`);
+  }
+
+  // ------------------------------------------------------------------------------------------
+  // WHAT THE SEND PATH DOES — EXECUTED, not pinned as source text.
+  //
+  // The first cut of this asserted `pauseFollowUpCadence(` did not appear within 600 characters of
+  // the agent arm. That is a claim about FORMATTING: merging the two apply branches broke it while
+  // the agent branch still held no cadence, and equally, a rename could have satisfied it while the
+  // behaviour rotted. resolveManualPromiseApplyPlan is the real decision, so run it.
+  // ------------------------------------------------------------------------------------------
+  const agentPlan = resolveManualPromiseApplyPlan(
+    decideManualOutboundPromise(base({ parse: incentives, humanAuthored: false }))
+  );
+  check("agent_plan_exists", !!agentPlan, "the agent's promise must still produce a plan (an owner task)");
+  check(
+    "agent_plan_has_no_due_date",
+    agentPlan?.taskDueIso === null,
+    `the agent's promise must carry NO due date, got ${JSON.stringify(agentPlan?.taskDueIso)}`
+  );
+  check(
+    "agent_plan_holds_no_cadence",
+    agentPlan?.holdUntilIso === null,
+    `the agent's promise must NOT hold cadence, got ${JSON.stringify(agentPlan?.holdUntilIso)}`
+  );
+  check(
+    "agent_plan_records_its_own_outcome",
+    agentPlan?.outcomeKey === "agent_promise_owner_task",
+    "an arm that ends in a task must record why, under its own key (2026-08-07 rule)"
+  );
+
+  // The PERSON's branch must be untouched by all of this: still dated, still holding cadence.
+  const humanPlan = resolveManualPromiseApplyPlan(
+    decideManualOutboundPromise(base({ parse: incentives, humanAuthored: true }))
+  );
+  check("human_plan_exists", !!humanPlan, "a person's promise must still produce a plan");
+  check(
+    "human_plan_keeps_its_due_date",
+    typeof humanPlan?.taskDueIso === "string" && humanPlan.taskDueIso.length > 0,
+    `a person's promise must keep its due date, got ${JSON.stringify(humanPlan?.taskDueIso)}`
+  );
+  check(
+    "human_plan_keeps_its_cadence_hold",
+    typeof humanPlan?.holdUntilIso === "string" && humanPlan.holdUntilIso.length > 0,
+    `a person's promise must keep its cadence hold, got ${JSON.stringify(humanPlan?.holdUntilIso)}`
+  );
+  check(
+    "human_plan_keeps_its_outcome_key",
+    humanPlan?.outcomeKey === "manual_outbound_promise_task",
+    "the person branch must keep recording under its original key"
+  );
+
+  // A decision the send path does not recognise must stay SILENT — no task, no hold.
+  check(
+    "unknown_decision_is_quiet",
+    resolveManualPromiseApplyPlan({ kind: "none", reason: "whatever" }) === null,
+    "a non-task decision must produce no plan at all"
+  );
+
+  // WIRING (the one thing execution cannot see from here): index.ts must consult the referee and
+  // apply the hold CONDITIONALLY. `.includes` on purpose — an escaped paren here trips the
+  // source-pin ratchet. See scripts/eval_source_pin_ratchet_eval.ts.
+  const fs4 = await import("node:fs");
+  const idx4 = fs4.readFileSync("services/api/src/index.ts", "utf8");
+  check(
+    "send_path_asks_the_referee",
+    idx4.includes("resolveManualPromiseApplyPlan(promiseDecision)"),
+    "index.ts must derive its apply plan from the referee, or the referee is decoration"
+  );
+  check(
+    "send_path_holds_cadence_only_when_the_plan_says_to",
+    idx4.includes("if (promisePlan.holdUntilIso) pauseFollowUpCadence"),
+    "the cadence hold must be gated on the plan — an unconditional call re-freezes the agent branch"
+  );
 }
 
 if (failures) {

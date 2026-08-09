@@ -104,11 +104,32 @@ export interface ManualOutboundPromiseInput {
   dueDate?: { year: number; month: number; day: number; dayOfWeek?: string } | null;
   confidenceMin?: number;
   maxHoldDays?: number;
+  /**
+   * Did a PERSON type these words? `isHumanAuthoredOutbound` answers it by comparing the pending
+   * draft against what was actually sent. Load-bearing in BOTH directions — see the decision.
+   */
+  humanAuthored: boolean;
 }
 
 export type ManualOutboundPromiseDecision =
   | { kind: "none"; reason: string }
-  | Extract<VoiceNextStepDecision, { kind: "staff_task" }>;
+  | Extract<VoiceNextStepDecision, { kind: "staff_task" }>
+  /**
+   * The AGENT promised it, and the agent cannot do it (Joe, 2026-08-07).
+   *
+   * PR #450 stopped an unedited agent draft from arming a staff task, and it was right to:
+   * 8 of the 20 "Promised over text" tasks on the box were the agent's own boilerplate, not a
+   * person's commitment. But dropping it entirely left the other half of the problem. On
+   * 2026-08-07 the agent started answering "That would be great" with *"I'll pull the current
+   * incentives that apply to the 2026 Street Glide Limited and text you the exact breakdown"* —
+   * and the system has NO incentives data at all (domain/offers.ts resolves a URL to the
+   * national-promotions page, nothing more). So it promised a person's work and nobody was told.
+   *
+   * This is the narrow middle: raise ONE task naming the promise, so it has an owner. No due-date
+   * pressure and NO cadence hold — the agent's promise is not evidence about when a human will
+   * get to it, and cadence timing is not this referee's business.
+   */
+  | { kind: "agent_promise_owner_task"; reason: string; taskSummary: string };
 
 export function decideManualOutboundPromise(input: ManualOutboundPromiseInput): ManualOutboundPromiseDecision {
   const parse = input.parse;
@@ -129,10 +150,69 @@ export function decideManualOutboundPromise(input: ManualOutboundPromiseInput): 
     maxHoldDays: input.maxHoldDays,
     summaryLeadIn: "Promised over text:"
   });
-  if (decision.kind === "staff_task") return decision;
+  if (decision.kind === "staff_task") {
+    if (input.humanAuthored) return decision;
+    // Same promise, different author: a person committed to nothing here, so there is no dated
+    // plan to hold cadence against — but somebody still has to do the thing we said we would do.
+    const promised = String(parse.action ?? "").trim();
+    return {
+      kind: "agent_promise_owner_task",
+      reason: "agent_authored_promise",
+      taskSummary: promised
+        ? `The agent promised this and only a person can do it: ${promised}`
+        : "The agent promised to send something only a person can put together"
+    };
+  }
   if (decision.kind === "none") return { kind: "none", reason: decision.reason };
   // breather_only / hold_for_customer never apply to a staff text: manual sends
   // already pause the cadence 24h, and customer commitments are owned by the
   // inbound-turn machinery.
   return { kind: "none", reason: `not_applicable_${decision.kind}` };
+}
+
+/**
+ * WHAT THE SEND PATH ACTUALLY DOES with a promise decision — the whole author difference, in one
+ * pure place the eval can EXECUTE.
+ *
+ * It lives here rather than inline in index.ts for a reason earned on 2026-08-09: the first cut of
+ * this slice kept two apply branches in the handler and pinned them with SOURCE TEXT. Those pins
+ * asserted `pauseFollowUpCadence(` did not appear near the agent arm — which is a claim about
+ * formatting, not behaviour, and it broke the moment the two branches were merged even though the
+ * agent branch still held no cadence. A plan object makes the real invariant checkable:
+ *
+ *   - a PERSON's promise  → dated task + cadence hold (unchanged since #450),
+ *   - the AGENT's promise → a task with NO due date and NO hold, because the agent saying
+ *     "shortly" tells us nothing about when a human will get to it,
+ *   - anything else       → null, and the send path does nothing at all.
+ *
+ * FAIL DIRECTION: null is the quiet answer (no task, no hold), so an unrecognised decision kind can
+ * never invent a due date or freeze someone's cadence.
+ */
+export interface ManualPromiseApplyPlan {
+  taskSummary: string;
+  taskDueIso: string | null;
+  holdUntilIso: string | null;
+  outcomeKey: "manual_outbound_promise_task" | "agent_promise_owner_task";
+}
+
+export function resolveManualPromiseApplyPlan(
+  decision: ManualOutboundPromiseDecision
+): ManualPromiseApplyPlan | null {
+  if (decision.kind === "staff_task") {
+    return {
+      taskSummary: decision.taskSummary,
+      taskDueIso: decision.taskDueIso,
+      holdUntilIso: decision.holdUntilIso,
+      outcomeKey: "manual_outbound_promise_task"
+    };
+  }
+  if (decision.kind === "agent_promise_owner_task") {
+    return {
+      taskSummary: decision.taskSummary,
+      taskDueIso: null,
+      holdUntilIso: null,
+      outcomeKey: "agent_promise_owner_task"
+    };
+  }
+  return null;
 }
