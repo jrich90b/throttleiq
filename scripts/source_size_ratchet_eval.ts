@@ -293,7 +293,14 @@ const CEILINGS: Ceiling[] = [
     // slice funded itself: isOpenPreferredTime and formatPreferredTimeForReply were hand-maintained
     // copies in BOTH index.ts and routes/sendgridInbound.ts and moved verbatim into
     // domain/businessHoursGuard.ts beside the invariant that now reads them.
-    max: 70_888,
+    // 70_888 -> 70_824. The widget seller-vs-buyer slice (+17169839279). The hand-rolled
+    // parser-vs-extractor merge inside resolveWebTextWidgetSalesVehicleContext — 24 lines of nested
+    // ternaries deciding which reader wins — moved into domain/webTextWidget.ts as
+    // mergeWebTextWidgetSalesContext, beside the extractor it arbitrates; the three pure parser-result
+    // helpers (accepted / vehicle-to-context / result-to-context) went with it, so an eval can
+    // EXECUTE the chain from a raw parse instead of pinning its source text. The slice funded its own
+    // two new call-site lines and still lands NET SMALLER.
+    max: 70_824,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

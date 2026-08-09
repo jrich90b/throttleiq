@@ -466,6 +466,7 @@
     "copilot_describe_refusal:eval",
     "rider_experience_persist:eval",
     "sale_trade_journey_bucket:eval",
+    "web_text_widget_seller_bucket:eval",
     "ci_eval_runner:eval"
   ]
 }

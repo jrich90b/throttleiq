@@ -472,7 +472,9 @@ import {
   buildWebTextWidgetInboundBody,
   extractWebTextWidgetCustomerMessage,
   extractWebTextWidgetSalesVehicleContext,
+  mergeWebTextWidgetSalesContext,
   normalizeWebTextWidgetDepartment,
+  webTextWidgetParserResultToContext,
   type WebTextWidgetSalesVehicleContext,
   webTextWidgetClassification,
   webTextWidgetDepartmentLabel,
@@ -8155,48 +8157,6 @@ function applyWebTextWidgetSalesDialogState(
   }
 }
 
-function webTextWidgetSalesParserAccepted(parsed: WebTextWidgetSalesLeadParse | null): boolean {
-  if (!parsed) return false;
-  const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
-  const min = Number(process.env.LLM_WEB_TEXT_WIDGET_SALES_CONFIDENCE_MIN ?? 0.74);
-  if (confidence < min) return false;
-  const hasRequested = !!String(parsed.requestedVehicle?.model ?? "").trim();
-  const hasTrade = !!String(parsed.tradeVehicle?.model ?? "").trim();
-  const hasSellOption = parsed.sellOption !== "none";
-  return parsed.explicitRequest || hasRequested || hasTrade || hasSellOption;
-}
-
-function webTextWidgetParsedVehicleToContext(
-  vehicle?: WebTextWidgetSalesLeadParse["requestedVehicle"]
-): WebTextWidgetSalesVehicleContext["requestedVehicle"] | undefined {
-  const year = String(vehicle?.year ?? "").trim();
-  const model = String(vehicle?.model ?? "").replace(/\s+/g, " ").trim();
-  const color = String(vehicle?.color ?? "").replace(/\s+/g, " ").trim();
-  const condition = vehicle?.condition === "new" || vehicle?.condition === "used" ? vehicle.condition : undefined;
-  if (!year && !model && !color && !condition) return undefined;
-  return {
-    ...(year ? { year } : {}),
-    ...(model ? { model } : {}),
-    ...(color ? { color } : {}),
-    ...(condition ? { condition } : {})
-  };
-}
-
-function webTextWidgetParserResultToContext(
-  parsed: WebTextWidgetSalesLeadParse | null
-): WebTextWidgetSalesVehicleContext | null {
-  if (!webTextWidgetSalesParserAccepted(parsed)) return null;
-  const requestedVehicle = webTextWidgetParsedVehicleToContext(parsed?.requestedVehicle);
-  const tradeVehicle = webTextWidgetParsedVehicleToContext(parsed?.tradeVehicle);
-  const sellOption = parsed?.sellOption && parsed.sellOption !== "none" ? parsed.sellOption : undefined;
-  if (!requestedVehicle && !tradeVehicle && !sellOption) return null;
-  return {
-    ...(requestedVehicle ? { requestedVehicle } : {}),
-    ...(tradeVehicle ? { tradeVehicle } : {}),
-    ...(sellOption ? { sellOption } : {})
-  };
-}
-
 async function resolveWebTextWidgetSalesVehicleContext(
   message: string,
   conv: any,
@@ -8212,39 +8172,11 @@ async function resolveWebTextWidgetSalesVehicleContext(
             lead: conv?.lead ?? null
           })
         );
-  const parsedContext = webTextWidgetParserResultToContext(parsed);
-  const extractedContext = extractWebTextWidgetSalesVehicleContext(message);
-  if (!parsedContext) return extractedContext;
-  if (!extractedContext) return parsedContext;
-  const customerText = extractWebTextWidgetCustomerMessage(message);
-  const hasExplicitTradeSignal =
-    !!extractedContext.tradeVehicle ||
-    !!extractedContext.sellOption ||
-    /\btrade\b|\bsell\s+(?:my|the|our)\b|\bcash\b|\bmake a deal\b|\bapprais/i.test(customerText);
-  const mergedContext: WebTextWidgetSalesVehicleContext = {
-    ...(extractedContext.requestedVehicle
-      ? { requestedVehicle: extractedContext.requestedVehicle }
-      : parsedContext.requestedVehicle
-        ? { requestedVehicle: parsedContext.requestedVehicle }
-        : {}),
-    ...(hasExplicitTradeSignal
-      ? extractedContext.tradeVehicle
-        ? { tradeVehicle: extractedContext.tradeVehicle }
-        : parsedContext.tradeVehicle
-          ? { tradeVehicle: parsedContext.tradeVehicle }
-          : {}
-      : {}),
-    ...(hasExplicitTradeSignal
-      ? extractedContext.sellOption
-        ? { sellOption: extractedContext.sellOption }
-        : parsedContext.sellOption
-          ? { sellOption: parsedContext.sellOption }
-          : {}
-      : extractedContext.sellOption
-        ? { sellOption: extractedContext.sellOption }
-        : {})
-  };
-  return Object.keys(mergedContext).length ? mergedContext : null;
+  return mergeWebTextWidgetSalesContext(
+    webTextWidgetParserResultToContext(parsed),
+    extractWebTextWidgetSalesVehicleContext(message),
+    extractWebTextWidgetCustomerMessage(message)
+  );
 }
 
 function webTextWidgetEmbedScript(): string {
@@ -8330,8 +8262,7 @@ app.post("/public/widget/text-us", async (req, res) => {
       preferredContactMethod: "text",
       smsOptIn: true
     } as any);
-    const classification = webTextWidgetClassification(department);
-    setConversationClassification(conv, classification as any);
+    setConversationClassification(conv, webTextWidgetClassification(department) as any);
     setConversationSoftTag(conv, "web_text_widget_department", {
       value: department,
       source: "web_text_widget",
@@ -8359,6 +8290,8 @@ app.post("/public/widget/text-us", async (req, res) => {
     if (department === "sales") {
       const salesVehicleContext = await resolveWebTextWidgetSalesVehicleContext(event.body ?? "", conv, "live");
       applyWebTextWidgetSalesVehicleContext(conv, salesVehicleContext);
+      // Re-stamp now the parser has read the turn: the department alone can only say "buy side".
+      setConversationClassification(conv, webTextWidgetClassification(department, salesVehicleContext) as any);
       const dealerProfile = await getDealerProfileHot();
       const widgetTurn: InboundMessageEvent = {
         ...event,
@@ -53613,7 +53546,10 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     regenWebTextWidgetAckFallback;
   if (regenWebTextWidgetSalesDraft) {
     applyWebTextWidgetSalesVehicleContext(conv, regenWebTextWidgetSalesContext);
-    setConversationClassification(conv, webTextWidgetClassification("sales") as any);
+    setConversationClassification(
+      conv,
+      webTextWidgetClassification("sales", regenWebTextWidgetSalesContext) as any
+    );
     setConversationSoftTag(conv, "web_text_widget_department", {
       value: "sales",
       source: "web_text_widget_regen",

@@ -113,7 +113,11 @@ for (const fn of [
   "decideStockNumberInterestTurn",
   "decidePriceAnswerAnchor",
   "decidePriceObjectionTurn",
-  "decideWalkInInventoryWatchTurn"
+  "decideWalkInInventoryWatchTurn",
+  // Keyed to THIS turn's widget-sales parser verdict (its intent, and whether IT found a requested
+  // vehicle); neither is persisted, so a stored conversation cannot reproduce the inputs. Its
+  // decision table is pinned instead by web_text_widget_seller_bucket:eval, which executes it.
+  "decideWebTextWidgetSalesClassification"
 ]) {
   NOT_PROJECTABLE[fn] = TURN_TEXT_REASON;
 }
