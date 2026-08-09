@@ -4,7 +4,9 @@ import {
   decorateBusinessHoursReply,
   resolveDealerTransactionPolicyRoute,
   resolveInboundTerminalRoute,
-  shouldParseBusinessHoursQuestion
+  shouldParseBusinessHoursQuestion,
+  businessHoursTurnCarriesAnotherAsk,
+  mapBusinessHoursQuestionParse
 } from "../services/api/src/domain/inboundPipeline.ts";
 import fs from "node:fs";
 import path from "node:path";
@@ -215,6 +217,91 @@ const cases: Case[] = [
     }),
     expected: null
   },
+  // ═══ THE ONE-LINE ANSWER IS NOT ENOUGH (Ulises HernandezPerez, Ref 11755, 2026-08-08) ═══
+  // An enrolled Riding Academy student: "...they close early today. I will make it a point to call
+  // at 9am on Monday when they open again, is that going to be too late, WILL I LOSE MY SEAT?"
+  // The hours READ is correct — the live parser says dealership at 0.85-0.90, 4/4 — and the hours
+  // ANSWER is still not what he asked. The queued reply was "Our hours today are 9:00 AM-6:00 PM".
+  // The live parser extracts other_ask verbatim on 4/4 runs, and empty on 4/4 plain hours asks.
+  {
+    id: "a_second_question_hands_the_turn_to_the_full_draft",
+    actual: classifyInboundPreParserTurn({
+      provider: "twilio",
+      channel: "sms",
+      text:
+        "I tried calling but its the weekend and they close early today. I will call at 9am on " +
+        "Monday when they open again, is that going to be too late, will I lose my seat?",
+      hoursQuestionParse: {
+        isHoursQuestion: true,
+        scope: "dealership",
+        day: "Monday",
+        otherAsk: "is that going to be too late, will I lose my seat",
+        confidence: 0.9
+      }
+    }),
+    expected: null
+  },
+  {
+    id: "an_hours_only_turn_still_takes_the_one_line_shortcut",
+    actual: classifyInboundPreParserTurn({
+      provider: "twilio",
+      channel: "sms",
+      text: "what time do you close today?",
+      hoursQuestionParse: {
+        isHoursQuestion: true,
+        scope: "dealership",
+        day: "today",
+        otherAsk: "",
+        confidence: 0.95
+      }
+    })?.routeOutcome,
+    expected: "business_hours_question_pre_parser"
+  },
+  {
+    id: "a_missing_other_ask_field_keeps_todays_behaviour",
+    actual: classifyInboundPreParserTurn({
+      provider: "twilio",
+      channel: "sms",
+      text: "what time do you close today?",
+      hoursQuestionParse: { isHoursQuestion: true, scope: "dealership", day: "today", confidence: 0.95 }
+    })?.routeOutcome,
+    expected: "business_hours_question_pre_parser"
+  },
+  {
+    id: "whitespace_only_other_ask_is_not_another_ask",
+    actual: classifyInboundPreParserTurn({
+      provider: "twilio",
+      channel: "sms",
+      text: "what time do you close today?",
+      hoursQuestionParse: {
+        isHoursQuestion: true,
+        scope: "dealership",
+        day: "today",
+        otherAsk: "   ",
+        confidence: 0.95
+      }
+    })?.routeOutcome,
+    expected: "business_hours_question_pre_parser"
+  },
+  // Independent of scope — "one line is not enough" is true however the hours read landed.
+  {
+    id: "a_second_question_wins_over_a_staff_person_read_too",
+    actual: classifyInboundPreParserTurn({
+      provider: "twilio",
+      channel: "sms",
+      // The text must trip the KEYWORD gate, or the turn is never claimed and this case would pass
+      // for the wrong reason — measured: the "is Giovanni working" phrasing does not trip it.
+      text: "are you open Saturday? and can you send pics of the road glide",
+      hoursQuestionParse: {
+        isHoursQuestion: true,
+        scope: "staff_person",
+        day: "Saturday",
+        otherAsk: "can you send pics of the road glide",
+        confidence: 0.9
+      }
+    }),
+    expected: null
+  },
   // scope is the safety discriminator: store hours are a WRONG answer to these two.
   {
     id: "staff_person_availability_is_not_a_dealership_hours_answer",
@@ -311,16 +398,40 @@ const cases: Case[] = [
     })?.hasScheduleDaySignal,
     expected: true
   },
-  // Cost gate: never pay for a parser call on a turn the regex already routes, and never skip
-  // one on the miss class. Shared by live + regen so the two paths cannot drift.
+  // ⚠️ THE ANTI-INERTNESS ASSERTION. This gate used to return FALSE for any turn the regex already
+  // claimed, on the reasoning that an additive-only parser could not change the outcome. Once the
+  // parser gained a say over those turns (#630's veto, then the other-ask fallthrough), that skip
+  // made BOTH features dead code in production — while every unit check still passed, because they
+  // hand the referee a parse this gate would never have produced. A turn worth an hours ANSWER is
+  // a turn worth an hours PARSE. Measured cost of the change: 7 extra calls in 30 days (0.2/day).
   {
-    id: "hours_parser_not_called_when_regex_already_routes",
+    id: "regex_claimed_turn_is_STILL_worth_a_parse_or_the_veto_is_dead_code",
     actual: shouldParseBusinessHoursQuestion({
       provider: "twilio",
       channel: "sms",
       text: "What time do you close today?"
     }),
-    expected: false
+    expected: true
+  },
+  {
+    id: "the_other_ask_turn_reaches_the_parser_at_all",
+    actual: shouldParseBusinessHoursQuestion({
+      provider: "twilio",
+      channel: "sms",
+      text:
+        "I tried calling but its the weekend and they close early today. I will call at 9am on " +
+        "Monday when they open again, is that going to be too late, will I lose my seat?"
+    }),
+    expected: true
+  },
+  {
+    id: "the_630_veto_turn_reaches_the_parser_at_all",
+    actual: shouldParseBusinessHoursQuestion({
+      provider: "twilio",
+      channel: "sms",
+      text: "If it looks like it'll be close I'll get ahold of you guys. Should I send my id over?"
+    }),
+    expected: true
   },
   {
     id: "hours_parser_called_on_the_production_miss",
@@ -551,7 +662,6 @@ if (passed !== cases.length) {
 // the veto above INERT on exactly the turns it exists for — the customer's turn was still ended by
 // a keyword. `.includes()` on purpose: an escaped paren here would count as a net source pin under
 // eval_source_pin_ratchet.
-const liveHandler = fs.readFileSync(path.resolve("services/api/src/index.ts"), "utf8");
 const assertWiring = (ok: boolean, msg: string) => {
   if (!ok) {
     console.error(`\nFAIL ${msg}`);
@@ -559,6 +669,32 @@ const assertWiring = (ok: boolean, msg: string) => {
   }
   console.log(`PASS ${msg}`);
 };
+const liveHandler = fs.readFileSync(path.resolve("services/api/src/index.ts"), "utf8");
+
+// The parser's OWN mapping, executed on raw model JSON — no LLM call. Without this, the parser
+// could stop carrying other_ask through entirely and every decision-table case above would still
+// pass, because they hand the referee a hand-built parse.
+const mapped = mapBusinessHoursQuestionParse({
+  is_hours_question: true,
+  scope: "dealership",
+  day: "Monday",
+  other_ask: "  will I lose my seat  ",
+  confidence: 0.9
+});
+assertWiring(mapped.otherAsk === "will I lose my seat", "the parser carries other_ask through, trimmed");
+assertWiring(businessHoursTurnCarriesAnotherAsk(mapped), "a mapped parse with another ask reads as one");
+const mappedEmpty = mapBusinessHoursQuestionParse({
+  is_hours_question: true,
+  scope: "dealership",
+  day: "today",
+  other_ask: "",
+  confidence: 0.95
+});
+assertWiring(mappedEmpty.otherAsk === null, "an empty other_ask maps to null, not an empty string");
+assertWiring(!businessHoursTurnCarriesAnotherAsk(mappedEmpty), "an hours-only parse carries no other ask");
+const mappedMissing = mapBusinessHoursQuestionParse({ is_hours_question: true, scope: "dealership", confidence: 0.95 });
+assertWiring(!businessHoursTurnCarriesAnotherAsk(mappedMissing), "a parse with no other_ask field at all is not another ask");
+
 assertWiring(
   liveHandler.includes('livePreParserDecision?.kind === "business_hours_question"'),
   "the live hours door is gated on the shared pre-parser referee"
