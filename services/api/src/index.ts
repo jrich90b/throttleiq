@@ -858,7 +858,9 @@ import {
   resolveFirstTimeRiderGuidanceSource,
   resolveCustomerDispositionSource,
   resolveInboundTerminalRoute,
-  type InboundPreParserDecision
+  resolveRequestedDay,
+  type InboundPreParserDecision,
+  type RequestedDayResolution
 } from "./domain/inboundPipeline.js";
 import {
   SOFT_SCHEDULE_COOLDOWN_MS,
@@ -23083,75 +23085,30 @@ function formatRememberedScheduleTimeForReply(text: string | null | undefined): 
   return token ? formatTime12h(token) : compact;
 }
 
-function extractDayRequest(text: string): string | null {
-  const t = text.toLowerCase();
-  const map: Record<string, string> = {
-    monday: "monday",
-    mondays: "monday",
-    mon: "monday",
-    tuesday: "tuesday",
-    tuesdays: "tuesday",
-    tue: "tuesday",
-    tues: "tuesday",
-    wednesday: "wednesday",
-    wednesdays: "wednesday",
-    wed: "wednesday",
-    thursday: "thursday",
-    thursdays: "thursday",
-    thu: "thursday",
-    thur: "thursday",
-    thurs: "thursday",
-    friday: "friday",
-    fridays: "friday",
-    fri: "friday",
-    saturday: "saturday",
-    saturdays: "saturday",
-    sat: "saturday",
-    sunday: "sunday",
-    sundays: "sunday",
-    sun: "sunday"
-  };
-  for (const key of Object.keys(map)) {
-    const re = new RegExp(`\\b${key}\\b`, "i");
-    if (re.test(t)) return map[key];
-  }
-  return null;
+function resolveRequestedDayForText(text: string, timeZone: string): RequestedDayResolution {
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  return resolveRequestedDay({
+    text,
+    todayKey: dayKey(new Date(), timeZone),
+    tomorrowKey: dayKey(tomorrow, timeZone)
+  });
 }
 
 async function buildBusinessHoursQuestionReply(text: string): Promise<string> {
   const cfg = await getSchedulerConfigHot();
   const dealerProfile = await getDealerProfileHot();
   const country = dealerProfile?.address?.country ?? null;
-  const textLower = String(text ?? "").toLowerCase();
-  const directDayRequest = extractDayRequest(textLower);
-  const wantsToday = /\btoday\b/.test(textLower);
-  const wantsTomorrow = /\btomorrow\b/.test(textLower);
-  const wantsTonight = /\b(tonight|tonite)\b/.test(textLower);
-  let dayRequest = directDayRequest;
-  if (!dayRequest && (wantsToday || wantsTonight)) {
-    dayRequest = dayKey(new Date(), cfg.timezone);
-  } else if (!dayRequest && wantsTomorrow) {
-    const nextDay = new Date();
-    nextDay.setDate(nextDay.getDate() + 1);
-    dayRequest = dayKey(nextDay, cfg.timezone);
-  }
+  const requestedDay = resolveRequestedDayForText(String(text ?? ""), cfg.timezone);
   const hoursLine = formatBusinessHoursForReply(cfg.businessHours, country);
-  if (dayRequest) {
-    const dayHours = cfg.businessHours?.[dayRequest];
-    const dayLabel =
-      wantsTonight || wantsToday
-        ? "today"
-        : wantsTomorrow
-          ? "tomorrow"
-          : dayRequest.replace(/^\w/, c => c.toUpperCase());
+  if (requestedDay.day && requestedDay.dayPhrase) {
+    const dayHours = cfg.businessHours?.[requestedDay.day];
     if (dayHours?.open && dayHours?.close) {
       const open = formatTime12h(dayHours.open);
       const close = formatTime12h(dayHours.close);
-      const dayPhrase = dayLabel === "today" || dayLabel === "tomorrow" ? dayLabel : `on ${dayLabel}`;
-      return `Our hours ${dayPhrase} are ${open}–${close}.`;
+      return `Our hours ${requestedDay.dayPhrase} are ${open}–${close}.`;
     }
-    const closedPhrase = dayLabel === "today" || dayLabel === "tomorrow" ? dayLabel : `on ${dayLabel}`;
-    return `We’re closed ${closedPhrase}.`;
+    return `We’re closed ${requestedDay.dayPhrase}.`;
   }
   if (hoursLine) return `Our hours this week are ${hoursLine}.`;
   return "Our hours vary by day. What day are you thinking?";
@@ -66650,7 +66607,7 @@ if (authToken && signature) {
     const cfg = await getSchedulerConfigHot();
     const tz = cfg.timezone || "America/New_York";
     const dealerProfile = await getDealerProfileHot();
-    const dayRequest = extractDayRequest(textLower);
+    const dayRequest = resolveRequestedDayForText(textLower, tz).namedDay;
     const wantsToday = /\btoday\b/.test(textLower);
     const wantsTomorrow = /\btomorrow\b/.test(textLower);
     const stateName = getDialogState(conv);
