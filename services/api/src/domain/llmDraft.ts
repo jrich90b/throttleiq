@@ -1,3 +1,8 @@
+import { mapBusinessHoursQuestionParse } from "./inboundPipeline.js";
+import {
+  BUSINESS_HOURS_QUESTION_JSON_SCHEMA,
+  buildBusinessHoursQuestionPrompt
+} from "./businessHoursQuestion.js";
 // services/api/src/domain/llmDraft.ts
 import fs from "node:fs";
 import path from "node:path";
@@ -2681,6 +2686,12 @@ export type BusinessHoursQuestionParse = {
   scope: "dealership" | "staff_person" | "appointment_slot" | "none";
   // The day the customer asked about, verbatim ("weekends", "Saturday"), when they named one.
   day?: string | null;
+  // A SECOND question in the same turn that our posted hours would not answer, verbatim, else "".
+  // The hours branch answers in one line and ends the turn, so when this is non-empty that one line
+  // is not enough and the turn belongs to the full draft path instead. A verbatim string rather than
+  // the sibling parsers' `has_other_ask` boolean on purpose: the log then shows exactly what we
+  // would have dropped, and an eval can assert on it instead of on a bit.
+  otherAsk?: string | null;
   confidence?: number;
 };
 
@@ -4084,18 +4095,6 @@ const FINANCE_PROCESS_QUESTION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = 
   }
 };
 
-const BUSINESS_HOURS_QUESTION_JSON_SCHEMA: { [key: string]: unknown } = {
-  type: "object",
-  additionalProperties: false,
-  required: ["is_hours_question", "scope", "day", "confidence"],
-  properties: {
-    is_hours_question: { type: "boolean" },
-    // See BusinessHoursQuestionParse — only "dealership" is answerable from our hours config.
-    scope: { type: "string", enum: ["dealership", "staff_person", "appointment_slot", "none"] },
-    day: { type: ["string", "null"] },
-    confidence: { type: "number" }
-  }
-};
 
 const FINANCE_HARDSHIP_DISCLOSURE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   type: "object",
@@ -9476,46 +9475,7 @@ export async function parseBusinessHoursQuestionWithLLM(args: {
   if (!text) return null;
 
   const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
-  const prompt = [
-    "You read SMS in a Harley dealership sales thread and decide whether the customer is asking",
-    "WHEN THE DEALERSHIP IS OPEN — its business hours — however they phrase it. Many customers",
-    "never say the word 'hours': they ask if we are 'available', 'around', 'there', or 'working'.",
-    "Return only JSON that matches the provided schema.",
-    "",
-    "scope (this is the important field):",
-    '- "dealership": the STORE\'s hours / whether the store is open at some time. Answerable from',
-    "  our posted hours.",
-    '- "staff_person": whether a NAMED PERSON (or "you" meaning the individual rep they have been',
-    "  texting) is working / in that day. Store hours would be a wrong answer.",
-    '- "appointment_slot": whether a specific APPOINTMENT time is free ("anything open at 2?",',
-    '  "do you have a slot Thursday?"). The scheduling handler owns these.',
-    '- "none": not an availability question (inventory, pricing, trade, photos, chit-chat).',
-    "",
-    "Hard rules:",
-    '- "are you guys ..." / "are you open ..." / "your availability" with no person named = dealership.',
-    "  A dealership 'we' question is about the store even when it says 'you'.",
-    "- A named rep, or 'is he/she in', or a question that only makes sense about one person =",
-    "  staff_person.",
-    '- Asking to BOOK or whether a TIME is free = appointment_slot, even though it sounds similar.',
-    '- "any Road Glides available?" is inventory = none. "Available" alone is not an hours word.',
-    "- is_hours_question is true whenever scope is dealership, staff_person, or appointment_slot.",
-    "- confidence is 0..1; use >= 0.7 only when the scope read is clear.",
-    "- day: the day/window the customer named, verbatim, else null.",
-    "",
-    "Examples:",
-    '- "Are you guys available weekends?" -> {"is_hours_question":true,"scope":"dealership","day":"weekends","confidence":0.93}',
-    '- "I do work days what is your availability like?" -> {"is_hours_question":true,"scope":"dealership","day":null,"confidence":0.85}',
-    '- "you guys around on Sunday?" -> {"is_hours_question":true,"scope":"dealership","day":"Sunday","confidence":0.9}',
-    '- "what time do you close today?" -> {"is_hours_question":true,"scope":"dealership","day":"today","confidence":0.95}',
-    '- "is Giovanni working Saturday?" -> {"is_hours_question":true,"scope":"staff_person","day":"Saturday","confidence":0.9}',
-    '- "are you in tomorrow? wanted to see you specifically" -> {"is_hours_question":true,"scope":"staff_person","day":"tomorrow","confidence":0.82}',
-    '- "do you have anything open at 2 on Thursday?" -> {"is_hours_question":true,"scope":"appointment_slot","day":"Thursday","confidence":0.9}',
-    '- "any Road Glides available?" -> {"is_hours_question":false,"scope":"none","day":null,"confidence":0.92}',
-    '- "what would my payment be?" -> {"is_hours_question":false,"scope":"none","day":null,"confidence":0.95}',
-    "",
-    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
-    `Message: ${text}`
-  ].join("\n");
+  const prompt = buildBusinessHoursQuestionPrompt({ text, history });
 
   const runParse = async (model: string): Promise<any | null> =>
     requestStructuredJson({
@@ -9523,7 +9483,8 @@ export async function parseBusinessHoursQuestionWithLLM(args: {
       prompt,
       schemaName: "business_hours_question_parser",
       schema: BUSINESS_HOURS_QUESTION_JSON_SCHEMA,
-      maxOutputTokens: 80,
+      // other_ask is copied verbatim, so the ceiling has to fit a sentence, not just the enums.
+      maxOutputTokens: 160,
       debugTag: "llm-business-hours-question-parser",
       debug
     });
@@ -9534,23 +9495,9 @@ export async function parseBusinessHoursQuestionWithLLM(args: {
     (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
   if (!parsed) return null;
 
-  const rawScope = String(parsed.scope ?? "").toLowerCase();
-  const scope: BusinessHoursQuestionParse["scope"] =
-    rawScope === "dealership" || rawScope === "staff_person" || rawScope === "appointment_slot"
-      ? rawScope
-      : "none";
-  const dayRaw = typeof parsed.day === "string" ? parsed.day.trim() : "";
-  const confidence =
-    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
-      ? Math.max(0, Math.min(1, parsed.confidence))
-      : undefined;
-  return {
-    isHoursQuestion: parsed.is_hours_question === true,
-    scope,
-    day: dayRaw || null,
-    confidence
-  };
+  return mapBusinessHoursQuestionParse(parsed);
 }
+
 
 // Detects a customer DISCLOSING a personal credit/financing hardship (no/bad credit, prior
 // denial or bankruptcy, identity theft affecting credit, fear of a high rate, "I won't

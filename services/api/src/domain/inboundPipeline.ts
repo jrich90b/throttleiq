@@ -56,6 +56,9 @@ export type BusinessHoursQuestionParseInput = {
   isHoursQuestion: boolean;
   scope: "dealership" | "staff_person" | "appointment_slot" | "none";
   day?: string | null;
+  // A second question in the same turn our posted hours would not answer, verbatim (see
+  // BusinessHoursQuestionParse.otherAsk).
+  otherAsk?: string | null;
   confidence?: number;
 };
 
@@ -105,6 +108,58 @@ export function isBusinessHoursQuestionParserAccepted(
   const confidence =
     typeof parse.confidence === "number" && Number.isFinite(parse.confidence) ? parse.confidence : 0;
   return confidence >= BUSINESS_HOURS_QUESTION_PARSER_MIN_CONFIDENCE;
+}
+
+/**
+ * Raw model JSON -> the typed hours parse. Lives here, in the pure module, rather than beside the
+ * prompt: importing llmDraft.ts constructs an OpenAI client at module load, and that would make
+ * this pure decision-table eval need an API key to run.
+ *
+ * Exported so an eval can EXECUTE the mapping. The decision-table cases hand the referee a
+ * hand-built parse, so without this nothing would notice if the parser stopped carrying
+ * `other_ask` through at all.
+ */
+export function mapBusinessHoursQuestionParse(parsed: any): BusinessHoursQuestionParseInput {
+  const rawScope = String(parsed?.scope ?? "").toLowerCase();
+  const scope: BusinessHoursQuestionParseInput["scope"] =
+    rawScope === "dealership" || rawScope === "staff_person" || rawScope === "appointment_slot"
+      ? rawScope
+      : "none";
+  const dayRaw = typeof parsed?.day === "string" ? parsed.day.trim() : "";
+  const confidence =
+    typeof parsed?.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  const otherAskRaw = typeof parsed?.other_ask === "string" ? parsed.other_ask.trim() : "";
+  return {
+    isHoursQuestion: parsed?.is_hours_question === true,
+    scope,
+    day: dayRaw || null,
+    otherAsk: otherAskRaw || null,
+    confidence
+  };
+}
+
+/**
+ * A one-line hours answer ENDS the turn, so it has to be the whole answer. When the customer asked
+ * something else in the same breath, it isn't — and the shortcut would drop that question entirely.
+ *
+ * Ulises HernandezPerez, Ref 11755, 2026-08-08 — an enrolled Riding Academy student:
+ *   "I tried calling ... but its the weekend and they close early today. I will make it a point to
+ *    call at 9am on Monday when they open again, is that going to be too late, WILL I LOSE MY SEAT?"
+ * The hours READ is correct (the live parser says dealership at 0.85-0.90, 4/4) — he really did
+ * reference our hours. They were his CONTEXT, not his question. The queued reply was "Our hours today
+ * are 9:00 AM-6:00 PM", and whether he keeps his seat went unanswered.
+ *
+ * Fail direction: only a NON-EMPTY otherAsk hands the turn to the full draft path. No parse, no
+ * field, or an empty one keeps the shortcut exactly as today — so this can only ever add answering,
+ * never remove it. The shortcut's failure is total and certain (the second question is always lost);
+ * the fallthrough's worst case is a drafted reply a human still reviews.
+ */
+export function businessHoursTurnCarriesAnotherAsk(
+  parse: BusinessHoursQuestionParseInput | null | undefined
+): boolean {
+  return !!String(parse?.otherAsk ?? "").trim();
 }
 
 /**
@@ -236,9 +291,16 @@ function normalizeText(value: string | null | undefined): string {
  * Whether this turn is worth one business-hours parser call. Pure + shared so the live and
  * regenerate paths can never drift on when the parser runs.
  *
- * Note the second gate: a turn the regex ALREADY routes gets no parser call, because the parser
- * is additive-only and could not change the outcome. So the new comprehension costs nothing on
- * the hours questions we handle today — only on the ones we were missing.
+ * ⚠️ This gate USED TO SKIP any turn the regex already claimed ("the parser is additive-only and
+ * could not change the outcome"). That premise died the moment the parser gained a say over turns
+ * the regex claims — first the veto (#630, 2026-08-09), then the other-ask fallthrough below — and
+ * skipping the call made BOTH of them dead code in production while every unit-level check passed,
+ * because those checks hand the referee a parse this gate would never have produced. That is
+ * `parser-fix-inert-until-the-lexical-gate-lets-it-through` exactly, and #630 shipped with it.
+ *
+ * So: a turn worth an hours ANSWER is now a turn worth an hours PARSE. The added cost is one small
+ * call on turns that trip the keyword scan — measured at ~1 a day on this store — and it buys the
+ * two things the regex cannot do: notice it was wrong, and notice the customer asked something else.
  */
 export function shouldParseBusinessHoursQuestion(input: {
   provider: InboundPipelineProvider;
@@ -248,8 +310,7 @@ export function shouldParseBusinessHoursQuestion(input: {
   const text = normalizeText(input.text);
   if (!text) return false;
   if (input.provider !== "twilio" || input.channel !== "sms") return false;
-  if (isBusinessHoursQuestionText(text)) return false;
-  return hasBusinessHoursQuestionHint(text);
+  return isBusinessHoursQuestionText(text) || hasBusinessHoursQuestionHint(text);
 }
 
 export function classifyInboundPreParserTurn(input: {
@@ -274,6 +335,10 @@ export function classifyInboundPreParserTurn(input: {
   if (!parserHoursQuestion && isBusinessHoursQuestionParserVetoed(input.hoursQuestionParse)) {
     return null;
   }
+  // The turn asks something a single hours line cannot answer — the full draft path owns it, so the
+  // second question survives. Independent of scope: "one line is not enough" is true whether the
+  // hours read was dealership, staff_person or appointment_slot.
+  if (businessHoursTurnCarriesAnotherAsk(input.hoursQuestionParse)) return null;
 
   const schedulingSignals = detectSchedulingSignals(text);
   const hasScheduleTimeSignal = !!extractTimeToken(text) || schedulingSignals.hasDayTime;

@@ -365,7 +365,13 @@ const CEILINGS: Ceiling[] = [
     // RE-DERIVED ON REBASE, and this is exactly why: the branch proposed 16_383 against a 16_399
     // ceiling, but main had since ratcheted to 16_381 — landing the branch's number verbatim would
     // have RAISED the ceiling and undone the draftChannelRules extraction. The #418 trap, live.
-    max: 16_365,
+    // 16_365 -> 16_312. The other-ask slice (+17167857284). The hours parser's strict JSON schema and
+    // its whole prompt moved into domain/businessHoursQuestion.ts — everything about that parse except
+    // the API call — and its raw-JSON mapping went to domain/inboundPipeline.ts beside the referee
+    // that reads it (which also let the pure decision-table eval EXECUTE the mapping without needing
+    // an OPENAI_API_KEY to import llmDraft at all). The slice added a schema field and ~20 prompt
+    // lines and still lands 53 under.
+    max: 16_312,
     note: "every parser prompt + JSON schema; second-largest and on the same trajectory"
   }
 ];
