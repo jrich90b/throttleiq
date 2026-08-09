@@ -78,7 +78,7 @@ import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buil
 import { buildAdfResubmissionAck, detectAdfFormResubmission } from "../domain/adfResubmission.js";
 import { buildMarketplaceRelayFirstTouchReply, buildMarketplaceRelayTaskSummary } from "../domain/marketplaceRelay.js";
 import { isHtmlClientNoticeOnly } from "../domain/inboundMailActionability.js";
-import { buildTradeAdfAck } from "../domain/tradeAdfReply.js";
+import { buildTradeAdfAck, tradeAdfPurchaseIsOnFloor } from "../domain/tradeAdfReply.js";
 import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn, decideRidingAcademyTurn, shouldCloseEventPromoLeadOnIntake, resolveRideChallengeEventTouch, decideIncomingInventoryPurpose, decideWalkInInventoryWatchTurn, decideSaleTradeJourneyBucket } from "../domain/routeStateReducer.js";
 import { buildLongTermTimelineMessage } from "../domain/longTermMessage.js";
 import { orchestrateInbound } from "../domain/orchestrator.js";
@@ -8330,7 +8330,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       .join(" ")
       .replace(/\s+/g, " ")
       .trim();
-    let ack = buildTradeAdfAck({ bikeLabel, purchaseLabel, midConversation: false });
+    // The ADF `vehicle` field is what the customer WANTS; it says nothing about what we stock. Ask
+    // the floor before promising to go over it in person (Cale Rice, Ref 11757).
+    const purchaseOnFloor = await tradeAdfPurchaseIsOnFloor({
+      year: activeAdfLeadProfile?.vehicle?.year ?? null,
+      model: activeAdfLeadProfile?.vehicle?.model ?? activeAdfLeadProfile?.vehicle?.description ?? null
+    });
+    let ack = buildTradeAdfAck({ bikeLabel, purchaseLabel, purchaseOnFloor, midConversation: false });
     ack = await applyInitialAdfPrefix(ack);
     addTodo(conv, "other", event.body, event.providerMessageId);
     if (
