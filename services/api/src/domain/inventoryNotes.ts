@@ -194,6 +194,68 @@ export async function collectCadenceInventoryNotes(args: {
   return Array.from(noteSet);
 }
 
+/**
+ * The note a REPLY may narrate — the same question the cadence builder asks, asked from the other
+ * path (Joe, 2026-08-08: "The agent should check the notes on the inventory page as well").
+ *
+ * THE MISS. The reply path looked a note up by the lead's stockId/VIN and stopped there, while the
+ * price path ten screens above it already fell back to a year+model feed match. So a promotion that
+ * lives on the MODEL never reached a customer whose record did not happen to point at one of the
+ * exact units it was typed on. Measured on the live store 2026-08-08: Joe entered "$1,000 Credit
+ * from Harley with a dealer match. So it's a $2,000 savings" on SIX new 2026 Street Glides on 08-01
+ * (unexpired through 08-31), and two Street Glide customers were both drafted without it four days
+ * later — `+17165600980` had no stockId at all, and `+17165981862` pointed at T10-26, which carries
+ * no note and is no longer even in the feed. Staff typed the offer in by hand, twice, two minutes
+ * apart.
+ *
+ * THE POLICY IS NOT NEW AND IS NOT DECIDED HERE. Borrowing a note from a unit we cannot prove is
+ * the lead's own is exactly the case Joe ruled on 2026-08-01 (+17736151296), and this delegates to
+ * `collectCadenceInventoryNotes` so both rulings keep ONE home:
+ *   - same year and no condition conflict => the bare note (provably the unit being named);
+ *   - otherwise ATTRIBUTED to the unit it lives on ("... on a new 2026 Street Glide"), per Joe's
+ *     "state the model year when mentioning discounts";
+ *   - undescribable source unit => dropped.
+ *
+ * Fail direction: NO note. A missing promo costs a discount we could have mentioned; a borrowed one
+ * narrated as the customer's own is a money claim about a bike they are not buying. Hence the
+ * unknown-model guard is the CALLER's (it holds `isUnknownModel`) and an empty `fallbackItems` —
+ * any feed hiccup — simply yields null.
+ */
+export async function resolveInventoryNoteForReply(args: {
+  stockId?: string | null;
+  vin?: string | null;
+  /** Feed rows for the lead's year+model, already looked up by the caller. Empty => no fallback. */
+  fallbackItems?: Array<{
+    stockId?: string | null;
+    vin?: string | null;
+    year?: string | null;
+    condition?: string | null;
+  }>;
+  model?: string | null;
+  leadYear?: string | null;
+  leadCondition?: string | null;
+}): Promise<string | null> {
+  // The lead's OWN unit still wins outright, unchanged — no attribution, no borrowing.
+  const own = await getInventoryNote(args.stockId ?? null, args.vin ?? null);
+  if (own) return own;
+
+  const model = String(args.model ?? "").trim();
+  const items = args.fallbackItems ?? [];
+  if (!model || !items.length) return null;
+
+  // narratedYear null on purpose: the reply's note line claims no year of its own, so the
+  // attribution ruling — not the cross-year guard — is what decides. Exactly the Mark Walsh case.
+  const notes = await collectCadenceInventoryNotes({
+    items,
+    narratedYear: null,
+    model,
+    leadYear: args.leadYear ?? null,
+    leadCondition: args.leadCondition ?? null,
+    max: 1
+  });
+  return notes[0] ?? null;
+}
+
 async function saveStore(store: InventoryNotesStore): Promise<void> {
   const filePath = dataPath(FILE_NAME);
   const payload = {

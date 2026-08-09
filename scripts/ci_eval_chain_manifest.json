@@ -38,6 +38,7 @@
     "first_time_rider_guidance:eval",
     "inventory_hold_cleanup:eval",
     "inventory_status:eval",
+    "inventory_note_reply_fallback:eval",
     "manual_cadence_context:eval",
     "manual_outbound_appointment:eval",
     "parts_catalog_lexicon:eval",
