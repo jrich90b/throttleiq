@@ -6,6 +6,8 @@ import {
   resolveInboundTerminalRoute,
   shouldParseBusinessHoursQuestion
 } from "../services/api/src/domain/inboundPipeline.ts";
+import fs from "node:fs";
+import path from "node:path";
 
 type Case = {
   id: string;
@@ -114,6 +116,104 @@ const cases: Case[] = [
       text: "Are you open Saturday?"
     })?.source,
     expected: "lexical"
+  },
+  // ═══ THE PARSER'S NARROW VETO (+17163975098, 2026-07-16) ═══
+  // He wrote: "…If it looks like it'll be close I'll get ahold of you guys before hand.  Should I
+  // send a photo of my id and my insurance over for it?" — isBusinessHoursQuestionText fires on
+  // "close" (as in CUTTING IT CLOSE) plus a question mark, so the turn was answered "Our hours
+  // tomorrow are 9:00 AM–6:00 PM." and his real question was never answered by anyone.
+  // The live parser reads this false/none at 0.90–0.95 (measured 5/5 on 2026-08-09).
+  {
+    id: "confident_parser_none_vetoes_an_accidental_keyword_hours_claim",
+    actual: classifyInboundPreParserTurn({
+      provider: "twilio",
+      channel: "sms",
+      text:
+        "I should be able to swing in around then tomorrow. If it looks like it'll be close I'll " +
+        "get ahold of you guys before hand.\n\nShould I send a photo of my id and my insurance over for it?",
+      hoursQuestionParse: { isHoursQuestion: false, scope: "none", day: null, confidence: 0.95 }
+    }),
+    expected: null
+  },
+  // UNKNOWN NEVER VETOES — the three ways the parser can fail to speak all keep today's behaviour,
+  // so an LLM outage cannot silently retire the hours answer.
+  {
+    id: "veto_needs_a_parse_at_all_outage_keeps_todays_answer",
+    actual: classifyInboundPreParserTurn({
+      provider: "twilio",
+      channel: "sms",
+      text: "If it looks like it'll be close I'll get ahold of you guys. Should I send my id over?"
+    })?.routeOutcome,
+    expected: "business_hours_question_pre_parser"
+  },
+  {
+    id: "veto_needs_confidence_at_or_above_the_floor",
+    actual: classifyInboundPreParserTurn({
+      provider: "twilio",
+      channel: "sms",
+      text: "If it looks like it'll be close I'll get ahold of you guys. Should I send my id over?",
+      hoursQuestionParse: { isHoursQuestion: false, scope: "none", day: null, confidence: 0.5 }
+    })?.routeOutcome,
+    expected: "business_hours_question_pre_parser"
+  },
+  // Only scope "none" vetoes. staff_person / appointment_slot are REAL availability questions the
+  // hours path handles acceptably; vetoing them would fail toward saying nothing at all.
+  {
+    id: "staff_person_read_does_not_veto_a_real_hours_question",
+    actual: classifyInboundPreParserTurn({
+      provider: "twilio",
+      channel: "sms",
+      text: "what time do you close today?",
+      hoursQuestionParse: { isHoursQuestion: false, scope: "staff_person", day: null, confidence: 0.95 }
+    })?.routeOutcome,
+    expected: "business_hours_question_pre_parser"
+  },
+  {
+    id: "appointment_slot_read_does_not_veto_a_real_hours_question",
+    actual: classifyInboundPreParserTurn({
+      provider: "twilio",
+      channel: "sms",
+      text: "what time do you close today?",
+      hoursQuestionParse: { isHoursQuestion: false, scope: "appointment_slot", day: null, confidence: 0.95 }
+    })?.routeOutcome,
+    expected: "business_hours_question_pre_parser"
+  },
+  // The veto never fights the accept: a parser that CLAIMS the turn still routes it.
+  {
+    id: "a_claiming_parse_still_routes_and_is_never_vetoed",
+    actual: classifyInboundPreParserTurn({
+      provider: "twilio",
+      channel: "sms",
+      text: "what time do you close today?",
+      hoursQuestionParse: { isHoursQuestion: true, scope: "dealership", day: "today", confidence: 0.95 }
+    })?.routeOutcome,
+    expected: "business_hours_question_pre_parser"
+  },
+  // A SELF-CONTRADICTORY parse is not a confident "no". The schema says is_hours_question is true
+  // whenever scope is dealership/staff_person/appointment_slot, so `true` + `none` is a shape the
+  // parser should never emit — but nothing enforces that, and a malformed parse must not be able to
+  // silence a turn. It reads as unknown, and unknown never vetoes.
+  {
+    id: "a_self_contradictory_parse_never_vetoes",
+    actual: classifyInboundPreParserTurn({
+      provider: "twilio",
+      channel: "sms",
+      text: "what time do you close today?",
+      hoursQuestionParse: { isHoursQuestion: true, scope: "none", day: null, confidence: 0.95 }
+    })?.routeOutcome,
+    expected: "business_hours_question_pre_parser"
+  },
+  // A plain hours ask the parser confidently agrees is NOT about hours is a contradiction we do not
+  // invent behaviour for — the parser wins, because that is the whole point of the veto.
+  {
+    id: "veto_applies_even_when_the_keyword_read_looks_obvious",
+    actual: classifyInboundPreParserTurn({
+      provider: "twilio",
+      channel: "sms",
+      text: "are you open to trading for my Road King?",
+      hoursQuestionParse: { isHoursQuestion: false, scope: "none", day: null, confidence: 0.9 }
+    }),
+    expected: null
   },
   // scope is the safety discriminator: store hours are a WRONG answer to these two.
   {
@@ -445,5 +545,31 @@ if (passed !== cases.length) {
   console.error(`\n${cases.length - passed} failures out of ${cases.length} inbound-pipeline cases`);
   process.exit(1);
 }
+
+// BOTH hours doors must ask this referee. The second door used to re-run the raw keyword scan
+// (`isBusinessHoursQuestionText(event.body ?? "")`) and publish the canned line itself, which made
+// the veto above INERT on exactly the turns it exists for — the customer's turn was still ended by
+// a keyword. `.includes()` on purpose: an escaped paren here would count as a net source pin under
+// eval_source_pin_ratchet.
+const liveHandler = fs.readFileSync(path.resolve("services/api/src/index.ts"), "utf8");
+const assertWiring = (ok: boolean, msg: string) => {
+  if (!ok) {
+    console.error(`\nFAIL ${msg}`);
+    process.exit(1);
+  }
+  console.log(`PASS ${msg}`);
+};
+assertWiring(
+  liveHandler.includes('livePreParserDecision?.kind === "business_hours_question"'),
+  "the live hours door is gated on the shared pre-parser referee"
+);
+assertWiring(
+  !liveHandler.includes('isBusinessHoursQuestionText(event.body ?? "")) {'),
+  "no hours door opens on the raw keyword scan alone (that door made the parser veto inert)"
+);
+assertWiring(
+  liveHandler.includes('regenPreParserDecision?.kind === "business_hours_question"'),
+  "the regenerate hours door asks the same referee, so both paths carry the veto"
+);
 
 console.log(`\nAll ${cases.length} inbound-pipeline checks passed.`);

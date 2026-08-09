@@ -310,7 +310,14 @@ const CEILINGS: Ceiling[] = [
     // promise of a person's work pauses the cadence were hand-maintained copies; both now call the
     // pure referee resolveManualPromiseApplyPlan (domain/manualOutboundPromise.ts), so the eval can
     // EXECUTE the whole author difference instead of pinning how far apart two calls sit in the file.
-    max: 70_775,
+    // 70_775 -> 70_753. The hours-veto slice (+17163975098). The pre-parser keyword branch used to
+    // re-run the RAW keyword scan at a SECOND door, so the parser's new veto would have been inert
+    // there; both doors now ask the one referee. index.ts was sitting EXACTLY on the ceiling again
+    // (+5 for the shared-referee condition), so the slice funded itself: formatTime12h and
+    // formatBusinessHoursProposalTime — pure string formatters with no callers outside index.ts —
+    // moved verbatim into domain/inboundPipeline.ts beside resolveRequestedDay, the business-hours
+    // helper the same module already owns. -22 net, so the slice lands well under what it started at.
+    max: 70_753,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

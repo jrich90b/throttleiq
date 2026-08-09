@@ -853,6 +853,8 @@ import {
   canInviteScheduleAfterBusinessHours,
   classifyInboundPreParserTurn,
   decorateBusinessHoursReply,
+  formatBusinessHoursProposalTime,
+  formatTime12h,
   shouldParseBusinessHoursQuestion,
   resolveDealerTransactionPolicyRoute,
   resolveDealerTransactionPolicySource,
@@ -22488,17 +22490,6 @@ function parseDayOfWeek(text: string): { day: string; date: Date } | null {
   return null;
 }
 
-function formatTime12h(time: string): string {
-  const m = time.match(/^(\d{1,2}):(\d{2})$/);
-  if (!m) return time;
-  let hour = Number(m[1]);
-  const minute = m[2];
-  const ampm = hour >= 12 ? "PM" : "AM";
-  hour = hour % 12;
-  if (hour === 0) hour = 12;
-  return `${hour}:${minute} ${ampm}`;
-}
-
 function resolveRangeHour24(
   rawHour: number,
   meridiem: string,
@@ -23124,24 +23115,6 @@ function appendBusinessHoursAppointmentContext(replyRaw: string, textRaw: string
   const dayLabel = day ? day.replace(/^\w/, c => c.toUpperCase()) : "that day";
   const timeLabel = formatBusinessHoursProposalTime(timeToken);
   return `${reply} ${dayLabel} at ${timeLabel} is during open hours, but I still need to check appointment availability before locking it in.`;
-}
-
-function formatBusinessHoursProposalTime(timeToken: string): string {
-  const m = String(timeToken ?? "").match(/^(\d{1,2}):(\d{2})(am|pm)?$/i);
-  if (!m) return timeToken;
-  const rawHour = Number(m[1]);
-  const minute = m[2] ?? "00";
-  const meridiem = String(m[3] ?? "").toLowerCase();
-  let hour24 = rawHour;
-  if (meridiem === "am") {
-    hour24 = rawHour === 12 ? 0 : rawHour;
-  } else if (meridiem === "pm") {
-    hour24 = rawHour === 12 ? 12 : rawHour + 12;
-  } else if (rawHour >= 1 && rawHour <= 6) {
-    // In dealer scheduling, bare "1" through "6" almost always means PM.
-    hour24 = rawHour + 12;
-  }
-  return formatTime12h(`${String(hour24).padStart(2, "0")}:${minute}`);
 }
 
 function isSalesLeadForBusinessHours(conv: any, isServiceLeadOverride?: boolean): boolean {
@@ -59966,7 +59939,12 @@ if (authToken && signature) {
     process.env.LLM_ENABLED === "1" &&
     process.env.LLM_RESPONSE_CONTROL_PARSER_ENABLED !== "0" &&
     !!process.env.OPENAI_API_KEY;
-  if (event.provider === "twilio" && isBusinessHoursQuestionText(event.body ?? "")) {
+  // Second hours door. It used to re-run the RAW keyword scan, so a turn the referee had just
+  // declined on the parser's veto landed here and got the canned hours line anyway — the fix would
+  // have been inert. Ask the same referee both doors already share (its decision is computed above,
+  // parser included) so one reading of the turn governs both. Reachability is unchanged for every
+  // turn the referee still claims.
+  if (event.provider === "twilio" && livePreParserDecision?.kind === "business_hours_question") {
     const reply = appendBusinessHoursAppointmentContext(
       await buildBusinessHoursQuestionReply(event.body ?? ""),
       event.body ?? ""
