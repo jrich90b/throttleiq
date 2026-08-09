@@ -10,6 +10,7 @@ import {
   hasManualPromiseHint,
   isActionablePromiseKind,
   isHumanAuthoredOutbound,
+  resolveManualPromiseApplyPlan,
   type ManualOutboundPromiseInput
 } from "../services/api/src/domain/manualOutboundPromise.ts";
 import type { ManualOutboundPromiseParse } from "../services/api/src/domain/llmDraft.ts";
@@ -342,29 +343,77 @@ for (const t of HINT_NO) check(`hint_no:${t.slice(0, 34)}`, !hasManualPromiseHin
     check(id, d.kind === "none", `expected none, got ${JSON.stringify(d)}`);
   }
 
-  // WIRING: the send path must act on the new kind, and must NOT hold cadence when it does.
+  // ------------------------------------------------------------------------------------------
+  // WHAT THE SEND PATH DOES — EXECUTED, not pinned as source text.
+  //
+  // The first cut of this asserted `pauseFollowUpCadence(` did not appear within 600 characters of
+  // the agent arm. That is a claim about FORMATTING: merging the two apply branches broke it while
+  // the agent branch still held no cadence, and equally, a rename could have satisfied it while the
+  // behaviour rotted. resolveManualPromiseApplyPlan is the real decision, so run it.
+  // ------------------------------------------------------------------------------------------
+  const agentPlan = resolveManualPromiseApplyPlan(
+    decideManualOutboundPromise(base({ parse: incentives, humanAuthored: false }))
+  );
+  check("agent_plan_exists", !!agentPlan, "the agent's promise must still produce a plan (an owner task)");
+  check(
+    "agent_plan_has_no_due_date",
+    agentPlan?.taskDueIso === null,
+    `the agent's promise must carry NO due date, got ${JSON.stringify(agentPlan?.taskDueIso)}`
+  );
+  check(
+    "agent_plan_holds_no_cadence",
+    agentPlan?.holdUntilIso === null,
+    `the agent's promise must NOT hold cadence, got ${JSON.stringify(agentPlan?.holdUntilIso)}`
+  );
+  check(
+    "agent_plan_records_its_own_outcome",
+    agentPlan?.outcomeKey === "agent_promise_owner_task",
+    "an arm that ends in a task must record why, under its own key (2026-08-07 rule)"
+  );
+
+  // The PERSON's branch must be untouched by all of this: still dated, still holding cadence.
+  const humanPlan = resolveManualPromiseApplyPlan(
+    decideManualOutboundPromise(base({ parse: incentives, humanAuthored: true }))
+  );
+  check("human_plan_exists", !!humanPlan, "a person's promise must still produce a plan");
+  check(
+    "human_plan_keeps_its_due_date",
+    typeof humanPlan?.taskDueIso === "string" && humanPlan.taskDueIso.length > 0,
+    `a person's promise must keep its due date, got ${JSON.stringify(humanPlan?.taskDueIso)}`
+  );
+  check(
+    "human_plan_keeps_its_cadence_hold",
+    typeof humanPlan?.holdUntilIso === "string" && humanPlan.holdUntilIso.length > 0,
+    `a person's promise must keep its cadence hold, got ${JSON.stringify(humanPlan?.holdUntilIso)}`
+  );
+  check(
+    "human_plan_keeps_its_outcome_key",
+    humanPlan?.outcomeKey === "manual_outbound_promise_task",
+    "the person branch must keep recording under its original key"
+  );
+
+  // A decision the send path does not recognise must stay SILENT — no task, no hold.
+  check(
+    "unknown_decision_is_quiet",
+    resolveManualPromiseApplyPlan({ kind: "none", reason: "whatever" }) === null,
+    "a non-task decision must produce no plan at all"
+  );
+
+  // WIRING (the one thing execution cannot see from here): index.ts must consult the referee and
+  // apply the hold CONDITIONALLY. `.includes` on purpose — an escaped paren here trips the
+  // source-pin ratchet. See scripts/eval_source_pin_ratchet_eval.ts.
   const fs4 = await import("node:fs");
   const idx4 = fs4.readFileSync("services/api/src/index.ts", "utf8");
-  const armAt = idx4.indexOf('promiseDecision.kind === "agent_promise_owner_task"');
   check(
-    "send_path_arms_the_owner_task",
-    armAt >= 0,
-    "index.ts must act on agent_promise_owner_task, or the referee is decoration"
+    "send_path_asks_the_referee",
+    idx4.includes("resolveManualPromiseApplyPlan(promiseDecision)"),
+    "index.ts must derive its apply plan from the referee, or the referee is decoration"
   );
-  if (armAt >= 0) {
-    const armBlock = idx4.slice(armAt, armAt + 600);
-    check("owner_task_is_added", /addTodo\(/.test(armBlock), "the arm must actually add the task");
-    check(
-      "owner_task_does_not_touch_cadence",
-      !/pauseFollowUpCadence\(/.test(armBlock),
-      "the agent-promise arm must NOT pause cadence — timing is not this change's business"
-    );
-    check(
-      "owner_task_is_recorded",
-      /recordRouteOutcome\(/.test(armBlock),
-      "an arm that ends in a task must record why (2026-08-07 rule)"
-    );
-  }
+  check(
+    "send_path_holds_cadence_only_when_the_plan_says_to",
+    idx4.includes("if (promisePlan.holdUntilIso) pauseFollowUpCadence"),
+    "the cadence hold must be gated on the plan — an unconditional call re-freezes the agent branch"
+  );
 }
 
 if (failures) {

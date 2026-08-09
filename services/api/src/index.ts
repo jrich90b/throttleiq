@@ -85,7 +85,8 @@ import {
 import {
   decideManualOutboundPromise,
   hasManualPromiseHint,
-  isHumanAuthoredOutbound
+  isHumanAuthoredOutbound,
+  resolveManualPromiseApplyPlan
 } from "./domain/manualOutboundPromise.js";
 import { applyTradeVehicleRepair, type TradeVehicleRepairRequest } from "./domain/tradeVehicleRepair.js";
 import { buildPipelineSummary } from "./domain/pipelineFunnel.js";
@@ -52374,30 +52375,16 @@ app.post("/conversations/:id/send", async (req, res) => {
             ),
             humanAuthored: promiseHumanAuthored
           });
-          if (promiseDecision.kind === "agent_promise_owner_task") {
-            const ownerTask = addTodo(conv, "other", promiseDecision.taskSummary, promiseSourceMessageId, undefined, undefined, "reminder");
-            recordRouteOutcome("manual", "agent_promise_owner_task", { convId: conv.id, leadKey: conv.leadKey, channel: promiseChannel, taskCreated: !!ownerTask });
-            saveConversation(conv);
-            return;
-          }
-          if (promiseDecision.kind !== "staff_task") return;
-          const promiseTask = addTodo(
-            conv,
-            "other",
-            promiseDecision.taskSummary,
-            promiseSourceMessageId,
-            undefined,
-            { dueAt: promiseDecision.taskDueIso },
-            "reminder"
-          );
-          pauseFollowUpCadence(conv, promiseDecision.holdUntilIso, "manual_promise_next_step");
-          recordRouteOutcome("manual", "manual_outbound_promise_task", {
-            convId: conv.id,
-            leadKey: conv.leadKey,
-            channel: promiseChannel,
-            taskCreated: !!promiseTask,
-            taskDueAt: promiseDecision.taskDueIso,
-            holdUntil: promiseDecision.holdUntilIso
+          // ONE apply block for both authors; the referee owns the whole difference between them
+          // (dated task + cadence hold for a person, a bare owner task for the agent).
+          const promisePlan = resolveManualPromiseApplyPlan(promiseDecision);
+          if (!promisePlan) return;
+          const promiseTask = addTodo(conv, "other", promisePlan.taskSummary, promiseSourceMessageId,
+            undefined, promisePlan.taskDueIso ? { dueAt: promisePlan.taskDueIso } : undefined, "reminder");
+          if (promisePlan.holdUntilIso) pauseFollowUpCadence(conv, promisePlan.holdUntilIso, "manual_promise_next_step");
+          recordRouteOutcome("manual", promisePlan.outcomeKey, {
+            convId: conv.id, leadKey: conv.leadKey, channel: promiseChannel,
+            taskCreated: !!promiseTask, taskDueAt: promisePlan.taskDueIso, holdUntil: promisePlan.holdUntilIso
           });
           saveConversation(conv);
         } catch (err: any) {

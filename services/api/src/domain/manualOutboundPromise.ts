@@ -169,3 +169,50 @@ export function decideManualOutboundPromise(input: ManualOutboundPromiseInput): 
   // inbound-turn machinery.
   return { kind: "none", reason: `not_applicable_${decision.kind}` };
 }
+
+/**
+ * WHAT THE SEND PATH ACTUALLY DOES with a promise decision — the whole author difference, in one
+ * pure place the eval can EXECUTE.
+ *
+ * It lives here rather than inline in index.ts for a reason earned on 2026-08-09: the first cut of
+ * this slice kept two apply branches in the handler and pinned them with SOURCE TEXT. Those pins
+ * asserted `pauseFollowUpCadence(` did not appear near the agent arm — which is a claim about
+ * formatting, not behaviour, and it broke the moment the two branches were merged even though the
+ * agent branch still held no cadence. A plan object makes the real invariant checkable:
+ *
+ *   - a PERSON's promise  → dated task + cadence hold (unchanged since #450),
+ *   - the AGENT's promise → a task with NO due date and NO hold, because the agent saying
+ *     "shortly" tells us nothing about when a human will get to it,
+ *   - anything else       → null, and the send path does nothing at all.
+ *
+ * FAIL DIRECTION: null is the quiet answer (no task, no hold), so an unrecognised decision kind can
+ * never invent a due date or freeze someone's cadence.
+ */
+export interface ManualPromiseApplyPlan {
+  taskSummary: string;
+  taskDueIso: string | null;
+  holdUntilIso: string | null;
+  outcomeKey: "manual_outbound_promise_task" | "agent_promise_owner_task";
+}
+
+export function resolveManualPromiseApplyPlan(
+  decision: ManualOutboundPromiseDecision
+): ManualPromiseApplyPlan | null {
+  if (decision.kind === "staff_task") {
+    return {
+      taskSummary: decision.taskSummary,
+      taskDueIso: decision.taskDueIso,
+      holdUntilIso: decision.holdUntilIso,
+      outcomeKey: "manual_outbound_promise_task"
+    };
+  }
+  if (decision.kind === "agent_promise_owner_task") {
+    return {
+      taskSummary: decision.taskSummary,
+      taskDueIso: null,
+      holdUntilIso: null,
+      outcomeKey: "agent_promise_owner_task"
+    };
+  }
+  return null;
+}
