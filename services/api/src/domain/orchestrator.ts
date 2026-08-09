@@ -1,7 +1,7 @@
 // services/api/src/domain/orchestrator.ts
 import { loadSystemPrompt } from "./loadPrompt.js";
 import type { InboundMessageEvent, OrchestratorResult } from "./types.js";
-import { buildTradeAdfAck } from "./tradeAdfReply.js";
+import { buildTradeAdfAck, tradeAdfPurchaseIsOnFloor } from "./tradeAdfReply.js";
 import { buildPaymentMethodsReply, hasPaymentMethodsTenderHint } from "./paymentMethodsReply.js";
 import { buildMonthlyTargetAck } from "./financialEmpathyLine.js";
 import { textContainsSchedulingOffer } from "./bookingFunnel.js";
@@ -2886,9 +2886,15 @@ export async function orchestrateInbound(
     // questions. See buildTradeAdfAck (tradeAdfReply.ts).
     const pv = ctx?.lead?.vehicle ?? {};
     const purchaseLabel = [pv?.year, pv?.model ?? pv?.description].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+    // Same floor check as the initial ADF path (routes/sendgridInbound.ts), through the same shared
+    // resolver so the two paths cannot drift (Cale Rice, Ref 11757).
+    const purchaseOnFloor =
+      event.provider === "sendgrid_adf"
+        ? await tradeAdfPurchaseIsOnFloor({ year: pv?.year ?? null, model: pv?.model ?? pv?.description ?? null })
+        : false;
     const draft =
       event.provider === "sendgrid_adf"
-        ? buildTradeAdfAck({ bikeLabel: tradeLabel, purchaseLabel, midConversation: hasPriorOutbound })
+        ? buildTradeAdfAck({ bikeLabel: tradeLabel, purchaseLabel, purchaseOnFloor, midConversation: hasPriorOutbound })
         : "Totally fair question. " +
           leadLine +
           mileageLine +
