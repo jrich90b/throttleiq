@@ -61,6 +61,37 @@ export type BusinessHoursQuestionParseInput = {
 
 export const BUSINESS_HOURS_QUESTION_PARSER_MIN_CONFIDENCE = 0.7;
 
+/** "14:30" -> "2:30 PM". Pure; moved out of index.ts alongside its only non-trivial caller below. */
+export function formatTime12h(time: string): string {
+  const m = String(time ?? "").match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return time;
+  let hour = Number(m[1]);
+  const minute = m[2];
+  const ampm = hour >= 12 ? "PM" : "AM";
+  hour = hour % 12;
+  if (hour === 0) hour = 12;
+  return `${hour}:${minute} ${ampm}`;
+}
+
+/** A customer's bare time token ("4", "4:30pm") rendered for an hours reply. */
+export function formatBusinessHoursProposalTime(timeToken: string): string {
+  const m = String(timeToken ?? "").match(/^(\d{1,2}):(\d{2})(am|pm)?$/i);
+  if (!m) return timeToken;
+  const rawHour = Number(m[1]);
+  const minute = m[2] ?? "00";
+  const meridiem = String(m[3] ?? "").toLowerCase();
+  let hour24 = rawHour;
+  if (meridiem === "am") {
+    hour24 = rawHour === 12 ? 0 : rawHour;
+  } else if (meridiem === "pm") {
+    hour24 = rawHour === 12 ? 12 : rawHour + 12;
+  } else if (rawHour >= 1 && rawHour <= 6) {
+    // In dealer scheduling, bare "1" through "6" almost always means PM.
+    hour24 = rawHour + 12;
+  }
+  return formatTime12h(`${String(hour24).padStart(2, "0")}:${minute}`);
+}
+
 /**
  * Only a confident DEALERSHIP-scope read routes. A staff_person or appointment_slot read is a
  * question store hours would answer WRONGLY, and an unsure read is no read at all.
@@ -71,6 +102,38 @@ export function isBusinessHoursQuestionParserAccepted(
   if (!parse) return false;
   if (parse.isHoursQuestion !== true) return false;
   if (parse.scope !== "dealership") return false;
+  const confidence =
+    typeof parse.confidence === "number" && Number.isFinite(parse.confidence) ? parse.confidence : 0;
+  return confidence >= BUSINESS_HOURS_QUESTION_PARSER_MIN_CONFIDENCE;
+}
+
+/**
+ * The NARROW veto: the parser read the whole turn and confidently says the customer is not asking
+ * about our hours AT ALL (`scope: "none"`). Only then may it overrule a keyword claim.
+ *
+ * Earned by a production miss, +17163975098 on 2026-07-16 — the reason the veto was left out
+ * originally was that no miss had asked for one. The customer wrote:
+ *   "I should be able to swing in around then tomorrow. If it looks like it'll be close I'll get
+ *    ahold of you guys before hand.  Should I send a photo of my id and my insurance over for it?"
+ * `isBusinessHoursQuestionText` fires on "close" (as in CUTTING IT CLOSE) plus a question mark, so
+ * the turn was answered "Our hours tomorrow are 9:00 AM-6:00 PM." and his actual question — should
+ * he send his ID and insurance ahead of the ride — was never answered by anyone.
+ *
+ * Deliberately narrower than `isBusinessHoursQuestionParserAccepted` is permissive:
+ *  - `staff_person` and `appointment_slot` do NOT veto. Those turns ARE availability questions the
+ *    hours path handles acceptably; vetoing them would fail toward saying nothing, which is the
+ *    failure this whole path exists to prevent.
+ *  - No parse, a malformed parse, or confidence under the floor does NOT veto — unknown keeps
+ *    today's behaviour exactly, so an LLM outage cannot silently retire the hours answer.
+ * So the ONLY turns that change are ones where the parser positively read "not an hours question"
+ * and the keyword scan disagreed.
+ */
+export function isBusinessHoursQuestionParserVetoed(
+  parse: BusinessHoursQuestionParseInput | null | undefined
+): boolean {
+  if (!parse) return false;
+  if (parse.isHoursQuestion === true) return false;
+  if (parse.scope !== "none") return false;
   const confidence =
     typeof parse.confidence === "number" && Number.isFinite(parse.confidence) ? parse.confidence : 0;
   return confidence >= BUSINESS_HOURS_QUESTION_PARSER_MIN_CONFIDENCE;
@@ -193,10 +256,10 @@ export function classifyInboundPreParserTurn(input: {
   provider: InboundPipelineProvider;
   channel: "sms" | "email";
   text: string | null | undefined;
-  // Optional: callers that ran the typed parser pass its verdict in. The parser is ADDITIVE
-  // ONLY — it can claim a turn the regex missed, but it never vetoes one the regex claims.
-  // A veto would fail toward NOT answering an hours question, which is the failure this whole
-  // path exists to prevent, and no production miss asks for it.
+  // Optional: callers that ran the typed parser pass its verdict in. The parser CLAIMS turns the
+  // regex missed, and — since 2026-08-09 — may also VETO one the regex wrongly claimed, but only
+  // on a confident `scope: "none"`. See isBusinessHoursQuestionParserVetoed for why that is the
+  // one safe direction to widen in (the miss that earned it: +17163975098, "it'll be close").
   hoursQuestionParse?: BusinessHoursQuestionParseInput | null;
 }): InboundPreParserDecision | null {
   const text = normalizeText(input.text);
@@ -205,6 +268,12 @@ export function classifyInboundPreParserTurn(input: {
   const lexicalHoursQuestion = isBusinessHoursQuestionText(text);
   const parserHoursQuestion = isBusinessHoursQuestionParserAccepted(input.hoursQuestionParse);
   if (!lexicalHoursQuestion && !parserHoursQuestion) return null;
+  // A confident "this turn is not about our hours" ends it. Checked AFTER the accept so the two can
+  // never both hold: accept needs isHoursQuestion true + scope dealership, veto needs it false +
+  // scope none. The keyword scan alone can no longer end a turn the parser read as something else.
+  if (!parserHoursQuestion && isBusinessHoursQuestionParserVetoed(input.hoursQuestionParse)) {
+    return null;
+  }
 
   const schedulingSignals = detectSchedulingSignals(text);
   const hasScheduleTimeSignal = !!extractTimeToken(text) || schedulingSignals.hasDayTime;
