@@ -908,6 +908,23 @@ export function buildFinanceAckVisitQuestion(): string {
   return "Do you want to come see it this week, or is the weekend easier?";
 }
 
+/**
+ * The C1.7 question for a composed reply that may not have named a single unit — the multi-intent
+ * answer (availability / price / trade, in any combination). Sibling of the finance-ack question
+ * above, and deliberately a near-copy of it, with one difference that is the whole point: no "it".
+ *
+ * "Come see IT" needs an antecedent. In the finance ack the copy always names the bike one sentence
+ * earlier, so "it" lands. Here the reply can be trade-only ("For the trade value, we can start with
+ * an estimate…"), where the customer's bike is the only thing "it" could bind to and the sentence
+ * inverts into an invitation to come look at their own motorcycle. Mike Wolf's turn
+ * (+17164323990, 2026-08-07) is exactly that shape — price plus trade, and he had already SEEN the
+ * new bike ("I've already seen one"). So the ask is the visit itself, still a choice of two, which
+ * is what C1.7 prefers and what the offered-a-time funnel metric counts.
+ */
+export function buildVisitAdvanceQuestion(): string {
+  return "Do you want to swing by this week, or is the weekend easier?";
+}
+
 export type FinanceSubmissionAckArgs = {
   /** A pre-qualification submission reads differently from a submitted credit application. */
   kind: "prequal" | "credit_app";

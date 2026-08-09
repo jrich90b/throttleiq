@@ -103,6 +103,7 @@
     "voice_charter:eval",
     "voice_banned_phrase:eval",
     "template_charter_clean:eval",
+    "multi_intent_reply_advance:eval",
     "long_term_message:eval",
     "intent_handled:eval",
     "corpus_replay_flywheel:eval",

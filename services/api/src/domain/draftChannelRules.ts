@@ -72,6 +72,51 @@ export function advanceEveryReplySuppressed(ctx: {
 }
 
 /**
+ * Charter C1.7 for a COMPOSED DETERMINISTIC reply — the tail that makes a template end by asking.
+ *
+ * C1.7 binds our own templates exactly as it binds the LLM composer: "a hardcoded ack that ends in
+ * a statement is out of compliance with it". The finance-submission ack (#618) applies the rule to a
+ * single fixed string; this helper is the same rule for a draft ASSEMBLED from several optional
+ * lines, where whether anything asks depends on which lines happened to fire.
+ *
+ * The turn that named it: Mike Wolf (+17164323990, 2026-08-07 18:02) — "Thanks Scott, I've already
+ * seen one but I'll be by soon to get a price on a trade in." He told us he was coming in. The
+ * multi-intent composer answered with a price line and a trade-estimate line and asked NOTHING, so
+ * the one thing worth knowing — which day — was never asked, and the rep replaced the draft by hand
+ * with "let me know when you plan on stopping by with your bike."
+ *
+ * Two guards, and both are the charter's own words:
+ *  - the four suppressions are `advanceEveryReplySuppressed` — the SAME referee the composer uses,
+ *    so grief / not-interested / already-bought / already-booked threads are never pushed;
+ *  - "At most one question per message" is a CEILING ("One question. Never two."), so a draft that
+ *    already asks something is returned untouched. That is why this reads the assembled draft
+ *    rather than any one line: the scheduling, out-of-stock-preference and payment-follow-up lines
+ *    each ask on their own, and any of them may or may not be present.
+ *
+ * FAIL DIRECTION: a miss is exactly today's behavior (a statement-only reply — the pre-C1.7 norm).
+ * An over-fire appends one visit question to a reply that had none, on a thread with no hardship, no
+ * closing, no sale and no booking — recoverable, staff-visible, and a draft either way in suggest
+ * mode. Returns the tail (space-prefixed) so the caller's copy stays in one place.
+ */
+export function templateAdvanceTail(args: {
+  draft: string;
+  ask: string;
+  ctx: {
+    needsEmpathy?: boolean | null;
+    dispositionClosing?: boolean | null;
+    alreadyPurchased?: boolean | null;
+    appointment?: any;
+  };
+}): string {
+  const draft = String(args.draft ?? "");
+  const ask = String(args.ask ?? "").trim();
+  if (!draft.trim() || !ask) return "";
+  if (advanceEveryReplySuppressed(args.ctx ?? {})) return "";
+  if (draft.includes("?")) return ""; // the ceiling: never a second question
+  return ` ${ask}`;
+}
+
+/**
  * The per-channel rule block for the draft prompt. Lifted out of llmDraft.ts so the surface that
  * changes every time we learn something about voice can grow on its own budget — the same move as
  * customerAckActionExemplars.ts and vehicleChoiceConfidencePrompt.ts.

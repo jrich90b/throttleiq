@@ -72,9 +72,10 @@ import {
   isStockNumberInventoryInterestText,
   buildHiringManagerInquiryReply,
   buildTakeOffMilwaukeeEightEngineReply,
-  buildFinanceAckVisitQuestion
+  buildFinanceAckVisitQuestion,
+  buildVisitAdvanceQuestion
 } from "./workflowRegressionGuards.js";
-import { advanceEveryReplySuppressed } from "./draftChannelRules.js";
+import { advanceEveryReplySuppressed, templateAdvanceTail } from "./draftChannelRules.js";
 import { getSchedulerConfig, dayKey, getPreferredSalespeople } from "./schedulerConfig.js";
 import { getAuthedCalendarClient, queryFreeBusy } from "./googleCalendar.js";
 import {
@@ -3670,7 +3671,23 @@ export async function orchestrateInbound(
     }
 
     const parts = [availabilityLine, pricingOrPaymentsLine, tradeLine, schedulingLine].filter(Boolean);
-    const draft = parts.join(" ").trim() || fallbackDraft;
+    const composed = parts.join(" ").trim() || fallbackDraft;
+    // Charter C1.7 — a multi-intent answer that produced no scheduling line still has to end by
+    // advancing the lead. Only the schedulingLine arm asks anything here, and it needs
+    // wantsScheduling; Mike Wolf (+17164323990, 2026-08-07) volunteered the visit in words that arm
+    // does not read ("I'll be by soon to get a price on a trade in") and got price + trade copy and
+    // no question at all. templateAdvanceTail returns "" when the assembled draft already asks
+    // something, so this can never produce a second question.
+    const draft = `${composed}${templateAdvanceTail({
+      draft: composed,
+      ask: buildVisitAdvanceQuestion(),
+      ctx: {
+        needsEmpathy: !!ctx?.needsEmpathy,
+        dispositionClosing: !!ctx?.dispositionClosing,
+        alreadyPurchased: !!ctx?.sale,
+        appointment: ctx?.appointment
+      }
+    })}`;
     return finalize({
       intent,
       stage: "ENGAGED",
