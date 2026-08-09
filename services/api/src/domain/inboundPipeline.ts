@@ -406,3 +406,91 @@ export function decorateBusinessHoursReply(input: {
   }
   return `${baseReply} If you're thinking about coming in, what time works best? I can put you down on the schedule.`;
 }
+
+const NAMED_WEEKDAYS: Record<string, string> = {
+  monday: "monday",
+  mondays: "monday",
+  mon: "monday",
+  tuesday: "tuesday",
+  tuesdays: "tuesday",
+  tue: "tuesday",
+  tues: "tuesday",
+  wednesday: "wednesday",
+  wednesdays: "wednesday",
+  wed: "wednesday",
+  thursday: "thursday",
+  thursdays: "thursday",
+  thu: "thursday",
+  thur: "thursday",
+  thurs: "thursday",
+  friday: "friday",
+  fridays: "friday",
+  fri: "friday",
+  saturday: "saturday",
+  saturdays: "saturday",
+  sat: "saturday",
+  sunday: "sunday",
+  sundays: "sunday",
+  sun: "sunday"
+};
+
+export type RequestedDayResolution = {
+  /** A weekday the customer named outright ("on Monday"). Null when they named none. */
+  namedDay: string | null;
+  /** The day whose hours/forecast we should look up. Null when the turn names no day at all. */
+  day: string | null;
+  /** How the reply must refer to that day — always derived from the SAME branch that set `day`. */
+  label: string | null;
+  /** Drop-in phrase for a sentence: "today" | "tomorrow" | "on Monday". */
+  dayPhrase: string | null;
+  source: "named_day" | "today" | "tomorrow" | "none";
+};
+
+/**
+ * Single source of truth for "which day is this turn asking about, and what do we CALL it?".
+ *
+ * A named weekday outranks a bare "today"/"tomorrow", because a customer who writes
+ * "they close early today, I will call at 9am on Monday" is asking about MONDAY. The label is
+ * returned alongside the day so a caller cannot look one day up and print another — the
+ * +17167857284 miss, where Monday's 9-6 window went out as "Our hours today are 9:00 AM-6:00 PM"
+ * on a Saturday that actually closed at 3:00 PM.
+ *
+ * Pure: the caller supplies today's and tomorrow's weekday keys, so this never reads the clock.
+ */
+export function resolveRequestedDay(input: {
+  text: string | null | undefined;
+  todayKey: string;
+  tomorrowKey: string;
+}): RequestedDayResolution {
+  const text = String(input.text ?? "").toLowerCase();
+  let namedDay: string | null = null;
+  for (const key of Object.keys(NAMED_WEEKDAYS)) {
+    if (new RegExp(`\\b${key}\\b`, "i").test(text)) {
+      namedDay = NAMED_WEEKDAYS[key];
+      break;
+    }
+  }
+  if (namedDay) {
+    const label = namedDay.replace(/^\w/, c => c.toUpperCase());
+    return { namedDay, day: namedDay, label, dayPhrase: `on ${label}`, source: "named_day" };
+  }
+  if (/\b(today|tonight|tonite)\b/.test(text)) {
+    return {
+      namedDay: null,
+      day: String(input.todayKey ?? "").toLowerCase() || null,
+      label: "today",
+      dayPhrase: "today",
+      source: "today"
+    };
+  }
+  if (/\btomorrow\b/.test(text)) {
+    return {
+      namedDay: null,
+      day: String(input.tomorrowKey ?? "").toLowerCase() || null,
+      label: "tomorrow",
+      dayPhrase: "tomorrow",
+      source: "tomorrow"
+    };
+  }
+  return { namedDay: null, day: null, label: null, dayPhrase: null, source: "none" };
+}

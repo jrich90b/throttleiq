@@ -300,7 +300,13 @@ const CEILINGS: Ceiling[] = [
     // helpers (accepted / vehicle-to-context / result-to-context) went with it, so an eval can
     // EXECUTE the chain from a raw parse instead of pinning its source text. The slice funded its own
     // two new call-site lines and still lands NET SMALLER.
-    max: 70_824,
+    // 70_824 -> 70_781. The requested-day slice (+17167857284). index.ts resolved "which day is this
+    // turn about?" with one expression and "what do we CALL that day?" with a second, independent
+    // one — so it looked up Monday and printed "today". Both now come from resolveRequestedDay in
+    // domain/inboundPipeline.ts, which returns the day and its label together; index.ts loses its
+    // private 34-line weekday map, and the weather branch that already had the precedence right
+    // shares the same referee.
+    max: 70_781,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
