@@ -306,7 +306,11 @@ const CEILINGS: Ceiling[] = [
     // domain/inboundPipeline.ts, which returns the day and its label together; index.ts loses its
     // private 34-line weekday map, and the weather branch that already had the precedence right
     // shares the same referee.
-    max: 70_781,
+    // 70_781 -> 70_775. The manual-promise owner slice. The two apply branches that decided whether a
+    // promise of a person's work pauses the cadence were hand-maintained copies; both now call the
+    // pure referee resolveManualPromiseApplyPlan (domain/manualOutboundPromise.ts), so the eval can
+    // EXECUTE the whole author difference instead of pinning how far apart two calls sit in the file.
+    max: 70_775,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
