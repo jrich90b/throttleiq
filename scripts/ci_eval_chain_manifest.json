@@ -423,6 +423,7 @@
     "watch_model_match:eval",
     "watch_field_hygiene:eval",
     "watch_alert_daily_cap:eval",
+    "watch_alert_unanswered_pause:eval",
     "model_family:eval",
     "family_watch_clarify:eval",
     "watch_sibling_scope:eval",

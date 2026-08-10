@@ -2,6 +2,12 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import type { InboundMessageEvent } from "./types.js";
 import { maybeMarkEngagedFromInbound } from "./engagement.js";
+import { setInventoryWatchOptOut } from "./inventoryWatchOptOut.js";
+import {
+  decideUnansweredWatchAlertPause,
+  hasSentWatchCloseOut,
+  type UnansweredWatchAlertDecision
+} from "./watchAlertUnansweredPause.js";
 import {
   decideAppointmentBookingRecord,
   decideAppointmentConfirmRecord,
@@ -108,7 +114,7 @@ import {
 } from "./draftStateInvariants.js";
 import { isPhoneLogConversation } from "./phoneLogLead.js";
 import type { StaffPingRecord } from "./staffPing.js";
-import { buildPersonaSelfIntroPattern } from "./agentVoice.js";
+import { buildPersonaSelfIntroPattern, buildUnansweredWatchCloseOutReply } from "./agentVoice.js";
 import { getCachedDealerProfile } from "./dealerProfile.js";
 import { findComputerLikePhrases } from "./voiceBannedPhrases.js";
 import {
@@ -5756,6 +5762,100 @@ export function collectInventoryWatches(conv: any): InventoryWatch[] {
   const arr: InventoryWatch[] = Array.isArray(conv?.inventoryWatches) ? conv.inventoryWatches : [];
   const single: InventoryWatch | undefined = conv?.inventoryWatch ?? undefined;
   return single && !arr.includes(single) ? [...arr, single] : arr;
+}
+
+// Does this conversation have at least one ACTIVE inventory watch (one the engine would still fire)?
+// Unions the single `inventoryWatch` AND the `inventoryWatches` array (collectInventoryWatches) — they
+// can coexist, so the old array-if-present-else-single check missed an active single watch.
+export function hasActiveInventoryWatch(conv: any): boolean {
+  return collectInventoryWatches(conv).some((w: any) => w && w.status !== "paused");
+}
+
+// Remove a customer from active inventory-watch alerts: pause every active watch (the watch-fire
+// engine skips paused watches). Reversible — keeps the record so they can be re-added if they ask.
+// Returns how many were paused. Unions single + array so neither is left active.
+export function pauseInventoryWatches(conv: any): number {
+  let paused = 0;
+  for (const w of collectInventoryWatches(conv)) {
+    if (w && w.status !== "paused") {
+      w.status = "paused";
+      paused++;
+    }
+  }
+  return paused;
+}
+
+// Explicit customer opt-out: pause the current watches AND set the durable opt-out flag so a later
+// watch (re-)creation can't refire alerts at someone who asked us to stop. See inventoryWatchOptOut.ts.
+export function markInventoryWatchOptOut(conv: any, reason: string): number {
+  setInventoryWatchOptOut(conv, reason);
+  return pauseInventoryWatches(conv);
+}
+
+/**
+ * SIDE EFFECT half of the unanswered-alert stop (decision lives in watchAlertUnansweredPause.ts,
+ * which stays import-free so its eval is not a shared-file barrier).
+ *
+ * At a watch fire site: pause every active watch and raise ONE staff task in place of the text.
+ * Returns the decision when it paused, null when the conversation is still inside its allowance
+ * (the caller then fires exactly as before).
+ *
+ * Called from BOTH watch fire paths in index.ts (`processInventoryWatchlist` and
+ * `notifyInventoryWatchersForAvailableItem`) so the arrival cron and the hold-release path stay in
+ * lockstep. The pause goes through pauseInventoryWatches — the same referee the explicit opt-out
+ * uses — so this adds no new writer of `inventoryWatches`. The task is a `call`, which addTodo
+ * merges by task class, so a lead can never accumulate a pile of them.
+ *
+ * It also queues ONE close-out text (Joe, 2026-08-10: leave "the floor open to keep the watch or
+ * let us know if they are looking for something different"), because a silent pause drops the lead
+ * with nobody the wiser. It is a `draft_ai` like the alerts it replaces, so staff still approve it,
+ * and it is guarded by hasSentWatchCloseOut so a re-run can never send a second one.
+ */
+export function applyUnansweredWatchAlertPause(
+  conv: any,
+  nowIsoValue: string,
+  opts?: { limit?: number }
+): UnansweredWatchAlertDecision | null {
+  const decision = decideUnansweredWatchAlertPause(conv, opts);
+  if (!decision.pause) return null;
+  const paused = pauseInventoryWatches(conv);
+  if (paused > 0) {
+    addTodo(conv, "call", decision.summary, undefined, conv?.leadOwner);
+    if (!hasSentWatchCloseOut(conv)) {
+      const to = conv?.lead?.phone ?? conv?.leadKey;
+      if (to) {
+        appendOutbound(
+          conv,
+          "salesperson",
+          to,
+          buildUnansweredWatchCloseOutReply({
+            firstName: conv?.lead?.firstName ?? null,
+            bikeLabel: watchedModelLabelForCloseOut(conv)
+          }),
+          "draft_ai"
+        );
+      }
+    }
+    conv.updatedAt = nowIsoValue;
+    saveConversation(conv);
+  }
+  return decision;
+}
+
+/**
+ * The model to name in the close-out, or null to keep it generic. Only a label the CUSTOMER's own
+ * watch carries is used — never an inventory unit — so the sign-off cannot name a bike they never
+ * asked about. Distinct models on one thread => stay generic rather than pick a favourite.
+ */
+function watchedModelLabelForCloseOut(conv: any): string | null {
+  const labels = new Set<string>();
+  for (const watch of collectInventoryWatches(conv)) {
+    const model = String((watch as any)?.model ?? "").trim();
+    if (!model) continue;
+    const year = String((watch as any)?.year ?? "").trim();
+    labels.add(year ? `${year} ${model}` : model);
+  }
+  return labels.size === 1 ? [...labels][0] : null;
 }
 
 /**

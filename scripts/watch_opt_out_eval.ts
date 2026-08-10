@@ -48,7 +48,18 @@ assert.ok(
   !/if \(!watchOptOutHint\(/.test(index),
   "nothing may gate the watch-opt-out parser call on a word list again"
 );
-assert.ok(/function pauseInventoryWatches/.test(index) && /function hasActiveInventoryWatch/.test(index), "pause + active-watch helpers must exist");
+// The helpers moved to conversationStore.ts (beside collectInventoryWatches, whose union they read)
+// when the unanswered-alert stop landed — index.ts calls them, the store owns them. Assert BOTH: the
+// definitions exist in their new home AND index.ts still imports them, so a lost wire cannot pass.
+const store = fs.readFileSync("services/api/src/domain/conversationStore.ts", "utf8");
+assert.ok(
+  /export function pauseInventoryWatches/.test(store) && /export function hasActiveInventoryWatch/.test(store),
+  "pause + active-watch helpers must exist (conversationStore.ts)"
+);
+assert.ok(
+  /pauseInventoryWatches,/.test(index) && /hasActiveInventoryWatch,/.test(index),
+  "index.ts must import the pause + active-watch helpers"
+);
 const callSites = (index.match(/await resolveWatchOptOutReply\(/g) || []).length;
 assert.ok(callSites >= 2, `the resolver must be wired in BOTH paths; found ${callSites}`);
 // Belt-and-suspenders: explicit STOP + disposition closeout also pause the watch.
