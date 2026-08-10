@@ -1146,5 +1146,15 @@ console.log("PASS MDF toolbox SSO handoff — the Marketing Development Fund cli
     runnerSrc.indexOf("portalFormDidNotExpandSummary()") < phaseBAt,
     "phase B runs after the form-expansion gate, so a slow render is never mistaken for a missing control"
   );
+  // And the result must actually STOP the run. Order and existence are not enough: neutering the
+  // branch (`if (false && …)`) left every other assertion here green. A check nobody acts on is the
+  // same defect in a different costume.
+  assert.match(
+    runnerSrc,
+    /if \(missingPostDateControls\.length\) \{\s*
+\s*await browser\.close\(\);\s*
+\s*return \{ code: 2, summary: ansiraFormChangedSummary\(missingPostDateControls\) \};/,
+    "a missing post-date control CLOSES the browser and blocks the run with the named control"
+  );
 }
 console.log("PASS Ansira control-phase split — #activity-sub-detail is checked AFTER the dates, where Ansira actually creates it.");
