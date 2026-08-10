@@ -24,7 +24,36 @@ type Row = {
   wouldSend: boolean;
   reason: string;
   ack: string;
+  /** Absent on every row written before 2026-08-10 — those are UNKNOWN, never assumed live. */
+  origin?: "live" | "replay";
 };
+
+/**
+ * Which rows may be graded against the flip bar.
+ *
+ * `corpus_replay_nightly` shells out to `inbound_shadow_replay`, which runs each case against a
+ * SANDBOX store but inherits the live REPORT_ROOT — so rehearsals of historical turns land in this
+ * same file. Measured 2026-08-10: 722 would-send rows over 11 days against 46 real new leads (~15x),
+ * with one lead (+15126299400, really texted once on 07-19) appearing as a would-send on ELEVEN
+ * consecutive days. Graded naively that reads as a duplicate-send bug; it is a rehearsal counted as
+ * a performance.
+ *
+ * Rows written before the origin stamp existed cannot be classified after the fact — timestamps
+ * cannot do it, because the replay jobs run at several different hours and outnumber the ~4 real
+ * leads/day. So they are UNKNOWN and excluded, which keeps the bar conservative: the flip waits for
+ * clean evidence rather than being approved on contaminated evidence.
+ */
+export function gradableRows(rows: Row[]): { live: Row[]; replay: Row[]; unknown: Row[] } {
+  const live: Row[] = [];
+  const replay: Row[] = [];
+  const unknown: Row[] = [];
+  for (const r of rows) {
+    if (r.origin === "live") live.push(r);
+    else if (r.origin === "replay") replay.push(r);
+    else unknown.push(r);
+  }
+  return { live, replay, unknown };
+}
 
 function parseArgs(argv: string[]): { dir: string; limit: number; all: boolean } {
   const args = new Map<string, string>();
@@ -78,14 +107,36 @@ function main(): void {
     return;
   }
 
-  const wouldSend = rows.filter(r => r.wouldSend);
-  const held = rows.filter(r => !r.wouldSend);
+  const split = gradableRows(rows);
+  // Only LIVE rows describe what would really have gone to a customer.
+  const gradable = split.live;
+  const wouldSend = gradable.filter(r => r.wouldSend);
+  const held = gradable.filter(r => !r.wouldSend);
   const reasonCounts = new Map<string, number>();
-  for (const r of rows) reasonCounts.set(r.reason, (reasonCounts.get(r.reason) ?? 0) + 1);
+  for (const r of gradable) reasonCounts.set(r.reason, (reasonCounts.get(r.reason) ?? 0) + 1);
 
   console.log("=== First-touch auto-send SHADOW (nothing was sent) ===");
   console.log(`Source: ${path.join(dir, "first_touch_autosend_shadow.jsonl")}`);
-  console.log(`Records: ${rows.length}  |  WOULD auto-send: ${wouldSend.length}  |  held for staff: ${held.length}`);
+  console.log(
+    `Records: ${rows.length}  |  live: ${split.live.length}  |  replay (excluded): ${split.replay.length}` +
+      `  |  unstamped/UNKNOWN (excluded): ${split.unknown.length}`
+  );
+  console.log(`LIVE rows — WOULD auto-send: ${wouldSend.length}  |  held for staff: ${held.length}`);
+  if (split.unknown.length) {
+    console.log(
+      `NOTE: ${split.unknown.length} row(s) predate the origin stamp (2026-08-10) and cannot be told ` +
+        `apart from replays. They are excluded from every count above — the flip bar must be graded ` +
+        `on rows written after the stamp landed.`
+    );
+  }
+  // Duplicate check, on LIVE rows only — the criterion that was being graded on replay traffic.
+  const seen = new Map<string, number>();
+  for (const r of wouldSend) {
+    const key = String(r.convId ?? r.leadKey ?? "");
+    if (key) seen.set(key, (seen.get(key) ?? 0) + 1);
+  }
+  const dupes = [...seen.entries()].filter(([, n]) => n > 1);
+  console.log(`LIVE duplicate would-send leads: ${dupes.length}${dupes.length ? " -> " + dupes.map(([k, n]) => `${k} x${n}`).join(", ") : " (bar criterion 3: PASS so far)"}`);
   console.log("Reasons: " + [...reasonCounts.entries()].map(([r, c]) => `${r}=${c}`).join(", "));
 
   const show = all ? wouldSend : wouldSend.slice(-limit);

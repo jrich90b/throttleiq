@@ -124,6 +124,7 @@
     "openai_usage_pricing:eval",
     "model_authority:eval",
     "first_touch_autosend:eval",
+    "first_touch_shadow_origin:eval",
     "persona_continuity:eval",
     "release_gate:eval",
     "scoring_exclusions:eval",
