@@ -53,7 +53,8 @@ import {
   buildDeptWidgetAcquisitionReply
 } from "./domain/webWidgetDeptBikeClarify.js";
 import { decideConversationAccess } from "./domain/conversationAccess.js";
-import { buildMacInstallerScript, shellSingleQuote } from "./domain/mdfRunnerMacInstaller.js";
+import { removeUploadedFileFromPacket } from "./domain/mdfClaimFileRemoval.js";
+import { buildMacInstallerScript, externalApiBase, shellSingleQuote } from "./domain/mdfRunnerMacInstaller.js";
 import { isProactiveContactPaused } from "./domain/proactiveContactPause.js";
 import {
   isInventoryWatchOptedOut,
@@ -49029,6 +49030,17 @@ app.patch("/mdf/claims/:id", requireManager, (req, res) => {
   return res.json({ ok: true, claim: updated });
 });
 
+// Take one uploaded document back off a claim (a mis-upload). The reducer also stops any invoice row
+// referencing it and reports rows left with no evidence — see domain/mdfClaimFileRemoval.ts.
+app.post("/mdf/claims/:id/remove-file", requireManager, (req, res) => {
+  const claim = getMdfClaim(req.params.id);
+  if (!claim) return res.status(404).json({ ok: false, error: "MDF claim not found." });
+  const result = removeUploadedFileFromPacket(claim.packet as any, req.body ?? {});
+  if (!result.removed) return res.status(404).json({ ok: false, error: "That file is not on this claim." });
+  const updated = updateMdfClaim(req.params.id, { packet: result.packet as any });
+  return res.json({ ok: true, claim: updated, removedFile: result.removedFile, orphanedInvoices: result.orphanedInvoices });
+});
+
 app.delete("/mdf/claims/:id", requireManager, (req, res) => {
   const existed = deleteMdfClaim(req.params.id);
   return res.json({ ok: true, deleted: existed });
@@ -49453,18 +49465,6 @@ app.delete("/mdf/portal-runner/registration", requireManager, async (req, res) =
     revokedMachineId: firstRetired?.revokedMachineId ?? null
   });
 });
-
-function externalApiBase(req: any): string {
-  const configured =
-    process.env.MDF_PORTAL_PUBLIC_API_BASE_URL ||
-    process.env.LEADRIDER_API_BASE_URL ||
-    process.env.PUBLIC_API_BASE_URL ||
-    "";
-  if (configured.trim()) return configured.trim().replace(/\/$/, "");
-  const proto = String(req.headers["x-forwarded-proto"] || req.protocol || "https").split(",")[0].trim();
-  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
-  return host ? `${proto}://${host}` : "";
-}
 
 app.get("/mdf/portal-runner/install.sh", requireManager, async (req, res) => {
   const runnerToken = String(process.env.MDF_PORTAL_RUNNER_TOKEN ?? process.env.AUTOMATION_RUN_WRITE_TOKEN ?? "").trim();
