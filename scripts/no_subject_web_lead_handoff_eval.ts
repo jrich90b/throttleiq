@@ -265,9 +265,18 @@ assert.equal(
 // This is the half that was measured wrong first and would have made the accept inert: the replay
 // harness reads its router fields out of a sandbox copy the debounced handler never flushes, so the
 // route has to REPORT the decision and the harness has to prefer the report.
+// Scoped to the TERMINAL response — the exit a subjectless lead actually leaves through. Three
+// earlier branch exits already reported the reason on `main`, so a bare file-wide `includes` was
+// satisfied by those and could not see whether THIS exit reports it: a sabotage that blanked the
+// terminal pair survived until this was scoped.
+const terminalResponse = sendgrid.slice(sendgrid.lastIndexOf("    intent: result.intent,"));
 assert.ok(
-  sendgrid.includes("followUpReason: conv.followUp?.reason ?? null"),
-  "the ADF route must report its handoff reason — the store copy a replay sees is the PRE-turn state"
+  terminalResponse.includes("followUpReason: conv.followUp?.reason ?? null"),
+  "the ADF route's FINAL response must report its handoff reason — the store copy a replay sees is the PRE-turn state"
+);
+assert.ok(
+  terminalResponse.includes("followUpMode: conv.followUp?.mode ?? null"),
+  "…and the mode alongside it, so a reader can tell a handoff from an active thread"
 );
 const replay = fs.readFileSync(path.resolve("scripts/inbound_shadow_replay.ts"), "utf8");
 assert.ok(
