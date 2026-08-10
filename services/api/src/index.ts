@@ -49304,7 +49304,9 @@ async function validateMdfPortalRunnerMachine(
       status: 409,
       code: "runner_revoked",
       error:
-        "runner_revoked: this computer was retired from the LeadRider runner in the console. Stopping. To use this computer again, run the runner installer on it."
+        "runner_revoked: this computer was retired from the LeadRider runner in the console. Stopping. " +
+        "To use this computer again, run the runner INSTALLER on it (that re-identifies the computer and clears the retirement) — " +
+        "re-downloading alone is not enough, and neither is restarting the runner."
     };
   }
 
@@ -49509,6 +49511,14 @@ fi
 
 cd "\${APP_DIR}"
 npm install
+
+# RE-IDENTIFY THIS COMPUTER (2026-08-10). Retiring a runner in the console leaves a tombstone keyed
+# to this machine's id, and the console then says "run the installer on the new computer" — but the
+# id lives OUTSIDE the app folder, so reinstalling on the SAME computer came back with the same id
+# and was refused forever. Joe hit this twice in one hour. Dropping the id here makes the installer
+# the recovery the console already promises: the runner mints a fresh id and claims the slot, which
+# clears the tombstone. A genuinely competing live runner still gets a clear runner_conflict.
+rm -f "\${HOME}/.leadrider/mdf-runner-machine.json"
 
 cat > "\${APP_DIR}/.env" <<ENV
 MDF_PORTAL_API_BASE_URL=${apiBase}
