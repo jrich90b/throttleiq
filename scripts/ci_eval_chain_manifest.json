@@ -472,6 +472,7 @@
     "console_copilot_insights:eval",
     "console_copilot_marketing_list:eval",
     "copilot_list_save:eval",
+    "marketing_list_delete:eval",
     "copilot_describe_refusal:eval",
     "rider_experience_persist:eval",
     "sale_trade_journey_bucket:eval",

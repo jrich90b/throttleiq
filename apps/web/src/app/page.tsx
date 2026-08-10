@@ -12482,15 +12482,35 @@ export default function Home() {
     await load();
   }
 
-  async function deleteGroup() {
-    if (selectedContactListId === "all") return;
-    const ok = window.confirm("Delete this group?");
+  // Delete a marketing list. The API + proxy have had DELETE all along; until 2026-08-10 the only way
+  // to reach it was a text link buried at the bottom of the "Groups are much better with contacts"
+  // help panel ("Have you changed your mind? delete this group"), which is why Joe could not find it.
+  //
+  // Also: this used to fire-and-forget. A 403 or a 500 left the console claiming success and jumping
+  // back to All Contacts, so a list that was never deleted looked deleted until the next reload.
+  async function deleteGroup(listId?: string) {
+    const id = String(listId ?? selectedContactListId ?? "").trim();
+    if (!id || id === "all") return;
+    const list = contactLists.find(row => row.id === id) ?? null;
+    const label = list?.name?.trim() || "this group";
+    const count = Array.isArray(list?.contactIds) ? list.contactIds.length : 0;
+    // Say what is being deleted and how many contacts it holds. The contacts themselves are NOT
+    // deleted — only the list — and the wording says so, because that is the fear this prompt exists
+    // to answer.
+    const ok = window.confirm(
+      `Delete the list "${label}"?${count ? ` It has ${count} contact${count === 1 ? "" : "s"}.` : ""} ` +
+        "The contacts stay in your database — only the list is removed."
+    );
     if (!ok) return;
-    await fetch(`/api/contacts/lists/${encodeURIComponent(selectedContactListId)}`, {
-      method: "DELETE"
-    });
-    setSelectedContactListId("all");
-    await load();
+    try {
+      const resp = await fetch(`/api/contacts/lists/${encodeURIComponent(id)}`, { method: "DELETE" });
+      const payload = await resp.json().catch(() => null);
+      if (!resp.ok || !payload?.ok) throw new Error(payload?.error || "That list could not be deleted.");
+      if (selectedContactListId === id) setSelectedContactListId("all");
+      await load();
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "That list could not be deleted.");
+    }
   }
 
   async function createNewContact() {
@@ -14893,17 +14913,31 @@ export default function Home() {
                   All Contacts
                 </button>
                 {contactLists.map(list => (
-                  <button
+                  <div
                     key={list.id}
-                    className={`w-full text-left px-3 py-2 rounded text-sm border ${
+                    className={`flex items-center gap-1 rounded border ${
                       selectedContactListId === list.id
                         ? "bg-blue-600 text-white border-blue-600"
                         : "bg-white hover:bg-gray-50 border-gray-200"
                     }`}
-                    onClick={() => setSelectedContactListId(list.id)}
                   >
-                    <div className="truncate">{list.name}</div>
-                  </button>
+                    <button
+                      className="min-w-0 flex-1 text-left px-3 py-2 text-sm"
+                      onClick={() => setSelectedContactListId(list.id)}
+                    >
+                      <div className="truncate">{list.name}</div>
+                    </button>
+                    {selectedContactListId === list.id ? (
+                      <button
+                        className="shrink-0 px-2 py-2 text-sm font-semibold text-white/80 hover:text-white"
+                        title="Delete this list (the contacts stay in your database)"
+                        aria-label={`Delete the list ${list.name}`}
+                        onClick={() => void deleteGroup(list.id)}
+                      >
+                        <SideNavIcon name="trash" className="w-4 h-4" />
+                      </button>
+                    ) : null}
+                  </div>
                 ))}
                 {authUser?.role === "manager" || authUser?.permissions?.canAccessSuppressions ? (
                   <button
@@ -21225,7 +21259,7 @@ export default function Home() {
                 </div>
                 <div className="mt-10 pt-6 border-t text-sm text-gray-500">
                   Have you changed your mind?{" "}
-                  <button className="text-blue-600 hover:underline" onClick={deleteGroup}>
+                  <button className="text-blue-600 hover:underline" onClick={() => void deleteGroup()}>
                     delete this group
                   </button>
                 </div>
