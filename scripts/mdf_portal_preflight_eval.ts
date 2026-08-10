@@ -1029,6 +1029,21 @@ console.log("PASS portal runner computer-switch handoff");
     firstProbe < handoffAt && handoffAt < blockAt,
     "the preflight probes, then attempts the handoff, and only then blocks the claim"
   );
+  // Ordering alone is not enough: dropping the handoff INSIDE the blocking branch also reads as
+  // "before the block" while still condemning the run. The recovery must be its own decision,
+  // taken and re-judged BEFORE the branch that gives up — so there are two separate tests of
+  // sessionCheck.expired, and the handoff belongs to the first. (This sabotage survived the
+  // first version of this eval; that is why the shape is asserted, not just the order.)
+  const expiredTests = [...runnerSrc.matchAll(/if \(sessionCheck\.expired\) \{/g)].map(m => m.index ?? -1);
+  assert.equal(
+    expiredTests.length,
+    2,
+    `the preflight must test sessionCheck.expired TWICE — once to recover, once to give up (found ${expiredTests.length})`
+  );
+  assert.ok(
+    expiredTests[0] < handoffAt && handoffAt < expiredTests[1],
+    "the handoff sits in the RECOVERY branch, before the branch that blocks the claim"
+  );
   // The re-probe is what makes the handoff mean anything — without it the run blocks regardless.
   assert.ok(
     /if \(handoff\) sessionCheck = await checkAnsiraSessionViaCdp\(options\.cdpUrl\);/.test(runnerSrc),
