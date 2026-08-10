@@ -137,7 +137,13 @@ assert.equal(
     "an unmatched file is a 404, never a silent success"
   );
   assert.ok(web.includes("removeMdfUploadedFile"), "the console has a remove action");
-  assert.ok(web.includes("window.confirm(`Remove "), "and it confirms before removing");
+  // Anchored on THIS dialog's own words. The console already had an unrelated
+  // window.confirm(`Remove "..."`) for campaign assets, so the generic prefix passed even with the
+  // claim-file confirm deleted — a sabotage caught that, and this is the repair.
+  assert.ok(
+    web.includes("from this claim? The claim keeps everything else."),
+    "and it confirms before removing, with the claim-file wording"
+  );
   // The console must send the SAME three fields the key is built from, or the button and the reducer
   // would disagree about which document was clicked.
   assert.ok(
