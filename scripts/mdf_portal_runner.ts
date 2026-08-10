@@ -12,6 +12,7 @@ import {
   ANSIRA_CLAIMS_LIST_URL,
   MDF_TOOLBOX_LINK_TEXT,
   ANSIRA_FORM_CONTROLS,
+  ANSIRA_POST_DATE_FORM_CONTROLS,
   ansiraFormChangedSummary,
   cdpConnectFailureSummary,
   findMissingFormControls,
@@ -1879,6 +1880,19 @@ async function runPlaywrightPortalDraft(claim: MdfClaimEntry, options: RunnerOpt
   if (!formExpanded) {
     await browser.close();
     return { code: 2, summary: portalFormDidNotExpandSummary() };
+  }
+
+  // Phase-B preflight: the controls Ansira only creates once the dates are in. Checking these up
+  // front is what blocked the 2026-07 IDMP claim — the runner demanded #activity-sub-detail while
+  // the page still showed nothing but Marketing Activity and two empty date fields. Now that the
+  // body has expanded, a control that is STILL missing really is a form change worth reporting.
+  const missingPostDateControls = await findMissingFormControls(
+    ANSIRA_POST_DATE_FORM_CONTROLS,
+    async selector => (await page.locator(selector).count().catch(() => 0)) > 0
+  );
+  if (missingPostDateControls.length) {
+    await browser.close();
+    return { code: 2, summary: ansiraFormChangedSummary(missingPostDateControls) };
   }
 
   const invoices = invoiceRecordsForClaim(claim);

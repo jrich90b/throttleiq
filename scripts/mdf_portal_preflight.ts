@@ -27,16 +27,37 @@ export type PreflightControl = { selector: string; label: string };
  * fail the run for controls whose absence actually breaks it, so the guard doesn't
  * false-positive on a cosmetic change.
  */
+/**
+ * Controls that exist as soon as the Marketing Activity is chosen — checked BEFORE the dates go
+ * in. Most of the form body is present-but-hidden at this point, so `count()` finds it.
+ */
 export const ANSIRA_FORM_CONTROLS: PreflightControl[] = [
   { selector: "#app-marketing-activity", label: "Marketing Activity dropdown" },
   { selector: "#app-claim-start-date", label: "Activity start date" },
   { selector: "#app-claim-end-date", label: "Activity end date" },
   { selector: "#app-claim-name", label: "Claim name" },
-  { selector: "#activity-sub-detail", label: "Activity sub-detail dropdown" },
   { selector: "#app-claimed-amount", label: "Claimed amount" },
   { selector: 'input[name="invoices[1][vendor_name]"]', label: "First invoice vendor field" },
   { selector: 'input[type="file"][name="files[]"]', label: "File upload input" },
   { selector: "#app-draft-submit-btn", label: "Save for Later (draft submit) button" }
+];
+
+/**
+ * Controls Ansira does NOT create until both Activity dates are accepted — checked AFTER the
+ * dates are filled and the form body expands.
+ *
+ * `#activity-sub-detail` lived in the list above until 2026-08-10 and made the runner demand a
+ * dropdown that does not exist yet. Joe photographed the live Create Claim page mid-block: with
+ * "2026 Media Claim" selected and both date fields empty, the page shows Marketing Activity and
+ * Dates of Activity and NOTHING else — while the eight controls above were all found, so the rest
+ * of the body is merely hidden and this one is genuinely absent.
+ *
+ * It also explains why the previous claim went through minutes earlier: that form had been driven
+ * by hand first, so the dropdown had already rendered. The runner only worked when a human had
+ * warmed the form up — which is not a working runner.
+ */
+export const ANSIRA_POST_DATE_FORM_CONTROLS: PreflightControl[] = [
+  { selector: "#activity-sub-detail", label: "Activity sub-detail dropdown" }
 ];
 
 /**
