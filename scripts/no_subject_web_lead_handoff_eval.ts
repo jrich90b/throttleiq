@@ -180,8 +180,9 @@ assert.equal(
 );
 
 // --- 3. The replay judge's design-accept ----------------------------------
-// Fail-direction: keyed to the ack copy the two deliberate handoff branches share (see the accept's
-// own note for why the recorded followUp.reason CANNOT be used — the replay sandbox never flushes it).
+// Fail-direction: keyed to the referee's OWN recorded decision, never to the body or the form name.
+// That key is only truthful because the ADF route reports the decision on its response and the replay
+// prefers the response over the sandbox copy — both halves are asserted at the bottom of this file.
 
 const judgeMajor = { addressed: false, severity: "major" as const, reason: "ignored the customer's request" };
 const judgeMinor = { addressed: false, severity: "minor" as const, reason: "no next step" };
@@ -191,7 +192,8 @@ const handoffRow = {
   conversationId: "+13049475135",
   body: TIMOTHY_BODY,
   draft: `Hey Timothy, it's Alexandra over at American Harley-Davidson. ${PINNED_ACK}`,
-  verdict: "candidate_safe" as const
+  verdict: "candidate_safe" as const,
+  router: { followUpMode: "manual_handoff", followUpReason: NO_SUBJECT_WEB_LEAD_HANDOFF_REASON }
 };
 
 assert.equal(
@@ -218,17 +220,28 @@ assert.equal(
   "if the branch ever engages the lead instead of handing it off, the row surfaces again"
 );
 assert.equal(
-  isNoSubjectWebLeadHandoffAckByDesign(
-    { ...handoffRow, draft: `${PINNED_ACK} Meanwhile, that Street Glide is still available — what day works?` },
-    judgeMajor
-  ),
-  true,
-  "documented: the gate is the ack copy, so a branch that appended a sales push would still be excused — which is exactly why the ack-copy site count below is asserted"
+  isNoSubjectWebLeadHandoffAckByDesign({ ...handoffRow, router: { followUpReason: null } }, judgeMajor),
+  false,
+  "no marker means the referee never handed this lead off — an ignored ask must still fail"
 );
 assert.equal(
-  isNoSubjectWebLeadHandoffAckByDesign({ ...handoffRow, body: "Hey, you still have that Road Glide?" }, judgeMajor),
+  isNoSubjectWebLeadHandoffAckByDesign({ ...handoffRow, router: { followUpReason: "room58_standard" } }, judgeMajor),
   false,
-  "an SMS turn is never this accept's business — it only ever excuses a first-touch web lead"
+  "a DIFFERENT handoff reason is the twin accept's business, not this one's"
+);
+// The property the flywheel's own self-test defends: a customer who wrote a real question and got
+// this ack anyway must STILL fail. They never carry this marker, so they never reach the accept.
+assert.equal(
+  isNoSubjectWebLeadHandoffAckByDesign(
+    {
+      ...handoffRow,
+      body: `${TIMOTHY_BODY}\nIs the Low Rider ST still in stock, and what is your best out-the-door price?`,
+      router: { followUpReason: null }
+    },
+    judgeMajor
+  ),
+  false,
+  "a real unanswered question stays a miss — this accept must never blind the sweep to one"
 );
 // The twin accept must NOT have widened: Larry's row still needs its own form name + empty Inquiry,
 // and Timothy's body satisfies neither.
@@ -238,14 +251,32 @@ assert.equal(
   "the existing Room58 - Standard accept stays exactly as narrow as it was"
 );
 
-// The accept is keyed to copy, so its safety rests on how FEW places emit that copy. Pin the count:
-// two deliberate handoff branches today (the twin form's, and this slice's). A third borrower must
-// force a re-read of the accept rather than quietly inheriting an excuse from the nightly judge.
+// The accept also requires the pinned ack, so pin how FEW places emit it: two deliberate handoff
+// branches today (the twin form's, and this slice's). A third borrower must force a re-read of the
+// accept rather than quietly inheriting an excuse from the nightly judge.
 const ackCopySites = sendgrid.split("I’ll make sure the team follows up soon.").length - 1;
 assert.equal(
   ackCopySites,
   2,
   "exactly two branches send the pinned handoff ack — if that changed, re-read isNoSubjectWebLeadHandoffAckByDesign before touching this number"
+);
+
+// --- 3b. The marker has to REACH the recorded row ---------------------------
+// This is the half that was measured wrong first and would have made the accept inert: the replay
+// harness reads its router fields out of a sandbox copy the debounced handler never flushes, so the
+// route has to REPORT the decision and the harness has to prefer the report.
+assert.ok(
+  sendgrid.includes("followUpReason: conv.followUp?.reason ?? null"),
+  "the ADF route must report its handoff reason — the store copy a replay sees is the PRE-turn state"
+);
+const replay = fs.readFileSync(path.resolve("scripts/inbound_shadow_replay.ts"), "utf8");
+assert.ok(
+  replay.includes("followUpReason: adfRouter.followUpReason ?? convAfter?.followUp?.reason ?? null"),
+  "the replay must prefer the ROUTE'S reported reason over the sandbox copy, in that order"
+);
+assert.ok(
+  replay.includes("followUpReason: parsed?.followUpReason ?? null"),
+  "submitAdf must read the reason off the response body, or adfRouter carries nothing to prefer"
 );
 
 // --- 4. WIRING — a ratchet cannot prove this, so count the call sites ------
@@ -335,4 +366,4 @@ assert.ok(
   "the previous ask stays as the else branch — this slice narrows it, it does not delete it"
 );
 
-console.log(`no_subject_web_lead_handoff:eval PASS (${ROWS.length} decision rows, 5 parse->referee chains, 7 accept cases, 1 call site)`);
+console.log(`no_subject_web_lead_handoff:eval PASS (${ROWS.length} decision rows, 5 parse->referee chains, 8 accept cases, 1 call site, 3 marker hops)`);

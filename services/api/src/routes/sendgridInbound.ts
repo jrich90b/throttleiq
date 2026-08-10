@@ -10192,6 +10192,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     channel,
     intent: result.intent,
     stage: result.stage,
-    draft
+    draft,
+    // The handoff decision, reported the way bucket/cta/intent already are. The offline replay
+    // harness reads its `router.*` fields back out of the STORE, but the handler's write is debounced
+    // and never flushes inside a replay sandbox — MEASURED 2026-08-10: a turn that demonstrably set
+    // manual_handoff came back with `followUp` null and without even its own outbound message. So
+    // every recorded row's followUp was the PRE-turn state, and any scorer keyed on it was silently
+    // inert. Returning it here makes the decision observable at the one moment it is certain.
+    followUpMode: conv.followUp?.mode ?? null,
+    followUpReason: conv.followUp?.reason ?? null
   });
 }

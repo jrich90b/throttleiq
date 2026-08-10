@@ -919,6 +919,8 @@ async function submitAdf(port: number, candidate: Candidate, adfXml: string): Pr
   stage?: string | null;
   bucket?: string | null;
   cta?: string | null;
+  followUpMode?: string | null;
+  followUpReason?: string | null;
 }> {
   const body = new URLSearchParams();
   body.set("text", adfXml);
@@ -945,7 +947,9 @@ async function submitAdf(port: number, candidate: Candidate, adfXml: string): Pr
     intent: parsed?.intent ?? null,
     stage: parsed?.stage ?? null,
     bucket: parsed?.bucket ?? null,
-    cta: parsed?.cta ?? null
+    cta: parsed?.cta ?? null,
+    followUpMode: parsed?.followUpMode ?? null,
+    followUpReason: parsed?.followUpReason ?? null
   };
 }
 
@@ -1376,7 +1380,9 @@ async function replayOne(
         intent: postResult.intent ?? null,
         stage: postResult.stage ?? null,
         classificationBucket: postResult.bucket ?? null,
-        classificationCta: postResult.cta ?? null
+        classificationCta: postResult.cta ?? null,
+        followUpMode: postResult.followUpMode ?? null,
+        followUpReason: postResult.followUpReason ?? null
       };
     } else if (candidate.provider === "web_widget") {
       const postResult = await submitWebTextWidget(port, candidate);
@@ -1430,8 +1436,12 @@ async function replayOne(
         stage: adfRouter.stage ?? null,
         classificationBucket: adfRouter.classificationBucket ?? convAfter?.classification?.bucket ?? null,
         classificationCta: adfRouter.classificationCta ?? convAfter?.classification?.cta ?? null,
-        followUpMode: convAfter?.followUp?.mode ?? null,
-        followUpReason: convAfter?.followUp?.reason ?? null,
+        // The response first, the store second. The sandbox copy is re-read 250ms after the turn
+        // and the handler's write is debounced, so on an ADF replay the store still holds the
+        // PRE-turn followUp — measured 2026-08-10 on a turn that demonstrably set manual_handoff.
+        // Anything keyed on these fields was reading the wrong state; the route now reports them.
+        followUpMode: adfRouter.followUpMode ?? convAfter?.followUp?.mode ?? null,
+        followUpReason: adfRouter.followUpReason ?? convAfter?.followUp?.reason ?? null,
         dialogState: convAfter ? (convAfter as any).dialogState?.name ?? (convAfter as any).dialogState ?? null : null,
         conversationMode: (convAfter as any)?.mode ?? null,
         debugFlow: convAfter?.lastDecision ?? null
