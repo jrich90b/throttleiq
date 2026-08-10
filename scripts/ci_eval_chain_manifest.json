@@ -110,6 +110,7 @@
     "intent_handled:eval",
     "corpus_replay_flywheel:eval",
     "replay_fidelity:eval",
+    "inbound_shadow_api_env:eval",
     "intent_handled_anomaly:eval",
     "faq_payment_methods:eval",
     "financial_empathy_line:eval",
