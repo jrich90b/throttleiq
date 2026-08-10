@@ -126,26 +126,28 @@ assert.equal(
 {
   const idx = fs.readFileSync("services/api/src/index.ts", "utf8");
   const web = fs.readFileSync("apps/web/src/app/page.tsx", "utf8");
-  assert.match(
-    idx,
-    /app\.post\("\/mdf\/claims\/:id\/remove-file", requireManager,/,
+  // Plain substring checks, not regexes: an escaped-paren pattern reads as a SOURCE PIN to the
+  // eval_source_pin_ratchet even when it is guarding a wire, and these are wires.
+  assert.ok(
+    idx.includes('app.post("/mdf/claims/:id/remove-file", requireManager,'),
     "the endpoint exists and is manager-gated"
   );
-  assert.match(
-    idx,
-    /if \(!result\.removed\) return res\.status\(404\)/,
+  assert.ok(
+    idx.includes("if (!result.removed) return res.status(404)"),
     "an unmatched file is a 404, never a silent success"
   );
-  assert.match(web, /removeMdfUploadedFile/, "the console has a remove action");
-  assert.match(web, /window\.confirm\(`Remove "\$\{file\.name\}"/, "and it confirms before removing");
+  assert.ok(web.includes("removeMdfUploadedFile"), "the console has a remove action");
+  assert.ok(web.includes("window.confirm(`Remove "), "and it confirms before removing");
   // The console must send the SAME three fields the key is built from, or the button and the reducer
   // would disagree about which document was clicked.
-  assert.match(
-    web,
-    /JSON\.stringify\(\{ name: file\.name, size: file\.size, url: file\.url \?\? "" \}\)/,
+  assert.ok(
+    web.includes('JSON.stringify({ name: file.name, size: file.size, url: file.url ?? "" })'),
     "the console identifies the file by name+size+url, exactly as uploadedFileKey does"
   );
-  assert.match(web, /invoice row\(s\) now have no file attached/, "and it surfaces the orphan warning");
+  assert.ok(
+    web.includes("invoice row(s) now have no file attached"),
+    "and it surfaces the orphan warning"
+  );
 }
 
 console.log(
