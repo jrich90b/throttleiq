@@ -164,17 +164,44 @@ for (const t of HINT_NO) check(`hint_no:${t.slice(0, 34)}`, !hasManualPromiseHin
     }
   }
   // A resolved next-week due flows through the decision as a dated staff task (not tomorrow).
+  //
+  // ⚠️ CLOCK-SAFE, and it has to be: `nextWeek` above comes from the REAL clock, while every other
+  // fixture here runs on the pinned 2026-07-15 NOW_MS. Feeding a real-clock date to a pinned clock
+  // is a countdown, not a test — the referee drops any due beyond its 30-day hold cap, so this case
+  // passed all summer and went red on its own at midnight ET on 2026-08-10, when "next Monday"
+  // stepped from 08-10 (26 days out) to 08-17 (33 days, over the cap) and reddened `main` for every
+  // routine with zero commits behind it. The relationship under test — a resolved next-week due
+  // becomes a DATED Monday task instead of the tomorrow default — holds on any date, so anchor this
+  // one case to the same clock its date came from and the two can never drift apart again.
   if (nextWeek) {
     const d = decideManualOutboundPromise(
       base({
         parse: parse({ kind: "check_and_get_back", action: "call when the trade with the backrest arrives", dueText: "next week" }),
-        dueDate: nextWeek
+        dueDate: nextWeek,
+        nowMs: Date.now()
       })
     );
     if (d.kind !== "staff_task" || !/Mon/.test(d.dueLabel)) {
       console.error(`event-conditioned promise with "next week" must yield a Monday-due staff task, got ${JSON.stringify(d)}`);
       failures += 1;
     }
+  }
+  // …and the same relationship on a FULLY PINNED pair — the Monday after the fixture's own
+  // Wednesday. This is the deterministic guard: it cannot drift with the calendar, so if the
+  // referee ever stops dating a next-week promise, this fails on any day of any year.
+  {
+    const pinnedMonday = { year: 2026, month: 7, day: 20, dayOfWeek: "monday" as const };
+    const d = decideManualOutboundPromise(
+      base({
+        parse: parse({ kind: "check_and_get_back", action: "call when the trade with the backrest arrives", dueText: "next week" }),
+        dueDate: pinnedMonday
+      })
+    );
+    check(
+      "next_week_promise_is_a_dated_monday_task",
+      d.kind === "staff_task" && /Mon/.test(d.dueLabel),
+      JSON.stringify(d)
+    );
   }
   // The parser prompt must carry the event-conditioned few-shot so due_text survives the parse.
   const fs2 = await import("node:fs");
