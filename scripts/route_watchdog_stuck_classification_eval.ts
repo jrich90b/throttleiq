@@ -116,6 +116,7 @@ type Row = {
   hasOpenCallTask?: boolean;
   lastInboundIsReactionOnly?: boolean;
   lastInboundJudgedNoResponse?: boolean;
+  hasPendingEmailDraftReply?: boolean;
 };
 
 const rows: Row[] = [
@@ -169,6 +170,19 @@ const rows: Row[] = [
   // A judged turn past the ceiling reports the INFORMATIVE reason, not "aged_out" —
   // "we decided this" beats "it got old" for triage.
   { id: "judged_beats_aged_out", conv: { status: null, mode: "suggest", followUp: { mode: "active" } }, ageSec: OLD, actionable: false, reason: "judged_no_response", lastInboundJudgedNoResponse: true },
+  // The agent DID reply and the reply is an email draft in the approval box
+  // (Haywood Kirkland +17166977040, 2026-08-10: an HD.com Request-a-Quote ADF
+  // drafted 6s after arrival, counted as the day's only actionable stuck turn
+  // because the email lane writes no `draft_ai` message row).
+  { id: "email_draft_pending", conv: { status: null, mode: "suggest", followUp: { mode: "active" } }, ageSec: RECENT, actionable: false, reason: "email_draft_pending", hasPendingEmailDraftReply: true },
+  // FAIL DIRECTION: no draft means nobody answered — the real miss stays actionable.
+  { id: "no_email_draft_stays_actionable", conv: { status: null, mode: "suggest", followUp: { mode: "active" } }, ageSec: RECENT, actionable: true, reason: null, hasPendingEmailDraftReply: false },
+  // An absent flag behaves like "no draft", never like a draft.
+  { id: "absent_email_draft_stays_actionable", conv: { status: null, mode: "suggest", followUp: { mode: "active" } }, ageSec: RECENT, actionable: true, reason: null },
+  // A terminal state still outranks the email-draft suppression (priority order).
+  { id: "closed_beats_email_draft_pending", conv: { status: "closed", mode: "suggest", followUp: { mode: "active" } }, ageSec: RECENT, actionable: false, reason: "closed", hasPendingEmailDraftReply: true },
+  // A recorded silence verdict is the more informative reason when both apply.
+  { id: "judged_beats_email_draft_pending", conv: { status: null, mode: "suggest", followUp: { mode: "active" } }, ageSec: RECENT, actionable: false, reason: "judged_no_response", lastInboundJudgedNoResponse: true, hasPendingEmailDraftReply: true },
   // Missing followUp / mode are tolerated → recent unsuppressed stays actionable.
   { id: "actionable_sparse_conv", conv: { status: null, mode: "suggest", followUp: null }, ageSec: RECENT, actionable: true, reason: null },
   // A custom (smaller) ceiling still suppresses a turn beyond it.
@@ -181,7 +195,8 @@ for (const r of rows) {
     maxAgeSec: r.maxAgeSec,
     hasOpenCallTask: r.hasOpenCallTask,
     lastInboundIsReactionOnly: r.lastInboundIsReactionOnly,
-    lastInboundJudgedNoResponse: r.lastInboundJudgedNoResponse
+    lastInboundJudgedNoResponse: r.lastInboundJudgedNoResponse,
+    hasPendingEmailDraftReply: r.hasPendingEmailDraftReply
   });
   assert.equal(got.actionable, r.actionable, `classify[${r.id}] actionable expected ${r.actionable}, got ${got.actionable}`);
   assert.equal(

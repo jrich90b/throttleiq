@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import {
+  hasPendingFirstTouchEmailDraft,
   isAutomatedSenderInbound,
   isBareReactionOnlyInbound,
   isNonSalesConversation,
@@ -203,7 +204,8 @@ function collectStuckTurns(
           convId: String(conv?.id ?? ""),
           leadKey: String(conv?.leadKey ?? ""),
           inboundAtMs
-        })
+        }),
+        hasPendingEmailDraftReply: hasPendingFirstTouchEmailDraft(conv)
       });
 
       return {

@@ -3,9 +3,11 @@ import path from "node:path";
 import { evaluateTurnToneQuality, normalizeText } from "./lib/toneQuality.ts";
 import { matchInboundReply } from "./lib/toneResponseMatch.ts";
 import {
+  hasPendingFirstTouchEmailDraft,
   isAutomatedSenderInbound,
   isClosingAckNoAction,
   isEnthusiasmAckNoAction,
+  isExplicitNoReplyRequest,
   isHumanRewrittenOutbound,
   isIndefiniteDeferralNoActionableAsk,
   isLeadIntakeRenotificationOnEngagedThread,
@@ -157,6 +159,11 @@ function getSkipReason(
   if (provider === "voice_transcript") return "provider_voice_transcript";
   if (isTestLeadEmail(leadEmail) || isTestLeadEmail(conv?.id)) return "test_lead_email";
   if (isOptOutKeywordInbound(inboundText)) return "opt_out_no_reply";
+  // The customer told us not to write back. Silence is the instruction, not a miss.
+  if (isExplicitNoReplyRequest(inboundText)) return "explicit_no_reply_request";
+  // The email lane's reply lives in `conv.emailDraft`, not in a `draft_ai` message
+  // row — same pending-approval state the SMS lane gets credit for.
+  if (hasPendingFirstTouchEmailDraft(conv)) return "email_draft_pending";
   if (isQuotedReactionEchoInbound(inboundText)) return "reaction_to_outbound";
   if (isShortAckNoAction(inboundText)) return "short_ack_no_action";
   if (isClosingAckNoAction(inboundText)) return "closing_ack_no_action";

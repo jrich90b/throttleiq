@@ -618,6 +618,101 @@ export function isIndefiniteDeferralNoActionableAsk(text: string | null | undefi
 }
 
 /**
+ * The customer EXPLICITLY told us not to write back — "Please don't respond
+ * today it's your day off", "no need to reply", "don't text back". Staying
+ * silent is not a dropped turn, it is the instruction being followed, so a
+ * quality scorer must not grade it `missing_response`.
+ *
+ * Production case (Robert Czechowski +17164808010, 2026-08-09): he asked whether
+ * he could swap his old seat onto his new Street Glide, got an answer 10 seconds
+ * later, then wrote "Please don't respond today it's you're day off" — being
+ * courteous to someone he believes is a person. The agent correctly said nothing
+ * and was charged with a miss, which put the release gate's `toneMissingResponses`
+ * at 2 (threshold 1) and made 2026-08-10 DIRTY.
+ *
+ * This is distinct from every existing no-reply matcher: it is not an ack
+ * (`isShortAckNoAction`), not a closer (`isClosingAckNoAction`), and not the
+ * customer promising to re-initiate (`isIndefiniteDeferralNoActionableAsk`) —
+ * it is a direct instruction about OUR next action.
+ *
+ * Fail-direction: this HIDES a turn from scoring, so over-firing masks a real
+ * miss. Kept fail-safe by (1) a length ceiling, (2) a question-mark guard — a
+ * turn that asks something is never a pure no-reply instruction, and (3) the
+ * SAME actionable-request guard the deferral matcher uses, so "don't reply
+ * tonight, but send me the price tomorrow" still scores. The guard is
+ * deliberately allowed to over-block: "don't text me" trips its own `text me`
+ * token and stays graded, which is the safe direction.
+ */
+const NO_REPLY_REQUEST_RE = new RegExp(
+  [
+    // A negated directive aimed at our next action: "don't respond", "no need to reply",
+    // "please do not text back", "you don't have to get back to me".
+    "\\b(?:do\\s*n(?:o|')?t|dont|no\\s+need\\s+to|(?:you\\s+)?don'?t\\s+have\\s+to|no\\s+rush\\s+to)\\s+" +
+      "(?:worry\\s+about\\s+)?(?:respond(?:ing)?|reply(?:ing)?|answer(?:ing)?|text(?:ing)?|write|writing|message|get\\s+back)\\b",
+    // The noun form: "no response needed", "no reply necessary".
+    "\\bno\\s+(?:response|reply|answer)\\s+(?:needed|necessary|required|expected)\\b"
+  ].join("|"),
+  "i"
+);
+export function isExplicitNoReplyRequest(text: string | null | undefined): boolean {
+  const raw = String(text ?? "").trim();
+  if (!raw) return false;
+  if (raw.length > 200) return false;
+  if (/\?/.test(raw)) return false;
+  const normalized = raw.replace(/\s+/g, " ");
+  if (DEFERRAL_ACTIONABLE_REQUEST_RE.test(normalized)) return false;
+  return NO_REPLY_REQUEST_RE.test(normalized);
+}
+
+/**
+ * The email lane's pending reply. On an SMS thread the agent's unsent draft is a
+ * real message row (`provider: "draft_ai"`), so every scorer that asks "did
+ * anything come back?" sees it. On an EMAIL thread the draft is stored in the
+ * `conv.emailDraft` FIELD instead and no message row is written — so the exact
+ * same state, an agent reply sitting in the approval box, reads as total silence.
+ * That is a storage difference, not a behavior difference, and grading it as a
+ * miss holds the email lane to a standard the SMS lane is not held to.
+ *
+ * Production case (Haywood Kirkland +17166977040, 2026-08-10): an `HD.com Request
+ * a Quote` ADF for a 2025 Road Glide landed at 08:06:22Z and the agent drafted a
+ * reply 6 seconds later ("Thanks — I saw you wanted to learn more about the 2025
+ * Road Glide"). Because the lead is email-channel the draft went to
+ * `conv.emailDraft`, and that ONE conversation failed the release gate TWICE the
+ * same morning — as the tone scorer's second `missing_response` and as the route
+ * watchdog's only actionable stuck turn.
+ *
+ * Fail-direction: this HIDES a turn, and `emailDraft` carries no timestamp of its
+ * own, so it cannot be bound to a specific turn by time. The shape is therefore
+ * pinned to the ONLY arrangement where the binding is unambiguous — a first
+ * touch: exactly one inbound turn and NO outbound of any kind on the thread. The
+ * draft can then belong to nothing else. Consequences of that narrowness, both
+ * deliberate: a first-touch email lead with NO draft is still a real miss and
+ * still graded, and a SECOND customer email that gets dropped makes the predicate
+ * false again (two inbounds), so the dropped follow-up keeps failing the gate.
+ */
+export function hasPendingFirstTouchEmailDraft(conv: {
+  emailDraft?: unknown;
+  messages?: Array<{ direction?: unknown; body?: unknown }> | null;
+} | null | undefined): boolean {
+  const draft = conv?.emailDraft;
+  const draftText =
+    typeof draft === "string"
+      ? draft
+      : draft && typeof draft === "object"
+        ? String((draft as { body?: unknown }).body ?? "")
+        : "";
+  if (!draftText.trim()) return false;
+  const messages = Array.isArray(conv?.messages) ? conv!.messages! : [];
+  let inboundCount = 0;
+  for (const m of messages) {
+    const direction = String(m?.direction ?? "");
+    if (direction === "out") return false;
+    if (direction === "in" && String(m?.body ?? "").trim()) inboundCount += 1;
+  }
+  return inboundCount === 1;
+}
+
+/**
  * The engine's indefinite-deferral hold, at conversation level: the LAST
  * inbound message says the customer will re-initiate, so the cadence tick
  * skips this conversation every pass — by design — while nextDueAt stays

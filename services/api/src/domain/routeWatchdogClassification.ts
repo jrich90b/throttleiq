@@ -29,6 +29,7 @@ export type StuckSuppressionReason =
   | "call_only"
   | "reaction_only"
   | "judged_no_response"
+  | "email_draft_pending"
   | "aged_out";
 
 export type StuckClassification = {
@@ -118,6 +119,7 @@ export function classifyStuckTurn(
     hasOpenCallTask?: boolean;
     lastInboundIsReactionOnly?: boolean;
     lastInboundJudgedNoResponse?: boolean;
+    hasPendingEmailDraftReply?: boolean;
   }
 ): StuckClassification {
   // A closed conversation can never be a live routing stall (sold / opt-out /
@@ -186,6 +188,26 @@ export function classifyStuckTurn(
   // recorded — the genuine stall this watchdog exists to catch — stays ACTIONABLE.
   if (opts.lastInboundJudgedNoResponse === true) {
     return { actionable: false, suppressionReason: "judged_no_response" };
+  }
+
+  // The agent DID reply — the reply is an email draft waiting in the approval box.
+  // The watchdog's "no outbound after the inbound" test reads message ROWS, and the
+  // email lane stores its draft in the `conv.emailDraft` field instead of writing
+  // one, so an answered email thread is indistinguishable from an ignored one
+  // (Haywood Kirkland +17166977040, 2026-08-10: drafted 6 seconds after the ADF
+  // landed, counted as the day's only actionable stuck turn and failed the release
+  // gate). An SMS thread in the identical state carries a `draft_ai` row and never
+  // reaches this classifier at all.
+  //
+  // Same division of labour as `reaction_only`: the shape test lives in the shared,
+  // eval-pinned scoringExclusions module (`hasPendingFirstTouchEmailDraft`) and
+  // arrives here as a boolean, so no message text is read in this module.
+  //
+  // FAIL DIRECTION: the predicate demands a first touch — one inbound, no outbound
+  // at all — because `emailDraft` has no timestamp to bind it to a turn. A lead with
+  // no draft, or a second customer email that got dropped, stays ACTIONABLE.
+  if (opts.hasPendingEmailDraftReply === true) {
+    return { actionable: false, suppressionReason: "email_draft_pending" };
   }
 
   const maxAgeSec = Number.isFinite(opts.maxAgeSec) ? (opts.maxAgeSec as number) : STUCK_MAX_AGE_SEC_DEFAULT;

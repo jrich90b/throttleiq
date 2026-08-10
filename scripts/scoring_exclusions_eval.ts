@@ -7,6 +7,8 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 
 import {
+  hasPendingFirstTouchEmailDraft,
+  isExplicitNoReplyRequest,
   isAutomatedSenderInbound,
   isBareEmoticonReaction,
   isBareReactionOnlyInbound,
@@ -629,5 +631,147 @@ assert.match(
   /staff_owned_turn_no_agent_reply/,
   "tone quality audit must record the staff-owned-turn skip reason"
 );
+
+// ---------------------------------------------------------------------------
+// Explicit no-reply request: the customer told us not to write back.
+// Robert Czechowski +17164808010, 2026-08-09 — "Please don't respond today it's
+// you're day off". Silence is the instruction being followed; grading it a
+// missing response put toneMissingResponses at 2 (threshold 1) and made
+// 2026-08-10 DIRTY.
+{
+  assert.equal(
+    isExplicitNoReplyRequest("Please don't respond today it's you're day off"),
+    true,
+    "the live turn that dirtied the 8/10 gate must be excluded"
+  );
+  assert.equal(isExplicitNoReplyRequest("no need to reply"), true);
+  assert.equal(isExplicitNoReplyRequest("Dont text back, I'll swing by"), true);
+  assert.equal(isExplicitNoReplyRequest("No response needed"), true);
+  assert.equal(isExplicitNoReplyRequest("you don't have to get back to me tonight"), true);
+
+  // FAIL-DIRECTION: an instruction that ALSO carries a real ask stays graded.
+  assert.equal(
+    isExplicitNoReplyRequest("don't reply tonight, but send me the price tomorrow"),
+    false,
+    "a no-reply instruction carrying an actionable ask must still be graded"
+  );
+  assert.equal(
+    isExplicitNoReplyRequest("no need to reply, can you just call me?"),
+    false,
+    "a question is never a pure no-reply instruction"
+  );
+  assert.equal(
+    isExplicitNoReplyRequest("don't reply here, email me instead"),
+    false,
+    "a channel switch is a request, not a request for silence"
+  );
+  // Never fires on ordinary turns that merely contain the verbs.
+  assert.equal(isExplicitNoReplyRequest("I didn't respond because I was at work"), false);
+  assert.equal(isExplicitNoReplyRequest("Thanks!"), false);
+  assert.equal(isExplicitNoReplyRequest(""), false);
+  assert.equal(isExplicitNoReplyRequest(null), false);
+  assert.equal(
+    isExplicitNoReplyRequest(
+      "no need to respond " + "x".repeat(220)
+    ),
+    false,
+    "length ceiling holds — a long message is not a bare instruction"
+  );
+}
+assert.match(
+  toneSource,
+  /isExplicitNoReplyRequest\(inboundText\)/,
+  "tone quality audit must apply the explicit-no-reply exclusion"
+);
+assert.match(
+  toneSource,
+  /explicit_no_reply_request/,
+  "tone quality audit must record the explicit-no-reply skip reason"
+);
+
+// ---------------------------------------------------------------------------
+// Email-lane pending draft: the agent replied, and the reply is an email draft
+// in the approval box (`conv.emailDraft`) rather than a `draft_ai` message row.
+// Haywood Kirkland +17166977040, 2026-08-10 — one conversation failed the
+// release gate twice the same morning (tone missing_response + the watchdog's
+// only actionable stuck turn) while carrying a draft written 6s after the ADF.
+{
+  const firstTouchEmailLead = {
+    emailDraft: "Hey Haywood, it's Alexandra over at American Harley-Davidson...",
+    messages: [{ direction: "in", body: "WEB LEAD (ADF)\nSource: HD.com Request a Quote" }]
+  };
+  assert.equal(
+    hasPendingFirstTouchEmailDraft(firstTouchEmailLead),
+    true,
+    "a first-touch email lead with a pending draft has been answered"
+  );
+
+  // FAIL-DIRECTION: the real misses this must never hide.
+  assert.equal(
+    hasPendingFirstTouchEmailDraft({ messages: firstTouchEmailLead.messages }),
+    false,
+    "a first-touch email lead with NO draft is a real miss and stays graded"
+  );
+  assert.equal(
+    hasPendingFirstTouchEmailDraft({ emailDraft: "   ", messages: firstTouchEmailLead.messages }),
+    false,
+    "a blank draft is not a reply"
+  );
+  assert.equal(
+    hasPendingFirstTouchEmailDraft({
+      emailDraft: "an older draft",
+      messages: [
+        { direction: "in", body: "WEB LEAD (ADF)" },
+        { direction: "in", body: "Any update on that Road Glide?" }
+      ]
+    }),
+    false,
+    "a SECOND customer email cannot be excused by a draft with no timestamp"
+  );
+  assert.equal(
+    hasPendingFirstTouchEmailDraft({
+      emailDraft: "a stale draft",
+      messages: [
+        { direction: "in", body: "WEB LEAD (ADF)" },
+        { direction: "out", body: "Thanks for reaching out" },
+        { direction: "in", body: "Still waiting on that price" }
+      ]
+    }),
+    false,
+    "once the thread has any outbound, the draft is no longer provably this turn's reply"
+  );
+  assert.equal(hasPendingFirstTouchEmailDraft(null), false);
+  assert.equal(hasPendingFirstTouchEmailDraft({ emailDraft: "x", messages: [] }), false);
+  // Object-shaped drafts (legacy scrub scripts read `emailDraft.body`) count too.
+  assert.equal(
+    hasPendingFirstTouchEmailDraft({
+      emailDraft: { body: "Hey Haywood..." },
+      messages: firstTouchEmailLead.messages
+    }),
+    true,
+    "an object-shaped email draft is still a pending reply"
+  );
+}
+assert.match(
+  toneSource,
+  /hasPendingFirstTouchEmailDraft\(conv\)/,
+  "tone quality audit must apply the email-draft-pending exclusion"
+);
+assert.match(
+  toneSource,
+  /email_draft_pending/,
+  "tone quality audit must record the email-draft-pending skip reason"
+);
+{
+  const watchdogSource = await fs.readFile(
+    path.resolve(process.cwd(), "scripts/route_audit_watchdog.ts"),
+    "utf8"
+  );
+  assert.match(
+    watchdogSource,
+    /hasPendingEmailDraftReply: hasPendingFirstTouchEmailDraft\(conv\)/,
+    "the route watchdog must bind the email-draft-pending predicate for the classifier"
+  );
+}
 
 console.log("PASS scoring exclusions eval");
