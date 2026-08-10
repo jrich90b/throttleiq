@@ -197,7 +197,15 @@ export type FirstTouchShadowRecordInput = {
   inboundText?: string | null;
   ackText: string;
   decision: FirstTouchAutoSendDecision;
+  /** Injected only by the eval; production reads the process env. */
+  origin?: FirstTouchShadowOrigin;
 };
+
+/**
+ * Where a shadow row came from. `"replay"` means a rehearsal of a historical turn, not a real
+ * customer — see firstTouchShadowOrigin below for why that distinction is load-bearing.
+ */
+export type FirstTouchShadowOrigin = "live" | "replay";
 
 export type FirstTouchShadowRecord = {
   at: string;
@@ -210,7 +218,40 @@ export type FirstTouchShadowRecord = {
   wouldSend: boolean;
   reason: string;
   ack: string;
+  origin: FirstTouchShadowOrigin;
 };
+
+/**
+ * Is this process a REPLAY of a historical turn, or a live customer inbound? (2026-08-10)
+ *
+ * WHY THIS EXISTS. The flip bar for FIRST_TOUCH_ACK_AUTOSEND is graded off this JSONL, and one of
+ * its criteria is "zero duplicates" — the same lead must never be acked twice. Measured 2026-08-10,
+ * the log carried **722 would-send rows over 11 days against 46 real new leads** (~15x), because
+ * `corpus_replay_nightly` shells out to `inbound_shadow_replay`, which spawns a per-case API with a
+ * SANDBOX data dir but INHERITS the live `REPORT_ROOT` — so every rehearsal appends here.
+ *
+ * A replay is a thread rewound to before we answered, so it will always say "would send", and it
+ * says it again every night. Layla (+15126299400) was really texted once, on 2026-07-19, and shows
+ * up as a would-send on ELEVEN consecutive days. Graded naively that reads as a duplicate-send bug;
+ * it is a rehearsal counted as a performance. Nothing about the guard was proven broken by it.
+ *
+ * The signal is `NODE_ENV`, which `buildShadowApiEnv` (scripts/inbound_shadow_replay.ts) pins to
+ * "shadow" for every replayed case. It is the same value the harness has always set; this just
+ * stops throwing it away.
+ *
+ * FAIL DIRECTION: anything that is not provably live is "replay". A row wrongly marked replay is
+ * merely excluded from the bar (the bar stays conservative and the flip waits); a row wrongly
+ * marked live re-contaminates the one measurement this exists to clean, which is how we got here.
+ */
+export function firstTouchShadowOrigin(env?: NodeJS.ProcessEnv): FirstTouchShadowOrigin {
+  const source = env ?? process.env;
+  const nodeEnv = String(source.NODE_ENV ?? "").trim().toLowerCase();
+  if (nodeEnv === "shadow" || nodeEnv === "test") return "replay";
+  // An explicit override for any future harness that cannot set NODE_ENV.
+  const explicit = String(source.FIRST_TOUCH_SHADOW_ORIGIN ?? "").trim().toLowerCase();
+  if (explicit === "replay") return "replay";
+  return "live";
+}
 
 function clip(value: unknown, max: number): string | null {
   const text = typeof value === "string" ? value.trim() : value == null ? "" : String(value).trim();
@@ -230,7 +271,10 @@ export function buildFirstTouchShadowRecord(input: FirstTouchShadowRecordInput):
     inbound: clip(input.inboundText, 240),
     wouldSend: Boolean(input.decision?.send),
     reason: String(input.decision?.reason ?? ""),
-    ack: clip(input.ackText, 600) ?? ""
+    ack: clip(input.ackText, 600) ?? "",
+    // Stamped at build time, so a row can never be re-classified later by guesswork (timestamps
+    // cannot do it: the replay jobs run at several hours and drown the ~4 real leads/day).
+    origin: input.origin ?? firstTouchShadowOrigin()
   };
 }
 
