@@ -10,6 +10,7 @@ import { RUNNER_REVOKED_EXIT_CODE } from "../services/api/src/domain/portalRunne
 import { describeMdfUploadOutcome } from "./lib/mdfUploadOutcome.ts";
 import {
   ANSIRA_CLAIMS_LIST_URL,
+  MDF_TOOLBOX_LINK_TEXT,
   ANSIRA_FORM_CONTROLS,
   ansiraFormChangedSummary,
   cdpConnectFailureSummary,
@@ -1328,40 +1329,81 @@ async function trySavedChromeLogin(page: any, options: RunnerOptions): Promise<{
   };
 }
 
-async function openMdfSsoEntry(page: any, portalUrl: string, options: RunnerOptions): Promise<any> {
-  const startUrl = /h-?dnet\.com/i.test(portalUrl || "") ? portalUrl : hDNetHomeUrl;
-  await page.goto(startUrl, {
-    waitUntil: "domcontentloaded",
-    timeout: 60_000
-  });
+/**
+ * THE SSO HANDOFF — H-DNet > My Toolbox > "Marketing Development Fund".
+ *
+ * This is the ONLY thing that gives this browser an Ansira session. Being signed into
+ * H-DNet does not do it, and neither does navigating straight to app.ansira.com — that
+ * just bounces to the Microsoft sign-in, which the runner then reports as "your session
+ * expired" even though the human is perfectly logged in.
+ *
+ * The click was written in 2026-06 and then orphaned: a later change routed around the
+ * toolbox ("skip the un-clickable toolbox") and nothing called this again, so the live
+ * Playwright path did neither the click NOR the launcher URL. Joe raised it more than
+ * once; on 2026-08-10 he sent a photo of the open Toolbox panel with the link in it.
+ *
+ * Order is deliberate:
+ *   1. The real click, because that is the route a human uses and the one Joe verified.
+ *   2. The launcher URL as a fallback — it is that same menu item's real href (captured
+ *      via CDP 2026-06-17), so it is the same handoff without depending on SharePoint's
+ *      widget rendering.
+ *
+ * Fail direction: best effort throughout. It can only ever ADD a session; every failure
+ * path returns the page unchanged and leaves the caller's own login detection to decide.
+ * It never reads or types a credential — clicking a menu item is not authentication.
+ */
+async function establishAnsiraSessionViaToolbox(
+  page: any,
+  options: RunnerOptions
+): Promise<{ page: any; landedOnAnsira: boolean; via: "toolbox" | "launcher" | "none" }> {
+  const onAnsira = (candidate: any): boolean => /app\.ansira\.com/i.test(String(candidate?.url?.() ?? ""));
+  const portalUrl = options.portalUrl || hDNetHomeUrl;
+  const startUrl = /h-?dnet\.com/i.test(portalUrl) ? portalUrl : hDNetHomeUrl;
+
+  await page.goto(startUrl, { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => {});
   await page.waitForTimeout(5000);
   let text = await pageBodyText(page);
   if (isLoginPage(text) || /login\.microsoftonline\.com/i.test(page.url())) {
     await trySavedChromeLogin(page, options);
     text = await pageBodyText(page);
-    if (isLoginPage(text) || /login\.microsoftonline\.com/i.test(page.url())) return page;
+    // Genuinely logged OUT of H-DNet itself — no handoff is possible, and this is the one
+    // case where a human really is needed. Report it as such rather than clicking blindly.
+    if (isLoginPage(text) || /login\.microsoftonline\.com/i.test(page.url())) {
+      return { page, landedOnAnsira: false, via: "none" };
+    }
   }
 
+  // 1) The Toolbox click.
   const toolbox = page.locator(".avaQuickLinksExtension.headerExtension").first();
-  if (!(await toolbox.count())) return page;
-
-  await toolbox.click({ force: true }).catch(() => {});
-  await page.waitForTimeout(2000);
-  const toolboxPanel = page.locator(".ms-Panel.is-open").first();
-  const mdfLink = toolboxPanel
-    .locator("a")
-    .filter({ hasText: /^Marketing Development Fund$/i })
-    .first();
-  if (await mdfLink.count()) {
-    const popupPromise = page.waitForEvent("popup", { timeout: 8000 }).catch(() => null);
-    await mdfLink.click({ force: true }).catch(() => {});
-    const popup = await popupPromise;
-    const activePage = popup ?? page;
-    await activePage.waitForLoadState("domcontentloaded", { timeout: 60_000 }).catch(() => {});
-    await activePage.waitForTimeout(5000);
-    return activePage;
+  if (await toolbox.count().catch(() => 0)) {
+    await toolbox.click({ force: true }).catch(() => {});
+    await page.waitForTimeout(2000);
+    const mdfLink = page
+      .locator(".ms-Panel.is-open")
+      .first()
+      .locator("a")
+      .filter({ hasText: MDF_TOOLBOX_LINK_TEXT })
+      .first();
+    if (await mdfLink.count().catch(() => 0)) {
+      const popupPromise = page.waitForEvent("popup", { timeout: 8000 }).catch(() => null);
+      await mdfLink.click({ force: true }).catch(() => {});
+      const popup = await popupPromise;
+      const activePage = popup ?? page;
+      await activePage.waitForLoadState("domcontentloaded", { timeout: 60_000 }).catch(() => {});
+      await activePage.waitForTimeout(5000);
+      if (onAnsira(activePage)) return { page: activePage, landedOnAnsira: true, via: "toolbox" };
+      page = activePage;
+    }
   }
-  return page;
+
+  // 2) The same menu item's href, for when the SharePoint widget does not render.
+  if (options.launcherUrl) {
+    await page.goto(options.launcherUrl, { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => {});
+    await page.waitForTimeout(5000);
+    if (onAnsira(page)) return { page, landedOnAnsira: true, via: "launcher" };
+  }
+
+  return { page, landedOnAnsira: false, via: "none" };
 }
 
 async function openAnsiraClaimFormThroughHNet(page: any, options: RunnerOptions): Promise<{ page: any; blocker: string | null }> {
@@ -1377,10 +1419,29 @@ async function openAnsiraClaimFormThroughHNet(page: any, options: RunnerOptions)
   const hasForm = async (): Promise<boolean> =>
     (await page.locator("#app-marketing-activity").count().catch(() => 0)) > 0;
 
-  // 1) Go straight to the MDF Recap list. The live M365 session auto-SSOs Ansira — no toolbox.
+  // 1) Try the MDF Recap list directly. This works ONLY when an Ansira session already
+  // exists in this browser — a live H-DNet/M365 login does NOT, on its own, sign you into
+  // Ansira (Joe, 2026-08-10, with a photo of the Toolbox). The comment that used to sit
+  // here claimed it "auto-SSOs Ansira — no toolbox", and that assumption is what stranded
+  // every session-expired claim: see step 1b.
   await page.goto(options.recapEntryUrl || ansiraClaimCreateUrl, { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => {});
   await page.waitForTimeout(4000);
-  if (await onLogin()) return sessionExpired("recap list");
+
+  // 1b) SSO HANDOFF (the step that was missing). Landing on a login here does NOT mean the
+  // human is logged out — far more often H-DNet is fine and Ansira has simply never been
+  // handed the session. The handoff is a real click: H-DNet > My Toolbox > "Marketing
+  // Development Fund". Do it, then re-try the recap list, and only THEN call it expired.
+  //
+  // Without this the runner could never recover on its own: it refused to run until it saw
+  // an Ansira session, while the only thing that mints one had been routed around. Four
+  // completed logins on 2026-08-07 produced zero filled drafts for exactly this reason.
+  if (await onLogin()) {
+    const handoff = await establishAnsiraSessionViaToolbox(page, options);
+    page = handoff.page;
+    await page.goto(options.recapEntryUrl || ansiraClaimCreateUrl, { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => {});
+    await page.waitForTimeout(4000);
+    if (await onLogin()) return sessionExpired("recap list");
+  }
 
   // 2) Click "Create MDF Recap" to instantiate the form (a bare nav to /create does not render it).
   const createBtn = page.getByText(/create\s+mdf\s+recap/i).first();
@@ -1477,6 +1538,35 @@ async function checkAnsiraSessionViaCdp(cdpUrl: string): Promise<{ expired: bool
     return { expired: isExpiredSessionLanding({ finalUrl, bodyText }), finalUrl };
   } catch {
     return { expired: false };
+  } finally {
+    await browser?.close().catch(() => {});
+  }
+}
+
+/**
+ * CDP wrapper around the Toolbox handoff, for the preflight (which has a debug-port URL, not
+ * a page). Opens/reuses a tab in the runner Chrome, performs the handoff, and leaves the tab
+ * where it landed so the run that follows inherits the fresh session.
+ *
+ * Best-effort by construction: any failure returns false and the caller falls straight back
+ * to the existing "blocked, log in and it will auto-retry" path — strictly no worse than
+ * before, and it never touches credentials.
+ */
+async function attemptToolboxSessionHandoff(options: RunnerOptions): Promise<boolean> {
+  if (!options.cdpUrl) return false;
+  let browser: import("playwright").Browser | null = null;
+  try {
+    browser = await connectRunnerBrowser(options.cdpUrl);
+    const context = browser.contexts()[0];
+    if (!context) return false;
+    const page = context.pages()[0] ?? (await context.newPage());
+    const result = await establishAnsiraSessionViaToolbox(page, options);
+    if (result.landedOnAnsira) {
+      console.log(`MDF session preflight: Ansira session established via the ${result.via} handoff.`);
+    }
+    return result.landedOnAnsira;
+  } catch {
+    return false;
   } finally {
     await browser?.close().catch(() => {});
   }
@@ -2154,7 +2244,16 @@ async function runMain(options: RunnerOptions) {
   // which only production can prove — if it ever misreads a LIVE session as
   // expired, disable it here and the runner behaves exactly as before.
   if (osFlag("MDF_PORTAL_SESSION_PREFLIGHT", true) && options.cdpUrl && cdpOk && (playwrightAvailable || browserUseAvailable)) {
-    const sessionCheck = await checkAnsiraSessionViaCdp(options.cdpUrl);
+    let sessionCheck = await checkAnsiraSessionViaCdp(options.cdpUrl);
+    // A bare probe of the Ansira claims list cannot tell "the human is logged out" apart from
+    // "Ansira has never been handed this session" — and the second is the common case. Before
+    // condemning the run, DO the handoff (H-DNet > Toolbox > Marketing Development Fund) and
+    // probe again. Until this existed the preflight was a closed loop: it refused to run
+    // without an Ansira session while nothing in the run ever created one.
+    if (sessionCheck.expired) {
+      const handoff = await attemptToolboxSessionHandoff(options);
+      if (handoff) sessionCheck = await checkAnsiraSessionViaCdp(options.cdpUrl);
+    }
     if (sessionCheck.expired) {
       // Session-recovery UX (2026-07-29): open the login page in the runner Chrome so the
       // human just logs in (MFA) in the window that pops up, and queue this task for an
