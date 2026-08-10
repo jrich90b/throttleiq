@@ -1924,6 +1924,100 @@ export function decideAdfDepartmentRoute(input: AdfDepartmentRouteInput): AdfDep
   return { kind: "none" };
 }
 
+// --- Subjectless web-lead handoff (2026-08-10) -----------------------------
+//
+// The SAME parser verdict (`parseAdfDepartmentInterestWithLLM`) that routes a department request
+// also answers a second, narrower question: did the customer identify ANY subject at all? Its
+// `none` verdict means "a greeting, an unrelated topic, or no identifiable subject" — and on a web
+// form that carries no bike, that is precisely the lead the agent cannot answer.
+//
+// Production miss (Timothy Patrick, +13049475135, Ref 11753, "Room58 - Contact Us", 2026-08-08):
+// the ADF body ended `Inquiry:\nHome` — the PAGE the form sat on, not anything he typed — and the
+// only place left to land was the purchase-intent fallback, which asked "Which bike are you asking
+// about?" about a bike nobody had named. Joe removed that question by hand before sending. Measured
+// 2026-08-09 across the two catch-all web forms: 26 leads, and ZERO let the customer pick a bike —
+// the `Harley-Davidson Full Line` on every one of them is the form's own filler, so no sample size
+// turns it into a customer choice. Same family as the walk-in note graded as customer speech: text
+// that is not the customer talking, read as if it were.
+//
+// The treatment is the one the structurally identical twin form already gets (`isRoom58Standard`,
+// live since 2026-03-12): the pinned ack, a staff todo, `manual_handoff`, cadence stopped — because
+// a human has to find out what the customer actually wants. NOT a new reply class and not new copy;
+// the sibling's exact sentence pair.
+//
+// DELIBERATELY parser-driven, not a page-name/junk-word list. Enumerating "Home" would be the
+// keyword-scan anti-pattern on n=1 ("Home" is the only bare page name in all 830 conversations);
+// the parser already answers "did they actually ask something?" without anyone listing anything.
+//
+// FAIL DIRECTION: unsure => none => today's behaviour exactly. A bike named on the lead, an
+// inventory stock id/VIN, no parser verdict, low confidence, or ANY department other than `none`
+// (a real parts/apparel/service/course request, or `vehicle` — the default for bike shoppers) all
+// keep the existing path. The only turns this can change are the ones that would have asked which
+// bike with no bike on record, so the worst case is a lead the agent could have engaged getting a
+// human instead — which is the reversible direction, and the 26-lead measurement says that lead
+// does not exist on these forms.
+// ---------------------------------------------------------------------------
+
+/**
+ * Marker written to `followUp.reason` when this referee hands the lead to a person. The nightly
+ * replay judge's design-accept keys on this EXACT string rather than sniffing the body, so the
+ * accept can never widen past the referee's own decision.
+ */
+export const NO_SUBJECT_WEB_LEAD_HANDOFF_REASON = "no_subject_web_lead";
+
+/**
+ * The raw ADF department parse, narrowed to the three fields the referees read. Pulled out of the
+ * route so an eval can EXECUTE the carrying step instead of asserting how it is spelled: a mapping
+ * that quietly hardcodes `accepted: false` reads identical to a correct one in source, and that is
+ * the one sabotage a source pin cannot catch.
+ */
+export type AdfDepartmentVerdict = {
+  accepted: boolean;
+  department: "apparel" | "parts" | "service" | "vehicle" | "riding_academy" | "none" | null;
+  confidence: number;
+};
+
+export function toAdfDepartmentVerdict(
+  parse: { department?: string | null; confidence?: number | null } | null | undefined
+): AdfDepartmentVerdict {
+  return {
+    accepted: !!parse,
+    department: (parse?.department ?? null) as AdfDepartmentVerdict["department"],
+    confidence: parse?.confidence ?? 0
+  };
+}
+
+export type NoSubjectWebLeadHandoffKind = "handoff" | "none";
+
+export type NoSubjectWebLeadHandoffInput = {
+  isInitialAdf: boolean;
+  /** A SPECIFIC model on the lead (a placeholder like "Full Line" is not one). */
+  hasNamedBike: boolean;
+  hasInventoryIdentifiers: boolean;
+  parserAccepted: boolean;
+  department?: "apparel" | "parts" | "service" | "vehicle" | "riding_academy" | "none" | null;
+  confidence: number;
+  confidenceMin: number;
+};
+
+export type NoSubjectWebLeadHandoffDecision = {
+  kind: NoSubjectWebLeadHandoffKind;
+  /** `followUp.reason` to record on a handoff; empty string when nothing changes. */
+  reason: string;
+};
+
+export function decideNoSubjectWebLeadHandoff(
+  input: NoSubjectWebLeadHandoffInput
+): NoSubjectWebLeadHandoffDecision {
+  const none: NoSubjectWebLeadHandoffDecision = { kind: "none", reason: "" };
+  if (!input.isInitialAdf) return none;
+  if (input.hasNamedBike || input.hasInventoryIdentifiers) return none;
+  if (!input.parserAccepted) return none;
+  if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) return none;
+  if (input.department !== "none") return none;
+  return { kind: "handoff", reason: NO_SUBJECT_WEB_LEAD_HANDOFF_REASON };
+}
+
 // --- Finance-process / logistics handoff (2026-06-18) ----------------------
 //
 // A customer asking about the PROCESS / SEQUENCING / TIMING / CONDITIONS of financing

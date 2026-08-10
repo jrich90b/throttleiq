@@ -44,6 +44,9 @@ import {
 import { isPlaceholderModel } from "../services/api/src/domain/modelDeflection.ts";
 import { classifyReplayErrorCause } from "../services/api/src/domain/replayFidelity.ts";
 import { describeWalkInNoteProvenance } from "../services/api/src/domain/walkInFollowUpTopic.ts";
+// Imported, never re-spelled: the accept below and the referee that writes the marker must agree on
+// the exact string, or the accept quietly stops matching the branch it exists to excuse.
+import { NO_SUBJECT_WEB_LEAD_HANDOFF_REASON } from "../services/api/src/domain/routeStateReducer.ts";
 
 export type ReplayRow = {
   id?: string;
@@ -499,6 +502,37 @@ export function isRoom58StandardHandoffAckByDesign(
   return /i got your inquiry/.test(draft) && /make sure the team follows up soon/.test(draft);
 }
 
+// Subjectless web-lead handoff ack BY DESIGN (Timothy Patrick, +13049475135, 2026-08-08). The twin
+// accept above only ever matched ONE form name with a literally EMPTY Inquiry, so the structurally
+// identical catch-all form — whose Inquiry carried the page name "Home" rather than nothing — fell
+// through to a sales draft asking which bike. Once `decideNoSubjectWebLeadHandoff` sends that lead
+// to a person instead, the judge grades the same handoff ack the way it graded Larry's: as a 1:1
+// sales reply that ignored an ask, with the ask invented from a form field the customer never
+// filled in. That is the scorer's miss, not the product's.
+//
+// The gate is THE REFEREE'S OWN DECISION, read off the row's recorded `followUp.reason`, so this
+// accept can never be wider than the branch it excuses: no body sniffing, no form-name list, nothing
+// to drift. A lead the referee did not hand off — a named bike, a real department or vehicle request,
+// an unconfident parser — carries no marker and still fails, and the draft must also still be the
+// pinned ack copy, so a branch that started selling would surface again.
+//
+// ⚠️ That key only works because the ADF route now REPORTS the decision (`followUpMode`/
+// `followUpReason` on its JSON response) and the replay prefers the response over the store. Keying
+// it on the store alone would have been inert: MEASURED 2026-08-10, the replay sandbox is re-read
+// 250ms after the turn while the handler's write is debounced, so a turn that demonstrably set
+// manual_handoff came back with `followUp` null and without even its own outbound. A guard keyed on
+// that would have silently never fired. If either half of this is ever unwired, the eval's
+// end-to-end assertion is what catches it.
+export function isNoSubjectWebLeadHandoffAckByDesign(
+  row: ReplayRow,
+  judge: IntentVerdict | null | undefined
+): boolean {
+  if (!judge || judge.addressed) return false;
+  if (row.router?.followUpReason !== NO_SUBJECT_WEB_LEAD_HANDOFF_REASON) return false;
+  const draft = String(row.draft ?? "").toLowerCase();
+  return /i got your inquiry/.test(draft) && /make sure the team follows up soon/.test(draft);
+}
+
 /** A row worth spending a judge call on: it produced a draft on an actionable inbound. */
 export function isJudgeWorthy(row: ReplayRow): boolean {
   if (!row.draft || !String(row.draft).trim()) return false;
@@ -603,6 +637,9 @@ export function adjustScore(score: TurnScore, row: ReplayRow): TurnScore & { adj
     return { ...score, pass: true, critical: false, adjustment: "design_accepted_handoff" };
   }
   if (!score.pass && isRoom58StandardHandoffAckByDesign(row, score.judge)) {
+    return { ...score, pass: true, critical: false, adjustment: "design_accepted_handoff" };
+  }
+  if (!score.pass && isNoSubjectWebLeadHandoffAckByDesign(row, score.judge)) {
     return { ...score, pass: true, critical: false, adjustment: "design_accepted_handoff" };
   }
   if (!score.pass && isManagerQuotePricingPath(row, score.judge)) {

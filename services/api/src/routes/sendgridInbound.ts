@@ -79,7 +79,8 @@ import { buildAdfResubmissionAck, detectAdfFormResubmission } from "../domain/ad
 import { buildMarketplaceRelayFirstTouchReply, buildMarketplaceRelayTaskSummary } from "../domain/marketplaceRelay.js";
 import { isHtmlClientNoticeOnly } from "../domain/inboundMailActionability.js";
 import { buildTradeAdfAck, tradeAdfPurchaseIsOnFloor } from "../domain/tradeAdfReply.js";
-import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn, decideRidingAcademyTurn, shouldCloseEventPromoLeadOnIntake, resolveRideChallengeEventTouch, decideIncomingInventoryPurpose, decideWalkInInventoryWatchTurn, decideSaleTradeJourneyBucket } from "../domain/routeStateReducer.js";
+import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn, decideRidingAcademyTurn, shouldCloseEventPromoLeadOnIntake, resolveRideChallengeEventTouch, decideIncomingInventoryPurpose, decideWalkInInventoryWatchTurn, decideSaleTradeJourneyBucket, decideNoSubjectWebLeadHandoff, toAdfDepartmentVerdict } from "../domain/routeStateReducer.js";
+import type { AdfDepartmentVerdict } from "../domain/routeStateReducer.js";
 import { buildLongTermTimelineMessage } from "../domain/longTermMessage.js";
 import { orchestrateInbound } from "../domain/orchestrator.js";
 import { collectRecentStaffCorrections } from "../domain/feedbackSteering.js";
@@ -5347,12 +5348,18 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     isGenericLeadModel(adfDepartmentVehicleContext) ||
     adfDepartmentTerseInquiry;
   let adfDepartmentRoute: { kind: "apparel" | "parts" | "service" | "riding_academy" | "none" } = { kind: "none" };
+  // The same verdict answers a SECOND question further down the route — "did the customer identify
+  // any subject at all?" — which `decideAdfDepartmentRoute` collapses away (it folds `none`,
+  // `vehicle` and low confidence into one `none`). Keep the raw verdict so the subjectless-lead
+  // referee reads the parser rather than re-deriving it, and so no second LLM call is spent.
+  let adfDepartmentVerdict: AdfDepartmentVerdict = toAdfDepartmentVerdict(null);
   if (isInitialAdf && !!effectiveInquiry && !adfDepartmentExistingSignal && adfDepartmentCue) {
     const adfDepartmentParse = await parseAdfDepartmentInterestWithLLM({
       inquiry: effectiveInquiry,
       vehicle: adfDepartmentVehicleContext || null,
       leadSource
     });
+    adfDepartmentVerdict = toAdfDepartmentVerdict(adfDepartmentParse);
     adfDepartmentRoute = decideAdfDepartmentRoute({
       parserAccepted: !!adfDepartmentParse,
       department: adfDepartmentParse?.department ?? null,
@@ -9595,10 +9602,38 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         `Thanks for your inquiry about the ${bikeLabel}. ` +
         "That unit is no longer available, but I can help with similar options if you want.";
     } else if (!hasIdentifiers) {
-      draft =
-        bikeLabel === "the bike"
-          ? "Thanks — I got your inquiry. Which bike are you asking about?"
-          : `Thanks — I saw you wanted to learn more about the ${bikeLabel}.${isRequestDetails ? " Any specific questions about the bike?" : ""} I’m here to help.`;
+      // No bike on the lead and nothing else claimed this turn — the one place a lead can land where
+      // "Which bike are you asking about?" is all that is left to say. Ask the referee whether the
+      // customer identified any subject at all first: on the catch-all web forms the Vehicle field is
+      // the form's own filler, so a `none` verdict means there is no bike to ask about and no ask to
+      // answer, and the lead belongs to a person (the treatment the twin form already gets).
+      const noSubjectHandoff = decideNoSubjectWebLeadHandoff({
+        isInitialAdf,
+        hasNamedBike: bikeLabel !== "the bike",
+        hasInventoryIdentifiers: hasIdentifiers,
+        parserAccepted: adfDepartmentVerdict.accepted,
+        department: adfDepartmentVerdict.department as any,
+        confidence: adfDepartmentVerdict.confidence,
+        confidenceMin: Number(process.env.ADF_DEPARTMENT_CONFIDENCE_MIN ?? 0.7)
+      });
+      if (noSubjectHandoff.kind === "handoff") {
+        // The twin form's exact sentence pair — no new copy, and the nightly judge's design-accept
+        // already knows it (keyed to the followUp.reason this writes, not to the wording).
+        draft = "Thanks — I got your inquiry. I’ll make sure the team follows up soon.";
+        addTodo(conv, "other", event.body, event.providerMessageId);
+        setFollowUpMode(conv, "manual_handoff", noSubjectHandoff.reason);
+        stopFollowUpCadence(conv, "manual_handoff");
+        console.log("[sendgrid inbound] subjectless web lead -> human handoff", {
+          leadSource,
+          confidence: adfDepartmentVerdict.confidence,
+          reason: noSubjectHandoff.reason
+        });
+      } else {
+        draft =
+          bikeLabel === "the bike"
+            ? "Thanks — I got your inquiry. Which bike are you asking about?"
+            : `Thanks — I saw you wanted to learn more about the ${bikeLabel}.${isRequestDetails ? " Any specific questions about the bike?" : ""} I’m here to help.`;
+      }
       suppressAvailabilityAppend = true;
     }
   }
@@ -10157,6 +10192,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     channel,
     intent: result.intent,
     stage: result.stage,
-    draft
+    draft,
+    // The handoff decision, reported the way bucket/cta/intent already are. The offline replay
+    // harness reads its `router.*` fields back out of the STORE, but the handler's write is debounced
+    // and never flushes inside a replay sandbox — MEASURED 2026-08-10: a turn that demonstrably set
+    // manual_handoff came back with `followUp` null and without even its own outbound message. So
+    // every recorded row's followUp was the PRE-turn state, and any scorer keyed on it was silently
+    // inert. Returning it here makes the decision observable at the one moment it is certain.
+    followUpMode: conv.followUp?.mode ?? null,
+    followUpReason: conv.followUp?.reason ?? null
   });
 }

@@ -80,6 +80,11 @@ for (const fn of [
   "decidePostSaleOwnershipTurn",
   "decideWatchScopeTurn",
   "decideAdfDepartmentRoute",
+  // Reads the SAME turn-only ADF department verdict as the route above (department + confidence),
+  // which is never persisted, so a stored conversation cannot reproduce its inputs. Its decision
+  // table is pinned instead by no_subject_web_lead_handoff:eval, which executes it against the
+  // parser's measured verdicts.
+  "decideNoSubjectWebLeadHandoff",
   "decideFinanceProcessQuestionTurn",
   "decideServiceSchedulingHandoffTurn",
   "decideFinanceHardshipTurn",
