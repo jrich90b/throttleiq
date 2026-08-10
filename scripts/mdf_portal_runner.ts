@@ -314,9 +314,29 @@ async function loadRemoteBundles(options: RunnerOptions): Promise<{ task: AgentT
   // and let the daemon stand the machine down for good. Anything else stays a normal failure
   // that retries — a transient 409 must never retire a working runner.
   if (resp.status === 409 && /runner_revoked/.test(text)) {
+    // RE-IDENTIFY ONCE, then stand down (2026-08-10). The console's Retire tombstones this
+    // computer's machine id, and the id is what the server checks first — so a retired computer
+    // could never come back on its own, and reinstalling did not help either (the id lives outside
+    // the app folder the installer replaces). Joe hit that lockout twice in one hour.
+    //
+    // The first fix wiped the id in the INSTALLER, which recovered the lockout but handed a fresh
+    // identity out on every install — so two runner processes on one PC registered as two different
+    // computers and spent the afternoon stealing the slot from each other. This is the narrow
+    // version: recover exactly the retired case, in the runner, ONCE per process, and never touch
+    // the identity of a machine that is working.
+    if (!reIdentifiedAfterRevoke) {
+      reIdentifiedAfterRevoke = true;
+      const fresh = await regenerateRunnerMachineIdentity();
+      if (fresh) {
+        console.warn(
+          "[mdf-portal-runner] This computer was retired in the console; re-identifying it once and retrying."
+        );
+        return loadRemoteBundles(options);
+      }
+    }
     console.error(
       "[mdf-portal-runner] This computer was retired from the LeadRider runner in the console. Standing down.\n" +
-        "To use this computer as the runner again, run the runner installer on it."
+        "Re-identifying it did not clear the retirement — run the runner installer on this computer."
     );
     process.exit(RUNNER_REVOKED_EXIT_CODE);
   }
@@ -348,6 +368,29 @@ async function updateRemoteTask(
   });
   const text = await resp.text();
   if (!resp.ok) throw new Error(`Could not update remote MDF portal task (${resp.status}): ${text.slice(0, 500)}`);
+}
+
+// One re-identify per process. A loop here would mint a new machine id on every poll, which is the
+// failure mode the installer-side version actually produced in production.
+let reIdentifiedAfterRevoke = false;
+
+/**
+ * Replace this computer's runner identity with a fresh one. Used ONLY to recover from a console
+ * retirement — never on a healthy runner, because a second identity on one PC makes two processes
+ * look like two computers and they then fight over the single runner slot.
+ *
+ * Returns false if the new identity could not be persisted: without a stable file the next poll
+ * would mint yet another id, so the caller stands down instead (fail toward stopping, not churning).
+ */
+async function regenerateRunnerMachineIdentity(): Promise<boolean> {
+  try {
+    await rm(runnerMachinePath, { force: true });
+    const before = await loadRunnerMachineIdentity();
+    const after = await loadRunnerMachineIdentity();
+    return !!before.id && before.id === after.id;
+  } catch {
+    return false;
+  }
 }
 
 async function runnerIdentityHeaders(): Promise<Record<string, string>> {

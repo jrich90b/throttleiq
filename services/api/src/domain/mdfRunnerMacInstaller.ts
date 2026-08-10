@@ -2,9 +2,10 @@
 // lived in mdfRunnerWindowsInstaller.ts, and index.ts sits on its size ceiling). Pure builder: the
 // route stays in index.ts and only supplies the per-dealer values.
 //
-// The identity-clearing step near the top is load-bearing — see mdf_portal_preflight:eval. Retiring
-// a runner in the console tombstones this machine's id; without dropping ~/.leadrider/
-// mdf-runner-machine.json a reinstall returns with the same id and is refused forever.
+// This installer deliberately does NOT wipe the machine identity. A version that did recovered the
+// retire-lockout but handed out a fresh identity on every install, so two runner processes on one PC
+// registered as two computers and fought over the single slot. Recovery from a retirement lives in
+// the runner, which re-identifies ONCE on a runner_revoked reply.
 
 export function shellSingleQuote(value: string): string {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
@@ -53,15 +54,11 @@ fi
 cd "\${APP_DIR}"
 npm install
 
-# RE-IDENTIFY THIS COMPUTER (2026-08-10). Retiring a runner in the console leaves a tombstone keyed
-# to this machine's id, and the console then says "run the installer on the new computer" — but the
-# id lives OUTSIDE the app folder, so reinstalling on the SAME computer came back with the same id
-# and was refused forever. Joe hit this twice in one hour. Dropping the id here makes the installer
-# the recovery the console already promises: the runner mints a fresh id and claims the slot, which
-# clears the tombstone. A genuinely competing live runner still gets a clear runner_conflict.
-rm -f "\${HOME}/.leadrider/mdf-runner-machine.json"
-
+# ONE identity file for this computer, named here so the installer and the daemon cannot disagree
+# (2026-08-10). Two identities on one machine make it register as two computers, and they then fight
+# over the single runner slot.
 cat > "\${APP_DIR}/.env" <<ENV
+MDF_PORTAL_RUNNER_MACHINE_PATH=\${HOME}/.leadrider/mdf-runner-machine.json
 MDF_PORTAL_API_BASE_URL=${apiBase}
 MDF_PORTAL_RUNNER_TOKEN=${runnerToken}
 MDF_PORTAL_CDP_URL=http://127.0.0.1:9222

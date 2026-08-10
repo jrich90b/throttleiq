@@ -80,7 +80,8 @@ if ($proceed -notmatch '^[Yy]') {
 $AppDir = Join-Path $env:LOCALAPPDATA "LeadRider\\mdf-runner"
 $ProfileDir = Join-Path $env:LOCALAPPDATA "LeadRider\\mdf-chrome-profile"
 $LogDir = Join-Path $env:LOCALAPPDATA "LeadRider\\logs"
-New-Item -ItemType Directory -Force -Path $AppDir, $ProfileDir, $LogDir | Out-Null
+$AppDataDir = Join-Path $env:LOCALAPPDATA "LeadRider"
+New-Item -ItemType Directory -Force -Path $AppDir, $ProfileDir, $LogDir, $AppDataDir | Out-Null
 
 function Find-Chrome {
   $candidates = @(
@@ -149,13 +150,16 @@ if (Test-Path (Join-Path $AppDir ".git")) {
 Set-Location $AppDir
 npm install --no-audit --no-fund
 
-# RE-IDENTIFY THIS COMPUTER (2026-08-10). The console Retire writes a tombstone keyed to this
-# machine id and then tells you to run the installer - but the id lives outside the app folder,
-# so reinstalling on the SAME computer returned the same id and was refused forever (hit twice
-# in one hour on sales2). Dropping it makes the installer the recovery the console promises.
-Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:USERPROFILE ".leadrider\\mdf-runner-machine.json")
+# ONE identity file for this computer, chosen HERE and written into .env (2026-08-10). The installer
+# used to mint its own identity under $env:USERPROFILE while the daemon minted one under whatever
+# home directory ITS process resolved -- so a single PC could register as two different computers and
+# the two would fight over the single runner slot, each kicking the other mid-claim (measured on
+# sales2: three machine ids in 15 minutes, the name alternating SALES2 / sales2). Naming the path in
+# .env makes them agree by construction, whoever runs them.
+$IdentityPath = Join-Path $AppDataDir "mdf-runner-machine.json"
 
 $envLines = @(
+  'MDF_PORTAL_RUNNER_MACHINE_PATH=' + $IdentityPath,
   'MDF_PORTAL_API_BASE_URL=${args.apiBase}',
   'MDF_PORTAL_RUNNER_TOKEN=${args.runnerToken}',
   'MDF_PORTAL_CDP_URL=http://127.0.0.1:9222',
@@ -192,9 +196,7 @@ Start-ScheduledTask -TaskName "LeadRider MDF Runner"
 # "installed at <time>, but it has not checked in since", which names the real problem.
 # The identity file is the SAME one the runner reads, and an existing one is never overwritten,
 # so the installer and the daemon always agree on who this machine is.
-$IdentityDir = Join-Path $env:USERPROFILE ".leadrider"
-$IdentityPath = Join-Path $IdentityDir "mdf-runner-machine.json"
-New-Item -ItemType Directory -Force -Path $IdentityDir | Out-Null
+# Uses the SAME $IdentityPath written into .env above -- never a second one.
 if (-not (Test-Path $IdentityPath)) {
   $identity = @{ id = [guid]::NewGuid().ToString(); name = $env:COMPUTERNAME }
   Set-Content -LiteralPath $IdentityPath -Value ($identity | ConvertTo-Json) -Encoding UTF8

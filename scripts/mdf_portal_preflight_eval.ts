@@ -1158,60 +1158,74 @@ console.log("PASS MDF toolbox SSO handoff — the Marketing Development Fund cli
 console.log("PASS Ansira control-phase split — #activity-sub-detail is checked AFTER the dates, where Ansira actually creates it.");
 
 // ---------------------------------------------------------------------------------------------
-// RETIRE → REINSTALL must actually recover the computer (Joe, 2026-08-10, hit TWICE in one hour).
+// RETIRE -> RECOVER, without handing out a second identity (Joe, 2026-08-10).
 //
-// The console's Retire writes a tombstone keyed to the runner's machine id, and then tells the
-// operator to "run the installer on the new computer". But the id lives in
-// ~/.leadrider/mdf-runner-machine.json — OUTSIDE the app folder the installer replaces — so
-// reinstalling on the SAME computer came back with the SAME id and was refused forever. The console
-// read "no active runner" while the runner hammered the API and was turned away every few minutes.
+// Two defects, one after the other, both measured live on sales2:
 //
-// Both installers now drop that file, which makes reinstalling the recovery the console promises:
-// a fresh id claims the slot, and claiming clears the tombstone.
+// 1. The console's Retire tombstones this computer's machine id, and the refusal then said "run the
+//    installer on it" — which could not work, because the id lives outside the folder the installer
+//    replaces. Joe hit that lockout twice in one hour.
+// 2. The first fix wiped the identity IN THE INSTALLER. That recovered the lockout and immediately
+//    caused a worse one: every install handed out a fresh identity, so two runner processes on one
+//    PC registered as two computers and spent the afternoon stealing the slot from each other —
+//    three machine ids in 15 minutes, the name alternating SALES2 / sales2, and a claim that took
+//    17 minutes instead of 4 because each run kept being kicked.
+//
+// So: recovery belongs in the RUNNER, once per process, only on a runner_revoked reply. And the
+// installer names ONE identity path in .env so it and the daemon can never disagree.
 // ---------------------------------------------------------------------------------------------
 {
   const idxSrc = fs.readFileSync("services/api/src/index.ts", "utf8");
   const winSrc = fs.readFileSync("services/api/src/domain/mdfRunnerWindowsInstaller.ts", "utf8");
-  const runnerSrc2 = fs.readFileSync("scripts/mdf_portal_runner.ts", "utf8");
-
-  // The identity path the runner uses — asserted so the installers cannot drift off it.
-  assert.match(
-    runnerSrc2,
-    /path\.join\(os\.homedir\(\), "\.leadrider", "mdf-runner-machine\.json"\)/,
-    "the runner's machine identity lives at ~/.leadrider/mdf-runner-machine.json"
-  );
-
-  // macOS installer clears it, BEFORE writing .env / registering the agents. The script moved out of
-  // index.ts into domain/mdfRunnerMacInstaller.ts (index.ts was on its size ceiling) — assert against
-  // its new home, and assert index.ts still CALLS the builder so the move cannot orphan it.
   const macSrc = fs.readFileSync("services/api/src/domain/mdfRunnerMacInstaller.ts", "utf8");
-  assert.match(
-    idxSrc,
-    /const script = buildMacInstallerScript\(\{ apiBase, runnerToken, repoUrl, branch \}\);/,
-    "the install.sh route builds its script from the extracted module"
-  );
-  assert.match(macSrc, /return `#!\/bin\/zsh/, "the generated script still starts with the shebang on line 1");
-  const shClear = macSrc.indexOf('rm -f "\\${HOME}/.leadrider/mdf-runner-machine.json"');
-  const shEnv = macSrc.indexOf('cat > "\\${APP_DIR}/.env" <<ENV');
-  assert.ok(shClear >= 0, "install.sh clears the stale machine identity");
-  assert.ok(shEnv >= 0, "install.sh env anchor present");
-  assert.ok(shClear < shEnv, "install.sh clears the identity before it configures the runner");
+  const runnerSrc3 = fs.readFileSync("scripts/mdf_portal_runner.ts", "utf8");
 
-  // Windows installer clears it too — same file, PowerShell form.
-  assert.match(
-    winSrc,
-    /Remove-Item -Force -ErrorAction SilentlyContinue \(Join-Path \$env:USERPROFILE "\.leadrider\\\\mdf-runner-machine\.json"\)/,
-    "install.bat clears the stale machine identity"
-  );
-  const batClear = winSrc.indexOf("Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:USERPROFILE");
-  const batEnv = winSrc.indexOf("$envLines = @(");
-  assert.ok(batClear >= 0 && batEnv >= 0 && batClear < batEnv, "install.bat clears the identity before configuring");
+  // --- the installers must NOT wipe the identity ------------------------------------------------
+  for (const [name, src] of [["install.bat", winSrc], ["install.sh", macSrc]] as const) {
+    assert.ok(
+      !/rm -f .*mdf-runner-machine\.json/.test(src) &&
+        !/Remove-Item[^\n]*mdf-runner-machine\.json/.test(src),
+      `${name} must NOT delete the machine identity — that is what made one PC look like two`
+    );
+  }
 
-  // The refusal must name the step that WORKS. The old wording ("run the runner installer on it")
-  // was true-sounding and useless — it is what sent Joe round the loop a second time.
-  const revokedMsg = idxSrc.slice(idxSrc.indexOf("runner_revoked: this computer was retired"), idxSrc.indexOf("runner_revoked: this computer was retired") + 420);
-  assert.match(revokedMsg, /INSTALLER/, "the refusal names the installer explicitly");
-  assert.match(revokedMsg, /re-identifies the computer and clears the retirement/, "and says WHY that is the fix");
-  assert.match(revokedMsg, /re-downloading alone is not enough/, "and rules out the thing an operator tries first");
+  // --- ONE identity path, named in .env, so installer and daemon agree --------------------------
+  assert.match(winSrc, /MDF_PORTAL_RUNNER_MACHINE_PATH=/, "install.bat names the identity path in .env");
+  assert.match(macSrc, /MDF_PORTAL_RUNNER_MACHINE_PATH=/, "install.sh names the identity path in .env");
+  assert.match(
+    runnerSrc3,
+    /process\.env\.MDF_PORTAL_RUNNER_MACHINE_PATH/,
+    "the runner honours the identity path the installer chose"
+  );
+  // The Windows installer's own check-in must reuse that path, never mint its own second one.
+  assert.equal(
+    (winSrc.match(/\$IdentityPath = /g) ?? []).length,
+    1,
+    "install.bat defines the identity path exactly once — a second definition is how the PC got two ids"
+  );
+  assert.ok(
+    !/\$IdentityDir = Join-Path \$env:USERPROFILE/.test(winSrc),
+    "install.bat no longer keeps a separate USERPROFILE identity beside the one it puts in .env"
+  );
+
+  // --- recovery lives in the runner, ONCE, and only on runner_revoked ---------------------------
+  assert.match(runnerSrc3, /let reIdentifiedAfterRevoke = false;/, "the re-identify is one-shot per process");
+  const revokeAt = runnerSrc3.indexOf('if (resp.status === 409 && /runner_revoked/.test(text)) {');
+  const reIdAt = runnerSrc3.indexOf("const fresh = await regenerateRunnerMachineIdentity();");
+  const standDownAt = runnerSrc3.indexOf("process.exit(RUNNER_REVOKED_EXIT_CODE);");
+  assert.ok(revokeAt >= 0 && reIdAt >= 0 && standDownAt >= 0, "all three recovery anchors are present");
+  assert.ok(revokeAt < reIdAt && reIdAt < standDownAt, "re-identify is attempted BEFORE standing the computer down");
+  assert.match(
+    runnerSrc3,
+    /if \(!reIdentifiedAfterRevoke\) \{\s*\n\s*reIdentifiedAfterRevoke = true;/,
+    "the flag is set before the retry, so a revoked runner can never loop minting new ids"
+  );
+  // A regenerate that cannot PERSIST must not be reported as success — otherwise the next poll mints
+  // another id, which is exactly the churn this whole slice exists to stop.
+  assert.match(
+    runnerSrc3,
+    /return !!before\.id && before\.id === after\.id;/,
+    "regenerate only succeeds when the new identity reads back stable from disk"
+  );
 }
-console.log("PASS runner retire/reinstall recovery — both installers clear the stale machine identity, and the refusal names the step that works.");
+console.log("PASS runner identity — recovery is one-shot in the runner on runner_revoked; the installers name ONE identity path and never wipe it.");
