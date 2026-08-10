@@ -2050,6 +2050,49 @@ export type FinanceProcessQuestionTurnDecision = {
   kind: FinanceProcessQuestionTurnKind;
 };
 
+// --- Budget gated on the financing (Franklin +17164208660, 2026-08-10) -----
+//
+// We ask a shopper "what budget should I target?" and they answer that it depends on the
+// FINANCING — the down payment, the monthly payment, what they qualify for. That is an answer,
+// not a non-answer, and it names the one thing the agent cannot help with. The live miss: he
+// replied "No I want used and I don't know it depends on how much money I have to put down"
+// and the next draft asked for a budget range again, because the clarifier's budget hint is a
+// six-word list that could not see the sentence. Joe ruled 2026-08-10: "it should probably hand
+// it to finance, only finance can handle that info."
+//
+// Distinct from decideFinanceProcessQuestionTurn, which owns a QUESTION about the financing
+// process (deadlines, sequencing) and requires an explicit request. This one owns a STATEMENT
+// tying spending capacity to financing terms, so it deliberately does NOT gate on
+// explicitRequest — the customer is not asking us anything.
+//
+// FAIL DIRECTION: unsure => none, and today's behavior runs (at worst one redundant clarifying
+// question). We only hand off on a confident read, because a wrong handoff pulls a person into
+// a thread that did not need one.
+// ---------------------------------------------------------------------------
+export type BudgetGatedOnFinancingTurnKind = "finance_handoff" | "none";
+
+export type BudgetGatedOnFinancingTurnInput = {
+  parserAccepted: boolean;
+  intent?: string | null; // "budget_gated_on_financing" | "none"
+  confidence: number;
+  confidenceMin: number;
+};
+
+export type BudgetGatedOnFinancingTurnDecision = {
+  kind: BudgetGatedOnFinancingTurnKind;
+};
+
+export function decideBudgetGatedOnFinancingTurn(
+  input: BudgetGatedOnFinancingTurnInput
+): BudgetGatedOnFinancingTurnDecision {
+  if (!input.parserAccepted) return { kind: "none" };
+  if (input.intent !== "budget_gated_on_financing") return { kind: "none" };
+  if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) {
+    return { kind: "none" };
+  }
+  return { kind: "finance_handoff" };
+}
+
 export function decideFinanceProcessQuestionTurn(
   input: FinanceProcessQuestionTurnInput
 ): FinanceProcessQuestionTurnDecision {
