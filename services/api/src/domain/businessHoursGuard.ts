@@ -45,6 +45,66 @@ export function parseClockMinutes(value: string | null | undefined): number | nu
   return hour * 60 + minute;
 }
 
+/** Local calendar day ("2026-08-09") for an instant in a timezone. Pure; moved out of index.ts
+ *  beside the closing-time helper that answers the same kind of question. */
+export function dayKeyLocal(iso: string, tz: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).format(new Date(iso));
+  } catch {
+    return new Date(iso).toISOString().slice(0, 10);
+  }
+}
+
+/**
+ * Epoch ms at which we CLOSE on the business day an instant falls in — or null when that day has no
+ * usable window, or the instant is outside it.
+ *
+ * Deliberately computed as an OFFSET from the instant itself (close-minutes minus the instant's own
+ * local minutes) rather than by constructing a wall-clock time in a zone. That sidesteps every
+ * timezone-arithmetic trap: the only assumption is that no DST transition falls between the instant
+ * and closing on the same day, which no dealership schedule crosses.
+ *
+ * Used by the held-draft backstop so a "needs a human" flag lands while someone is still there.
+ */
+export function closingTimeMsForInstant(args: {
+  atIso: string | null | undefined;
+  timeZone: string;
+  businessHours: BusinessWeekHours | null | undefined;
+}): number | null {
+  const atMs = Date.parse(String(args.atIso ?? ""));
+  if (!Number.isFinite(atMs)) return null;
+  let weekday = "";
+  let hour = NaN;
+  let minute = NaN;
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: args.timeZone,
+      weekday: "long",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false
+    }).formatToParts(new Date(atMs));
+    weekday = String(parts.find(p => p.type === "weekday")?.value ?? "").toLowerCase();
+    hour = Number(parts.find(p => p.type === "hour")?.value);
+    minute = Number(parts.find(p => p.type === "minute")?.value);
+  } catch {
+    return null;
+  }
+  if (hour === 24) hour = 0; // some ICU builds render midnight as 24 under hour12:false
+  if (!weekday || !Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+  const window = openWindow((args.businessHours as any)?.[weekday]);
+  if (!window) return null;
+  const localMinutes = hour * 60 + minute;
+  // Outside the day's window => the plain stale timer is right; there is no "before close" to beat.
+  if (localMinutes < window.open || localMinutes >= window.close) return null;
+  return atMs + (window.close - localMinutes) * 60_000;
+}
+
 function openWindow(day: DayHours): { open: number; close: number } | null {
   const open = parseClockMinutes(day?.open);
   const close = parseClockMinutes(day?.close);

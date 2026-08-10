@@ -44,6 +44,22 @@ export type HeldDraftBackstopOptions = {
   /** If a prior escalation was surfaced but the draft is STILL held (a human dismissed the task
    *  without resolving), re-surface after this window rather than never again. Default 24 (hours). */
   reNudgeHours?: number;
+  /** Epoch ms at which the dealership CLOSES on the business day the hold landed in, when the hold
+   *  landed while the store was open. Omit (or null) when unknown, or when the hold landed outside
+   *  opening hours — then the plain stale window applies, exactly as before.
+   *
+   *  MEASURED, 2026-08-09: all four escalations this backstop has ever raised. Two landed while
+   *  someone was there (held 9:12am -> flagged 3:12pm; held 1:21am -> flagged 7:21am, waiting at
+   *  the door). The other two were held in the EARLY AFTERNOON with four hours of business day left
+   *  and surfaced at 7:52pm and 7:42pm — both after a 6pm close, to an empty store. Maya's (8/07)
+   *  was still unresolved two days later. A flag nobody can act on is a flag that did not fire. */
+  closesAtMs?: number | null;
+  /** Never escalate sooner than this after the hold, even to beat closing — self-heal and a quick
+   *  customer reply still get a shot. Default 1 (hour). */
+  minSoakHours?: number;
+  /** Land the flag this long BEFORE closing, so it is actionable rather than technically on time.
+   *  Default 45 (minutes). */
+  beforeCloseMinutes?: number;
 };
 
 /** Summary marker so the sweep can find an already-open escalation todo for a conv (dedup) and so
@@ -75,7 +91,20 @@ export function shouldEscalateStaleHeldDraft(
   if (conv.closedAt || conv.closedReason || conv.sale) return false;
   // Give self-heal + a same-window customer reply time to resolve it on their own first.
   const staleMs = Math.max(1, opts.staleHours ?? 6) * 60 * 60 * 1000;
-  if (nowMs - heldAt < staleMs) return false;
+  let dueAtMs = heldAt + staleMs;
+  // ...but never let the wait cross closing time. When the plain window would surface this after the
+  // store shuts, pull it forward to just before close so a human can still act TODAY, subject to a
+  // minimum soak so a hold at 5:55pm doesn't escalate the instant it lands. This can only ever move
+  // the flag EARLIER and only within the hold's own business day — it never delays one, and with no
+  // closesAtMs it is a no-op.
+  const closesAt = typeof opts.closesAtMs === "number" && Number.isFinite(opts.closesAtMs) ? opts.closesAtMs : null;
+  if (closesAt !== null) {
+    const beforeCloseMs = Math.max(0, opts.beforeCloseMinutes ?? 45) * 60 * 1000;
+    const minSoakMs = Math.max(0, opts.minSoakHours ?? 1) * 60 * 60 * 1000;
+    const actionableBy = closesAt - beforeCloseMs;
+    if (actionableBy < dueAtMs && actionableBy >= heldAt + minSoakMs) dueAtMs = actionableBy;
+  }
+  if (nowMs < dueAtMs) return false;
   // Already answered by a real reply after the hold => resolved (defensive; the send path normally
   // nulls draftHeld itself, but never escalate a conversation a human already replied to).
   for (const m of conv.messages ?? []) {
@@ -94,4 +123,22 @@ export function shouldEscalateStaleHeldDraft(
     if (nowMs - escalatedAt < reNudgeMs) return false;
   }
   return true;
+}
+
+/**
+ * The staff-task summary for an escalated hold. Pure, and here rather than inline in the sweep so the
+ * marker, the customer's ask and the wording live with the rule that raises them — an eval can then
+ * assert the text a rep actually reads instead of pinning the sweep's source.
+ */
+export function buildHeldDraftEscalationSummary(args: {
+  who: string;
+  inboundPreview?: string | null;
+}): string {
+  const who = String(args.who ?? "").trim() || "this lead";
+  const ask = String(args.inboundPreview ?? "").replace(/\s+/g, " ").trim().slice(0, 180);
+  const askLine = ask ? ` They asked: "${ask}".` : "";
+  return (
+    `${HELD_DRAFT_BACKSTOP_TODO_MARKER} Reply to ${who} needs a human — the AI's draft was held ` +
+    `for review and couldn't auto-fix, so it never sent.${askLine} Please review and reply.`
+  );
 }

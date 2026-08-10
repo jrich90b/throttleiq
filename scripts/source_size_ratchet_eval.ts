@@ -317,7 +317,15 @@ const CEILINGS: Ceiling[] = [
     // formatBusinessHoursProposalTime — pure string formatters with no callers outside index.ts —
     // moved verbatim into domain/inboundPipeline.ts beside resolveRequestedDay, the business-hours
     // helper the same module already owns. -22 net, so the slice lands well under what it started at.
-    max: 70_753,
+    // 70_753 -> 70_751. The held-draft flag lands before closing (Maya +15854782032). All four
+    // escalations this backstop ever raised were replayed: the two held in the early afternoon
+    // surfaced at 7:52pm and 7:42pm, after a 6pm close, to an empty store. index.ts was sitting
+    // EXACTLY on the ceiling again, so the slice funded itself twice over: the escalation SUMMARY
+    // moved into domain/heldDraftBackstop.ts beside the marker and the rule that raise it (an eval
+    // now asserts the text a rep reads instead of pinning the sweep's source), and dayKeyLocal moved
+    // into domain/businessHoursGuard.ts beside the new closing-time helper that answers the same
+    // kind of question.
+    max: 70_751,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

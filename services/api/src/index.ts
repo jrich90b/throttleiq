@@ -41,6 +41,7 @@ import { isIndefiniteFollowUpDeferralText } from "./domain/scoringExclusions.js"
 import { findTlpLogCatchupCandidates, isTlpLeadNotFoundError } from "./domain/tlpLogCatchup.js";
 import {
   shouldEscalateStaleHeldDraft,
+  buildHeldDraftEscalationSummary,
   HELD_DRAFT_BACKSTOP_TODO_MARKER
 } from "./domain/heldDraftBackstop.js";
 import { leadVehicleRelevantToFollowUp } from "./domain/followUpVehicleRelevance.js";
@@ -839,7 +840,7 @@ import {
   resolveRoutingParserDecision,
   shouldTreatInboundAsTestRideBikeSelection
 } from "./domain/routerV2.js";
-import { formatBusinessHoursForReply, formatPreferredTimeForReply, mayStateTokenAsWorkable, preferredDateTimeNotedTail, statablePreferredTimeText, statableTimeReply, type BusinessWeekHours } from "./domain/businessHoursGuard.js";
+import { closingTimeMsForInstant, dayKeyLocal, formatBusinessHoursForReply, formatPreferredTimeForReply, mayStateTokenAsWorkable, preferredDateTimeNotedTail, statablePreferredTimeText, statableTimeReply, type BusinessWeekHours } from "./domain/businessHoursGuard.js";
 import {
   resolveAcceptedVisitTimeOffer,
   shouldOfferTimesAfterAcceptance
@@ -9156,20 +9157,6 @@ function fmtLocal(iso: string, tz: string) {
     hour: "numeric",
     minute: "2-digit"
   });
-}
-
-function dayKeyLocal(iso: string, tz: string) {
-  try {
-    const fmt = new Intl.DateTimeFormat("en-CA", {
-      timeZone: tz,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit"
-    });
-    return fmt.format(new Date(iso));
-  } catch {
-    return new Date(iso).toISOString().slice(0, 10);
-  }
 }
 
 function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) {
@@ -32099,17 +32086,28 @@ async function processDueFollowUpsUnlocked() {
     openTodos.filter(t => String(t.summary ?? "").includes(HELD_DRAFT_BACKSTOP_TODO_MARKER)).map(t => t.convId)
   );
   let heldDraftsEscalated = 0;
+  // MEASURED 2026-08-09 over all four escalations this backstop has ever raised: the two that were
+  // held in the early afternoon surfaced at 7:52pm and 7:42pm, after a 6pm close, to an empty store —
+  // and Maya's (8/07) was still unresolved two days later. Hand the pure rule today's closing time so
+  // a flag lands while someone can still act on it. Config read once per sweep, not per conversation.
+  const heldBackstopCfg = await getSchedulerConfigHot();
   for (const conv of convs) {
     if (heldDraftsEscalated >= HELD_DRAFT_BACKSTOP_TODOS_PER_TICK) break;
-    if (!shouldEscalateStaleHeldDraft(conv as any, convIdsWithHeldBackstopTodo.has(conv.id), now.getTime())) continue;
+    const heldClosesAtMs = closingTimeMsForInstant({
+      atIso: (conv.draftHeld as any)?.at ?? null,
+      timeZone: heldBackstopCfg.timezone,
+      businessHours: heldBackstopCfg.businessHours
+    });
+    const opts = { closesAtMs: heldClosesAtMs };
+    if (!shouldEscalateStaleHeldDraft(conv as any, convIdsWithHeldBackstopTodo.has(conv.id), now.getTime(), opts)) continue;
     const heldReason = String((conv.draftHeld as any)?.reason ?? "");
-    const who = normalizeDisplayCase(conv.lead?.firstName) || conv.lead?.name || "this lead";
-    const ask = String((conv.draftHeld as any)?.inboundPreview ?? "").replace(/\s+/g, " ").trim().slice(0, 180);
-    const askLine = ask ? ` They asked: "${ask}".` : "";
     const todo = addTodo(
       conv,
       "note",
-      `${HELD_DRAFT_BACKSTOP_TODO_MARKER} Reply to ${who} needs a human — the AI's draft was held for review and couldn't auto-fix, so it never sent.${askLine} Please review and reply.`,
+      buildHeldDraftEscalationSummary({
+        who: normalizeDisplayCase(conv.lead?.firstName) || conv.lead?.name || "this lead",
+        inboundPreview: (conv.draftHeld as any)?.inboundPreview ?? null
+      }),
       undefined,
       conv.leadOwner,
       undefined,
