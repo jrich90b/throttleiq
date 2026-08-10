@@ -334,7 +334,14 @@ const CEILINGS: Ceiling[] = [
     // the Windows sibling that already lived in its own module. Verbatim move, proved by diffing the
     // generated script body against the previous commit (which caught a stray newline that would have
     // pushed the #!/bin/zsh shebang off line 1).
-    max: 70_620,
+    // 70_620 -> 70_608. The unanswered-watch-alert stop + its close-out (Joseph +17163308822;
+    // Joe 8/10 asked for a sign-off that leaves the floor open). Re-derived against current main,
+    // NOT carried over from the branch's stale 70_739 (the #418 trap): three watch-state helpers
+    // that only ever read/wrote the collectInventoryWatches union — hasActiveInventoryWatch,
+    // pauseInventoryWatches, markInventoryWatchOptOut — moved beside it in conversationStore.ts,
+    // and the close-out copy lives in agentVoice.ts with the other watch templates, so index.ts
+    // pays only for two call sites and still ratchets DOWN.
+    max: 70_608,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

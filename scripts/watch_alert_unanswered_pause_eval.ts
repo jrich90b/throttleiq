@@ -32,16 +32,20 @@ import {
   DEFAULT_UNANSWERED_WATCH_ALERT_LIMIT,
   WATCH_ALERT_OPT_OFF_MARKER,
   WATCH_ALERT_WATCHING_FOR_MARKER,
+  WATCH_CLOSE_OUT_MARKER,
   countUnansweredDeliveredWatchAlerts,
   decideUnansweredWatchAlertPause,
+  hasSentWatchCloseOut,
   isInventoryWatchAlertBody,
+  isInventoryWatchCloseOutBody,
   lastInboundAt,
   unansweredWatchAlertLimit
 } from "../services/api/src/domain/watchAlertUnansweredPause.ts";
 import {
   buildWatchAvailableReply,
   buildWatchAvailableBundleReply,
-  buildCholoWatchAvailableReply
+  buildCholoWatchAvailableReply,
+  buildUnansweredWatchCloseOutReply
 } from "../services/api/src/domain/agentVoice.ts";
 
 const alertBody = buildWatchAvailableReply({
@@ -215,6 +219,146 @@ assert.equal(
   0,
   "watchAlertUnansweredPause.ts stays import-free (no store side effect on load)"
 );
+
+// ═══ THE CLOSE-OUT (Joe, 2026-08-10) ═══════════════════════════════════════════════════
+// "Should there be a close out text leaving the floor open to keep the watch or let us know if
+// they are looking for something different?" — yes. A silent pause drops the lead invisibly.
+{
+  const closeOut = buildUnansweredWatchCloseOutReply({
+    firstName: "Joseph",
+    bikeLabel: "2026 Road Glide"
+  });
+
+  // ── The invariant that makes the whole thing safe: our own sign-off is NOT an alert. ──
+  // Without this the goodbye text counts itself, so on a lead who never replies the run reads
+  // one higher than the customer's real silence.
+  assert.equal(
+    isInventoryWatchAlertBody(closeOut),
+    false,
+    "the close-out must NEVER be counted as a watch alert — it is our sign-off, not an arrival"
+  );
+  assert.equal(isInventoryWatchCloseOutBody(closeOut), true, "the close-out carries its own marker");
+  assert.ok(
+    closeOut.toLowerCase().includes(WATCH_CLOSE_OUT_MARKER),
+    "the marker must be the literal copy, so a reword breaks this eval instead of blinding the guard"
+  );
+  // The exclusion must actually WORK, not merely be unreachable because today's wording happens
+  // to avoid the alert markers. A sign-off is a natural place to write "take you off the list",
+  // so pin the precedence directly: close-out marker present => NOT an alert, whatever else the
+  // sentence says. (A sabotage that deleted the exclusion passed until this assertion existed.)
+  const closeOutBorrowingAlertWords =
+    `Hey Joseph — a 2026 Road Glide you were watching for came in, but I'll ${WATCH_CLOSE_OUT_MARKER}. ` +
+    `Just let me know and I'll take you off the list. Keep an eye out, or something different?`;
+  assert.equal(
+    isInventoryWatchCloseOutBody(closeOutBorrowingAlertWords),
+    true,
+    "a close-out is a close-out even when it borrows alert wording"
+  );
+  assert.equal(
+    isInventoryWatchAlertBody(closeOutBorrowingAlertWords),
+    false,
+    "the close-out marker must OUTRANK both alert markers, or our sign-off counts as a 4th alert"
+  );
+  assert.equal(
+    countUnansweredDeliveredWatchAlerts({
+      messages: [
+        { direction: "in", at: "2026-05-05T00:00:00Z", body: "let me know" },
+        { direction: "out", at: "2026-05-07T00:00:00Z", provider: "twilio", body: alertBody },
+        { direction: "out", at: "2026-06-05T00:00:00Z", provider: "twilio", body: closeOutBorrowingAlertWords }
+      ]
+    }),
+    1,
+    "one alert plus a marker-borrowing close-out is ONE alert"
+  );
+
+  // Belt and braces: the two alert markers must be absent outright, not merely out-ranked.
+  for (const marker of [WATCH_ALERT_OPT_OFF_MARKER, WATCH_ALERT_WATCHING_FOR_MARKER]) {
+    assert.ok(
+      !closeOut.toLowerCase().includes(marker),
+      `the close-out must not borrow the alert marker ${JSON.stringify(marker)}`
+    );
+  }
+
+  // ── Charter C1.7 on the template: end by ASKING, one question, a choice of two. ──
+  assert.ok(closeOut.trim().endsWith("?"), "C1.7: the close-out must end by asking");
+  assert.equal((closeOut.match(/\?/g) ?? []).length, 1, "exactly one question");
+  assert.ok(closeOut.includes(" or "), "C1.7 prefers a choice of two");
+
+  // ── The promise is scoped to what we control. ──
+  // A quiet thread still gets marketing campaigns, and the cadence ladder already has form for
+  // promising quiet and texting on. Claiming total silence would put a lie in a customer's hand.
+  for (const overclaim of [
+    "you won't hear from",
+    "you will not hear from",
+    "stop texting you",
+    "no more texts",
+    "remove you from our list",
+    "take you off the list"
+  ]) {
+    assert.ok(
+      !closeOut.toLowerCase().includes(overclaim),
+      `the close-out must not promise more silence than we can keep: ${JSON.stringify(overclaim)}`
+    );
+  }
+  assert.ok(
+    /alerts/i.test(closeOut),
+    "it must say what actually stops — the ALERTS — rather than gesture at silence"
+  );
+
+  // ── It leaves the floor open BOTH ways, which is the whole point of Joe's ask. ──
+  assert.ok(/keep an eye out/i.test(closeOut), "offers to keep the watch running");
+  assert.ok(/something different/i.test(closeOut), "invites them to say the spec changed");
+
+  // ── Never names a bike the customer did not ask for; generic when we do not know. ──
+  assert.ok(closeOut.includes("2026 Road Glide"), "names the watched model when there is exactly one");
+  const generic = buildUnansweredWatchCloseOutReply({ firstName: "Joseph", bikeLabel: null });
+  assert.ok(
+    !/\b(19|20)\d{2}\b/.test(generic),
+    "with no single watched model the close-out names no bike at all"
+  );
+  assert.ok(generic.trim().endsWith("?"), "the generic form still ends by asking");
+
+  // ── Sent once, ever. ──
+  assert.equal(hasSentWatchCloseOut({ messages: [] }), false, "no close-out on a fresh thread");
+  assert.equal(
+    hasSentWatchCloseOut({ messages: [{ direction: "out", provider: "twilio", body: closeOut }] }),
+    true,
+    "a delivered close-out is remembered, so the pause cannot queue a second one"
+  );
+  assert.equal(
+    hasSentWatchCloseOut({ messages: [{ direction: "out", provider: "draft_ai", body: closeOut }] }),
+    true,
+    "a close-out still awaiting staff approval also blocks a second one"
+  );
+  assert.equal(
+    hasSentWatchCloseOut({
+      messages: [{ direction: "out", provider: "draft_ai", draftStatus: "stale", body: closeOut }]
+    }),
+    false,
+    "a STALE close-out never reached the customer, so it must not block the real one"
+  );
+  assert.equal(
+    hasSentWatchCloseOut({ messages: [{ direction: "in", body: closeOut }] }),
+    false,
+    "a customer quoting our text back is not us having sent it"
+  );
+
+  // ── The counter still sees the alerts themselves when a close-out sits among them. ──
+  const alertsPlusCloseOut = {
+    messages: [
+      { direction: "in", at: "2026-05-05T00:00:00Z", body: "let me know when one lands" },
+      { direction: "out", at: "2026-05-07T00:00:00Z", provider: "twilio", body: alertBody },
+      { direction: "out", at: "2026-06-05T00:00:00Z", provider: "twilio", body: alertBody },
+      { direction: "out", at: "2026-07-03T00:00:00Z", provider: "twilio", body: alertBody },
+      { direction: "out", at: "2026-07-23T00:00:00Z", provider: "twilio", body: closeOut }
+    ]
+  };
+  assert.equal(
+    countUnansweredDeliveredWatchAlerts(alertsPlusCloseOut),
+    3,
+    "three alerts and one close-out counts as THREE — the sign-off is not a fourth alert"
+  );
+}
 
 console.log(
   "PASS watch-alert unanswered pause eval — after 3 DELIVERED alerts with no reply the watches pause and a staff task replaces the text; drafts/stale/failed sends never count, any inbound resets the run, both fire paths wired and both record why."

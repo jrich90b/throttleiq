@@ -69,10 +69,36 @@ export type WatchAlertPauseConversation = {
   messages?: WatchAlertPauseMessage[] | null;
 };
 
+/**
+ * The close-out's own marker (buildUnansweredWatchCloseOutReply, agentVoice.ts). Two jobs: it keeps
+ * the close-out from being counted as one more ignored ALERT, and it is how we know the close-out
+ * has already gone, so it can never be sent twice.
+ */
+export const WATCH_CLOSE_OUT_MARKER = "pause those alerts for now";
+
+export function isInventoryWatchCloseOutBody(body: unknown): boolean {
+  const normalized = String(body ?? "").toLowerCase().replace(/\s+/g, " ");
+  if (!normalized) return false;
+  return normalized.includes(WATCH_CLOSE_OUT_MARKER);
+}
+
 export function isInventoryWatchAlertBody(body: unknown): boolean {
   const normalized = String(body ?? "").toLowerCase().replace(/\s+/g, " ");
   if (!normalized) return false;
+  // The close-out is OUR sign-off, not an alert. Counting it would let the goodbye text itself
+  // extend the unanswered run, and on a lead that never writes back it would read as a 4th alert.
+  if (normalized.includes(WATCH_CLOSE_OUT_MARKER)) return false;
   return normalized.includes(WATCH_ALERT_OPT_OFF_MARKER) || normalized.includes(WATCH_ALERT_WATCHING_FOR_MARKER);
+}
+
+/** Has the close-out already gone out on this thread (delivered, or still awaiting approval)? */
+export function hasSentWatchCloseOut(conv: WatchAlertPauseConversation): boolean {
+  for (const message of conv?.messages ?? []) {
+    if (message?.direction !== "out") continue;
+    if (String(message?.draftStatus ?? "").toLowerCase() === "stale") continue;
+    if (isInventoryWatchCloseOutBody(message.body)) return true;
+  }
+  return false;
 }
 
 function isDeliveredOutbound(message: WatchAlertPauseMessage): boolean {

@@ -496,6 +496,41 @@ export function buildWatchAvailableReply(args: {
 }
 
 /**
+ * The LAST text on an inventory watch nobody has answered (Joe, 2026-08-10).
+ *
+ * The pause on its own goes silent, which drops the lead invisibly. Joe asked for a close-out that
+ * "leaves the floor open to keep the watch or let us know if they are looking for something
+ * different" — so this one text ends the sequence AND gives them a way back in. Net fewer texts
+ * than the alerts it replaces, not more.
+ *
+ * THE PROMISE IS SCOPED TO WHAT WE CONTROL. It says the ALERTS pause, never "you won't hear from
+ * us": a quiet thread still receives marketing campaigns (campaignBuilder carries no exclusion for
+ * a quiet/handoff footing — checked 2026-08-10), and we already have form for promising quiet and
+ * texting anyway (the cadence ladder promises it at rung 5 and texts on at rungs 6-9). Widening
+ * this sentence would put a lie in a customer's hand.
+ *
+ * Charter C1.7: ends on ONE question offering a choice of two. It does not close the lead — either
+ * answer is a live customer, and "something different" is a re-qualification for a person.
+ *
+ * ⚠️ It must NOT contain the watch-alert markers ("you were watching for" / "take you off the
+ * list"), or the unanswered-alert counter would read this very message as one more ignored alert.
+ * watch_alert_unanswered_pause:eval asserts that, and asserts it is recognised as already-sent so
+ * it can never go out twice.
+ */
+export function buildUnansweredWatchCloseOutReply(args: {
+  firstName?: string | null;
+  bikeLabel?: string | null;
+}): string {
+  const opener = args.firstName ? `Hey ${args.firstName}` : "Hey there";
+  const bike = String(args.bikeLabel ?? "").trim();
+  const sent = bike ? `I've sent a few ${bike} updates your way` : "I've sent a few updates your way";
+  return (
+    `${opener} — ${sent} and haven't heard back, so I'll pause those alerts for now. ` +
+    `Want me to keep an eye out, or are you after something different these days?`
+  );
+}
+
+/**
  * CHOLO build-segment watch alert (Cholo style vision, 2026-07-26). A cholo watch is a STYLE watch, not
  * a model watch — the customer asked for "a cholo", never for the specific model that happens to match.
  * So the generic buildWatchAvailableReply ("a <model> you were watching for") is WRONG here: it would name

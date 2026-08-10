@@ -5,6 +5,7 @@ import { maybeMarkEngagedFromInbound } from "./engagement.js";
 import { setInventoryWatchOptOut } from "./inventoryWatchOptOut.js";
 import {
   decideUnansweredWatchAlertPause,
+  hasSentWatchCloseOut,
   type UnansweredWatchAlertDecision
 } from "./watchAlertUnansweredPause.js";
 import {
@@ -113,7 +114,7 @@ import {
 } from "./draftStateInvariants.js";
 import { isPhoneLogConversation } from "./phoneLogLead.js";
 import type { StaffPingRecord } from "./staffPing.js";
-import { buildPersonaSelfIntroPattern } from "./agentVoice.js";
+import { buildPersonaSelfIntroPattern, buildUnansweredWatchCloseOutReply } from "./agentVoice.js";
 import { getCachedDealerProfile } from "./dealerProfile.js";
 import { findComputerLikePhrases } from "./voiceBannedPhrases.js";
 import {
@@ -5804,6 +5805,11 @@ export function markInventoryWatchOptOut(conv: any, reason: string): number {
  * lockstep. The pause goes through pauseInventoryWatches — the same referee the explicit opt-out
  * uses — so this adds no new writer of `inventoryWatches`. The task is a `call`, which addTodo
  * merges by task class, so a lead can never accumulate a pile of them.
+ *
+ * It also queues ONE close-out text (Joe, 2026-08-10: leave "the floor open to keep the watch or
+ * let us know if they are looking for something different"), because a silent pause drops the lead
+ * with nobody the wiser. It is a `draft_ai` like the alerts it replaces, so staff still approve it,
+ * and it is guarded by hasSentWatchCloseOut so a re-run can never send a second one.
  */
 export function applyUnansweredWatchAlertPause(
   conv: any,
@@ -5815,10 +5821,41 @@ export function applyUnansweredWatchAlertPause(
   const paused = pauseInventoryWatches(conv);
   if (paused > 0) {
     addTodo(conv, "call", decision.summary, undefined, conv?.leadOwner);
+    if (!hasSentWatchCloseOut(conv)) {
+      const to = conv?.lead?.phone ?? conv?.leadKey;
+      if (to) {
+        appendOutbound(
+          conv,
+          "salesperson",
+          to,
+          buildUnansweredWatchCloseOutReply({
+            firstName: conv?.lead?.firstName ?? null,
+            bikeLabel: watchedModelLabelForCloseOut(conv)
+          }),
+          "draft_ai"
+        );
+      }
+    }
     conv.updatedAt = nowIsoValue;
     saveConversation(conv);
   }
   return decision;
+}
+
+/**
+ * The model to name in the close-out, or null to keep it generic. Only a label the CUSTOMER's own
+ * watch carries is used — never an inventory unit — so the sign-off cannot name a bike they never
+ * asked about. Distinct models on one thread => stay generic rather than pick a favourite.
+ */
+function watchedModelLabelForCloseOut(conv: any): string | null {
+  const labels = new Set<string>();
+  for (const watch of collectInventoryWatches(conv)) {
+    const model = String((watch as any)?.model ?? "").trim();
+    if (!model) continue;
+    const year = String((watch as any)?.year ?? "").trim();
+    labels.add(year ? `${year} ${model}` : model);
+  }
+  return labels.size === 1 ? [...labels][0] : null;
 }
 
 /**
