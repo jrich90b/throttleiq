@@ -1181,9 +1181,18 @@ console.log("PASS Ansira control-phase split — #activity-sub-detail is checked
     "the runner's machine identity lives at ~/.leadrider/mdf-runner-machine.json"
   );
 
-  // macOS installer clears it, BEFORE writing .env / registering the agents.
-  const shClear = idxSrc.indexOf('rm -f "\\${HOME}/.leadrider/mdf-runner-machine.json"');
-  const shEnv = idxSrc.indexOf('cat > "\\${APP_DIR}/.env" <<ENV');
+  // macOS installer clears it, BEFORE writing .env / registering the agents. The script moved out of
+  // index.ts into domain/mdfRunnerMacInstaller.ts (index.ts was on its size ceiling) — assert against
+  // its new home, and assert index.ts still CALLS the builder so the move cannot orphan it.
+  const macSrc = fs.readFileSync("services/api/src/domain/mdfRunnerMacInstaller.ts", "utf8");
+  assert.match(
+    idxSrc,
+    /const script = buildMacInstallerScript\(\{ apiBase, runnerToken, repoUrl, branch \}\);/,
+    "the install.sh route builds its script from the extracted module"
+  );
+  assert.match(macSrc, /return `#!\/bin\/zsh/, "the generated script still starts with the shebang on line 1");
+  const shClear = macSrc.indexOf('rm -f "\\${HOME}/.leadrider/mdf-runner-machine.json"');
+  const shEnv = macSrc.indexOf('cat > "\\${APP_DIR}/.env" <<ENV');
   assert.ok(shClear >= 0, "install.sh clears the stale machine identity");
   assert.ok(shEnv >= 0, "install.sh env anchor present");
   assert.ok(shClear < shEnv, "install.sh clears the identity before it configures the runner");
