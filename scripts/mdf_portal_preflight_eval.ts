@@ -17,6 +17,7 @@ import {
   ANSIRA_CLAIMS_LIST_URL,
   MDF_TOOLBOX_LINK_TEXT,
   ANSIRA_FORM_CONTROLS,
+  ANSIRA_POST_DATE_FORM_CONTROLS,
   ansiraFormChangedSummary,
   ansiraMarketingOptionSummary,
   cdpConnectFailureSummary,
@@ -1067,3 +1068,83 @@ console.log("PASS portal runner computer-switch handoff");
   );
 }
 console.log("PASS MDF toolbox SSO handoff — the Marketing Development Fund click is wired into BOTH the in-run path and the preflight, and the preflight tries it before blocking.");
+
+// ---------------------------------------------------------------------------------------------
+// WHEN a control exists, not just WHETHER (Joe's photo, 2026-08-10).
+//
+// The runner blocked an IDMP media claim with "the Ansira form changed — missing Activity
+// sub-detail dropdown". It had not changed. Joe photographed the live Create Claim page in that
+// exact state: "2026 Media Claim" selected, both Dates of Activity EMPTY, and the page showing
+// nothing below them. The other eight controls were found (present but hidden), so the sub-detail
+// dropdown is genuinely not created until the dates are accepted — and the runner was demanding it
+// beforehand.
+//
+// It also explains the claim that succeeded twenty minutes earlier: that form had been driven by
+// hand first, so the dropdown already existed. A runner that only works after a human warms up the
+// form is not working.
+// ---------------------------------------------------------------------------------------------
+{
+  const runnerSrc = fs.readFileSync("scripts/mdf_portal_runner.ts", "utf8");
+  const preSelectors = ANSIRA_FORM_CONTROLS.map(c => c.selector);
+  const postSelectors = ANSIRA_POST_DATE_FORM_CONTROLS.map(c => c.selector);
+
+  // --- EXECUTED: the split itself ---------------------------------------------------------------
+  assert.ok(
+    !preSelectors.includes("#activity-sub-detail"),
+    "#activity-sub-detail must NOT be demanded before the dates — Ansira has not created it yet"
+  );
+  assert.ok(
+    postSelectors.includes("#activity-sub-detail"),
+    "#activity-sub-detail is checked after the dates, where it genuinely exists"
+  );
+  // Nothing may be lost in the split, and nothing checked twice.
+  const overlap = preSelectors.filter(sel => postSelectors.includes(sel));
+  assert.deepEqual(overlap, [], `a control must be checked in exactly one phase (both: ${overlap.join(", ")})`);
+  for (const required of [
+    "#app-marketing-activity",
+    "#app-claim-start-date",
+    "#app-claim-end-date",
+    "#app-claim-name",
+    "#app-claimed-amount",
+    "#activity-sub-detail",
+    'input[name="invoices[1][vendor_name]"]',
+    'input[type="file"][name="files[]"]',
+    "#app-draft-submit-btn"
+  ]) {
+    assert.ok(
+      [...preSelectors, ...postSelectors].includes(required),
+      `the split must not DROP a control the filler depends on: ${required}`
+    );
+  }
+
+  // --- EXECUTED: the phase-B check still reports a real absence ---------------------------------
+  assert.equal(
+    (await findMissingFormControls(ANSIRA_POST_DATE_FORM_CONTROLS, () => true)).length,
+    0,
+    "sub-detail present after the dates → the run proceeds"
+  );
+  const stillMissing = await findMissingFormControls(ANSIRA_POST_DATE_FORM_CONTROLS, () => false);
+  assert.equal(stillMissing.length, 1, "sub-detail STILL absent after the dates → that is a real form change");
+  assert.match(
+    ansiraFormChangedSummary(stillMissing),
+    /Activity sub-detail dropdown/,
+    "and it is named in the operator summary"
+  );
+
+  // --- ORDER: phase B runs AFTER the dates are filled -------------------------------------------
+  // Anchors must be found first: indexOf returns -1 when a string moves, and -1 beats everything.
+  const datesFilledAt = runnerSrc.indexOf('await fillText(page, "#app-claim-end-date", endDate);');
+  const phaseBAt = runnerSrc.indexOf("const missingPostDateControls = await findMissingFormControls(");
+  const phaseAAt = runnerSrc.indexOf("const missingControls = await findMissingFormControls(");
+  assert.ok(datesFilledAt >= 0 && phaseBAt >= 0 && phaseAAt >= 0, "all three ordering anchors are present");
+  assert.ok(phaseAAt < datesFilledAt, "phase A (present-but-hidden controls) is checked before the dates");
+  assert.ok(
+    datesFilledAt < phaseBAt,
+    "phase B is checked AFTER the dates go in — checking it earlier is the whole defect being fixed"
+  );
+  assert.ok(
+    runnerSrc.indexOf("portalFormDidNotExpandSummary()") < phaseBAt,
+    "phase B runs after the form-expansion gate, so a slow render is never mistaken for a missing control"
+  );
+}
+console.log("PASS Ansira control-phase split — #activity-sub-detail is checked AFTER the dates, where Ansira actually creates it.");
