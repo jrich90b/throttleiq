@@ -15,6 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   ANSIRA_CLAIMS_LIST_URL,
+  MDF_TOOLBOX_LINK_TEXT,
   ANSIRA_FORM_CONTROLS,
   ansiraFormChangedSummary,
   ansiraMarketingOptionSummary,
@@ -965,3 +966,89 @@ console.log("PASS mdf runner windows port guards");
   );
 }
 console.log("PASS portal runner computer-switch handoff");
+
+// ---------------------------------------------------------------------------------------------
+// THE SSO HANDOFF — H-DNet > My Toolbox > "Marketing Development Fund" (Joe, 2026-08-10).
+//
+// The runner had a toolbox-click function since 2026-06 and NOTHING CALLED IT: a later change
+// routed around the widget, and the live Playwright path went straight to app.ansira.com on the
+// assumption that an H-DNet login auto-SSOs Ansira. It does not. The result was a closed loop —
+// the preflight refused to run without an Ansira session while nothing in the run ever created
+// one — which is why 2026-08-07 logged four completed logins and zero filled drafts.
+//
+// These assertions exist to stop the click being orphaned a second time.
+// ---------------------------------------------------------------------------------------------
+{
+  const runnerSrc = fs.readFileSync("scripts/mdf_portal_runner.ts", "utf8");
+
+  // --- EXECUTED: the label matcher, against real menu text -------------------------------------
+  assert.ok(MDF_TOOLBOX_LINK_TEXT.test("Marketing Development Fund"), "matches the Toolbox item");
+  assert.ok(MDF_TOOLBOX_LINK_TEXT.test("  Marketing Development Fund  "), "tolerates the widget's padding");
+  assert.ok(MDF_TOOLBOX_LINK_TEXT.test("marketing development fund"), "case-insensitive");
+  // The dead ends it must never follow — same words, not the app.
+  for (const decoy of [
+    "Marketing Development Fund Guidelines",
+    "Marketing Development Fund - Reference",
+    "2026 Marketing Development Fund Policy",
+    "MARKETING-DEVELOPMENT-FUND.aspx"
+  ]) {
+    assert.equal(MDF_TOOLBOX_LINK_TEXT.test(decoy), false, `must not follow the document "${decoy}"`);
+  }
+
+  // --- WIRED: the handoff is CALLED, not merely defined ----------------------------------------
+  assert.ok(
+    /async function establishAnsiraSessionViaToolbox\(/.test(runnerSrc),
+    "the toolbox handoff exists"
+  );
+  const callSites = (runnerSrc.match(/establishAnsiraSessionViaToolbox\(/g) ?? []).length;
+  assert.equal(
+    callSites,
+    3,
+    `the handoff must be DEFINED once and CALLED twice — the in-run path and the preflight (found ${callSites} occurrences). ` +
+      "A count, not a substring: the whole defect being fixed here is a correct function nobody called."
+  );
+  assert.ok(
+    /const handoff = await establishAnsiraSessionViaToolbox\(page, options\);/.test(runnerSrc),
+    "the in-run path (openAnsiraClaimFormThroughHNet) performs the handoff"
+  );
+  assert.ok(
+    /const handoff = await attemptToolboxSessionHandoff\(options\);/.test(runnerSrc),
+    "the preflight performs the handoff through its CDP wrapper"
+  );
+
+  // --- ORDER: the preflight must TRY before it CONDEMNS -----------------------------------------
+  // Both anchors must be found: indexOf returns -1 for a missing string and -1 beats everything,
+  // so an unanchored comparison passes vacuously the moment either line is reworded.
+  const firstProbe = runnerSrc.indexOf("let sessionCheck = await checkAnsiraSessionViaCdp(options.cdpUrl);");
+  const handoffAt = runnerSrc.indexOf("const handoff = await attemptToolboxSessionHandoff(options);");
+  const blockAt = runnerSrc.indexOf("const loginOpened = await openLoginPageForSessionRecovery(");
+  assert.ok(firstProbe >= 0, "the preflight probe call site is present (ordering anchor)");
+  assert.ok(handoffAt >= 0, "the preflight handoff call site is present (ordering anchor)");
+  assert.ok(blockAt >= 0, "the preflight block call site is present (ordering anchor)");
+  assert.ok(
+    firstProbe < handoffAt && handoffAt < blockAt,
+    "the preflight probes, then attempts the handoff, and only then blocks the claim"
+  );
+  // The re-probe is what makes the handoff mean anything — without it the run blocks regardless.
+  assert.ok(
+    /if \(handoff\) sessionCheck = await checkAnsiraSessionViaCdp\(options\.cdpUrl\);/.test(runnerSrc),
+    "a successful handoff is re-probed, so the run proceeds on the session it just established"
+  );
+
+  // --- ORDER: the in-run path must TRY before it CONDEMNS ---------------------------------------
+  // Asserted on BEHAVIOUR, not on prose. The old assumption survives in the comments on purpose so
+  // the history stays readable, and a comment must never be what the gate reads.
+  const inRunHandoff = runnerSrc.indexOf("const handoff = await establishAnsiraSessionViaToolbox(page, options);");
+  const inRunExpired = runnerSrc.indexOf('return sessionExpired("recap list");');
+  assert.ok(inRunHandoff >= 0 && inRunExpired >= 0, "both in-run anchors are present");
+  assert.ok(
+    inRunHandoff < inRunExpired,
+    "the in-run path performs the toolbox handoff BEFORE it reports the session expired"
+  );
+  // The orphan itself: the old entry point must not linger as a second, uncalled copy.
+  assert.ok(
+    !/async function openMdfSsoEntry\(/.test(runnerSrc),
+    "the orphaned openMdfSsoEntry is gone (rehabilitated into establishAnsiraSessionViaToolbox), not left as dead code"
+  );
+}
+console.log("PASS MDF toolbox SSO handoff — the Marketing Development Fund click is wired into BOTH the in-run path and the preflight, and the preflight tries it before blocking.");

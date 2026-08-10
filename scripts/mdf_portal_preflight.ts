@@ -413,6 +413,19 @@ export function portalFormDidNotExpandSummary(): string {
 export const ANSIRA_CLAIMS_LIST_URL = "https://app.ansira.com/member/reimbursements/claims";
 
 /**
+ * The H-DNet "My Toolbox" menu item that hands this browser an Ansira session.
+ *
+ * Clicking it is the ONLY thing that signs the runner into Ansira — an H-DNet/M365 login
+ * does not, and a direct nav to app.ansira.com just bounces to the Microsoft sign-in.
+ *
+ * ANCHORED (^…$) on purpose. The SharePoint site also carries a same-named reference PAGE
+ * (…/MARKETING-DEVELOPMENT-FUND.aspx) and assorted "…Fund Guidelines" documents; those are
+ * documents, not the app, and a loose match sends the runner into a dead end. Lives here
+ * rather than in the runner so mdf_portal_preflight:eval can execute it against real labels.
+ */
+export const MDF_TOOLBOX_LINK_TEXT = /^\s*Marketing Development Fund\s*$/i;
+
+/**
  * Sign-in page TEXT markers — the runner's long-standing login-screen detection
  * (previously the runner-private isLoginPage), now shared so the early probe and
  * the in-run checks can never drift apart. "Create Claim" excludes the logged-in
