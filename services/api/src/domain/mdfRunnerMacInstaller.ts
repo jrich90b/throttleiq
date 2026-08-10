@@ -7,6 +7,20 @@
 // registered as two computers and fought over the single slot. Recovery from a retirement lives in
 // the runner, which re-identifies ONCE on a runner_revoked reply.
 
+// The public base URL the installer bakes into the runner's .env. Lives here with the installers,
+// its only callers (moved out of index.ts 2026-08-10 — that file sits on its size ceiling).
+export function externalApiBase(req: any): string {
+  const configured =
+    process.env.MDF_PORTAL_PUBLIC_API_BASE_URL ||
+    process.env.LEADRIDER_API_BASE_URL ||
+    process.env.PUBLIC_API_BASE_URL ||
+    "";
+  if (configured.trim()) return configured.trim().replace(/\/$/, "");
+  const proto = String(req.headers["x-forwarded-proto"] || req.protocol || "https").split(",")[0].trim();
+  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
+  return host ? `${proto}://${host}` : "";
+}
+
 export function shellSingleQuote(value: string): string {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }

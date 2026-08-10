@@ -448,6 +448,7 @@
     "watch_fire_miss:eval",
     "google_integration_health:eval",
     "mdf_portal_health:eval",
+    "mdf_claim_file_removal:eval",
     "inventory_watch_opt_out_durable:eval",
     "promised_unit_not_in_stock:eval",
     "cross_lead_leak:eval",

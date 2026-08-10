@@ -8523,6 +8523,40 @@ export default function Home() {
     }
   }
 
+  // Take one uploaded document back off the claim (a mis-upload). The API also stops any invoice row
+  // that referenced it; if a row is left with detail typed in but no file behind it, say so plainly —
+  // the runner would otherwise fill that line into Ansira with nothing to substantiate it.
+  async function removeMdfUploadedFile(file: MdfClaimPacket["uploadedFiles"][number]) {
+    const id = String(mdfSelectedClaimId ?? "").trim();
+    if (!id) return;
+    if (!window.confirm(`Remove "${file.name}" from this claim? The claim keeps everything else.`)) return;
+    setMdfClaimActionBusy(`${id}:remove-file`);
+    setMdfError(null);
+    try {
+      const resp = await fetch(`/api/mdf/claims/${encodeURIComponent(id)}/remove-file`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: file.name, size: file.size, url: file.url ?? "" })
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "That file could not be removed.");
+      if (data?.claim?.packet) {
+        setMdfPacket(data.claim.packet);
+        setMdfClaims(rows => rows.map(row => (row.id === id ? data.claim : row)));
+      }
+      const orphans = Array.isArray(data?.orphanedInvoices) ? data.orphanedInvoices.length : 0;
+      setMdfPortalTaskNotice(
+        orphans
+          ? `Removed "${file.name}". ${orphans} invoice row(s) now have no file attached — add the right file or clear those rows before running the portal draft.`
+          : `Removed "${file.name}" from this claim.`
+      );
+    } catch (err) {
+      setMdfError(err instanceof Error ? err.message : "That file could not be removed.");
+    } finally {
+      setMdfClaimActionBusy("");
+    }
+  }
+
   async function createMdfPortalTask() {
     const id = String(mdfSelectedClaimId ?? "").trim();
     if (!id) {
@@ -17090,16 +17124,27 @@ export default function Home() {
                                 {file.inferredRole.replace(/_/g, " ")} • {(file.size / 1024 / 1024).toFixed(2)} MB
                               </div>
                             </div>
-                            {file.url ? (
-                              <a
-                                className="shrink-0 rounded border bg-white px-2.5 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-100"
-                                href={file.url}
-                                target="_blank"
-                                rel="noreferrer"
+                            <div className="flex shrink-0 items-center gap-2">
+                              {file.url ? (
+                                <a
+                                  className="rounded border bg-white px-2.5 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-100"
+                                  href={file.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  Open
+                                </a>
+                              ) : null}
+                              <button
+                                type="button"
+                                className="rounded border border-red-200 bg-white px-2.5 py-1 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50"
+                                onClick={() => void removeMdfUploadedFile(file)}
+                                disabled={!!mdfClaimActionBusy}
+                                title="Remove this file from the claim (the file itself is not deleted)"
                               >
-                                Open
-                              </a>
-                            ) : null}
+                                Remove
+                              </button>
+                            </div>
                           </div>
                         ))}
                       </div>
