@@ -1,0 +1,314 @@
+{
+  "note": "Every WEB TEXT WIDGET inbound in the live americanharley store as of 2026-08-09 (30 messages), Name: redacted. `expected` is the vehicle-slot table this corpus must keep producing.",
+  "capturedAt": "2026-08-09",
+  "rows": [
+    {
+      "lead": "+17169306602",
+      "body": "WEB TEXT WIDGET\nDepartment: Sales\nName: Customer 1\nPage: 2014 Harley-Davidson® Street Glide® Special Amber Whiskey | American Harley-Davidson®\nURL: https://americanharley-davidson.com/inventory/1008601/2014-harley-davidson-street-glide-special-amber-whiskey\n\nMessage:\nHow much is the 2014 Street Glide",
+      "expected": {
+        "requestedVehicle": null,
+        "tradeVehicle": null,
+        "sellOption": null
+      }
+    },
+    {
+      "lead": "+15857392236",
+      "body": "WEB TEXT WIDGET\nDepartment: Sales\nName: Customer 2\nPage: Used Harley Davidson for Sale, Buffalo, North Tonawanda NY | American Harley-Davidson®\nURL: https://americanharley-davidson.com/used-harley-davidson-motorcycles-for-sale-buffalo-ny-xpreownedinventory?search_text=&condition=preowned&year_from=0&year_to=0&price_from=&price_to=&length_from=&length_to=&mileage_to=0&sort_column=year&sort_direction=desc&inventory_list_id=0&page=3\n\nMessage:\nHello, u have a 2020 street glide with i believe like 6000 miles. It's vivid black, could I get a little more info on that and a few more pics please. Thx, brad",
+      "expected": {
+        "requestedVehicle": null,
+        "tradeVehicle": null,
+        "sellOption": null
+      }
+    },
+    {
+      "lead": "+14138859118",
+      "body": "WEB TEXT WIDGET\nDepartment: Sales\nName: Customer 3\nPage: Used Harley Davidson for Sale, Buffalo, North Tonawanda NY | American Harley-Davidson®\nURL: https://americanharley-davidson.com/used-harley-davidson-motorcycles-for-sale-buffalo-ny-xpreownedinventory?search_text=&condition=preowned&year_from=0&year_to=0&price_from=&price_to=&length_from=&length_to=&mileage_to=0&sort_column=year&sort_direction=desc&inventory_list_id=0&page=2\n\nMessage:\nI want to buy the 2000 wide glide.I have a brand new 2025 road king special that I just bought.Its black on black. I can supply pics and vin number.I will buy it with cash if we are unable to make a deal with the road king. Thanks!",
+      "expected": {
+        "requestedVehicle": {
+          "year": "2000",
+          "model": "Wide Glide",
+          "condition": "used"
+        },
+        "tradeVehicle": {
+          "year": "2025",
+          "model": "Road King Special",
+          "condition": "new",
+          "color": "Black on Black"
+        },
+        "sellOption": "either"
+      }
+    },
+    {
+      "lead": "+16077384120",
+      "body": "WEB TEXT WIDGET\nDepartment: Sales\nName: Customer 4\nPage: 2020 Harley-Davidson® Iron 1200™ Vivid Black | American Harley-Davidson®\nURL: https://americanharley-davidson.com/inventory/995817/2020-harley-davidson-iron-1200-vivid-black\n\nMessage:\nPrice on the 2020 vivid black iron 1200",
+      "expected": {
+        "requestedVehicle": null,
+        "tradeVehicle": null,
+        "sellOption": null
+      }
+    },
+    {
+      "lead": "+16077384120",
+      "body": "WEB TEXT WIDGET\nDepartment: Sales\nName: Customer 5\nPage: 2008 Harley-Davidson® 1200 Nightster® Mirage Orange Pearl & Vivid Black | American Harley-Davidson®\nURL: https://americanharley-davidson.com/inventory/995811/2008-harley-davidson-1200-nightster-mirage-orange-pearl-vivid-black\n\nMessage:\nPrice on 1200 nightster orange an black",
+      "expected": {
+        "requestedVehicle": null,
+        "tradeVehicle": null,
+        "sellOption": null
+      }
+    },
+    {
+      "lead": "+15853565986",
+      "body": "WEB TEXT WIDGET\nDepartment: Sales\nName: Customer 6\nPage: Harley-Davidson Motorcycles For Sale Near Buffalo, NY. | American Harley-Davidson®\nURL: https://americanharley-davidson.com/\n\nMessage:\nIm looking for a klock Werks windshield for a Low Rider ST. Do you have demo shields I can try? I want to buy a bronze Kolor Flare next week. Please email me back. jmcunningham17@yahoo.com thanks",
+      "expected": {
+        "requestedVehicle": {
+          "model": "Klock Werks Windshield"
+        },
+        "tradeVehicle": null,
+        "sellOption": null
+      }
+    },
+    {
+      "lead": "+17163686204",
+      "body": "WEB TEXT WIDGET\nDepartment: Sales\nName: Customer 7\nPage: Inventory | American Harley-Davidson®\nURL: https://americanharley-davidson.com/inventory?search_text=&brands=0&range=0&family=0&condition=preowned\n\nMessage:\nWas wondering the price of the 2013 street glide",
+      "expected": {
+        "requestedVehicle": null,
+        "tradeVehicle": null,
+        "sellOption": null
+      }
+    },
+    {
+      "lead": "+17166985963",
+      "body": "WEB TEXT WIDGET\nDepartment: Motor Clothes\nName: Customer 8\nPage: Staff | American Harley-Davidson®\nURL: https://americanharley-davidson.com/our-staff-american-harley-davidson-buffalo-ny-xstaff\n\nMessage:\nHi Im wondering if you sell poker chips and the price of them ? Thank you",
+      "expected": {
+        "requestedVehicle": null,
+        "tradeVehicle": null,
+        "sellOption": null
+      }
+    },
+    {
+      "lead": "+17165741407",
+      "body": "WEB TEXT WIDGET\nDepartment: Sales\nName: Customer 9\nPage: 2013 Harley-Davidson® Street Glide® Vivid Black | American Harley-Davidson®\nURL: https://americanharley-davidson.com/inventory/998573/2013-harley-davidson-street-glide-vivid-black\n\nMessage:\nI have a buddy interested in the 2013 black street glide was wondering how much you guys are listing it",
+      "expected": {
+        "requestedVehicle": null,
+        "tradeVehicle": null,
+        "sellOption": null
+      }
+    },
+    {
+      "lead": "+358408271739",
+      "body": "WEB TEXT WIDGET\nDepartment: Service\nName: Customer 10\nPage: Harley Serial 1 -sähköpyörä | American Harley-Davidson®\nURL: https://americanharley-davidson.com/serial1\n\nMessage:\nHei, minulla Serial 1 sähköpyörä, siinä on Enviola vaihteisto, sovellus ei toimi puhelimessa S24, android 16.",
+      "expected": {
+        "requestedVehicle": null,
+        "tradeVehicle": null,
+        "sellOption": null
+      }
+    },
+    {
+      "lead": "+17165732502",
+      "body": "WEB TEXT WIDGET\nDepartment: Parts\nName: Customer 11\nPage: Harley Davidson Parts in North Tonawanda NY | American Harley-Davidson®\nURL: https://americanharley-davidson.com/parts-department-harley-davidson-motorcycles-buffalo-ny-parts\n\nMessage:\nWas wondering if you have part# 17036-91A available?",
+      "expected": {
+        "requestedVehicle": null,
+        "tradeVehicle": null,
+        "sellOption": null
+      }
+    },
+    {
+      "lead": "+19054842961",
+      "body": "WEB TEXT WIDGET\nDepartment: Parts\nName: Customer 12\nPage: Harley-Davidson Motorcycles For Sale Near Buffalo, NY. | American Harley-Davidson®\nURL: https://americanharley-davidson.com/\n\nMessage:\nDo you have a Saddlemen Road Sofa seat for a 2025 Harley-Davidson Road Glide available?",
+      "expected": {
+        "requestedVehicle": null,
+        "tradeVehicle": null,
+        "sellOption": null
+      }
+    },
+    {
+      "lead": "+12676649074",
+      "body": "WEB TEXT WIDGET\nDepartment: Sales\nName: Customer 13\nPage: Fat Bob® 114 | Request details | American Harley-Davidson®\nURL: https://americanharley-davidson.com/showroom/4/harley-davidson/3/motorcycles/1316/38204/fxfbsfatbob114/3598/form/17\n\nMessage:\nLooking to aquire numbers if I were to finance the fat bob",
+      "expected": {
+        "requestedVehicle": null,
+        "tradeVehicle": null,
+        "sellOption": null
+      }
+    },
+    {
+      "lead": "+17162925763",
+      "body": "WEB TEXT WIDGET\nDepartment: Sales\nName: Customer 14\nPage: Harley-Davidson Motorcycles For Sale Near Buffalo, NY. | American Harley-Davidson®\nURL: https://americanharley-davidson.com/\n\nMessage:\nI am looking to outright sell my 2024 Honda Rebel 500. It only has 330 miles. Stays covered through all weather. Had indoor winter storage. Practically brand new, I do not ride as often as I would like and will be moving at the end of the year. Let me know if you would be interested. Thanks.",
+      "expected": {
+        "requestedVehicle": null,
+        "tradeVehicle": {
+          "year": "2024",
+          "model": "Honda Rebel 500",
+          "condition": "used"
+        },
+        "sellOption": "trade"
+      }
+    },
+    {
+      "lead": "+19729199691",
+      "body": "WEB TEXT WIDGET\nDepartment: Sales\nName: Customer 15\nPage: Contact Harley-Davidson Dealership in North Tonawanda | American Harley-Davidson®\nURL: https://americanharley-davidson.com/contact-us-american-harley-davidson-buffalo-ny-xcontact\n\nMessage:\npurchase this bike",
+      "expected": {
+        "requestedVehicle": null,
+        "tradeVehicle": null,
+        "sellOption": null
+      }
+    },
+    {
+      "lead": "+19928960999",
+      "body": "WEB TEXT WIDGET\nDepartment: Sales\nName: Customer 16\nPage: Harley-Davidson Street® 750 | American Harley-Davidson®\nURL: https://americanharley-davidson.com/showroom/4/harley-davidson/3/motorcycles/1/1056/harleydavidsonstreet750\n\nMessage:\nDelhi",
+      "expected": {
+        "requestedVehicle": null,
+        "tradeVehicle": null,
+        "sellOption": null
+      }
+    },
+    {
+      "lead": "+17162891646",
+      "body": "WEB TEXT WIDGET\nDepartment: Sales\nName: Customer 17\nPage: 2020 Harley-Davidson® Iron 1200™ Vivid Black | American Harley-Davidson®\nURL: https://americanharley-davidson.com/inventory/995817/2020-harley-davidson-iron-1200-vivid-black/thanks#request-details\n\nMessage:\nVery interested in the 2020 iron 1200. I was in gowanda on Saturday test riding an 883 that someone unfortunately had a deposit on already & that deal went through",
+      "expected": {
+        "requestedVehicle": {
+          "year": "2020",
+          "model": "Iron 1200",
+          "condition": "used"
+        },
+        "tradeVehicle": null,
+        "sellOption": null
+      }
+    },
+    {
+      "lead": "+17162927936",
+      "body": "WEB TEXT WIDGET\nDepartment: Service\nName: Customer 18\nPage: Harley Davidson Service, Buffalo, North Tonawanda NY | American Harley-Davidson®\nURL: https://americanharley-davidson.com/service-department-harley-davidson-motorcycles-buffalo-ny-service\n\nMessage:\nI wanted to set up an service appointment for an inspection for my bike",
+      "expected": {
+        "requestedVehicle": null,
+        "tradeVehicle": null,
+        "sellOption": null
+      }
+    },
+    {
+      "lead": "+16054313150",
+      "body": "WEB TEXT WIDGET\nDepartment: Parts\nName: Customer 19\nPage: Harley Serial 1 Ebicycle | American Harley-Davidson®\nURL: https://americanharley-davidson.com/serial1\n\nMessage:\nAre parts available for the serial 1 ebikes",
+      "expected": {
+        "requestedVehicle": null,
+        "tradeVehicle": null,
+        "sellOption": null
+      }
+    },
+    {
+      "lead": "+15857552622",
+      "body": "WEB TEXT WIDGET\nDepartment: Sales\nName: Customer 20\nPage: Used Harley Davidson for Sale, Buffalo, North Tonawanda NY | American Harley-Davidson®\nURL: https://americanharley-davidson.com/used-harley-davidson-motorcycles-for-sale-buffalo-ny-xpreownedinventory?search_text=&condition=preowned&year_from=0&year_to=0&price_from=&price_to=&length_from=&length_to=&mileage_to=0&sort_column=year&sort_direction=desc&inventory_list_id=0&page=3\n\nMessage:\nLooking for a used or new trike.",
+      "expected": {
+        "requestedVehicle": {
+          "model": "Or New Trike",
+          "condition": "new"
+        },
+        "tradeVehicle": null,
+        "sellOption": null
+      }
+    },
+    {
+      "lead": "+17163481556",
+      "body": "WEB TEXT WIDGET\nDepartment: Motor Clothes\nName: Customer 21\nPage: Harley Davidson Events in Buffalo, North Tonawanda, NY | American Harley-Davidson®\nURL: https://americanharley-davidson.com/events-calendar-american-harley-davidson-buffalo-ny-xcalendar\n\nMessage:\nDoes the ride on July 18th require pre-registration?",
+      "expected": {
+        "requestedVehicle": null,
+        "tradeVehicle": null,
+        "sellOption": null
+      }
+    },
+    {
+      "lead": "+12543831187",
+      "body": "WEB TEXT WIDGET\nDepartment: Service\nName: Customer 22\nPage: Harley Davidson Service, Buffalo, North Tonawanda NY | American Harley-Davidson®\nURL: https://americanharley-davidson.com/service-department-harley-davidson-motorcycles-buffalo-ny-service\n\nMessage:\nLooking dor a quote for a lower cylinder head replacement on a 2018 street glide special",
+      "expected": {
+        "requestedVehicle": null,
+        "tradeVehicle": null,
+        "sellOption": null
+      }
+    },
+    {
+      "lead": "+13153504839",
+      "body": "WEB TEXT WIDGET\nDepartment: Motor Clothes\nName: Customer 23\nPage: Harley-Davidson Motorcycles For Sale Near Buffalo, NY. | American Harley-Davidson®\nURL: https://americanharley-davidson.com/\n\nMessage:\nGood afternoon, I have been trying for months to locate three women’s shirts Customer Service advised that you have these items in your store and that you should be able to either ship them to my home or a store closer to my location. 96770-25vw in a size Large. 96765-25vw size large and 96538-25vw size large. Please let me know. Thank you so much! Maggie 315-350-4839",
+      "expected": {
+        "requestedVehicle": null,
+        "tradeVehicle": null,
+        "sellOption": null
+      }
+    },
+    {
+      "lead": "+6282245353758",
+      "body": "WEB TEXT WIDGET\nDepartment: Motor Clothes\nName: Customer 24\nPage: Harley-Davidson Motorcycles For Sale Near Buffalo, NY. | American Harley-Davidson®\nURL: https://americanharley-davidson.com/\n\nMessage:\ni want to buy harley factory racing",
+      "expected": {
+        "requestedVehicle": {
+          "model": "Harley Factory Racing"
+        },
+        "tradeVehicle": null,
+        "sellOption": null
+      }
+    },
+    {
+      "lead": "+17164785613",
+      "body": "WEB TEXT WIDGET\nDepartment: Motor Clothes\nName: Customer 25\nPage: Harley-Davidson Motorcycles For Sale Near Buffalo, NY. | American Harley-Davidson®\nURL: https://americanharley-davidson.com/\n\nMessage:\nDo you guys buy motorcycles? I have a '17 Harley Road King Special (Olive Gold) with just under 11k miles I'm looking to sell.",
+      "expected": {
+        "requestedVehicle": {
+          "model": "Motorcycles"
+        },
+        "tradeVehicle": null,
+        "sellOption": null
+      }
+    },
+    {
+      "lead": "+17166281539",
+      "body": "WEB TEXT WIDGET\nDepartment: Sales\nName: Customer 26\nPage: 2017 Harley-Davidson® Breakout® Custom Colour Laguna Orange | American Harley-Davidson®\nURL: https://americanharley-davidson.com/inventory/988002/2017-harley-davidson-breakout-custom-colour-laguna-orange?utm_medium=paid&utm_source=fb&utm_id=120228969955750012&utm_content=120228969955920012&utm_term=120228969955910012&utm_campaign=120228969955750012\n\nMessage:\nI am interested is the 2017 Breakout, I can come in Monday if still available, I have a 2020 883 iron with 4000 miles to trade in.",
+      "expected": {
+        "requestedVehicle": null,
+        "tradeVehicle": {
+          "year": "2020",
+          "model": "883 Iron",
+          "condition": "used"
+        },
+        "sellOption": "trade"
+      }
+    },
+    {
+      "lead": "+15415147201",
+      "body": "WEB TEXT WIDGET\nDepartment: Motor Clothes\nName: Customer 27\nPage: Register For Updates | American Harley-Davidson®\nURL: https://americanharley-davidson.com/register-for-updates\n\nMessage:\nChecking out Pan America HD",
+      "expected": {
+        "requestedVehicle": null,
+        "tradeVehicle": null,
+        "sellOption": null
+      }
+    },
+    {
+      "lead": "+15033968305",
+      "body": "WEB TEXT WIDGET\nDepartment: Sales\nName: Customer 28\nPage: Fat Boy® 30th anniversary | American Harley-Davidson®\nURL: https://americanharley-davidson.com/showroom/4/harley-davidson/3/motorcycles/4/4209/flfbsanv-fat-boy-30-anniversary\n\nMessage:\nIs this still in production? Otherwise how to get it from used market?",
+      "expected": {
+        "requestedVehicle": null,
+        "tradeVehicle": null,
+        "sellOption": null
+      }
+    },
+    {
+      "lead": "+17169839279",
+      "body": "WEB TEXT WIDGET\nDepartment: Sales\nName: Customer 29\nPage: Used Harley Davidson for Sale, Buffalo, North Tonawanda NY | American Harley-Davidson®\nURL: https://americanharley-davidson.com/used-harley-davidson-motorcycles-for-sale-buffalo-ny-xpreownedinventory\n\nMessage:\nDo you take used Harley’s on consignment or buy outright? I have a 2008 Superglide in excellent condition for sale.",
+      "expected": {
+        "requestedVehicle": {
+          "model": "Outright"
+        },
+        "tradeVehicle": {
+          "year": "2008",
+          "model": "Superglide In Excellent Condition",
+          "condition": "used"
+        },
+        "sellOption": null
+      }
+    },
+    {
+      "lead": "+918743030113",
+      "body": "WEB TEXT WIDGET\nDepartment: Sales\nName: Customer 30\nPage: Harley-Davidson Street® 750 | American Harley-Davidson®\nURL: https://americanharley-davidson.com/showroom/4/harley-davidson/3/motorcycles/1/1056/harleydavidsonstreet750\n\nMessage:\nlooking for street 750",
+      "expected": {
+        "requestedVehicle": {
+          "model": "Street 750"
+        },
+        "tradeVehicle": null,
+        "sellOption": null
+      }
+    }
+  ]
+}

@@ -470,6 +470,7 @@
     "rider_experience_persist:eval",
     "sale_trade_journey_bucket:eval",
     "web_text_widget_seller_bucket:eval",
+    "web_text_widget_model_shape:eval",
     "ci_eval_runner:eval"
   ]
 }

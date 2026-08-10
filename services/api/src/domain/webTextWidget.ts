@@ -159,11 +159,43 @@ function colorFromSalesWidgetText(text: string): string | undefined {
   return color || undefined;
 }
 
+/**
+ * A model name pulled out of FREE TEXT is a short noun phrase. A capture that runs on past one is
+ * not a bike — it is the rest of the customer's sentence.
+ *
+ * Dalton Magill (+17165741407, Sales widget, 2026-06-17) wrote, with no punctuation anywhere:
+ *   "I have a buddy interested in the 2013 black street glide was wondering how much you guys are
+ *    listing it"
+ * The requested-vehicle regex ends a capture on [.!?] or a following "i have/can/will/would", and
+ * that sentence offers neither, so the capture ran to the end of the message. His lead.vehicle.model
+ * AND conv.inventoryContext.model were stored as "Black Street Glide Was Wondering How Much You Guys
+ * Are Listing It" — draft context the widget ack narrates straight back at the customer, and a model
+ * name that no inventory lookup or marketing list can ever match.
+ *
+ * MEASURED against every widget inbound in the live store (30 messages, 9 extractions, 2026-08-09):
+ * every legitimate free-text capture is 1-3 words ("Wide Glide", "Iron 1200", "Klock Werks
+ * Windshield"); the single run-on is 12. Nothing lands in between, so this bound sits in the middle
+ * of a wide measured gap rather than on a cliff edge — six is twice the largest real capture and
+ * half the run-on.
+ *
+ * This bounds the SHAPE of an extracted slot. It reads no intent, and it is deliberately NOT a
+ * longer list of terminator keywords — growing that list is the keyword-scan anti-pattern #626 was
+ * fixed for. Fail direction: a rejected capture falls through to the widget PAGE TITLE (structured,
+ * and on Dalton's own lead exactly right — "2013 Harley-Davidson® Street Glide® Vivid Black"), then
+ * to the typed parser, then to no vehicle at all. It can only ever stop us asserting a bike name; it
+ * can never invent one.
+ *
+ * The page-title reader is deliberately NOT bounded by this: catalog titles are structured and
+ * legitimately long ("Ultra Limited Peace Officer / Firefighter / Shrine Special Edition").
+ */
+const MAX_FREE_TEXT_MODEL_WORDS = 6;
+
 function parseVehicleFromMatch(match: RegExpMatchArray | null, sourceText: string): WebTextWidgetVehicle | undefined {
   if (!match) return undefined;
   const year = String(match[1] ?? "").trim() || undefined;
   const model = titleCaseVehicleModel(String(match[2] ?? ""));
   if (!model) return undefined;
+  if (model.split(/\s+/).length > MAX_FREE_TEXT_MODEL_WORDS) return undefined;
   return {
     ...(year ? { year } : {}),
     model,
