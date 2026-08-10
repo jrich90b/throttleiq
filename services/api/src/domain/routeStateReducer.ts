@@ -1965,6 +1965,28 @@ export function decideAdfDepartmentRoute(input: AdfDepartmentRouteInput): AdfDep
  */
 export const NO_SUBJECT_WEB_LEAD_HANDOFF_REASON = "no_subject_web_lead";
 
+/**
+ * The raw ADF department parse, narrowed to the three fields the referees read. Pulled out of the
+ * route so an eval can EXECUTE the carrying step instead of asserting how it is spelled: a mapping
+ * that quietly hardcodes `accepted: false` reads identical to a correct one in source, and that is
+ * the one sabotage a source pin cannot catch.
+ */
+export type AdfDepartmentVerdict = {
+  accepted: boolean;
+  department: "apparel" | "parts" | "service" | "vehicle" | "riding_academy" | "none" | null;
+  confidence: number;
+};
+
+export function toAdfDepartmentVerdict(
+  parse: { department?: string | null; confidence?: number | null } | null | undefined
+): AdfDepartmentVerdict {
+  return {
+    accepted: !!parse,
+    department: (parse?.department ?? null) as AdfDepartmentVerdict["department"],
+    confidence: parse?.confidence ?? 0
+  };
+}
+
 export type NoSubjectWebLeadHandoffKind = "handoff" | "none";
 
 export type NoSubjectWebLeadHandoffInput = {

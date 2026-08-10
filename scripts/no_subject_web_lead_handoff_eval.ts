@@ -29,6 +29,7 @@ import path from "node:path";
 
 import {
   decideNoSubjectWebLeadHandoff,
+  toAdfDepartmentVerdict,
   NO_SUBJECT_WEB_LEAD_HANDOFF_REASON
 } from "../services/api/src/domain/routeStateReducer.ts";
 
@@ -263,10 +264,15 @@ assert.ok(
   "the referee must come from routeStateReducer — that is where route decisions live"
 );
 
-// The parser verdict has to be CARRIED to the call site — the link that a source pin on the
-// referee alone would miss entirely (a hoisted verdict that is never populated reads identical).
-const verdictWrites = sendgrid.split("adfDepartmentVerdict = {").length - 1;
-assert.equal(verdictWrites, 1, "the raw parser verdict is populated in exactly one place");
+// The parser verdict has to be CARRIED to the referee, and that link is the one a source pin cannot
+// hold: a mapping that hardcodes `accepted: false` looks exactly like a correct one. It lives in
+// toAdfDepartmentVerdict now, so EXECUTE the whole chain from the parser's real output shapes.
+const mapperUses = sendgrid.split("toAdfDepartmentVerdict(").length - 1;
+assert.equal(mapperUses, 2, "the verdict comes from the shared mapper twice: the empty default, and the parse");
+assert.ok(
+  sendgrid.includes("adfDepartmentVerdict = toAdfDepartmentVerdict(adfDepartmentParse)"),
+  "the mapper must be fed the PARSER's output — that is the link the referee's own table cannot check"
+);
 for (const field of [
   "parserAccepted: adfDepartmentVerdict.accepted",
   "department: adfDepartmentVerdict.department",
@@ -274,6 +280,39 @@ for (const field of [
 ]) {
   assert.ok(sendgrid.includes(field), `the call site must read the parser verdict: ${field}`);
 }
+
+// End to end: the parser's REAL measured output -> the mapper -> the referee -> the decision.
+for (const c of [
+  { label: "Timothy's page name", parse: { department: "none", item: null, confidence: 0.8 }, handoff: true },
+  { label: "the promo-list signup", parse: { department: "none", item: null, confidence: 0.9 }, handoff: true },
+  { label: "the take-off engine (parts)", parse: { department: "parts", item: "M-8 114 engine", confidence: 0.92 }, handoff: false },
+  { label: "a real bike shopper", parse: { department: "vehicle", item: "2026 Street Glide", confidence: 0.95 }, handoff: false },
+  { label: "the parser never answered", parse: null, handoff: false }
+]) {
+  const verdict = toAdfDepartmentVerdict(c.parse);
+  const decision = decideNoSubjectWebLeadHandoff({
+    isInitialAdf: true,
+    hasNamedBike: false,
+    hasInventoryIdentifiers: false,
+    parserAccepted: verdict.accepted,
+    department: verdict.department,
+    confidence: verdict.confidence,
+    confidenceMin: CONFIDENCE_MIN
+  });
+  assert.equal(decision.kind === "handoff", c.handoff, `parse -> mapper -> referee: ${c.label}`);
+}
+// A parse that arrived must never be reported as absent, and an absent one must never be confident.
+assert.equal(toAdfDepartmentVerdict({ department: "none", confidence: 0.8 }).accepted, true, "a real parse is accepted");
+assert.equal(toAdfDepartmentVerdict(null).accepted, false, "no parse is not an accepted parse");
+assert.equal(toAdfDepartmentVerdict(null).confidence, 0, "no parse carries no confidence");
+
+// The design-accept has to be ASKED by the scorer — an accept nothing calls is a phantom P1 waiting
+// to happen (the whole reason this slice widened the accept at all).
+const flywheel = fs.readFileSync(path.resolve("scripts/corpus_replay_flywheel.ts"), "utf8");
+assert.ok(
+  flywheel.includes("isNoSubjectWebLeadHandoffAckByDesign(row, score.judge)"),
+  "adjustScore must consult the design-accept, not merely export it"
+);
 
 // The side effects: the lead is handed to a person the same way the twin form's branch does it.
 const handoffBlock = sendgrid.slice(
@@ -296,4 +335,4 @@ assert.ok(
   "the previous ask stays as the else branch — this slice narrows it, it does not delete it"
 );
 
-console.log(`no_subject_web_lead_handoff:eval PASS (${ROWS.length} decision rows, 1 call site, 7 accept cases)`);
+console.log(`no_subject_web_lead_handoff:eval PASS (${ROWS.length} decision rows, 5 parse->referee chains, 7 accept cases, 1 call site)`);

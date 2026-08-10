@@ -79,7 +79,8 @@ import { buildAdfResubmissionAck, detectAdfFormResubmission } from "../domain/ad
 import { buildMarketplaceRelayFirstTouchReply, buildMarketplaceRelayTaskSummary } from "../domain/marketplaceRelay.js";
 import { isHtmlClientNoticeOnly } from "../domain/inboundMailActionability.js";
 import { buildTradeAdfAck, tradeAdfPurchaseIsOnFloor } from "../domain/tradeAdfReply.js";
-import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn, decideRidingAcademyTurn, shouldCloseEventPromoLeadOnIntake, resolveRideChallengeEventTouch, decideIncomingInventoryPurpose, decideWalkInInventoryWatchTurn, decideSaleTradeJourneyBucket, decideNoSubjectWebLeadHandoff } from "../domain/routeStateReducer.js";
+import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn, decideRidingAcademyTurn, shouldCloseEventPromoLeadOnIntake, resolveRideChallengeEventTouch, decideIncomingInventoryPurpose, decideWalkInInventoryWatchTurn, decideSaleTradeJourneyBucket, decideNoSubjectWebLeadHandoff, toAdfDepartmentVerdict } from "../domain/routeStateReducer.js";
+import type { AdfDepartmentVerdict } from "../domain/routeStateReducer.js";
 import { buildLongTermTimelineMessage } from "../domain/longTermMessage.js";
 import { orchestrateInbound } from "../domain/orchestrator.js";
 import { collectRecentStaffCorrections } from "../domain/feedbackSteering.js";
@@ -5351,22 +5352,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   // any subject at all?" — which `decideAdfDepartmentRoute` collapses away (it folds `none`,
   // `vehicle` and low confidence into one `none`). Keep the raw verdict so the subjectless-lead
   // referee reads the parser rather than re-deriving it, and so no second LLM call is spent.
-  let adfDepartmentVerdict: { accepted: boolean; department: string | null; confidence: number } = {
-    accepted: false,
-    department: null,
-    confidence: 0
-  };
+  let adfDepartmentVerdict: AdfDepartmentVerdict = toAdfDepartmentVerdict(null);
   if (isInitialAdf && !!effectiveInquiry && !adfDepartmentExistingSignal && adfDepartmentCue) {
     const adfDepartmentParse = await parseAdfDepartmentInterestWithLLM({
       inquiry: effectiveInquiry,
       vehicle: adfDepartmentVehicleContext || null,
       leadSource
     });
-    adfDepartmentVerdict = {
-      accepted: !!adfDepartmentParse,
-      department: adfDepartmentParse?.department ?? null,
-      confidence: adfDepartmentParse?.confidence ?? 0
-    };
+    adfDepartmentVerdict = toAdfDepartmentVerdict(adfDepartmentParse);
     adfDepartmentRoute = decideAdfDepartmentRoute({
       parserAccepted: !!adfDepartmentParse,
       department: adfDepartmentParse?.department ?? null,
