@@ -191,10 +191,13 @@ assert.equal(
   "both stops record a route outcome naming the reason"
 );
 // The cron stop sits ABOVE the pending-queue flush, or a capped-off alert would still slip out.
-assert.ok(
-  idx.indexOf("applyUnansweredWatchAlertPause(conv, nowIso)") < idx.indexOf("deliverDuePendingWatchAlerts(conv, {"),
-  "the stop is checked before yesterday's queued alerts are flushed"
-);
+// Both anchors must be FOUND first: `indexOf` returns -1 for a missing string, and -1 < anything is
+// true, so an unanchored comparison would pass vacuously the moment either call site is reworded.
+const stopAt = idx.indexOf("applyUnansweredWatchAlertPause(conv, nowIso)");
+const flushAt = idx.indexOf("deliverDuePendingWatchAlerts(conv, {");
+assert.ok(stopAt >= 0, "the cron stop call site is present (verbatim) — the ordering check needs an anchor");
+assert.ok(flushAt >= 0, "the pending-queue flush call site is present — the ordering check needs an anchor");
+assert.ok(stopAt < flushAt, "the stop is checked before yesterday's queued alerts are flushed");
 // The pause reuses the existing referee rather than writing watch state inline.
 assert.ok(
   /export function applyUnansweredWatchAlertPause\(/.test(store) && /const paused = pauseInventoryWatches\(conv\);/.test(store),
