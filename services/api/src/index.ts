@@ -56,11 +56,7 @@ import { decideConversationAccess } from "./domain/conversationAccess.js";
 import { removeUploadedFileFromPacket } from "./domain/mdfClaimFileRemoval.js";
 import { buildMacInstallerScript, externalApiBase, shellSingleQuote } from "./domain/mdfRunnerMacInstaller.js";
 import { isProactiveContactPaused } from "./domain/proactiveContactPause.js";
-import {
-  isInventoryWatchOptedOut,
-  setInventoryWatchOptOut,
-  clearInventoryWatchOptOut
-} from "./domain/inventoryWatchOptOut.js";
+import { isInventoryWatchOptedOut, clearInventoryWatchOptOut } from "./domain/inventoryWatchOptOut.js";
 import {
   buildCustomerPhotoShareTodoSummary,
   buildCustomerVehiclePhotoShareReply,
@@ -1076,6 +1072,10 @@ import {
   buildTodoConversationContext,
   REAL_OUTBOUND_CONTACT_PROVIDERS,
   collectInventoryWatches,
+  hasActiveInventoryWatch,
+  pauseInventoryWatches,
+  markInventoryWatchOptOut,
+  applyUnansweredWatchAlertPause,
   pruneInventoryWatchesByModel,
   isInProcessDealLead,
   shouldNudgeInProcessDeal,
@@ -7332,6 +7332,14 @@ async function processInventoryWatchlist(targetConvId?: string, opts?: { include
       // A held lead (manual_handoff or paused_indefinite "hold off") is off
       // proactive outreach until they re-engage — never fire a watch alert at them.
       if (isProactiveContactPaused(conv)) continue;
+      // Silence is not an answer (Joseph +17163308822): once we have DELIVERED the limit of watch
+      // alerts with no reply of any kind, pause the watches and raise a staff task instead of
+      // sending another. Placed above the pending-queue flush so a capped-off alert can't slip out.
+      const unansweredPause = applyUnansweredWatchAlertPause(conv, nowIso);
+      if (unansweredPause) {
+        recordRouteOutcome("manual", "inventory_watch_paused_unanswered", { convId: conv.id, leadKey: conv.leadKey, delivered: unansweredPause.delivered, limit: unansweredPause.limit });
+        continue;
+      }
       // Deliver yesterday's capped-off queue first (ONE bundled text). If it sends, the
       // conversation is now inside a fresh daily-cap window, so any new matches below queue.
       deliverDuePendingWatchAlerts(conv, { feedItems: items, holds, solds, nowIso, tz });
@@ -7514,34 +7522,8 @@ async function processInventoryWatchlist(targetConvId?: string, opts?: { include
   }
 }
 
-// Does this conversation have at least one ACTIVE inventory watch (one the engine would still fire)?
-// Unions the single `inventoryWatch` AND the `inventoryWatches` array (collectInventoryWatches) — they
-// can coexist, so the old array-if-present-else-single check missed an active single watch.
-function hasActiveInventoryWatch(conv: any): boolean {
-  return collectInventoryWatches(conv).some((w: any) => w && w.status !== "paused");
-}
-
-// Remove a customer from active inventory-watch alerts: pause every active watch (the watch-fire
-// engine skips paused watches — 4834/4945). Reversible — keeps the record so they can be re-added if
-// they ask. Returns how many were paused. Unions single + array so neither is left active.
-function pauseInventoryWatches(conv: any): number {
-  let paused = 0;
-  for (const w of collectInventoryWatches(conv)) {
-    if (w && w.status !== "paused") {
-      w.status = "paused";
-      paused++;
-    }
-  }
-  return paused;
-}
-
-// Explicit customer opt-out: pause the current watches AND set the durable
-// opt-out flag so a later watch (re-)creation can't refire alerts at someone who
-// asked us to stop. See domain/inventoryWatchOptOut.ts.
-function markInventoryWatchOptOut(conv: any, reason: string): number {
-  setInventoryWatchOptOut(conv, reason);
-  return pauseInventoryWatches(conv);
-}
+// hasActiveInventoryWatch / pauseInventoryWatches / markInventoryWatchOptOut now live beside
+// collectInventoryWatches in domain/conversationStore.ts — same union, one home (imported above).
 
 async function notifyInventoryWatchersForAvailableItem(
   matchedItem: InventoryFeedItem,
@@ -7587,6 +7569,12 @@ async function notifyInventoryWatchersForAvailableItem(
     // A held lead (manual_handoff or paused_indefinite "hold off") is off
     // proactive outreach until they re-engage — never fire a watch alert at them.
     if (isProactiveContactPaused(conv)) continue;
+    // Same unanswered-alert stop as the cron path — both fire sites in lockstep.
+    const unansweredPause = applyUnansweredWatchAlertPause(conv, nowIsoValue);
+    if (unansweredPause) {
+      recordRouteOutcome("manual", "inventory_watch_paused_unanswered", { convId: conv.id, leadKey: conv.leadKey, delivered: unansweredPause.delivered, limit: unansweredPause.limit });
+      continue;
+    }
     const { watches } = applyInventoryWatchListNormalization(conv);
     if (!watches.length) continue;
     const matchedWatch = watches.find((watch: InventoryWatch) => {

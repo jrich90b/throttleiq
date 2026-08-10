@@ -2,6 +2,11 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import type { InboundMessageEvent } from "./types.js";
 import { maybeMarkEngagedFromInbound } from "./engagement.js";
+import { setInventoryWatchOptOut } from "./inventoryWatchOptOut.js";
+import {
+  decideUnansweredWatchAlertPause,
+  type UnansweredWatchAlertDecision
+} from "./watchAlertUnansweredPause.js";
 import {
   decideAppointmentBookingRecord,
   decideAppointmentConfirmRecord,
@@ -5756,6 +5761,64 @@ export function collectInventoryWatches(conv: any): InventoryWatch[] {
   const arr: InventoryWatch[] = Array.isArray(conv?.inventoryWatches) ? conv.inventoryWatches : [];
   const single: InventoryWatch | undefined = conv?.inventoryWatch ?? undefined;
   return single && !arr.includes(single) ? [...arr, single] : arr;
+}
+
+// Does this conversation have at least one ACTIVE inventory watch (one the engine would still fire)?
+// Unions the single `inventoryWatch` AND the `inventoryWatches` array (collectInventoryWatches) — they
+// can coexist, so the old array-if-present-else-single check missed an active single watch.
+export function hasActiveInventoryWatch(conv: any): boolean {
+  return collectInventoryWatches(conv).some((w: any) => w && w.status !== "paused");
+}
+
+// Remove a customer from active inventory-watch alerts: pause every active watch (the watch-fire
+// engine skips paused watches). Reversible — keeps the record so they can be re-added if they ask.
+// Returns how many were paused. Unions single + array so neither is left active.
+export function pauseInventoryWatches(conv: any): number {
+  let paused = 0;
+  for (const w of collectInventoryWatches(conv)) {
+    if (w && w.status !== "paused") {
+      w.status = "paused";
+      paused++;
+    }
+  }
+  return paused;
+}
+
+// Explicit customer opt-out: pause the current watches AND set the durable opt-out flag so a later
+// watch (re-)creation can't refire alerts at someone who asked us to stop. See inventoryWatchOptOut.ts.
+export function markInventoryWatchOptOut(conv: any, reason: string): number {
+  setInventoryWatchOptOut(conv, reason);
+  return pauseInventoryWatches(conv);
+}
+
+/**
+ * SIDE EFFECT half of the unanswered-alert stop (decision lives in watchAlertUnansweredPause.ts,
+ * which stays import-free so its eval is not a shared-file barrier).
+ *
+ * At a watch fire site: pause every active watch and raise ONE staff task in place of the text.
+ * Returns the decision when it paused, null when the conversation is still inside its allowance
+ * (the caller then fires exactly as before).
+ *
+ * Called from BOTH watch fire paths in index.ts (`processInventoryWatchlist` and
+ * `notifyInventoryWatchersForAvailableItem`) so the arrival cron and the hold-release path stay in
+ * lockstep. The pause goes through pauseInventoryWatches — the same referee the explicit opt-out
+ * uses — so this adds no new writer of `inventoryWatches`. The task is a `call`, which addTodo
+ * merges by task class, so a lead can never accumulate a pile of them.
+ */
+export function applyUnansweredWatchAlertPause(
+  conv: any,
+  nowIsoValue: string,
+  opts?: { limit?: number }
+): UnansweredWatchAlertDecision | null {
+  const decision = decideUnansweredWatchAlertPause(conv, opts);
+  if (!decision.pause) return null;
+  const paused = pauseInventoryWatches(conv);
+  if (paused > 0) {
+    addTodo(conv, "call", decision.summary, undefined, conv?.leadOwner);
+    conv.updatedAt = nowIsoValue;
+    saveConversation(conv);
+  }
+  return decision;
 }
 
 /**
