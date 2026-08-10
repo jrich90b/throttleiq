@@ -499,6 +499,41 @@ export function isRoom58StandardHandoffAckByDesign(
   return /i got your inquiry/.test(draft) && /make sure the team follows up soon/.test(draft);
 }
 
+// Subjectless web-lead handoff ack BY DESIGN (Timothy Patrick, +13049475135, 2026-08-08). The twin
+// accept above only ever matched ONE form name with a literally EMPTY Inquiry, so the structurally
+// identical catch-all form — whose Inquiry carried the page name "Home" rather than nothing — fell
+// through to a sales draft asking which bike. Once `decideNoSubjectWebLeadHandoff` sends that lead
+// to a person instead, the judge grades the same handoff ack the way it graded Larry's: as a 1:1
+// sales reply that ignored an ask, with the ask invented from a form field the customer never
+// filled in. That is the scorer's miss, not the product's.
+//
+// ⚠️ MEASURED 2026-08-10, and it ruled out the obvious implementation: this accept CANNOT be keyed
+// to `row.router.followUpReason`. The replay harness copies the thread into a per-case sandbox and
+// re-reads it 250ms after the turn, but the handler's write is debounced and never flushes there —
+// the post-state carries neither the new outbound nor the followUp write (measured: 1 message in,
+// 1 message out, `followUp` null, on a turn that demonstrably set `manual_handoff`). So EVERY
+// inbound-shadow row's `router.followUpMode`/`followUpReason` is the PRE-turn state, and a guard
+// keyed on it is inert by construction — it would have silently never fired.
+//
+// So the gate is the ACK ITSELF, which is the honest marker anyway: the pinned sentence pair is
+// emitted by exactly two branches in the whole handler (this one and the twin form's), both of them
+// deliberate handoffs that say so out loud. `no_subject_web_lead_handoff:eval` asserts that count,
+// so a third branch cannot start borrowing the copy without someone re-reading this accept.
+//
+// Fail-direction: a customer who wrote a real question never receives this ack in the first place
+// (the referee needs a confident "no identifiable subject", the twin needs its exact form name), so
+// an ignored ask still fails. Reword the ack — or change either branch to actually engage the lead —
+// and the accept falls out and the rows surface again ([[scorer-copy-drift-design-accept]]).
+export function isNoSubjectWebLeadHandoffAckByDesign(
+  row: ReplayRow,
+  judge: IntentVerdict | null | undefined
+): boolean {
+  if (!judge || judge.addressed) return false;
+  if (!/^\s*WEB LEAD \(ADF\)/i.test(String(row.body ?? ""))) return false;
+  const draft = String(row.draft ?? "").toLowerCase();
+  return /i got your inquiry/.test(draft) && /make sure the team follows up soon/.test(draft);
+}
+
 /** A row worth spending a judge call on: it produced a draft on an actionable inbound. */
 export function isJudgeWorthy(row: ReplayRow): boolean {
   if (!row.draft || !String(row.draft).trim()) return false;
@@ -603,6 +638,9 @@ export function adjustScore(score: TurnScore, row: ReplayRow): TurnScore & { adj
     return { ...score, pass: true, critical: false, adjustment: "design_accepted_handoff" };
   }
   if (!score.pass && isRoom58StandardHandoffAckByDesign(row, score.judge)) {
+    return { ...score, pass: true, critical: false, adjustment: "design_accepted_handoff" };
+  }
+  if (!score.pass && isNoSubjectWebLeadHandoffAckByDesign(row, score.judge)) {
     return { ...score, pass: true, critical: false, adjustment: "design_accepted_handoff" };
   }
   if (!score.pass && isManagerQuotePricingPath(row, score.judge)) {
