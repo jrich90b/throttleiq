@@ -149,6 +149,12 @@ if (Test-Path (Join-Path $AppDir ".git")) {
 Set-Location $AppDir
 npm install --no-audit --no-fund
 
+# RE-IDENTIFY THIS COMPUTER (2026-08-10). The console Retire writes a tombstone keyed to this
+# machine id and then tells you to run the installer - but the id lives outside the app folder,
+# so reinstalling on the SAME computer returned the same id and was refused forever (hit twice
+# in one hour on sales2). Dropping it makes the installer the recovery the console promises.
+Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:USERPROFILE ".leadrider\\mdf-runner-machine.json")
+
 $envLines = @(
   'MDF_PORTAL_API_BASE_URL=${args.apiBase}',
   'MDF_PORTAL_RUNNER_TOKEN=${args.runnerToken}',

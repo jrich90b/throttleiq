@@ -1156,3 +1156,62 @@ console.log("PASS MDF toolbox SSO handoff — the Marketing Development Fund cli
   );
 }
 console.log("PASS Ansira control-phase split — #activity-sub-detail is checked AFTER the dates, where Ansira actually creates it.");
+
+// ---------------------------------------------------------------------------------------------
+// RETIRE → REINSTALL must actually recover the computer (Joe, 2026-08-10, hit TWICE in one hour).
+//
+// The console's Retire writes a tombstone keyed to the runner's machine id, and then tells the
+// operator to "run the installer on the new computer". But the id lives in
+// ~/.leadrider/mdf-runner-machine.json — OUTSIDE the app folder the installer replaces — so
+// reinstalling on the SAME computer came back with the SAME id and was refused forever. The console
+// read "no active runner" while the runner hammered the API and was turned away every few minutes.
+//
+// Both installers now drop that file, which makes reinstalling the recovery the console promises:
+// a fresh id claims the slot, and claiming clears the tombstone.
+// ---------------------------------------------------------------------------------------------
+{
+  const idxSrc = fs.readFileSync("services/api/src/index.ts", "utf8");
+  const winSrc = fs.readFileSync("services/api/src/domain/mdfRunnerWindowsInstaller.ts", "utf8");
+  const runnerSrc2 = fs.readFileSync("scripts/mdf_portal_runner.ts", "utf8");
+
+  // The identity path the runner uses — asserted so the installers cannot drift off it.
+  assert.match(
+    runnerSrc2,
+    /path\.join\(os\.homedir\(\), "\.leadrider", "mdf-runner-machine\.json"\)/,
+    "the runner's machine identity lives at ~/.leadrider/mdf-runner-machine.json"
+  );
+
+  // macOS installer clears it, BEFORE writing .env / registering the agents. The script moved out of
+  // index.ts into domain/mdfRunnerMacInstaller.ts (index.ts was on its size ceiling) — assert against
+  // its new home, and assert index.ts still CALLS the builder so the move cannot orphan it.
+  const macSrc = fs.readFileSync("services/api/src/domain/mdfRunnerMacInstaller.ts", "utf8");
+  assert.match(
+    idxSrc,
+    /const script = buildMacInstallerScript\(\{ apiBase, runnerToken, repoUrl, branch \}\);/,
+    "the install.sh route builds its script from the extracted module"
+  );
+  assert.match(macSrc, /return `#!\/bin\/zsh/, "the generated script still starts with the shebang on line 1");
+  const shClear = macSrc.indexOf('rm -f "\\${HOME}/.leadrider/mdf-runner-machine.json"');
+  const shEnv = macSrc.indexOf('cat > "\\${APP_DIR}/.env" <<ENV');
+  assert.ok(shClear >= 0, "install.sh clears the stale machine identity");
+  assert.ok(shEnv >= 0, "install.sh env anchor present");
+  assert.ok(shClear < shEnv, "install.sh clears the identity before it configures the runner");
+
+  // Windows installer clears it too — same file, PowerShell form.
+  assert.match(
+    winSrc,
+    /Remove-Item -Force -ErrorAction SilentlyContinue \(Join-Path \$env:USERPROFILE "\.leadrider\\\\mdf-runner-machine\.json"\)/,
+    "install.bat clears the stale machine identity"
+  );
+  const batClear = winSrc.indexOf("Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:USERPROFILE");
+  const batEnv = winSrc.indexOf("$envLines = @(");
+  assert.ok(batClear >= 0 && batEnv >= 0 && batClear < batEnv, "install.bat clears the identity before configuring");
+
+  // The refusal must name the step that WORKS. The old wording ("run the runner installer on it")
+  // was true-sounding and useless — it is what sent Joe round the loop a second time.
+  const revokedMsg = idxSrc.slice(idxSrc.indexOf("runner_revoked: this computer was retired"), idxSrc.indexOf("runner_revoked: this computer was retired") + 420);
+  assert.match(revokedMsg, /INSTALLER/, "the refusal names the installer explicitly");
+  assert.match(revokedMsg, /re-identifies the computer and clears the retirement/, "and says WHY that is the fix");
+  assert.match(revokedMsg, /re-downloading alone is not enough/, "and rules out the thing an operator tries first");
+}
+console.log("PASS runner retire/reinstall recovery — both installers clear the stale machine identity, and the refusal names the step that works.");

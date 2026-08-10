@@ -330,7 +330,11 @@ const CEILINGS: Ceiling[] = [
     // whose budget "hint" is the six-word list that caused the miss — moved verbatim into
     // domain/shortListClarifier.ts with the two model-context lookups injected, and the new
     // handoff's copy + confidence floor sit beside their parser in domain/budgetFinancingDeferral.ts.
-    max: 70_741,
+    // 70_741 -> 70_620. The macOS runner installer moved to domain/mdfRunnerMacInstaller.ts, beside
+    // the Windows sibling that already lived in its own module. Verbatim move, proved by diffing the
+    // generated script body against the previous commit (which caught a stray newline that would have
+    // pushed the #!/bin/zsh shebang off line 1).
+    max: 70_620,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
