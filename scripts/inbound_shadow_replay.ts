@@ -643,6 +643,12 @@ async function waitForHealth(port: number, child: ChildProcessWithoutNullStreams
  * completion log is accepted as a fallback so a re-keyed conversation id cannot wedge
  * the harness. Neither within the deadline => throw, so the case surfaces as a visible
  * error rather than a silent phantom.
+ *
+ * ⚠️ That preferred branch was DEAD until 2026-08-10: the harness set `AUTH_DISABLED: "1"`,
+ * which the API does not read as true, so this request always answered 401 and every case
+ * fell through to the log-line fallback. See `buildShadowApiEnv` and
+ * `inbound_shadow_api_env:eval`. The fallback is deliberately kept — this gate now has both
+ * signals instead of only the weaker one.
  */
 async function waitForPreparedConversation(args: {
   port: number;
@@ -692,22 +698,39 @@ function repoRoot(): string {
   return path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 }
 
-async function startApi(args: {
+/**
+ * The API reads this flag as `(process.env.AUTH_DISABLED ?? "false").toLowerCase() === "true"`
+ * (services/api/src/index.ts). It is an EXACT-STRING test, not a truthiness test: "1" leaves auth
+ * ON, and every authenticated route on the temporary API answers `401 {"ok":false,"error":"auth
+ * required"}`.
+ *
+ * Kept as a named constant so the eval can execute the API's own rule against the value this
+ * harness actually ships, instead of asserting on the source text of the env block.
+ */
+export const SHADOW_API_AUTH_DISABLED = "true";
+
+/** The API's own reading of AUTH_DISABLED, mirrored so the eval can execute it. */
+export function shadowApiAuthDisabled(raw: string | undefined): boolean {
+  return (raw ?? "false").toLowerCase() === "true";
+}
+
+/**
+ * Environment for the per-case temporary API.
+ *
+ * Exported (and pure) so the auth/hermeticity eval can execute it against a synthetic case
+ * instead of reading the source: a source-text assertion cannot prove the harness still boots
+ * a reachable API, which is exactly the failure this function had.
+ */
+export function buildShadowApiEnv(args: {
   dataDir: string;
   jobsPath: string;
   envFileVars: Record<string, string>;
   port: number;
-}): Promise<{ child: ChildProcessWithoutNullStreams; logs: string[] }> {
-  const root = repoRoot();
-  const entry = path.join(root, "services/api/dist/index.js");
-  try {
-    await fs.access(entry);
-  } catch {
-    throw new Error("services/api/dist/index.js is missing. Run `npm --workspace @throttleiq/api run build` first.");
-  }
-  const logs: string[] = [];
-  const env = {
-    ...process.env,
+  baseEnv?: NodeJS.ProcessEnv;
+}): Record<string, string | undefined> {
+  const baseEnv = args.baseEnv ?? process.env;
+  return {
+    ...baseEnv,
     ...args.envFileVars,
     NODE_ENV: "shadow",
     PORT: String(args.port),
@@ -736,12 +759,29 @@ async function startApi(args: {
     SUPPORT_MAIL_AUTO_POLL_ENABLED: "false",
     PERSONAL_MAIL_AUTO_POLL_ENABLED: "false",
     CLAUDE_AGENT_ENABLED: "false",
-    AUTH_DISABLED: "1",
+    AUTH_DISABLED: SHADOW_API_AUTH_DISABLED,
     // The API constructs the OpenAI client at module load. A real env file should
     // be supplied for production-quality shadow runs; this fallback only allows
     // local deterministic smoke tests to boot.
-    OPENAI_API_KEY: args.envFileVars.OPENAI_API_KEY || process.env.OPENAI_API_KEY || "shadow-replay-no-live-key"
+    OPENAI_API_KEY: args.envFileVars.OPENAI_API_KEY || baseEnv.OPENAI_API_KEY || "shadow-replay-no-live-key"
   };
+}
+
+async function startApi(args: {
+  dataDir: string;
+  jobsPath: string;
+  envFileVars: Record<string, string>;
+  port: number;
+}): Promise<{ child: ChildProcessWithoutNullStreams; logs: string[] }> {
+  const root = repoRoot();
+  const entry = path.join(root, "services/api/dist/index.js");
+  try {
+    await fs.access(entry);
+  } catch {
+    throw new Error("services/api/dist/index.js is missing. Run `npm --workspace @throttleiq/api run build` first.");
+  }
+  const logs: string[] = [];
+  const env = buildShadowApiEnv(args);
   const child = spawn(process.execPath, ["--import", "./dist/domain/sentryInit.js", "dist/index.js"], {
     cwd: path.join(root, "services/api"),
     env,
