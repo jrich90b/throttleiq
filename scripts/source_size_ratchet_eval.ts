@@ -325,7 +325,12 @@ const CEILINGS: Ceiling[] = [
     // now asserts the text a rep reads instead of pinning the sweep's source), and dayKeyLocal moved
     // into domain/businessHoursGuard.ts beside the new closing-time helper that answers the same
     // kind of question.
-    max: 70_751,
+    // 70_751 -> 70_741. Budget-gated-on-financing handoff (Franklin +17164208660; Joe 8/10:
+    // "only finance can handle that info"). The slice funded itself: the short-list clarifier —
+    // whose budget "hint" is the six-word list that caused the miss — moved verbatim into
+    // domain/shortListClarifier.ts with the two model-context lookups injected, and the new
+    // handoff's copy + confidence floor sit beside their parser in domain/budgetFinancingDeferral.ts.
+    max: 70_741,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

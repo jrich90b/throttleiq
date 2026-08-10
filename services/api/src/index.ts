@@ -795,6 +795,7 @@ import {
   decideDealerLeadSurveyTurn,
   decideJumpstartInviteTurn,
   decideFinancePricingTurn,
+  decideBudgetGatedOnFinancingTurn,
   decideFinanceProcessQuestionTurn,
   decideServiceSchedulingHandoffTurn,
   decideFinanceHardshipTurn,
@@ -840,6 +841,8 @@ import {
   resolveRoutingParserDecision,
   shouldTreatInboundAsTestRideBikeSelection
 } from "./domain/routerV2.js";
+import { buildShortListClarifierReply as buildShortListClarifierReplyPure, buildVehicleChoiceAlternativesReply, type ShortListClarifier } from "./domain/shortListClarifier.js";
+import { budgetFinancingDeferralHint, budgetGatedOnFinancingConfidenceMin, buildBudgetGatedOnFinancingReply, parseBudgetFinancingDeferralWithLLM } from "./domain/budgetFinancingDeferral.js";
 import { closingTimeMsForInstant, dayKeyLocal, formatBusinessHoursForReply, formatPreferredTimeForReply, mayStateTokenAsWorkable, preferredDateTimeNotedTail, statablePreferredTimeText, statableTimeReply, type BusinessWeekHours } from "./domain/businessHoursGuard.js";
 import {
   resolveAcceptedVisitTimeOffer,
@@ -2472,63 +2475,13 @@ function resolveKnownModelContextForShortList(conv: any): string | null {
   return null;
 }
 
-function buildShortListClarifierReply(conv: any, inboundText: string): {
-  reply: string;
-  hasPreferenceHint: boolean;
-} {
+// Thin wrapper: the clarifier itself lives in domain/shortListClarifier.ts (its slot hints are
+// word lists, documented there); only the model-context lookups are index.ts-local.
+function buildShortListClarifierReply(conv: any, inboundText: string): ShortListClarifier {
   const text = String(inboundText ?? "").trim();
-  const hasStyleHint =
-    /\b(touring|bagger|cruiser|sport|sportster|adventure|pan america|trike|tri glide|freewheeler)\b/i.test(
-      text
-    ) ||
-    /\b(crotch\s*rocket|sport\s*bike)\b/i.test(text) ||
-    /\bsit\s+back\b/i.test(text) ||
-    /\b(relaxed|comfortable)\s+(ride|riding|bike)\b/i.test(text) ||
-    /\bopposite\b[\s\S]{0,24}\b(crotch\s*rocket|sport\s*bike)\b/i.test(text);
-  const hasConditionHint = /\b(new|used|pre[-\s]?owned|preowned|both)\b/i.test(text);
-  const hasBudgetHint =
-    /\$\s*\d|\bunder\b|\bover\b|\baround\b|\babout\b|\bmax(?:imum)?\b/i.test(text);
-  const modelFromInbound = findMentionedModel(text);
-  const knownModelContext = resolveKnownModelContextForShortList(conv);
-  const hasModelContext = !!(modelFromInbound || knownModelContext);
-  const needsFamily = !hasModelContext && !hasStyleHint;
-  const needsCondition = !hasConditionHint;
-  const needsBudget = !hasBudgetHint;
-  const hasPreferenceHint = hasStyleHint || hasConditionHint || hasBudgetHint || !!modelFromInbound;
-
-  if (needsFamily && needsCondition) {
-    return {
-      hasPreferenceHint,
-      reply:
-        "Perfect — happy to. Are you leaning Grand American Touring, Cruiser, Sport, Adventure Touring, or Trike? Also, do you want new, used, or both, and what budget should I target?"
-    };
-  }
-  if (needsFamily) {
-    return {
-      hasPreferenceHint,
-      reply: needsBudget
-        ? "Perfect — which family are you leaning toward (Grand American Touring, Cruiser, Sport, Adventure Touring, or Trike), and what budget should I target?"
-        : "Perfect — which family are you leaning toward (Grand American Touring, Cruiser, Sport, Adventure Touring, or Trike)?"
-    };
-  }
-  if (needsCondition) {
-    return {
-      hasPreferenceHint,
-      reply: "Perfect — do you want new, used, or both, and what budget should I target?"
-    };
-  }
-  if (needsBudget) {
-    return {
-      hasPreferenceHint,
-      reply: "Perfect — any budget range I should target before I pull the short list?"
-    };
-  }
-  return {
-    hasPreferenceHint,
-    reply: "Perfect — any must-have model or color before I pull the short list?"
-  };
+  const hasModelContext = !!(findMentionedModel(text) || resolveKnownModelContextForShortList(conv));
+  return buildShortListClarifierReplyPure(text, hasModelContext);
 }
-
 // Vehicle-choice confidence: confidence floor to offer alternatives (default 0.8 — a high
 // bar, because a false positive undercuts a buyer who already chose). Override-able for tuning.
 function vehicleChoiceConfidenceMin(): number {
@@ -2536,21 +2489,6 @@ function vehicleChoiceConfidenceMin(): number {
   return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.8;
 }
 
-// Reply for an "open_to_alternatives" turn. Reuses the short-list clarifier (our existing
-// recommendation funnel) so we never freehand inventory: acknowledge the bike they referenced
-// without undercutting it, offer to line up a couple of options to compare, then ask the one
-// narrowing question the clarifier already owns.
-function buildVehicleChoiceAlternativesReply(
-  conv: Conversation | null | undefined,
-  inboundText: string,
-  referencedLabel: string | null
-): string {
-  const clarifier = buildShortListClarifierReply(conv, inboundText);
-  const lead = referencedLabel
-    ? `Totally fair — the ${referencedLabel} is a strong pick, and I'm happy to line up a couple of other options to compare so you feel good about it. `
-    : `Totally fair — happy to line up a couple of other options to compare so you feel good about it. `;
-  return `${lead}${clarifier.reply}`;
-}
 
 // Shared by BOTH /webhooks/twilio and /conversations/:id/regenerate (route-parity law).
 // FAIL DIRECTION = stay silent: returns a reply ONLY when the customer is lukewarm about a
@@ -2594,7 +2532,7 @@ async function resolveVehicleChoiceAlternativesReply(
   if (decision.kind !== "offer_alternatives") return null;
   markPendingShortListPrompt(conv, "vehicle_choice_open_to_alternatives");
   const label = formatModelToken(referencedModel) || referencedModel;
-  return buildVehicleChoiceAlternativesReply(conv, text, label);
+  return buildVehicleChoiceAlternativesReply(buildShortListClarifierReply(conv, text), label);
 }
 
 // Vehicle recommendation: confidence floor to act on a "pick some for me" request (default 0.7).
@@ -3596,6 +3534,43 @@ function financeProcessQuestionHint(text: string): boolean {
 // question and routes to the business manager (safe handoff per AGENTS.md fallback policy).
 function buildFinanceProcessHandoffReply(): string {
   return "Good question — that's one our finance manager can answer exactly so you get it right. Let me loop them in and they'll reach out shortly.";
+}
+
+// Shared by BOTH /webhooks/twilio and /conversations/:id/regenerate (route-parity law). Returns
+// the handoff reply (and sets the payments handoff state + a manager todo + stops cadence) ONLY
+// when the customer has tied what they can spend to the financing; otherwise null, so today's
+// clarifier/finance handling runs unchanged. Mirrors resolveFinanceProcessHandoffReply.
+async function resolveBudgetGatedOnFinancingReply(
+  conv: Conversation | null | undefined,
+  inboundText: string,
+  providerMessageId: string | null | undefined,
+  scope: "live" | "regen"
+): Promise<string | null> {
+  const text = String(inboundText ?? "").trim();
+  if (!text || !conv) return null;
+  if (!budgetFinancingDeferralHint(text)) return null; // pre-filter; miss => existing behavior
+  const parse = await safeLlmParse("budget_financing_deferral_parser", () =>
+    parseBudgetFinancingDeferralWithLLM({ text, history: buildHistory(conv, 8) })
+  );
+  const decision = decideBudgetGatedOnFinancingTurn({
+    parserAccepted: !!parse,
+    intent: parse?.intent ?? null,
+    confidence: parse?.confidence ?? 0,
+    confidenceMin: budgetGatedOnFinancingConfidenceMin()
+  });
+  if (decision.kind !== "finance_handoff") return null;
+  addTodo(
+    conv,
+    "payments",
+    `Budget depends on the financing — for the business manager. Customer said: ${text}`,
+    providerMessageId ?? undefined
+  );
+  setDialogState(conv, "payments_handoff");
+  setFollowUpMode(conv, "manual_handoff", "budget_gated_on_financing");
+  stopFollowUpCadence(conv, "manual_handoff");
+  stopRelatedCadences(conv, "budget_gated_on_financing", { setMode: "manual_handoff" });
+  recordRouteOutcome(scope, "budget_gated_on_financing_handoff", { convId: conv.id, leadKey: conv.leadKey });
+  return buildBudgetGatedOnFinancingReply();
 }
 
 // Shared by BOTH /webhooks/twilio and /conversations/:id/regenerate (route-parity law). Returns
@@ -54758,6 +54733,17 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     /\b(want me to send|i can send|happy to send)\b[\s\S]{0,100}\b(short list|couple models?|list of bikes?|options that fit)\b/i.test(
       regenLastOutboundText
     );
+  // Before the short-list clarifier, which would otherwise re-ask the budget the customer just
+  // explained only finance can produce (Joe 8/10). NOT `regen*`-named: both paths call the one
+  // shared resolver, so this is not the hand-mirrored logic route-parity counts as drift.
+  {
+    const handoffReply = await resolveBudgetGatedOnFinancingReply(conv, event.body ?? "", (inbound as any)?.providerMessageId, "regen");
+    if (handoffReply) {
+      return channel === "email"
+        ? respondWithEmailRegeneratedDraft(handoffReply)
+        : respondWithSmsRegeneratedDraft(handoffReply);
+    }
+  }
   const regenShortListInboundText = String(event.body ?? "").trim();
   const regenShortListClarifier = buildShortListClarifierReply(conv, regenShortListInboundText);
   const regenIsAffirmative = (() => {
@@ -63285,6 +63271,10 @@ if (authToken && signature) {
   // relevance guard) so it FAILS toward silence and never preempts a more specific intent.
   // Same resolver runs in /conversations/:id/regenerate (route-parity law).
   if (event.provider === "twilio" && !parserPrecheckBlocksDeterministicShortcut) {
+    const budgetFinanceReply = await resolveBudgetGatedOnFinancingReply(conv, inboundText, event.providerMessageId, "live");
+    if (budgetFinanceReply) {
+      return publishLiveTwilioReply(budgetFinanceReply, { turnFinanceIntent: true, financeContextIntent: true });
+    }
     const vehicleChoiceReply = await resolveVehicleChoiceAlternativesReply(conv, inboundText, {
       concreteParsedActionThisTurn:
         inboundParserLocationQuestion ||

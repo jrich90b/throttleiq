@@ -26,6 +26,7 @@ export {
   decideBusinessManagerFinanceOutcomePrompt,
   decideHeldDraftRelease,
   isRealReplyProvider,
+  decideBudgetGatedOnFinancingTurn,
   decideFinanceProcessQuestionTurn,
   decideServiceSchedulingHandoffTurn,
   decideFinanceHardshipTurn,
