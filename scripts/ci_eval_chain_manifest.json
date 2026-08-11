@@ -67,6 +67,7 @@
     "advance_goal_no_repeat:eval",
     "walkin_soft_timing_ask:eval",
     "room58_ask_them_in:eval",
+    "price_deferral_says_why:eval",
     "finance_rate_policy:eval",
     "finance_declined_long_term_cadence:eval",
     "business_manager_finance_prompt:eval",
