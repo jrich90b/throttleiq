@@ -35,7 +35,7 @@ import {
 import { findComputerLikePhrases, bannedPhraseAvoidanceInstruction } from "./voiceBannedPhrases.js";
 import {
   INBOUND_REPLY_ACTION_PARSER_JSON_SCHEMA,
-  INBOUND_REPLY_ACTION_EXAMPLES
+  INBOUND_REPLY_ACTION_EXAMPLES, INBOUND_REPLY_ACTION_VISIT_NOT_POSSIBLE_RULES
 } from "./inboundReplyActionPrompt.js";
 import {
   ROUTING_DECISION_PARSER_JSON_SCHEMA,
@@ -3024,6 +3024,7 @@ export type InboundReplyActionParse = {
   // obligation and has NOT withdrawn — an OPEN scheduling negotiation, never a closeout.
   // Carried as a slot so it can co-occur with whichever action owns the turn.
   schedulingConflictOpen?: boolean;
+  visitNotPossible?: boolean;
   confidence?: number;
 };
 
@@ -11601,6 +11602,7 @@ export async function parseInboundReplyActionWithLLM(args: {
     "- scheduling_conflict_open = false when there was no recent scheduling ask from us to be in conflict WITH.",
     "- Judge this from the conversation, not from keywords: health words do NOT by themselves make it true, and their absence does NOT make it false.",
     "",
+    ...INBOUND_REPLY_ACTION_VISIT_NOT_POSSIBLE_RULES,
     "Priority rules:",
     "- Latest explicit ask wins. A dealership address/location question outranks reminder, schedule, or watch context.",
     "- If the same turn asks where this/that/the bike is located plus pricing or cost, choose dealer_location_question and leave pricing as follow-up context.",
@@ -11666,10 +11668,7 @@ export async function parseInboundReplyActionWithLLM(args: {
   ) {
     action = actionRaw;
   }
-  const confidence =
-    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
-      ? Math.max(0, Math.min(1, parsed.confidence))
-      : undefined;
+  const confidence = typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence) ? Math.max(0, Math.min(1, parsed.confidence)) : undefined;
 
   return {
     action,
@@ -11678,6 +11677,7 @@ export async function parseInboundReplyActionWithLLM(args: {
     normalizedText: cleanOptionalString(parsed.normalized_text),
     reason: cleanOptionalString(parsed.reason),
     schedulingConflictOpen: !!parsed.scheduling_conflict_open,
+    visitNotPossible: !!parsed.visit_not_possible,
     confidence
   };
 }

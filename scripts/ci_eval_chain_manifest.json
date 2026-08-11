@@ -63,6 +63,7 @@
     "customer_ack_action:eval",
     "inbound_reply_action:eval",
     "finance_pricing_turn_decision:eval",
+    "prequal_stage_ladder:eval",
     "finance_rate_policy:eval",
     "finance_declined_long_term_cadence:eval",
     "business_manager_finance_prompt:eval",

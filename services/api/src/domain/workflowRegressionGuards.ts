@@ -928,6 +928,8 @@ export function buildVisitAdvanceQuestion(): string {
 export type FinanceSubmissionAckArgs = {
   /** A pre-qualification submission reads differently from a submitted credit application. */
   kind: "prequal" | "credit_app";
+  /** Prequal only: the stage ladder's line, which replaces the generic advancing question. */
+  stageAsk?: string | null;
   /** Has the customer received anything from us yet? Drives BOTH the wording and the intro. */
   introduce: boolean;
   firstName?: string | null;
@@ -971,6 +973,12 @@ export function buildFinanceSubmissionAck(args: FinanceSubmissionAckArgs): strin
           ? `Thanks ${firstName} — we just received your online credit application. Our finance team will reach out ${args.when} to go over options.`
           : `Thanks — we just received your online credit application. Our finance team will reach out ${args.when} to go over options.`;
   if (advanceEveryReplySuppressed(args.suppression ?? {})) return `${intro}${body}`;
+  // A PREQUAL lead gets its stage from the ladder (Joe, 2026-08-11): which bike, then the budget,
+  // then the visit, then the application. `stageAsk` is that line, already decided and recorded by
+  // applyPrequalStageReply. Credit-application leads keep the original question — Joe's directive
+  // was about pre-qualification, and there are only 3 credit apps in 90 days to reason from.
+  const stageAsk = String(args.stageAsk ?? "").trim();
+  if (stageAsk) return `${intro}${body} ${stageAsk}`;
   return `${intro}${body} ${buildFinanceAckAdvancingQuestion(args.bikeLabel)}`;
 }
 
@@ -2425,4 +2433,74 @@ export function buildExternalDealerApprovalTransferReply(
     return `${base} I can send you the link to complete our store application.`;
   }
   return `${base}\n\n${url}`;
+}
+
+// ---------------------------------------------------------------------------
+// PRE-QUALIFICATION STAGE LADDER — the copy (Joe, 2026-08-11). The DECISION is
+// decidePrequalTurn in routeStateReducer.ts; this file only says the words.
+//
+// Deterministic, not LLM-composed, for the same reason the finance ack is: the credit-application
+// line carries a customer-facing URL, and a link the model invents is a link that 404s. The two
+// qualifying questions are deterministic to keep all four stages in one readable place.
+//
+// Every one is a CHOICE OF TWO where a choice is fair. Joe, 2026-08-07: an either/or is easier to
+// answer from a phone than an open question, and every answer qualifies the lead further.
+// ---------------------------------------------------------------------------
+
+/** Stage 1 — only ever reached when the lead's bike is missing or a catch-all (isPlaceholderModel). */
+export function buildPrequalBikeAsk(): string {
+  return "To get you the right numbers — which bike are you looking at?";
+}
+
+/**
+ * Stage 2 — the gap the measurement found: budget captured on ZERO of 27 prequal leads in 90 days.
+ *
+ * Asks for a MONTHLY payment, not a purchase price. That is the number a pre-qualified buyer
+ * actually has in mind, it is the one `paymentBudgetContext` already stores, and it does not require
+ * the customer to know what anything costs. It names no figure of our own — quoting money is not
+ * this ladder's job.
+ */
+export function buildPrequalBudgetAsk(bikeLabelRaw?: string | null): string {
+  const bike = String(bikeLabelRaw ?? "").trim();
+  const on = bike && !isPlaceholderModel(bike) ? ` on the ${bike}` : "";
+  return `Do you have a monthly payment in mind${on}, or would it help to see what a few options look like?`;
+}
+
+/** Stage 3 — the appointment try. A visit is the goal; give one concrete shape to say yes to. */
+export function buildPrequalVisitAsk(): string {
+  return "Want to come take a look this week, or is the weekend easier?";
+}
+
+/**
+ * Stage 4 — the fallback, and the only one that is not a question.
+ *
+ * Reached when the customer told us coming in is not their path, or after two invitations with no
+ * booking. It hands them the dealer's real application and keeps the door open without pushing.
+ * Returns null when there is no real URL: we never fabricate a link, and the caller falls back to
+ * inviting them in (decidePrequalTurn already prefers offer_visit in that case).
+ */
+export function buildPrequalCreditAppLine(creditAppUrlRaw?: string | null): string | null {
+  const url = String(creditAppUrlRaw ?? "").trim();
+  if (!/^https?:\/\//i.test(url)) return null;
+  return `No problem — you can get pre-approved right from your phone here: ${url}. Once it's in, I'll follow up with what you qualify for.`;
+}
+
+/** The copy for a stage. `null` means "this stage has nothing to say" and the caller leaves the draft alone. */
+export function buildPrequalStageLine(args: {
+  stage: string;
+  bikeLabel?: string | null;
+  creditAppUrl?: string | null;
+}): string | null {
+  switch (args.stage) {
+    case "ask_bike":
+      return buildPrequalBikeAsk();
+    case "ask_budget":
+      return buildPrequalBudgetAsk(args.bikeLabel);
+    case "offer_visit":
+      return buildPrequalVisitAsk();
+    case "send_credit_app":
+      return buildPrequalCreditAppLine(args.creditAppUrl);
+    default:
+      return null;
+  }
 }

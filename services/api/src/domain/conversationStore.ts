@@ -87,8 +87,12 @@ import {
   type AppointmentTeardownCause,
   type ManualCadenceRestartContext,
   type ManualCadenceRestartDecision,
-  type SoldCloseoutDecision
+  type SoldCloseoutDecision,
+  decidePrequalTurn
 } from "./routeStateReducer.js";
+import { buildPrequalStageLine } from "./workflowRegressionGuards.js";
+import { advanceEveryReplySuppressed } from "./draftChannelRules.js";
+import { isPlaceholderModel } from "./modelDeflection.js";
 import { fileURLToPath } from "node:url";
 import { dataPath } from "./dataDir.js";
 import {
@@ -1161,6 +1165,17 @@ export type Conversation = {
     monthlyBudget?: number | null;
     termMonths?: number | null;
     downPayment?: number | null;
+    updatedAt?: string;
+  };
+  // Where a pre-qualification lead has got to on its stage ladder (Joe, 2026-08-11): discover the
+  // bike, discover the budget, try to book, and if that fails send the credit application. Only the
+  // two facts the ladder cannot derive from existing state live here — how many times we have
+  // invited them in, and whether the application has already gone out. Written ONLY through
+  // applyPrequalFlow, which asks decidePrequalTurn; never set these inline.
+  prequalFlow?: {
+    visitOffersMade?: number;
+    creditAppSentAt?: string | null;
+    lastStage?: string | null;
     updatedAt?: string;
   };
   compareContext?: {
@@ -8609,4 +8624,59 @@ export function applyInventoryWatchListNormalization(
         ? [conv.inventoryWatch]
         : [];
   return { watches, decision };
+}
+
+/**
+ * PRE-QUALIFICATION STAGE LADDER — the one writer (Joe, 2026-08-11).
+ *
+ * Asks `decidePrequalTurn` (routeStateReducer) what this turn is for, returns the line to say, and
+ * records the only two facts the ladder cannot re-derive: how many times we have invited this lead
+ * in, and whether the credit application has gone out. Both reply paths call THIS, so they cannot
+ * drift apart, and nothing anywhere else writes `conv.prequalFlow`.
+ *
+ * Returns "" when the ladder has nothing to add, which is every non-prequal turn and every
+ * suppressed, booked or already-sent one.
+ */
+export function applyPrequalStageReply(
+  conv: Conversation,
+  input: {
+    isPrequalLead: boolean;
+    /** The SAME shape both ack call sites already build; judged by the shared suppression referee. */
+    suppression?: { needsEmpathy?: boolean | null; dispositionClosing?: boolean | null; alreadyPurchased?: boolean | null; appointment?: any };
+    visitNotPossible?: boolean;
+    creditAppUrl?: string | null;
+    nowIso?: string;
+  }
+): string {
+  const bikeLabel = String(
+    (conv.lead as any)?.vehicle?.model ?? (conv.lead as any)?.vehicle?.description ?? ""
+  ).trim();
+  const budget = conv.paymentBudgetContext;
+  const creditAppUrl = String(input.creditAppUrl ?? "").trim();
+  const decision = decidePrequalTurn({
+    isPrequalLead: input.isPrequalLead,
+    suppressed: advanceEveryReplySuppressed(input.suppression ?? {}),
+    appointmentBooked: !!(conv.appointment?.whenIso || (conv.appointment as any)?.whenText),
+    // "Unknown" means missing OR a catch-all like "Harley-Davidson Full Line" — 19 of 27 measured
+    // prequal leads DO name a real bike and must never be asked which one they meant.
+    bikeUnknown: !bikeLabel || isPlaceholderModel(bikeLabel),
+    budgetKnown: !!(budget?.monthlyBudget || budget?.downPayment),
+    visitOffersMade: Number(conv.prequalFlow?.visitOffersMade ?? 0),
+    visitNotPossible: !!input.visitNotPossible,
+    creditAppSentAt: conv.prequalFlow?.creditAppSentAt ?? null,
+    creditAppAvailable: /^https?:\/\//i.test(creditAppUrl)
+  });
+  const line = buildPrequalStageLine({ stage: decision.stage, bikeLabel, creditAppUrl });
+  if (!line) return "";
+
+  const now = input.nowIso ?? new Date().toISOString();
+  const flow = conv.prequalFlow ?? {};
+  // Count the invitation only when one is actually going out, or "we tried twice" would be a lie.
+  if (decision.stage === "offer_visit") flow.visitOffersMade = Number(flow.visitOffersMade ?? 0) + 1;
+  // Stamped the moment it is composed, so a retry or a second path can never send a second one.
+  if (decision.stage === "send_credit_app") flow.creditAppSentAt = now;
+  flow.lastStage = decision.stage;
+  flow.updatedAt = now;
+  conv.prequalFlow = flow;
+  return line;
 }

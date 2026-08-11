@@ -1031,6 +1031,7 @@ import {
   isImplausibleAppointmentDueAt,
   startFollowUpCadence,
   applyCadenceQuietWindow,
+  applyPrequalStageReply,
   applyCadenceRevival,
   applyCadenceReplacement,
   applyAppointmentAttribution,
@@ -57353,9 +57354,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       latestInboundBeforeDraft?.provider === "sendgrid_adf" &&
       (/source:\s*marketplace\s*-\s*prequal/.test(latestInboundBodyLower) ||
         /\bprequal\b|\bpre-qual\b/.test(latestInboundBodyLower));
-    const asksIfInventoryIsAllOnline = isInventoryOnlineCompletenessQuestionText(
-      latestInboundBeforeDraft?.body ?? event.body ?? ""
-    );
+    const asksIfInventoryIsAllOnline = isInventoryOnlineCompletenessQuestionText(latestInboundBeforeDraft?.body ?? event.body ?? "");
     // Hours-aware timing, mirroring the live ADF path (routes/sendgridInbound.ts) so regenerating a
     // credit-app ack can't re-introduce an after-hours "shortly" the live path already avoids.
     const financeFollowUpWhen = await resolveStaffFollowUpTimingPhrase();
@@ -57367,7 +57366,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       when: financeFollowUpWhen,
       intro: hasPriorOutbound ? "" : buildAgentIntro(firstName, agentName, dealerName),
       bikeLabel: conv.lead?.vehicle?.model ?? null,
-      suppression: { appointment: conv.appointment, alreadyPurchased: !!conv.sale }
+      suppression: { appointment: conv.appointment, alreadyPurchased: !!conv.sale },
+      stageAsk: applyPrequalStageReply(conv, { isPrequalLead: latestInboundIsPrequalAdf, creditAppUrl: (await getDealerProfileHot())?.creditAppUrl, suppression: { appointment: conv.appointment, alreadyPurchased: !!conv.sale } })
     });
     if (asksIfInventoryIsAllOnline) {
       reply = `${reply} ${buildInventoryOnlineCompletenessReply()}`;
