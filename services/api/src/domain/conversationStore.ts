@@ -90,7 +90,7 @@ import {
   type SoldCloseoutDecision,
   decidePrequalTurn
 } from "./routeStateReducer.js";
-import { buildPrequalStageLine } from "./workflowRegressionGuards.js";
+import { buildPrequalStageLine, readPrequalSubmissionResult } from "./workflowRegressionGuards.js";
 import { advanceEveryReplySuppressed } from "./draftChannelRules.js";
 import { isPlaceholderModel } from "./modelDeflection.js";
 import { fileURLToPath } from "node:url";
@@ -8653,6 +8653,8 @@ export function applyPrequalStageReply(
   ).trim();
   const budget = conv.paymentBudgetContext;
   const creditAppUrl = String(input.creditAppUrl ?? "").trim();
+  // The lender's own verdict, off the ADF form. `unknown` on 22 of 42 leads, and it changes nothing.
+  const prequalResult = readPrequalSubmissionResult((conv.lead as any)?.inquiry);
   const decision = decidePrequalTurn({
     isPrequalLead: input.isPrequalLead,
     suppressed: advanceEveryReplySuppressed(input.suppression ?? {}),
@@ -8664,9 +8666,10 @@ export function applyPrequalStageReply(
     visitOffersMade: Number(conv.prequalFlow?.visitOffersMade ?? 0),
     visitNotPossible: !!input.visitNotPossible,
     creditAppSentAt: conv.prequalFlow?.creditAppSentAt ?? null,
-    creditAppAvailable: /^https?:\/\//i.test(creditAppUrl)
+    creditAppAvailable: /^https?:\/\//i.test(creditAppUrl),
+    prequalResult
   });
-  const line = buildPrequalStageLine({ stage: decision.stage, bikeLabel, creditAppUrl });
+  const line = buildPrequalStageLine({ stage: decision.stage, bikeLabel, creditAppUrl, prequalResult });
   if (!line) return "";
 
   const now = input.nowIso ?? new Date().toISOString();
