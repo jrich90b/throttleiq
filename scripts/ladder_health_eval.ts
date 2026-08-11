@@ -20,11 +20,21 @@ import assert from "node:assert/strict";
 const NOW = Date.parse("2026-08-11T12:00:00.000Z");
 const daysAgo = (n: number) => new Date(NOW - n * 24 * 60 * 60 * 1000).toISOString();
 
-/** A lead with a first outbound, optionally asking, optionally replied to, optionally booked. */
-const lead = (source: string, ageDays: number, opts: { asks?: boolean; replied?: boolean; booked?: boolean } = {}) => ({
+/**
+ * A lead with a first outbound, optionally asking, optionally replied to, optionally booked.
+ *
+ * CONTACTABLE BY DEFAULT, because every real lane but one is: measured 2026-08-11, every lane in the
+ * 30-day window ran ~100% reachable except AutoDealers.Digital, at 0 of 18. Pass `unreachable: true`
+ * for that shape.
+ */
+const lead = (
+  source: string,
+  ageDays: number,
+  opts: { asks?: boolean; replied?: boolean; booked?: boolean; unreachable?: boolean } = {}
+) => ({
   id: `c_${source}_${ageDays}_${Math.random()}`,
   createdAt: daysAgo(ageDays),
-  lead: { source },
+  lead: opts.unreachable ? { source } : { source, phone: "+17165550101" },
   appointment: opts.booked ? { status: "confirmed", whenIso: daysAgo(-3) } : undefined,
   messages: [
     { direction: "out", at: daysAgo(ageDays), body: opts.asks ? "Thanks — want to stop in and check it out?" : "Thanks, I'll be in touch." },
@@ -65,10 +75,38 @@ async function main(): Promise<void> {
   ];
   assert.equal(assessLadderHealth({ conversations: healthy, now: NOW }).alarms.length, 0, "a healthy lane is silent");
 
-  // --- A LANE THAT NEVER HAD A LADDER (the AutoDealers.Digital shape) ----------------------------
+  // --- A LANE THAT NEVER HAD A LADDER -----------------------------------------------------------
+  // Reachable leads that nobody asked anything => write the copy.
   const never = Array.from({ length: 12 }, (_, i) => lead("Lane C", 3 + i * 2, { asks: false }));
   const laneC = assessLadderHealth({ conversations: never, now: NOW }).lanes.find(l => l.source === "Lane C")!;
   assert.equal(laneC.alarm, "never_asks", "a lane that has never asked anything must alarm");
+  assert.equal(laneC.recent.contactable, 12, "…and every one of those leads WAS reachable");
+
+  // --- A LANE WITH NOBODY TO REACH (the real AutoDealers.Digital shape) -------------------------
+  // MEASURED 2026-08-11: 18 of 18 recent AutoDealers.Digital leads carried no phone and no email —
+  // the ADF is a name, a stock number and "Inquiry: Lead arrived". Reported as `never_asks` it sent a
+  // run hunting for missing copy; no wording reaches someone with no address. Separate alarm, because
+  // the fix is in the vendor feed, not in our templates.
+  const unreachable = Array.from({ length: 12 }, (_, i) => lead("Lane F", 3 + i * 2, { asks: false, unreachable: true }));
+  const laneF = assessLadderHealth({ conversations: unreachable, now: NOW }).lanes.find(l => l.source === "Lane F")!;
+  assert.equal(laneF.alarm, "uncontactable", "a lane whose leads carry no phone and no email is a FEED defect");
+  assert.equal(laneF.recent.contactable, 0, "…and the reach count proves it");
+  assert.ok(/phone or an email/i.test(laneF.why), "…and the reason names the real cause in words");
+  assert.ok(/feed defect/i.test(laneF.why), "…and points at the feed, not at our copy");
+  // It still ALARMS — an unreachable lane is a real problem, not something to quiet.
+  assert.equal(
+    assessLadderHealth({ conversations: unreachable, now: NOW }).alarms.length,
+    1,
+    "uncontactable is a LOUDER diagnosis, not a suppression"
+  );
+  // FAIL DIRECTION: one reachable lead is enough to fall back to today's `never_asks` diagnosis, so a
+  // lane we simply have not written copy for can never hide behind the contact excuse.
+  const oneReachable = [
+    ...Array.from({ length: 11 }, (_, i) => lead("Lane G", 3 + i * 2, { asks: false, unreachable: true })),
+    lead("Lane G", 4, { asks: false })
+  ];
+  const laneG = assessLadderHealth({ conversations: oneReachable, now: NOW }).lanes.find(l => l.source === "Lane G")!;
+  assert.equal(laneG.alarm, "never_asks", "a single reachable lead falls back to the missing-ladder diagnosis");
 
   // --- SMALL LANES NEVER ALARM ------------------------------------------------------------------
   // MEASURED PRECEDENT: the canary's ratio rule tripped on a healthy build off ~2 drafts. Most lanes
@@ -107,9 +145,15 @@ async function main(): Promise<void> {
   ];
   const laneE = assessLadderHealth({ conversations: mixed, now: NOW }).lanes.find(l => l.source === "Lane E")!;
   assert.deepEqual(
-    { leads: laneE.recent.leads, asked: laneE.recent.asked, replied: laneE.recent.replied, booked: laneE.recent.booked },
-    { leads: 3, asked: 2, replied: 2, booked: 1 },
-    "leads / asked / replied / booked are all counted"
+    {
+      leads: laneE.recent.leads,
+      asked: laneE.recent.asked,
+      replied: laneE.recent.replied,
+      booked: laneE.recent.booked,
+      contactable: laneE.recent.contactable
+    },
+    { leads: 3, asked: 2, replied: 2, booked: 1, contactable: 3 },
+    "leads / reach / asked / replied / booked are all counted"
   );
 
   // --- a lead with no source still gets counted, never dropped ----------------------------------
