@@ -171,12 +171,27 @@ function buildNoRepeatRule(askedAlready?: string[] | null): string {
 
 function advanceGoalBlock(goal: string): string {
   return `- THIS LEAD HAS A GOAL: ${goal}
-- ANSWER WHAT THEY ACTUALLY SAID FIRST — always, even when it has nothing to do with that goal. If
-  they asked something, answer it. If they told you something, acknowledge it. THEN let your one
-  question move toward the goal. A customer who gets their question ignored twice stops replying, and
-  no goal survives that.
 - If what they said makes the goal impossible or wrong for them, drop the goal for this turn and just
   be useful. Getting back on track is worth one turn of patience.`;
+}
+
+/**
+ * ANSWER THEM FIRST — unconditional, every SMS reply (Joe, 2026-08-11: *"if the customer responds
+ * with questions the agent needs to know how to handle this in the ladder"*).
+ *
+ * This started life inside `advanceGoalBlock`, so it only reached lanes that happened to carry a
+ * goal. That was backwards: answering the customer is not a property of having a goal. Every lane
+ * that asks them in — which since 8/11 is Room58, walk-ins and the finance lanes — can get a QUESTION
+ * back, and the reply must deal with it.
+ *
+ * It sits immediately before the goal (when there is one) so it reads as the binding instruction, for
+ * the measured reason a caveat placed UNDER a strong imperative loses to it 3 times out of 3.
+ */
+function answerThemFirstRule(): string {
+  return `- ANSWER WHAT THEY ACTUALLY SAID FIRST — always, even when it has nothing to do with where you are
+  trying to get them. If they asked something, answer it; if you do not have the answer, say so plainly
+  and say when you will. If they told you something, acknowledge it. THEN ask your one question. A
+  customer whose question gets ignored twice stops replying, and no plan survives that.`;
 }
 
 export function buildChannelRules(
@@ -222,6 +237,7 @@ ${
   being handed to a person, already has an appointment booked (confirm it instead), gave a specific
   later date to follow up, or disclosed a hardship. Answer warmly and stop — pushing there costs the
   lead. One question. Never two.
+${answerThemFirstRule()}
 ${String(ctx.advanceGoal ?? "").trim() ? `${advanceGoalBlock(String(ctx.advanceGoal).trim())}` : ""}`
     : `- BE BRIEF. Default to 1–2 short sentences; 3 only if truly needed. Answer ONLY what the customer
   asked THIS turn — do not pile on extra options, facts, offers, or multiple questions they didn't
