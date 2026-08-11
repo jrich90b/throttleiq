@@ -60,6 +60,21 @@ export function customerVisitConfirmed(conv: any): boolean {
  * assert "thanks again for coming in" on ~49 live leads — expansion in the unsafe direction, which
  * needs its own slice and its own canary. Pure.
  */
+/**
+ * ⭐ WHY THIS EXISTS RATHER THAN A WIDER `customerVisitConfirmed` (ruling 31, 2026-08-06, upheld
+ * 2026-08-11). Widening the shared predicate was MEASURED at **49 live leads** flipping false→true,
+ * newly asserting "thanks again for coming in" across FOUR draft builders — unsafe, and still is.
+ *
+ * On 2026-08-11 Joe supplied the fact that ruling was missing: **"Dealer lead app are walk ins."**
+ * So a Dealer Lead App lead carrying the salesperson's own `Demo Bikes Ridden` really has been in,
+ * and the walk-in first-touch builder composes THIS narrow predicate with the shared one instead of
+ * widening the shared one. Measured on the live store: 49 of 66 name a real bike, 2 say "None
+ * recorded", 15 have no field — and 17 name a DIFFERENT bike than the interest model, which is what
+ * proves the field is curated by a person rather than echoing the lead.
+ *
+ * It reads the lead comment and INBOUND messages ONLY. Our own outbound must never become the
+ * evidence, or the agent can talk itself into a visit that never happened.
+ */
 export function dealerRecordedDemoRide(conv: any): boolean {
   const msgs = Array.isArray(conv?.messages) ? conv.messages : [];
   const text = [
@@ -117,4 +132,28 @@ export function stripPhantomVisitFraming(text: string, conv: any): string {
   // Fabricated purchase congrats ("congrats on the/your/getting <X>.") — no confirmed sale → drop it.
   out = out.replace(/\bcongrat(?:s|ulations)?\b[^.!?]*\bon\b[^.!?]*[.!?]\s*/gi, "");
   return out.replace(/\s{2,}/g, " ").replace(/\s+([.!?])/g, "$1").trim();
+}
+
+/**
+ * The walk-in first touch's closing ask (Joe, 2026-08-11: *"The first message should be a little more
+ * loose with timing. It should say something like want to set up a time to stop in and check it out?
+ * Then continue the ladder from there."*).
+ *
+ * SOFT ON PURPOSE — no day, no clock time. The concrete slot comes on their reply, where the
+ * scheduling flow already owns it. Measured reason it must be soft: of 66 Dealer Lead App leads only
+ * **6** said they were buying inside 3 months, **15** said "Not Sure" and **8** said no. A hard
+ * "Saturday at 4:30?" is the wrong push for most of this lane.
+ *
+ * `alreadyVisited` changes the WORDS, not the pressure: 49 of those 66 already rode a bike here, and
+ * inviting someone to "come check it out" after they rode it reads as if we were not paying
+ * attention. They get "stop BACK in" instead.
+ *
+ * Replaces the old passive endings ("if any questions come up, just text me anytime"), which were
+ * measured asking nothing on 35 of 37 first touches in this lane.
+ */
+export function buildWalkInSoftTimingAsk(alreadyVisited: boolean, inStock: boolean): string {
+  if (alreadyVisited) return " Want to set up a time to stop back in and go over it?";
+  return inStock
+    ? " It's in stock — want to set up a time to stop in and check it out?"
+    : " Want to set up a time to stop in and check it out?";
 }
