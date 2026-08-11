@@ -12,10 +12,10 @@ import { fileURLToPath } from "node:url";
 import OpenAI from "openai";
 import type { Conversation } from "./conversationStore.js";
 import { dataPath } from "./dataDir.js";
-import { buildSelfHealSteering } from "./selfHealSteering.js";
+import { buildSelfHealSteering, deterministicHealTriggers, stillTriggered } from "./selfHealSteering.js";
 import { buildChannelRules, advanceEveryReplyEnabled, advanceEveryReplySuppressed } from "./draftChannelRules.js";
 export { advanceEveryReplyEnabled, advanceEveryReplySuppressed };
-import { isFabricatedGratitudeLeadIn, isEchoedInboundOpening } from "./leadInGuards.js";
+import { isFabricatedGratitudeLeadIn } from "./leadInGuards.js";
 import { CUSTOMER_ACK_ACTION_EXEMPLARS } from "./customerAckActionExemplars.js";
 import { buildVehicleChoiceConfidencePrompt } from "./vehicleChoiceConfidencePrompt.js";
 import { customerVisitConfirmed, phantomVisitGuardEnabled, stripPhantomVisitFraming } from "./visitFraming.js";
@@ -356,6 +356,7 @@ export type DraftContext = {
   // Why each, with the measured over-fire, is in advanceEveryReplySuppressed.
   dispositionClosing?: boolean | null;
   alreadyPurchased?: boolean | null;
+  advanceGoal?: string | null;
 
   // Inventory verification inputs (optional)
   stockId?: string | null;
@@ -15560,15 +15561,15 @@ export async function selfHealDraftWithLLM(args: {
     const conf1 = typeof v1?.confidence === "number" ? v1.confidence : 0;
     // Deterministic echo trigger (2026-07-27): the LLM judge misses the "parrots the customer's words
     // back" class, so catch it here — an echoed opening forces the re-draft even if the judge passed it.
-    const echoesInbound = isEchoedInboundOpening(original, inbound);
-    if (!echoesInbound && (!v1 || v1.overall === "good" || conf1 < 0.8)) {
+    const triggers = deterministicHealTriggers({ draft: original, inbound, history: args.ctx.history });
+    if (!triggers.any && (!v1 || v1.overall === "good" || conf1 < 0.8)) {
       // Draft is good/unsure — cache the verdict so the publish gate reuses it (no second judge call).
       cacheSelfHealVerdict(inbound, original, v1);
       return { draft: original, healed: false, outcome: "passed" };
     }
     // The PATCH: regenerate with steering so the re-draft fixes what was wrong. An echoed opening gets
     // an explicit anti-parrot instruction (it dominates, since the judge often rates the echo "good").
-    const steering = buildSelfHealSteering({ original, judgeSteering: String(v1?.steering || v1?.reason || ""), echoesInbound });
+    const steering = buildSelfHealSteering({ original, judgeSteering: String(v1?.steering || v1?.reason || ""), echoesInbound: triggers.echoesInbound, repeatsOwnQuestion: triggers.repeatsOwnQuestion });
     const steered = String((await generateDraftWithLLM({ ...args.ctx, steering })) ?? "").trim();
     if (!steered || steered === original.trim()) {
       cacheSelfHealVerdict(inbound, original, v1); // returned draft is the bad original → gate reuses v1 to hold
@@ -15581,9 +15582,8 @@ export async function selfHealDraftWithLLM(args: {
       cacheSelfHealVerdict(inbound, original, v1);
       return { draft: original, healed: false, outcome: "still_failing" };
     }
-    // If the trigger was an echoed opening, the re-draft only counts as healed when it NO LONGER echoes
-    // (a judge-"good" re-roll that still parrots the customer isn't a fix).
-    if (echoesInbound && isEchoedInboundOpening(steered, inbound)) {
+    // A re-draft only counts as healed when what FIRED is actually gone (see stillTriggered).
+    if (stillTriggered(triggers, { draft: steered, inbound, history: args.ctx.history })) {
       cacheSelfHealVerdict(inbound, original, v1);
       return { draft: original, healed: false, outcome: "still_failing" };
     }

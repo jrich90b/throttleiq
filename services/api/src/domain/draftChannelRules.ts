@@ -1,3 +1,4 @@
+import { extractAskedQuestions } from "./leadInGuards.js";
 import type { DraftContext } from "./llmDraft.js";
 
 /**
@@ -130,7 +131,65 @@ export function templateAdvanceTail(args: {
  * changes every time we learn something about voice can grow on its own budget — the same move as
  * customerAckActionExemplars.ts and vehicleChoiceConfidencePrompt.ts.
  */
-export function buildChannelRules(ctx: Pick<DraftContext, "channel" | "needsEmpathy" | "dispositionClosing" | "appointment">): string {
+/**
+ * The GOAL for this turn's question, when a lane has one, in the composer's own words.
+ *
+ * Joe, 2026-08-11, on the pre-qualification ladder reaching follow-up turns: *"If the customer goes
+ * off track and asks or says something unpredictable, will it ask the question needed to get back on
+ * track?"* — so the goal is deliberately written as a SUBORDINATE clause to answering them.
+ *
+ * The measured reason it is phrased that way: a caveat placed under a strong imperative loses to it
+ * 3 times out of 3 (advanceEveryReplySuppressed's own history — a grieving customer was offered a
+ * follow-up pause). So "answer what they said" cannot be the caveat; it has to be the instruction,
+ * with the goal riding along inside it. A goal that steamrolls the customer's actual question is a
+ * worse agent than one with no goal at all.
+ */
+/**
+ * Never ask the same question twice in the same words (Joe, 2026-08-11).
+ *
+ * MEASURED that day: of 743 conversations touched in 45 days, **60 (8%) contain a verbatim repeated
+ * question** — 128 repeat-askings. Now that every reply ends with a question, a customer who does not
+ * answer one gets it back at them identically, which is the single clearest tell that nobody is
+ * really there.
+ *
+ * The prompt rule is the FIRST line of defence and the cheap one. The second is deterministic and
+ * lives in the self-heal loop (`isRepeatedOutboundQuestion`), because a prompt rule alone is a
+ * request, not a guarantee — the same reason the four suppressions are in code.
+ *
+ * Re-asking is ENCOURAGED; repeating is not. If they dodged the question, ask it a different way.
+ */
+function buildNoRepeatRule(askedAlready?: string[] | null): string {
+  const asked = (askedAlready ?? []).map(q => String(q ?? "").trim()).filter(Boolean).slice(-4);
+  const base = `- NEVER ask a question you have already asked in this thread using the same words. If they did not
+  answer it, ask it a DIFFERENT way — shorter, or from another angle, or by offering a choice of two.
+  Re-asking is fine and often right; sounding like a recording is not.`;
+  if (!asked.length) return base;
+  return `${base}
+- You have already asked, word for word: ${asked.map(q => `"${q}"`).join(" / ")}. Do not send any of
+  those sentences again.`;
+}
+
+function advanceGoalBlock(goal: string): string {
+  return `- THIS LEAD HAS A GOAL: ${goal}
+- ANSWER WHAT THEY ACTUALLY SAID FIRST — always, even when it has nothing to do with that goal. If
+  they asked something, answer it. If they told you something, acknowledge it. THEN let your one
+  question move toward the goal. A customer who gets their question ignored twice stops replying, and
+  no goal survives that.
+- If what they said makes the goal impossible or wrong for them, drop the goal for this turn and just
+  be useful. Getting back on track is worth one turn of patience.`;
+}
+
+export function buildChannelRules(
+  ctx: Pick<DraftContext, "channel" | "needsEmpathy" | "dispositionClosing" | "appointment"> & {
+    advanceGoal?: string | null;
+    history?: { direction: "in" | "out"; body: string }[];
+  }
+): string {
+  // Derived HERE, not at the call site: llmDraft.ts is at its source_size_ratchet ceiling and this
+  // module is not, which is exactly what this module exists for.
+  const askedAlready = extractAskedQuestions(
+    (ctx.history ?? []).filter(h => h.direction === "out").map(h => h.body).join(" ")
+  );
   const isEmail = ctx.channel === "email";
   const channelRules = isEmail
     ? `
@@ -162,13 +221,15 @@ ${
 - DO NOT ask anything when the customer is closing the thread, said they are not interested, is
   being handed to a person, already has an appointment booked (confirm it instead), gave a specific
   later date to follow up, or disclosed a hardship. Answer warmly and stop — pushing there costs the
-  lead. One question. Never two.`
+  lead. One question. Never two.
+${String(ctx.advanceGoal ?? "").trim() ? `${advanceGoalBlock(String(ctx.advanceGoal).trim())}` : ""}`
     : `- BE BRIEF. Default to 1–2 short sentences; 3 only if truly needed. Answer ONLY what the customer
   asked THIS turn — do not pile on extra options, facts, offers, or multiple questions they didn't
   ask for. At most ONE question per message. If you have more to say, save it for their reply.
   (Staff's #1 complaint is replies that say too much — when in doubt, cut it.)
 - Do NOT offer appointment times unless the customer explicitly asks to schedule or stop in.`
 }
+${buildNoRepeatRule(askedAlready)}
 - No signatures.
 - If not first outbound, do NOT repeat the intro.
 - Do NOT mention email unless the customer explicitly asked to email.

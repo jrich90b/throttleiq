@@ -348,7 +348,9 @@ const CEILINGS: Ceiling[] = [
     // took their clock as a parameter, so nothing there reads a wall clock. The readiness RULE is pure
     // too and lives in domain/salesHandoffReadiness.ts; index.ts keeps only the parse call and the
     // side effects it alone owns.
-    max: 70_505,
+    // 70_505 -> 70_502. The advance-goal + no-repeat slice paid for its 3 lines of wiring by collapsing
+    // two multi-line expressions in the same object literal, and banked the difference.
+    max: 70_502,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

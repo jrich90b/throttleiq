@@ -2229,6 +2229,8 @@ export async function orchestrateInbound(
     appointment?: any;
     followUp?: any;
     leadSource?: string | null;
+    /** The pre-qualification ladder's goal for this turn, resolved by the caller (both reply paths). */
+    prequalGoal?: string | null;
     bucket?: string | null;
     cta?: string | null;
     disposition?: string | null; // conv.dialogState.name — the disposition parser's state (stepped-back/keep-current/…), for the visit-invite disengagement guard
@@ -5271,7 +5273,10 @@ export async function orchestrateInbound(
         needsEmpathy: ctx?.needsEmpathy ?? null,
         dispositionClosing: ctx?.dispositionClosing ?? null,
         alreadyPurchased: !!ctx?.sale,
-        staffCorrections: ctx?.staffCorrections ?? null
+        staffCorrections: ctx?.staffCorrections ?? null,
+        // The pre-qualification ladder reaching turns AFTER the first (Joe, 2026-08-11): a GOAL, not
+        // a sentence, so the composer answers what the customer actually said and still steers back.
+        advanceGoal: ctx?.prequalGoal ?? null
       };
       const baseDraft = await generateDraftWithLLM(draftCtx);
       // STEP 3 (dark unless DRAFT_QUALITY_AUTO_REGENERATE): if the judge would HOLD this draft,

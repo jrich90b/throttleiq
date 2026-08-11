@@ -230,3 +230,75 @@ export function isEchoedInboundOpening(reply: string, customerText: string): boo
   }
   return false;
 }
+
+/**
+ * True when `reply` asks a question we have ALREADY asked this customer, word for word.
+ *
+ * Joe, 2026-08-11: *"we have to make sure the questions aren't repeated exactly the same"* — raised
+ * while wiring the pre-qualification ladder, and it is not hypothetical. MEASURED the same day across
+ * 743 conversations touched in 45 days: **60 of them (8%) contain a verbatim repeated question, 128
+ * repeat-askings in total.** Every reply now ends with a question, so a customer who does not answer
+ * one gets it fired at them again in identical words, which is exactly how a person sounds like a
+ * machine.
+ *
+ * Sibling of `isEchoedInboundOpening`, and deliberately built the same way: DETERMINISTIC, and used
+ * only to TRIGGER a re-draft, never to block a send. A rare false positive costs one regenerate; it
+ * can never cost a reply. That is the fail direction that makes a text-matching rule acceptable here
+ * at all — it decides nothing about meaning, it only says "you already said this exact sentence".
+ *
+ * Deliberately STRICT (verbatim after normalising case/punctuation, >= MIN_QUESTION_WORDS words):
+ *  - Joe's ask is about EXACT repeats. "Which bike are you looking at?" following "What bike do you
+ *    have your eye on?" is a re-ask in different words, which is the behaviour we WANT when someone
+ *    has not answered — pressing again is fine, sounding like a recording is not.
+ *  - Short questions ("Sound good?", "Does that work?") legitimately recur in natural conversation.
+ */
+const MIN_QUESTION_WORDS = 4;
+
+/**
+ * Split on SENTENCE ends first, then normalise — not the other way round.
+ *
+ * The first cut normalised first, which strips "." and "!", so "Thanks! What day works best?" came
+ * back as ONE chunk carrying the preamble. Two messages asking the identical question after different
+ * lead-ins would then have compared unequal and the repeat would have gone unnoticed — the exact miss
+ * this guard exists to catch. (The 8%-of-conversations measurement was taken with that same flaw, so
+ * it is a LOWER bound on how often this really happens.)
+ */
+export function extractAskedQuestions(text: string): string[] {
+  const withoutLinks = String(text ?? "").replace(/https?:\/\/\S+/g, " "); // "?dealerid=" is not a question
+  return withoutLinks
+    .split(/(?<=[.!?])\s+/)
+    .filter(sentence => sentence.trim().endsWith("?"))
+    .map(sentence =>
+      sentence
+        .toLowerCase()
+        .replace(/[^a-z0-9?\s]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+    )
+    .filter(part => part.endsWith("?") && part.split(" ").filter(Boolean).length >= MIN_QUESTION_WORDS);
+}
+
+export function isRepeatedOutboundQuestion(
+  reply: string,
+  priorOutboundTexts: Array<string | null | undefined>
+): boolean {
+  const asked = extractAskedQuestions(reply);
+  if (!asked.length) return false;
+  const already = new Set<string>();
+  for (const prior of priorOutboundTexts ?? []) {
+    for (const q of extractAskedQuestions(String(prior ?? ""))) already.add(q);
+  }
+  if (!already.size) return false;
+  return asked.some(q => already.has(q));
+}
+
+/** `isRepeatedOutboundQuestion` against a draft history — the shape both reply paths already hold. */
+export function repeatsAQuestionFromHistory(
+  reply: string,
+  history?: { direction: "in" | "out"; body: string }[] | null
+): boolean {
+  return isRepeatedOutboundQuestion(
+    reply,
+    (history ?? []).filter(h => h.direction === "out").map(h => h.body)
+  );
+}

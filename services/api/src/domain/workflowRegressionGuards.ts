@@ -2560,3 +2560,33 @@ export function buildPrequalNotClearedCreditAppLine(creditAppUrlRaw?: string | n
   // a low-pressure "or come in" — no question, so it never breaks "one question, never two".
   return `That pre-qual is only a soft check — a full application is what gets you a real answer, and you can do it right from your phone here: ${url}. Or stop in and we'll run it with you.`;
 }
+
+/**
+ * The pre-qualification ladder's stage, said as a GOAL for the composer rather than as a sentence to
+ * copy (Joe, 2026-08-11 — the follow-up-turn half of the flow).
+ *
+ * The first touch uses the fixed line (`buildPrequalStageLine`): it is an acknowledgement, there is
+ * no customer turn to answer yet, and a deterministic ack is the right shape. Every turn AFTER that
+ * hands the composer a goal instead, for two reasons Joe named:
+ *  - the customer may say something unpredictable, and only the composer can answer THAT and still
+ *    steer back;
+ *  - a fixed sentence sent twice is the exact repetition he asked us to avoid.
+ *
+ * `send_credit_app` deliberately returns NULL: that stage carries a URL, a customer-facing link must
+ * never be LLM-composed, and it is delivered deterministically instead.
+ */
+export function buildPrequalStageGoal(stage: string, bikeLabelRaw?: string | null): string | null {
+  const bike = String(bikeLabelRaw ?? "").trim();
+  switch (stage) {
+    case "ask_bike":
+      return "find out which bike they actually want — the lead form only gave a catch-all, so nothing else can be priced until you know";
+    case "ask_budget":
+      return bike && !isPlaceholderModel(bike)
+        ? `find out what monthly payment they have in mind on the ${bike}. Ask about a MONTHLY payment, never a purchase price, and never name a figure of your own`
+        : "find out what monthly payment they have in mind. Ask about a MONTHLY payment, never a purchase price, and never name a figure of your own";
+    case "offer_visit":
+      return "get them in the door — name a specific day and a rough time they can say yes to";
+    default:
+      return null;
+  }
+}

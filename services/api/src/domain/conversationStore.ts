@@ -90,7 +90,7 @@ import {
   type SoldCloseoutDecision,
   decidePrequalTurn
 } from "./routeStateReducer.js";
-import { buildPrequalStageLine, readPrequalSubmissionResult } from "./workflowRegressionGuards.js";
+import { buildPrequalStageLine, readPrequalSubmissionResult, buildPrequalStageGoal } from "./workflowRegressionGuards.js";
 import { advanceEveryReplySuppressed } from "./draftChannelRules.js";
 import { isPlaceholderModel } from "./modelDeflection.js";
 import { fileURLToPath } from "node:url";
@@ -8637,6 +8637,40 @@ export function applyInventoryWatchListNormalization(
  * Returns "" when the ladder has nothing to add, which is every non-prequal turn and every
  * suppressed, booked or already-sent one.
  */
+/**
+ * The pre-qualification goal for a FOLLOW-UP turn, or null.
+ *
+ * Read-only twin of `applyPrequalStageReply`: same referee, same inputs, but it writes NOTHING and
+ * returns a goal for the composer instead of a finished sentence. The first touch uses the writer
+ * (a fixed ack, no customer turn to answer yet); every turn after it uses this, so the composer can
+ * answer whatever the customer actually said and still steer back — Joe, 2026-08-11.
+ *
+ * `send_credit_app` yields null on purpose: that stage carries a URL, and a customer-facing link is
+ * never LLM-composed.
+ */
+export function resolvePrequalAdvanceGoal(conv: Conversation, creditAppUrl?: string | null): string | null {
+  // ONE definition of "is this a prequal lead", read off the lead SOURCE (a machine record).
+  const source = String((conv.lead as any)?.source ?? (conv.lead as any)?.leadSource ?? "");
+  if (!/prequal|pre-qual/i.test(source)) return null;
+  const bikeLabel = String(
+    (conv.lead as any)?.vehicle?.model ?? (conv.lead as any)?.vehicle?.description ?? ""
+  ).trim();
+  const budget = conv.paymentBudgetContext;
+  const decision = decidePrequalTurn({
+    isPrequalLead: true,
+    suppressed: advanceEveryReplySuppressed({ appointment: conv.appointment, alreadyPurchased: !!(conv as any).sale }),
+    appointmentBooked: !!(conv.appointment?.whenIso || (conv.appointment as any)?.whenText),
+    bikeUnknown: !bikeLabel || isPlaceholderModel(bikeLabel),
+    budgetKnown: !!(budget?.monthlyBudget || budget?.downPayment),
+    visitOffersMade: Number(conv.prequalFlow?.visitOffersMade ?? 0),
+    visitNotPossible: false,
+    creditAppSentAt: conv.prequalFlow?.creditAppSentAt ?? null,
+    creditAppAvailable: /^https?:\/\//i.test(String(creditAppUrl ?? "")),
+    prequalResult: readPrequalSubmissionResult((conv.lead as any)?.inquiry)
+  });
+  return buildPrequalStageGoal(decision.stage, bikeLabel);
+}
+
 export function applyPrequalStageReply(
   conv: Conversation,
   input: {
