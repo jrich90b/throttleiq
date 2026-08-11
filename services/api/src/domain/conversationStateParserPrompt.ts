@@ -35,6 +35,81 @@ export function isVendorSolicitationVerdictConfident(parsed: {
   );
 }
 
+/**
+ * The hiring vocabulary. Kept as a corroborating cue (see `isExplicitHiringRequest`) rather than as
+ * comprehension: it never decides what the customer MEANT, it only bounds which turns a hiring
+ * verdict is allowed to act on.
+ */
+function hasHiringVocabulary(textLower: string): boolean {
+  return (
+    /\b(hiring manager|hiring|job openings?|jobs?|careers?|career opportunity|employment|apply for (?:a )?(?:job|position)|application for employment|resume)\b/.test(
+      textLower
+    ) ||
+    /\b(?:applied|submitted)\s+(?:online|an application)\b[\s\S]{0,80}\b(?:who|hiring|job|position|resume|manager|handles?)\b/.test(
+      textLower
+    )
+  );
+}
+
+/**
+ * The hiring demotion guard — whether a `hiring_manager` verdict survives to reach its handoff.
+ *
+ * Production miss (Brian Marsh, +17166798748, 2026-08-08, reported by Joe 2026-08-10): a job
+ * applicant's web lead ("I will provide my resume, I've been a sales manager ... I would love to
+ * one of your salesman") entered the SALES lane, and on his follow-up the agent drafted showroom
+ * appointment times at him. The comprehension was never wrong: MEASURED 3 runs on each of his two
+ * real turns, the parser returned `hiring_manager` / `hiring_manager_inquiry` /
+ * `explicit_request:true` at confidence 0.86-0.98, 6 of 6. The verdict was then DISCARDED by a
+ * lexical shape test — the old gate also required `hasRequestSignal` (a question mark, or one of
+ * "can you / please / need / call me" ...), so an applicant who STATES rather than ASKS was demoted
+ * to `general`. That `general` is itself load-bearing downstream: ADF intake reads it as an
+ * "accepted non-hiring intent" which VETOES the deterministic `isHiringManagerInquiryText`
+ * detector, and that detector returns TRUE on his text. A correct parser and a correct detector
+ * were both overruled by a missing question mark.
+ *
+ * So the parser's own assertion now stands in for the question mark. MEASURED over the whole store
+ * (842 conversations, 2026-08-11): 21 inbound turns carry hiring vocabulary, 13 are question-shaped
+ * (unchanged), 8 are statement-shaped and reachable by this guard. 3 runs on each of those 8:
+ *   - the 5 real job applicants (Brian Marsh; Cameron Mouyeos ADF + his follow-up; Joseph Juston
+ *     "I uploaded my resume"; Amy Szyminski "i have attached my resume") read `hiring_manager` +
+ *     `explicit_request:true` on 15 of 15 runs;
+ *   - the 3 decoys — a service job ("Hollis has a lot of the job done"), praise ("you're doing a
+ *     great job") and small talk ("training for my new job") — read `general` +
+ *     `explicit_request:false` on 9 of 9.
+ *
+ * NO confidence floor, deliberately, and this is the measurement that decided it: confidence does
+ * NOT separate the two classes. The decoys scored 0.73-0.90 and the true applicants 0.86-0.98, so
+ * the ranges overlap; a vendor-style 0.88 floor would have bought nothing against any decoy (all 3
+ * are already excluded on `state_intent` and `explicit_request`) while dropping Joseph Juston, a
+ * real applicant, on 2 runs in 3. `state_intent` + `manual_handoff_reason` + `explicit_request`
+ * separate the classes perfectly, 24 runs of 24.
+ *
+ * FAIL DIRECTION: this guard can only ever move a lead TOWARD a person (hiring handoff, cadence
+ * stopped) and away from an automated sales reply. A wrong flip costs one lead a human reply; the
+ * miss it fixes offered a job applicant a test-ride slot. `hasHiringVocabulary` and the finance
+ * exclusion are both retained as structural locks the parser cannot unlock on its own — finance
+ * still beats hiring, so a credit-app turn is never a hiring handoff.
+ */
+export function isExplicitHiringRequest(input: {
+  textLower: string;
+  hasRequestSignal: boolean;
+  financeCue: boolean;
+  parsed: {
+    state_intent?: unknown;
+    manual_handoff_reason?: unknown;
+    explicit_request?: unknown;
+  };
+}): boolean {
+  if (input.financeCue) return false;
+  if (!hasHiringVocabulary(input.textLower)) return false;
+  if (input.hasRequestSignal) return true;
+  return (
+    String(input.parsed.state_intent ?? "").toLowerCase() === "hiring_manager" &&
+    String(input.parsed.manual_handoff_reason ?? "").toLowerCase() === "hiring_manager_inquiry" &&
+    input.parsed.explicit_request === true
+  );
+}
+
 /** Taxonomy + disambiguation lines spliced into the conversation-state parser prompt. */
 export const VENDOR_SOLICITATION_PROMPT_RULES = [
   "",

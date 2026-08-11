@@ -398,7 +398,10 @@ const CEILINGS: Ceiling[] = [
     // 16_312 -> 16_158. The routing-decision parser's schema + rules + few-shot corpus moved to
     // domain/routingDecisionParserPrompt.ts, so the prompt that decides how EVERY inbound turn is
     // routed is editable on its own (and the "answering our own question" rule landed there).
-    max: 16158,
+    // 16_158 -> 16_154. The hiring demotion gate (its vocabulary regex + the `explicitHiringRequest`
+    // decision) moved to domain/conversationStateParserPrompt.ts beside the vendor guard it mirrors,
+    // so a pure eval can EXECUTE the decision against recorded parser verdicts with no API key.
+    max: 16154,
     note: "every parser prompt + JSON schema; second-largest and on the same trajectory"
   }
 ];

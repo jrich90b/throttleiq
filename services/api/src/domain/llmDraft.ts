@@ -24,6 +24,7 @@ import { buildPartsCatalogParserHint, matchPartsCatalogLexicon } from "./partsCa
 import {
   CONVERSATION_STATE_FEW_SHOT_EXAMPLES,
   VENDOR_SOLICITATION_PROMPT_RULES,
+  isExplicitHiringRequest,
   isVendorSolicitationVerdictConfident
 } from "./conversationStateParserPrompt.js";
 import { isDemoDayEventQuestionText } from "./workflowRegressionGuards.js";
@@ -13008,19 +13009,14 @@ export async function parseConversationStateWithLLM(args: {
   const lowMileageUsedCue =
     /\blow\s*mileage\b|\blow\s*miles\b/.test(textLower) &&
     (/\bused\b|\bpre[-\s]?owned\b/.test(textLower) || /\bnot\s+new\b/.test(textLower));
-  const hiringCue =
-    /\b(hiring manager|hiring|job openings?|jobs?|careers?|career opportunity|employment|apply for (?:a )?(?:job|position)|application for employment|resume)\b/.test(
-      textLower
-    ) ||
-    /\b(?:applied|submitted)\s+(?:online|an application)\b[\s\S]{0,80}\b(?:who|hiring|job|position|resume|manager|handles?)\b/.test(
-      textLower
-    );
   const explicitServiceRequest = serviceCue && hasRequestSignal;
   const explicitPartsRequest =
     (partsCue && hasRequestSignal) || (catalogPartsCue && catalogDepartmentActionSignal);
   const explicitApparelRequest =
     (apparelCue && hasRequestSignal) || (catalogApparelCue && catalogDepartmentActionSignal);
-  const explicitHiringRequest = hiringCue && !financeCue && hasRequestSignal;
+  // A job applicant who STATES rather than ASKS used to be demoted here — the guard's own comment
+  // (conversationStateParserPrompt.ts) carries the production miss and the 24-run measurement.
+  const explicitHiringRequest = isExplicitHiringRequest({ textLower, hasRequestSignal, financeCue, parsed });
 
   const stateRaw = String(parsed.state_intent ?? "").toLowerCase();
   let stateIntent: ConversationStateParse["stateIntent"] =
