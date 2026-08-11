@@ -126,16 +126,47 @@ async function main(): Promise<void> {
   );
 
   // --- DECLARED NO-LADDER LANES ARE SILENT, AND SAY WHY -----------------------------------------
-  // Without this the sweep flags the VOICE lane on every run, and an instrument that always shows a
-  // false alarm gets ignored — which is worse than no instrument.
-  assert.ok(laneHasNoLadderByDesign("Traffic Log Pro"), "the voice lane is declared");
-  assert.ok(laneHasNoLadderByDesign("Walk In"), "walk-ins are declared — they are already here");
+  // The list is a coverage registry: a lane either asks, or is declared with a reason, or alarms.
   assert.ok(laneHasNoLadderByDesign("Ride Challenge"), "marketing signups are declared");
+  assert.ok(laneHasNoLadderByDesign("Riding Academy - Enrolled"), "course enrolment is declared");
   assert.equal(laneHasNoLadderByDesign("Room58 - Request details"), null, "a real sales lane is NOT declared");
-  const voice = Array.from({ length: 20 }, (_, i) => lead("Traffic Log Pro", 3 + i, { asks: false }));
-  const voiceLane = assessLadderHealth({ conversations: voice, now: NOW }).lanes.find(l => l.source === "Traffic Log Pro")!;
-  assert.equal(voiceLane.alarm, null, "a declared no-ladder lane never alarms");
-  assert.ok(/by design/i.test(voiceLane.why), "…and its row says why, so nobody re-investigates it");
+  const signup = Array.from({ length: 20 }, (_, i) => lead("Ride Challenge", 3 + i, { asks: false }));
+  const signupLane = assessLadderHealth({ conversations: signup, now: NOW }).lanes.find(l => l.source === "Ride Challenge")!;
+  assert.equal(signupLane.alarm, null, "a declared no-ladder lane never alarms");
+  assert.ok(/by design/i.test(signupLane.why), "…and its row says why, so nobody re-investigates it");
+
+  // --- THE WALK-IN FAMILY MUST STAY VISIBLE -----------------------------------------------------
+  // `Traffic Log Pro`, `Walk In` and `Dealer Lead App` are ONE family (`WALK_IN_SOURCE_RE` in
+  // conversationStore.ts). Two of the three were declared no-ladder here, on reasons measurement
+  // killed on 2026-08-11: Traffic Log Pro sent a REAL customer-facing text to 16 of 22 leads (only 5
+  // of those asked anything), and "they are already standing in the store" is the assumption Joe
+  // overruled in #655 — 49 of 66 had ridden a bike here and still get asked back in. Net effect: 28
+  // of 30 family leads were invisible to the one net built to catch a lane that stopped advancing
+  // leads, in the best-converting volume source we own.
+  //
+  // ⚠️ REGRESSION GUARD, not decoration. Re-declaring any of the three re-blinds the sweep to the
+  // exact failure mode it exists for, and the row would look perfectly reasonable on its own.
+  for (const source of ["Traffic Log Pro", "Walk In", "Dealer Lead App"]) {
+    assert.equal(
+      laneHasNoLadderByDesign(source),
+      null,
+      `${source} is a walk-in lane that DOES get texted — it must never be declared silent by design`
+    );
+  }
+  // Not just the declaration: the lane genuinely reaches an alarm on the never-asks shape.
+  const walkInFamily = Array.from({ length: 12 }, (_, i) => lead("Traffic Log Pro", 3 + i * 2, { asks: false }));
+  const familyLane = assessLadderHealth({ conversations: walkInFamily, now: NOW }).lanes.find(
+    l => l.source === "Traffic Log Pro"
+  )!;
+  assert.equal(familyLane.alarm, "never_asks", "a walk-in lane nobody asks anything must surface as a build candidate");
+  // FAIL DIRECTION: the ladder clears the alarm, never the suppression list. A walk-in lane that DOES
+  // ask is silent, so the only way to quiet this row is to actually start asking.
+  const walkInAsking = Array.from({ length: 12 }, (_, i) => lead("Traffic Log Pro", 3 + i * 2, { asks: true }));
+  assert.equal(
+    assessLadderHealth({ conversations: walkInAsking, now: NOW }).alarms.length,
+    0,
+    "a walk-in lane that asks is silent — the ladder clears the alarm, not the suppression list"
+  );
 
   // --- IT COUNTS THE OTHER COLUMNS TOO ----------------------------------------------------------
   const mixed = [

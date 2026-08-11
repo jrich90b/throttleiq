@@ -76,21 +76,41 @@ export type LadderHealthReport = {
 /**
  * LANES THAT DELIBERATELY HAVE NO LADDER, each with the reason.
  *
- * This list is the point, not an escape hatch. Without it the sweep flags `Traffic Log Pro` — a VOICE
- * lane whose first "message" is literally "Call initiated to +1716…" — on every single run, and an
- * instrument that always shows a false alarm gets ignored, which is worse than no instrument.
- *
- * It also does the job of a coverage registry, in the only way that matters: a NEW source we have
- * never seen either starts asking, or shows up here with a reason, or alarms. **It does not demand a
- * ladder; it demands a decision** — the same contract `decision_registry_coverage:eval` uses for
- * referees.
+ * This list is the point, not an escape hatch. It does the job of a coverage registry in the only way
+ * that matters: a NEW source we have never seen either starts asking, or shows up here with a reason,
+ * or alarms. **It does not demand a ladder; it demands a decision** — the same contract
+ * `decision_registry_coverage:eval` uses for referees.
  *
  * ⚠️ Adding a lane here is a claim that pushing an appointment on it would be WRONG. It is not a way
  * to quiet a lane we simply have not got to yet.
+ *
+ * ## THE WALK-IN FAMILY IS NOT DECLARED HERE — it was, and the declaration was wrong (2026-08-11)
+ *
+ * `Traffic Log Pro`, `Walk In` and `Dealer Lead App` are ONE family: `WALK_IN_SOURCE_RE` in
+ * `conversationStore.ts` treats all three as walk-ins, and `inferWalkIn` routes on it. Two of the
+ * three were declared here on the day this file was written, and both reasons turned out to be false:
+ *
+ * - *"a VOICE lane — the first outbound is a call, not a text"* (Traffic Log Pro). MEASURED on the
+ *   live store: **16 of 22** leads in the 30-day window received a real customer-facing SMS, and only
+ *   5 of those texts asked anything. The bodies are ordinary first touches — *"Thanks for stopping in
+ *   today… let me know if I can answer any other questions"*. The lead ORIGIN is a phone log; what we
+ *   SEND is a text, and it is the passive one.
+ * - *"they are already standing in the store"* (Walk In). This is the exact assumption Joe overruled
+ *   on 2026-08-11 (`90d33585`, #655): 49 of 66 Dealer Lead App leads had ridden a bike here, and they
+ *   still get asked back in — *"want to set up a time to stop in and check it out?"*. Having visited
+ *   is a reason to change the WORDING ("stop BACK in"), never a reason to stop asking.
+ *
+ * The cost of the mistake was the whole point of the instrument: 28 of the 30 walk-in-family leads
+ * were invisible to the only net built to catch a lane that stopped advancing leads — and the family
+ * is the best-converting volume source we own (14% booked). #655 built the ask at the Dealer Lead App
+ * call site only, so the two sibling lanes carrying the volume still need the copy; with the
+ * suppression in place, nothing would ever have said so.
+ *
+ * ⚠️ THE LESSON, for the next lane someone wants to declare: a reason about where the lead CAME FROM
+ * ("it's a phone lane", "they were in the store") is not a reason about what we SEND. Check the
+ * outbound bodies before declaring a lane silent by design.
  */
 export const NO_LADDER_LANES: { pattern: RegExp; why: string }[] = [
-  { pattern: /traffic log pro/i, why: "a VOICE lane — the first outbound is a call, not a text" },
-  { pattern: /walk\s*in/i, why: "they are already standing in the store" },
   { pattern: /ride challenge|sweeps|rsvp/i, why: "a marketing signup, not a buyer" },
   { pattern: /riding academy/i, why: "course enrolment, not a motorcycle purchase" }
 ];
