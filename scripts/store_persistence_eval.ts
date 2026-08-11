@@ -196,6 +196,122 @@ async function main(): Promise<void> {
     console.log("document store file round trip ok");
   }
 
+  // --- concurrent writes to ONE store must not lose writes -----------------------------------
+  // A fixed `<file>.tmp` name is not atomic when two writes to the same store overlap: both open the
+  // same temp path, one rename publishes the other's bytes, and the loser fails
+  // `ENOENT: ... rename '<file>.tmp' -> '<file>'`. Measured on the pre-fix code at 12 concurrent
+  // writes: 11 of 12 REJECTED — eleven writes lost — and because these writes are fired without a
+  // catch, each rejection was also an unhandled promise rejection in the API process. The production
+  // error log carried 44 of them for sessions.json and 25 for twilio_inbound_jobs.json (2026-08-10).
+  // This drives the real writer, so it fails if the fix is unwired, not merely if its source changes.
+  {
+    const { writeJsonStoreText } = await import(
+      "../services/api/src/domain/storePersistence.ts"
+    );
+    const raceDir = await fs.mkdtemp(path.join(os.tmpdir(), "store-persistence-race-"));
+    const racePath = path.join(raceDir, "sessions.json");
+    const backendBefore = process.env.DATA_BACKEND;
+    delete process.env.DATA_BACKEND; // file mode: no database needed
+    try {
+      const writes = 12;
+      // Big enough that a write cannot land inside a single event-loop turn, which is what makes the
+      // overlap real rather than accidental.
+      const settled = await Promise.allSettled(
+        Array.from({ length: writes }, (_, i) =>
+          writeJsonStoreText({
+            store: "sessions",
+            filePath: racePath,
+            text: JSON.stringify({ n: i, pad: "x".repeat(20000) })
+          })
+        )
+      );
+      const rejected = settled.filter(r => r.status === "rejected");
+      const firstReason =
+        rejected.length > 0
+          ? String((rejected[0] as PromiseRejectedResult).reason?.message ?? "").slice(0, 160)
+          : "";
+      assert.equal(
+        rejected.length,
+        0,
+        `concurrent writes to one store must all succeed; ${rejected.length}/${writes} were lost: ${firstReason}`
+      );
+
+      const finalText = await fs.readFile(racePath, "utf8");
+      let parsed: any = null;
+      try {
+        parsed = JSON.parse(finalText);
+      } catch {
+        assert.fail("a concurrent burst must leave whole JSON behind, never a half-written file");
+      }
+      // Writes to one path are serialised, so the LAST one queued is the one on disk. Without the
+      // serialisation half of the fix the winner is whichever rename happens to land last.
+      assert.equal(
+        parsed?.n,
+        writes - 1,
+        "writes to one store apply in the order they were made — the last one queued wins"
+      );
+
+      const leftovers = (await fs.readdir(raceDir)).filter(name => name.includes(".tmp"));
+      assert.deepEqual(
+        leftovers,
+        [],
+        `no temp files may be left behind (found ${leftovers.join(", ")})`
+      );
+      console.log(`concurrent store writes ok (${writes} writes, 0 lost, no temp files left)`);
+    } finally {
+      if (backendBefore == null) delete process.env.DATA_BACKEND;
+      else process.env.DATA_BACKEND = backendBefore;
+    }
+  }
+
+  // --- the same race, on the inbound-SMS job queue ---------------------------------------------
+  // `twilio_inbound_jobs.json` is the queue of inbound customer texts, so a lost write is a message
+  // we may never answer. Its debounced save timer and an awaited `flushTwilioInboundJobs()` overlap
+  // in normal operation, which is how it produced 25 of the production ENOENTs. Driven through the
+  // store's real exported API.
+  {
+    const jobsDir = await fs.mkdtemp(path.join(os.tmpdir(), "twilio-inbound-jobs-race-"));
+    const jobsPath = path.join(jobsDir, "twilio_inbound_jobs.json");
+    const pathBefore = process.env.TWILIO_INBOUND_JOBS_PATH;
+    process.env.TWILIO_INBOUND_JOBS_PATH = jobsPath; // read at module import, so set it first
+    try {
+      const jobs = await import("../services/api/src/domain/twilioInboundJobStore.ts");
+      const enqueued = 6;
+      for (let i = 0; i < enqueued; i += 1) {
+        await jobs.enqueueTwilioInboundJob({
+          payload: { From: `+1716555${String(1000 + i)}`, Body: `race ${i}`, MessageSid: `SM_race_${i}` }
+        } as any);
+      }
+      const flushes = await Promise.allSettled(
+        Array.from({ length: 8 }, () => jobs.flushTwilioInboundJobs())
+      );
+      const failedFlushes = flushes.filter(r => r.status === "rejected");
+      const firstReason =
+        failedFlushes.length > 0
+          ? String((failedFlushes[0] as PromiseRejectedResult).reason?.message ?? "").slice(0, 160)
+          : "";
+      assert.equal(
+        failedFlushes.length,
+        0,
+        `overlapping inbound-job saves must all succeed; ${failedFlushes.length} failed: ${firstReason}`
+      );
+
+      const rows = JSON.parse(await fs.readFile(jobsPath, "utf8"));
+      assert.ok(Array.isArray(rows), "the inbound job store must be a whole JSON array on disk");
+      assert.equal(rows.length, enqueued, "every enqueued inbound job survives an overlapping save");
+      const leftovers = (await fs.readdir(jobsDir)).filter(name => name.includes(".tmp"));
+      assert.deepEqual(
+        leftovers,
+        [],
+        `no temp files may be left behind (found ${leftovers.join(", ")})`
+      );
+      console.log(`inbound job store concurrent save ok (${enqueued} jobs kept, 0 saves lost)`);
+    } finally {
+      if (pathBefore == null) delete process.env.TWILIO_INBOUND_JOBS_PATH;
+      else process.env.TWILIO_INBOUND_JOBS_PATH = pathBefore;
+    }
+  }
+
   // Optional Postgres round trip (skipped without DATABASE_URL_TEST)
   const testDbUrl = String(process.env.DATABASE_URL_TEST ?? "").trim();
   if (testDbUrl) {
