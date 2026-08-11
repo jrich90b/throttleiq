@@ -2490,6 +2490,8 @@ export function buildPrequalStageLine(args: {
   stage: string;
   bikeLabel?: string | null;
   creditAppUrl?: string | null;
+  /** When the lender's soft check did not clear, the application line explains WHY it is the move. */
+  prequalResult?: PrequalSubmissionResult;
 }): string | null {
   switch (args.stage) {
     case "ask_bike":
@@ -2499,8 +2501,62 @@ export function buildPrequalStageLine(args: {
     case "offer_visit":
       return buildPrequalVisitAsk();
     case "send_credit_app":
-      return buildPrequalCreditAppLine(args.creditAppUrl);
+      return args.prequalResult === "not_cleared"
+        ? buildPrequalNotClearedCreditAppLine(args.creditAppUrl)
+        : buildPrequalCreditAppLine(args.creditAppUrl);
     default:
       return null;
   }
+}
+
+/**
+ * What the LENDER already told us about a pre-qualification lead.
+ *
+ * A `Marketplace - Prequal` ADF carries its own verdict in the inquiry field, and the lender prints
+ * the next step right beside it:
+ *
+ *   "PreQual: N, PreQualified Amount; $0  Please note non-prequalified customers can still be
+ *    considered for approval with a completed credit application."
+ *
+ * Deterministic on purpose, and AGENTS.md allows exactly this: it is STRUCTURED EXTRACTION from a
+ * MACHINE RECORD, not comprehension of customer prose. `PreQual:` is a field the lender emits in a
+ * fixed shape — reading it with a parser would be paying an LLM to read a form field, and would make
+ * a hard fact probabilistic.
+ *
+ * MEASURED across all 42 prequal leads (2026-08-11): 15 say N, 5 say Y, 22 carry no PreQual field at
+ * all (older/other feeds). So `unknown` is the COMMONEST answer and must behave exactly as today —
+ * this reader may only ever ADD information, never take the benefit of the doubt away.
+ *
+ * We never read the AMOUNT. What someone was pre-qualified for is a money figure and none of this
+ * ladder's business.
+ */
+export type PrequalSubmissionResult = "cleared" | "not_cleared" | "unknown";
+
+export function readPrequalSubmissionResult(inquiryRaw?: string | null): PrequalSubmissionResult {
+  const text = String(inquiryRaw ?? "");
+  if (!text.trim()) return "unknown";
+  const match = /\bPreQual\s*:\s*([A-Za-z]+)/i.exec(text);
+  if (!match) return "unknown";
+  const value = match[1].trim().toUpperCase();
+  if (value === "N" || value === "NO") return "not_cleared";
+  if (value === "Y" || value === "YES") return "cleared";
+  return "unknown";
+}
+
+/**
+ * The credit-application line for a lead whose SOFT CHECK did not clear.
+ *
+ * ⚠️ It must never state the customer's credit outcome back to them. Adverse-action notice is the
+ * LENDER's job, not ours, and "you weren't approved" is both a compliance surface and a rotten text
+ * to receive. What it says instead is true, non-judgmental, and is the lender's OWN wording from the
+ * form: a pre-qual is a soft check; a completed application is what produces a real answer.
+ */
+export function buildPrequalNotClearedCreditAppLine(creditAppUrlRaw?: string | null): string | null {
+  const url = String(creditAppUrlRaw ?? "").trim();
+  if (!/^https?:\/\//i.test(url)) return null;
+  // The visit door stays OPEN. Skipping straight past the appointment on the 15-of-42 leads whose
+  // soft check did not clear would trade a booking for an application, and booking is the number the
+  // business is actually judged on. Same shape as the older buildFinanceAppInviteLine: the link, then
+  // a low-pressure "or come in" — no question, so it never breaks "one question, never two".
+  return `That pre-qual is only a soft check — a full application is what gets you a real answer, and you can do it right from your phone here: ${url}. Or stop in and we'll run it with you.`;
 }

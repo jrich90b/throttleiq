@@ -8798,6 +8798,14 @@ export type PrequalTurnInput = {
   visitOffersMade: number;
   /** Parser slot: still interested, but coming in is not their path. */
   visitNotPossible: boolean;
+  /**
+   * What the LENDER said on the ADF (`PreQual: N` / `Y`), read deterministically off the form.
+   * "not_cleared" means the soft check returned nothing and the lender's own instruction is a
+   * completed application — so this lead starts AT the fallback rung instead of earning it after two
+   * unanswered invitations. "unknown" is the commonest value (22 of 42 leads carry no such field)
+   * and must behave exactly as before.
+   */
+  prequalResult?: "cleared" | "not_cleared" | "unknown";
   /** ISO string once sent; the application goes out at most ONCE per lead. */
   creditAppSentAt?: string | null;
   /** False when the dealer profile has no real credit-app URL — we never fabricate a link. */
@@ -8833,9 +8841,13 @@ export function decidePrequalTurn(input: PrequalTurnInput): PrequalTurnDecision 
   if (input.bikeUnknown) return { stage: "ask_bike", reason: "no_specific_bike_on_the_lead" };
   if (!input.budgetKnown) return { stage: "ask_budget", reason: "no_budget_captured" };
 
-  // Qualified. Try for the appointment; fall back to the application when that has failed.
+  // Qualified. Try for the appointment; fall back to the application when that has failed — or when
+  // the lender has ALREADY told us it failed. A soft check that returned $0 does not need two
+  // unanswered invitations to prove the visit is not the blocker: the form itself says a completed
+  // application is the way through, and waiting just delays the only step that can produce a number.
   const triedEnough = input.visitOffersMade >= PREQUAL_VISIT_OFFER_LIMIT;
-  if (input.visitNotPossible || triedEnough) {
+  const softCheckDidNotClear = input.prequalResult === "not_cleared";
+  if (input.visitNotPossible || triedEnough || softCheckDidNotClear) {
     if (!input.creditAppAvailable) {
       // No real URL configured. Keep inviting rather than promising a link we cannot produce —
       // fail toward the thing we can actually do.
@@ -8843,7 +8855,11 @@ export function decidePrequalTurn(input: PrequalTurnInput): PrequalTurnDecision 
     }
     return {
       stage: "send_credit_app",
-      reason: input.visitNotPossible ? "customer_cannot_come_in" : "visit_offered_enough_times"
+      reason: softCheckDidNotClear
+        ? "soft_check_did_not_clear"
+        : input.visitNotPossible
+          ? "customer_cannot_come_in"
+          : "visit_offered_enough_times"
     };
   }
   return { stage: "offer_visit", reason: "qualified_ask_them_in" };

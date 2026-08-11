@@ -155,6 +155,93 @@ async function main(): Promise<void> {
     assert.ok(!noUrl.prequalFlow?.creditAppSentAt, "and nothing is stamped as sent");
   }
 
+  // --- the lender's own verdict, read off the form (Joe, 2026-08-11) ------------------------------
+  // Branson Stockwell (+17164312263) arrived with PreQual: N and got a message implying the soft
+  // check had gone fine. MEASURED across all 42 prequal leads that day: 15 N, 5 Y, 22 with no such
+  // field. So `unknown` is the COMMONEST answer and must behave exactly as it did before.
+  const { readPrequalSubmissionResult, buildPrequalNotClearedCreditAppLine } = await import(
+    "../services/api/src/domain/workflowRegressionGuards.ts"
+  );
+
+  // Every string below is a REAL inquiry field copied off the live store, never invented — a
+  // plausible-looking wording would have passed and shipped a reader that does not fit the feed.
+  const REAL_FORMS: Array<[string, string]> = [
+    ["PreQual: N, PreQualified Amount; $0 Please note non-prequalified customers can still be considered for approval with a completed credit application.", "not_cleared"],
+    ["Model Year: 2025, Model: Heritage Classic, PreQual: N, PreQualified Amount; $0 Please note non-prequalified customers can still be considered for approval with a completed credit application.", "not_cleared"],
+    ["Model Year: 2022, Model: Iron 883, PreQual: Y, PreQualified Amount; $13,000 or up to $33,000. Please note prequalified customers still require a full application.", "cleared"],
+    ["PreQual: Y, PreQualified Amount; $18,000 or up to $53,000. Please note prequalified customers s", "cleared"],
+    // 22 of 42 leads look like this — no verdict at all. Must stay `unknown`.
+    ["Model Year: 2016, Model: Ultra Limited,", "unknown"],
+    ["Model Year: 2019, Model: Tri Glide Ultra,", "unknown"],
+    ["", "unknown"]
+  ];
+  for (const [text, expected] of REAL_FORMS) {
+    assert.equal(
+      readPrequalSubmissionResult(text),
+      expected,
+      `real form string read wrong: ${JSON.stringify(text.slice(0, 60))}`
+    );
+  }
+  assert.equal(readPrequalSubmissionResult(null), "unknown", "a missing inquiry is unknown, never a verdict");
+  console.log(`the lender's verdict: ${REAL_FORMS.length} real form strings read correctly`);
+
+  // A soft check that did not clear starts AT the application — it does not have to earn it with two
+  // unanswered invitations first. But it still qualifies first: the bike and the budget come before.
+  assert.equal(
+    decidePrequalTurn({ ...BASE, prequalResult: "not_cleared" } as any).stage,
+    "send_credit_app",
+    "PreQual: N goes straight to the application once qualified"
+  );
+  assert.equal(
+    decidePrequalTurn({ ...BASE, prequalResult: "not_cleared", bikeUnknown: true } as any).stage,
+    "ask_bike",
+    "...but never before we know which bike"
+  );
+  assert.equal(
+    decidePrequalTurn({ ...BASE, prequalResult: "not_cleared", budgetKnown: false } as any).stage,
+    "ask_budget",
+    "...and never before the budget"
+  );
+  assert.equal(
+    decidePrequalTurn({ ...BASE, prequalResult: "not_cleared", appointmentBooked: true } as any).stage,
+    "none",
+    "a booked lead is still finished, whatever the form said"
+  );
+  // The two values that must change NOTHING — 27 of 42 leads are one of these.
+  for (const result of ["cleared", "unknown"] as const) {
+    assert.equal(
+      decidePrequalTurn({ ...BASE, prequalResult: result } as any).stage,
+      "offer_visit",
+      `prequalResult=${result} must behave exactly as before`
+    );
+  }
+
+  // The copy must never hand the customer their credit outcome. Adverse action is the lender's job.
+  const notCleared = buildPrequalNotClearedCreditAppLine("https://creditapplication.harley-davidson.com/us/en/?dealerid=3436");
+  assert.ok(notCleared, "a not-cleared lead gets a line");
+  assert.ok(/soft check/i.test(notCleared!), "it reframes the pre-qual as the soft check it is");
+  for (const forbidden of ["not approved", "denied", "declined", "rejected", "did not qualify", "didn't qualify", "$0"]) {
+    assert.ok(
+      !notCleared!.toLowerCase().includes(forbidden),
+      `the reply must never state the customer's credit outcome (found "${forbidden}")`
+    );
+  }
+  assert.equal(buildPrequalNotClearedCreditAppLine(""), null, "and never a fabricated link");
+  // The visit must NOT be traded away. 15 of 42 leads take this rung, and booking is the number the
+  // business is judged on — the application is an EXTRA path, never a replacement for coming in.
+  assert.ok(
+    /stop in|come in|swing by/i.test(notCleared!),
+    "the not-cleared line keeps the door to a visit open"
+  );
+  // Count question marks OUTSIDE the URL — the credit-app link carries "?dealerid=", which is not a
+  // question. (The first cut of this assertion failed on exactly that, which is the useful kind of
+  // failure: a naive "does it contain ?" check would have mis-graded every message with a link.)
+  assert.equal(
+    (notCleared!.replace(/https?:\/\/\S+/g, "").match(/\?/g) ?? []).length,
+    0,
+    "and it adds no second question — the ceiling is one per message"
+  );
+
   console.log("writer: counts invitations, sends the application once, respects the finish line");
   console.log("PASS prequal stage ladder — bike, then budget, then the visit, then the application.");
 }
