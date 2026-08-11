@@ -69,6 +69,7 @@
     "room58_ask_them_in:eval",
     "price_deferral_says_why:eval",
     "finance_approved_books_them:eval",
+    "unreachable_not_a_credit_outcome:eval",
     "finance_rate_policy:eval",
     "finance_declined_long_term_cadence:eval",
     "business_manager_finance_prompt:eval",

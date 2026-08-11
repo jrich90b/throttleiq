@@ -8768,3 +8768,29 @@ export function applyPrequalStageReply(
   conv.prequalFlow = flow;
   return line;
 }
+
+/**
+ * "Couldn't reach them" — recorded, and deliberately NOT stored as a finance outcome.
+ *
+ * MEASURED 2026-08-11: of 14 finance tasks marked `needs_more_info`, most were really this ("Phone
+ * number is not reachable", "4th call attempt that does not go through", "Call will not go through").
+ * A lender-contingency bucket was carrying "we cannot get hold of them", which is how anything acting
+ * on it ends up asking a customer for a pay stub when nobody has answered the phone.
+ *
+ * So this writes NO `financeOutcome`. It stops the business-manager prompt nagging (the manager DID
+ * answer) and leaves a task, because the outcome is still unknown and a person still owns it.
+ */
+export function recordFinanceCustomerUnreachable(
+  conv: Conversation,
+  input: { note?: string | null; token: string; nowIso: string }
+): void {
+  applyFinanceOutcomeNotifyState(conv, { lane: "public_link_unreachable", nowIso: input.nowIso });
+  const note = String(input.note ?? "").trim();
+  addTodo(
+    conv,
+    "note",
+    `Could not reach the customer about the credit application${note ? `: ${note}` : "."} Finance outcome still unknown.`,
+    `public_finance_outcome:${input.token}`
+  );
+  saveConversation(conv);
+}
