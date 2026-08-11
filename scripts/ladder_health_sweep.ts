@@ -37,11 +37,13 @@ console.log(
     `${report.summary.lanesScanned} lanes, ${report.summary.leadsRecent} leads, ` +
     `${report.summary.askedRecent} asked something, ${report.summary.bookedRecent} booked.`
 );
-console.log("\n  recent  asked  replied  booked | was  | source");
+// `reach` = leads carrying a phone or an email. It sits next to `asked` because the two together are
+// the diagnosis: 0 asked with full reach is a missing ladder; 0 asked with 0 reach is a broken feed.
+console.log("\n  recent  reach  asked  replied  booked | was  | source");
 for (const lane of report.lanes) {
   if (lane.recent.leads === 0) continue;
   console.log(
-    `  ${String(lane.recent.leads).padStart(6)}  ${pct(lane.askRateRecent)}  ` +
+    `  ${String(lane.recent.leads).padStart(6)}  ${String(lane.recent.contactable).padStart(5)}  ${pct(lane.askRateRecent)}  ` +
       `${String(lane.recent.replied).padStart(7)}  ${String(lane.recent.booked).padStart(6)} | ${pct(lane.askRateBaseline)} | ` +
       `${lane.alarm ? "⚠ " : "  "}${lane.source}`
   );
