@@ -77,7 +77,8 @@ async function main(): Promise<void> {
   // Importing the store hydrates one — point it at a temp dir so this never writes into the repo.
   process.env.DATA_DIR = await fsp.mkdtemp(path.join(os.tmpdir(), "unreachable-eval-"));
   delete process.env.CONVERSATIONS_DB_PATH;
-  const { recordFinanceCustomerUnreachable } = await import("../services/api/src/domain/conversationStore.ts");
+  const store: any = await import("../services/api/src/domain/conversationStore.ts");
+  const { recordFinanceCustomerUnreachable } = store;
   const conv: any = { id: "c", leadKey: "+17165550000", messages: [], lead: {} };
   recordFinanceCustomerUnreachable(conv, { note: "4th call attempt", token: "tok", nowIso: "2026-08-11T12:00:00.000Z" });
   assert.equal(conv.financeOutcome, undefined, "NO finance outcome is written — it is not a verdict");
@@ -86,6 +87,17 @@ async function main(): Promise<void> {
     String(conv.financeOutcomeNotify?.status ?? ""),
     "resolved",
     "…but NOT as resolved: the outcome is still unknown and a person still owns it"
+  );
+
+  // A TASK IS THE WHOLE POINT. Recording without leaving a person to own it swallows the lead
+  // silently — a sabotage that deleted the addTodo passed the first cut of this eval.
+  const todos = store.listOpenTodos().filter((t: any) => t.convId === conv.id);
+  assert.equal(todos.length, 1, "exactly one task is opened so a person still owns the lead");
+  assert.match(String(todos[0]?.summary ?? todos[0]?.text ?? ""), /could not reach/i, "and it says what happened");
+  assert.match(
+    String(todos[0]?.summary ?? todos[0]?.text ?? ""),
+    /outcome still unknown/i,
+    "…and that the finance outcome is still unknown, so nobody reads it as settled"
   );
 
   console.log("PASS unreachable — a separate answer, recorded as a task, never as a credit verdict.");
