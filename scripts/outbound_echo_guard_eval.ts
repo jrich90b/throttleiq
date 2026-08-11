@@ -13,6 +13,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { isEchoedInboundOpening } from "../services/api/src/domain/leadInGuards.ts";
+import { deterministicHealTriggers, stillTriggered } from "../services/api/src/domain/selfHealSteering.ts";
 
 // ---- THE REPORTED MISS: an 8-word verbatim echo at the opening → flagged. ----
 assert.equal(
@@ -71,20 +72,31 @@ assert.ok(
   /Never OPEN by repeating the customer's own words back/i.test(draftSrc),
   "the composer prompt forbids opening by repeating the customer's words"
 );
-assert.ok(/isEchoedInboundOpening/.test(draftSrc), "the self-heal loop imports/uses the echo detector");
-// Deterministic trigger: an echoed original forces the re-draft even when the LLM judge passed it.
-assert.ok(
-  /const echoesInbound = isEchoedInboundOpening\(original, inbound\);/.test(draftSrc),
-  "self-heal computes echoesInbound on the original draft"
-);
-assert.ok(
-  /if \(!echoesInbound && \(!v1 \|\| v1\.overall === "good" \|\| conf1 < 0\.8\)\)/.test(draftSrc),
-  "an echoed opening bypasses the 'draft is good' short-circuit (forces a re-draft)"
-);
-// And the re-draft must actually stop echoing to count as healed.
-assert.ok(
-  /if \(echoesInbound && isEchoedInboundOpening\(steered, inbound\)\)/.test(draftSrc),
+// The trigger moved into selfHealSteering.deterministicHealTriggers (2026-08-11), where it now sits
+// beside its sibling "you already asked me that". This eval FOLLOWED it rather than being loosened:
+// the checks below EXECUTE the real functions, which is stronger than the source pins they replace,
+// plus one call-site check that behaviour cannot prove from the outside.
+const ECHO_DRAFT = "might be able to swing tomorrow after work can work. Just give me a heads up.";
+const ECHO_INBOUND = "Might be able to swing tomorrow after work…";
+const triggers = deterministicHealTriggers({ draft: ECHO_DRAFT, inbound: ECHO_INBOUND, history: [] });
+assert.equal(triggers.echoesInbound, true, "an echoed opening fires the deterministic trigger");
+assert.equal(triggers.any, true, "…so it bypasses the 'draft is good' short-circuit and forces a re-draft");
+assert.equal(
+  stillTriggered(triggers, { draft: ECHO_DRAFT, inbound: ECHO_INBOUND, history: [] }),
+  true,
   "a re-draft that still echoes is NOT accepted as healed"
 );
+assert.equal(
+  stillTriggered(triggers, { draft: "Tomorrow after work works great — I'll have it ready.", inbound: ECHO_INBOUND, history: [] }),
+  false,
+  "a re-draft in the agent's own words IS a heal"
+);
+const clean = deterministicHealTriggers({ draft: "Sounds good, I'll have it ready.", inbound: ECHO_INBOUND, history: [] });
+assert.equal(clean.echoesInbound, false, "an ordinary reply does not trigger");
+
+// The call sites themselves — `.includes()`, never a regex with an escaped paren (eval_source_pin_ratchet).
+assert.ok(draftSrc.includes("deterministicHealTriggers({ draft: original, inbound, history: args.ctx.history })"), "self-heal computes the triggers on the original draft");
+assert.ok(draftSrc.includes("!triggers.any &&"), "the triggers bypass the 'draft is good' short-circuit");
+assert.ok(draftSrc.includes("stillTriggered(triggers, { draft: steered, inbound, history: args.ctx.history })"), "and the re-draft is re-checked before it counts as healed");
 
 console.log("PASS outbound_echo_guard — parrot detector + composer prompt rule + self-heal trigger wiring");
