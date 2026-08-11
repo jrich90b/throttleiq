@@ -60,7 +60,8 @@ import {
   listOpenQuestions,
   markQuestionDone,
   markOpenTodosResolvedByCommunication,
-  ensureInitialSmsOptOutFooter
+  ensureInitialSmsOptOutFooter,
+  applyPrequalStageReply
 } from "../domain/conversationStore.js";
 import type { InventoryWatch } from "../domain/conversationStore.js";
 import { isSuppressed } from "../domain/suppressionStore.js";
@@ -7213,7 +7214,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       firstName,
       when,
       bikeLabel: conv.lead?.vehicle?.model ?? null,
-      suppression: { appointment: conv.appointment, alreadyPurchased: !!conv.sale }
+      suppression: { appointment: conv.appointment, alreadyPurchased: !!conv.sale },
+      stageAsk: applyPrequalStageReply(conv, {
+        isPrequalLead: isPrequalLead,
+        suppression: { appointment: conv.appointment, alreadyPurchased: !!conv.sale },
+        creditAppUrl: (await getDealerProfile())?.creditAppUrl
+      })
     });
     if (shouldIntroduceOnAdf) {
       ack = await applyInitialAdfPrefix(ack);

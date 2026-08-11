@@ -94,6 +94,28 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     registry.push({ name, sample: fn, covers });
   };
 
+  // The pre-qualification stage ladder (Joe, 2026-08-11). Projectable from stored state except for
+  // the one parser signal, which is sampled as FALSE: `visitNotPossible` is a per-turn reading and
+  // nothing about it is stored on the conversation. That means this sampler covers the qualify and
+  // invite rungs, and the "customer cannot come in" rung is covered by the decision-table eval
+  // instead — where it can be set explicitly.
+  add("prequalTurn", (conv) => {
+    if (typeof reducer.decidePrequalTurn !== "function") return undefined;
+    const bike = str(conv?.lead?.vehicle?.model) || str(conv?.lead?.vehicle?.description);
+    const budget = conv?.paymentBudgetContext ?? {};
+    return reducer.decidePrequalTurn({
+      isPrequalLead: /prequal|pre-qual/i.test(str(conv?.lead?.source) + " " + str(conv?.lead?.leadSource)),
+      suppressed: !!conv?.sale,
+      appointmentBooked: !!(conv?.appointment?.whenIso || conv?.appointment?.whenText),
+      bikeUnknown: !bike,
+      budgetKnown: !!(budget.monthlyBudget || budget.downPayment),
+      visitOffersMade: Number(conv?.prequalFlow?.visitOffersMade ?? 0),
+      visitNotPossible: false,
+      creditAppSentAt: conv?.prequalFlow?.creditAppSentAt ?? null,
+      creditAppAvailable: true
+    });
+  }, ["decidePrequalTurn"]);
+
   add("staleBookedAppointmentDay", (conv, clock) => {
     const whenIso = str(conv?.appointment?.whenIso);
     if (!whenIso || typeof reducer.isStaleBookedAppointmentDay !== "function") return undefined;

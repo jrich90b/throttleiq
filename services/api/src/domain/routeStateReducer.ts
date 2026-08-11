@@ -8710,3 +8710,93 @@ export function decideShortAckTurnEnd(input: ShortAckTurnEndInput): ShortAckTurn
   if (input.shortAck) return { end: true, reason: "short_ack_no_pending_question" };
   return { end: false, reason: "turn_continues" };
 }
+
+// ---------------------------------------------------------------------------
+// PRE-QUALIFICATION STAGE LADDER (Joe, 2026-08-11, verbatim: "Pre qualification needs to change.
+// The agent should discover what bike they are interested in, what their budget in then either try
+// to book an appointment or if that fails, send them a credit application link.")
+//
+// MEASURED, live store, 90 days, before building anything:
+//   27 prequal leads — the finance lane that matters (credit applications: 3).
+//   19 of the 27 ALREADY carry a real, specific bike; only 8 are catch-alls ("Harley-Davidson Full
+//     Line", "FXR/LS/WX model"). Asking the 19 which bike they want reads as not having listened —
+//     the same miss Joe corrected by hand on 8/7 — so ask_bike is gated on the EXISTING
+//     isPlaceholderModel referee, never on "is the field empty".
+//   0 of the 27 ever had a budget captured, though paymentBudgetContext has held the shape all along.
+//   6 of the 27 booked (22%, against 3.8% for non-finance leads — this lane is our best, not our worst).
+//   15 were invited in and never came. THAT 15 is the credit application's audience.
+//
+// WHY A REDUCER: this is a route decision, so it is pure and central and both reply paths apply it
+// (AGENTS.md). It reads only already-structured state — no customer text is read in here. The one
+// comprehension input, `visitNotPossible`, arrives as a boolean FROM the parser slot of the same
+// name; the reducer never looks at words.
+//
+// FAIL DIRECTION, and it is the whole reason for the ordering below: every early return is toward
+// doing LESS. Suppressed, booked, or already-sent all return "none" before any stage can fire, so
+// the failure mode is a prequal lead who gets today's ordinary reply — not a customer who is asked
+// a question after they booked, and never a second credit application.
+export type PrequalStage = "none" | "ask_bike" | "ask_budget" | "offer_visit" | "send_credit_app";
+
+export type PrequalTurnInput = {
+  /** From the lead SOURCE (a machine record), never from customer text. */
+  isPrequalLead: boolean;
+  /** advanceEveryReplySuppressed — grief / not interested / already bought / already booked. */
+  suppressed: boolean;
+  appointmentBooked: boolean;
+  /** True when the lead's vehicle is missing OR a catch-all (isPlaceholderModel). */
+  bikeUnknown: boolean;
+  budgetKnown: boolean;
+  /** How many times we have already invited this lead in. */
+  visitOffersMade: number;
+  /** Parser slot: still interested, but coming in is not their path. */
+  visitNotPossible: boolean;
+  /** ISO string once sent; the application goes out at most ONCE per lead. */
+  creditAppSentAt?: string | null;
+  /** False when the dealer profile has no real credit-app URL — we never fabricate a link. */
+  creditAppAvailable: boolean;
+};
+
+export type PrequalTurnDecision = {
+  stage: PrequalStage;
+  reason: string;
+};
+
+/**
+ * How many invitations count as "we tried". Joe, 2026-08-11: send the application when they tell us
+ * they cannot come in, OR when we have invited them twice with no booking. TWO, deliberately — one
+ * unanswered invitation is not a refusal, and these threads are often just slow. At two, this would
+ * have reached roughly five leads a month.
+ */
+export const PREQUAL_VISIT_OFFER_LIMIT = 2;
+
+export function decidePrequalTurn(input: PrequalTurnInput): PrequalTurnDecision {
+  if (!input.isPrequalLead) return { stage: "none", reason: "not_a_prequal_lead" };
+  // The four existing suppressions own the turn before any goal does. Never sell into grief, never
+  // push someone who said no, never invite an owner in, never re-open a booked thread.
+  if (input.suppressed) return { stage: "none", reason: "suppressed" };
+  // THE FINISH LINE. This is the stop condition the ladder exists to have: the goal is reached, so
+  // stop asking. Before this change the only stop was a booked appointment reached by accident.
+  if (input.appointmentBooked) return { stage: "none", reason: "already_booked" };
+  // A credit application is not undoable and must never be sent twice.
+  if (String(input.creditAppSentAt ?? "").trim()) return { stage: "none", reason: "credit_app_already_sent" };
+
+  // Qualify first, in Joe's order. Both of these are questions, so they are safe to ask even after
+  // the customer has told us they cannot come in — they are how we help, not how we push.
+  if (input.bikeUnknown) return { stage: "ask_bike", reason: "no_specific_bike_on_the_lead" };
+  if (!input.budgetKnown) return { stage: "ask_budget", reason: "no_budget_captured" };
+
+  // Qualified. Try for the appointment; fall back to the application when that has failed.
+  const triedEnough = input.visitOffersMade >= PREQUAL_VISIT_OFFER_LIMIT;
+  if (input.visitNotPossible || triedEnough) {
+    if (!input.creditAppAvailable) {
+      // No real URL configured. Keep inviting rather than promising a link we cannot produce —
+      // fail toward the thing we can actually do.
+      return { stage: "offer_visit", reason: "credit_app_unavailable_keep_inviting" };
+    }
+    return {
+      stage: "send_credit_app",
+      reason: input.visitNotPossible ? "customer_cannot_come_in" : "visit_offered_enough_times"
+    };
+  }
+  return { stage: "offer_visit", reason: "qualified_ask_them_in" };
+}
