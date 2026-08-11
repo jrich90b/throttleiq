@@ -13,6 +13,7 @@ import OpenAI from "openai";
 import type { Conversation } from "./conversationStore.js";
 import { dataPath } from "./dataDir.js";
 import { buildSelfHealSteering, deterministicHealTriggers, stillTriggered } from "./selfHealSteering.js";
+import { FINANCE_OUTCOME_UNREACHABLE_EXAMPLES, FINANCE_OUTCOME_UNREACHABLE_MAPPING, FINANCE_OUTCOME_UNREACHABLE_RULE } from "./financeOutcomePrompt.js";
 import { buildChannelRules, advanceEveryReplyEnabled, advanceEveryReplySuppressed } from "./draftChannelRules.js";
 export { advanceEveryReplyEnabled, advanceEveryReplySuppressed };
 import { isFabricatedGratitudeLeadIn } from "./leadInGuards.js";
@@ -1845,9 +1846,7 @@ export async function parseCadenceRegenerateContextWithLLM(args: {
     });
 
   const parsedPrimary = await runParse(primaryModel);
-  const parsed =
-    parsedPrimary ??
-    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  const parsed = parsedPrimary ?? (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
   if (!parsed) return null;
 
   const rawState = String(parsed.state ?? "").toLowerCase();
@@ -3330,7 +3329,7 @@ export type AppointmentOutcomeFollowUpPlanParse = {
 };
 
 export type FinanceOutcomeFromCallParse = {
-  outcome: "approved" | "declined" | "needs_more_info" | "none";
+  outcome: "approved" | "declined" | "needs_more_info" | "unreachable" | "none";
   explicitOutcome: boolean;
   confidence?: number;
   reasonText?: string | null;
@@ -4748,7 +4747,7 @@ const FINANCE_OUTCOME_FROM_CALL_JSON_SCHEMA: { [key: string]: unknown } = {
   additionalProperties: false,
   required: ["outcome", "explicit_outcome", "confidence", "reason_text", "required_items"],
   properties: {
-    outcome: { type: "string", enum: ["approved", "declined", "needs_more_info", "none"] },
+    outcome: { type: "string", enum: ["approved", "declined", "needs_more_info", "unreachable", "none"] },
     explicit_outcome: { type: "boolean" },
     confidence: { type: "number", minimum: 0, maximum: 1 },
     reason_text: { type: "string" },
@@ -12713,7 +12712,8 @@ export async function parseFinanceOutcomeFromCallWithLLM(args: {
     'input: "Summary: Needs a co-signer and residence history." output: {"outcome":"needs_more_info","explicit_outcome":true,"confidence":0.95,"reason_text":"needs co-signer and residence history","required_items":["A qualified co-signer","Residence history"]}',
     'input: "Summary: Bank came back asking for two recent pay stubs and a copy of his license before they will finalize." output: {"outcome":"needs_more_info","explicit_outcome":true,"confidence":0.95,"reason_text":"bank needs pay stubs and a license copy","required_items":["Two recent pay stubs","Copy of driver license"]}',
     'input: "Summary: They need more information before they can decide." output: {"outcome":"needs_more_info","explicit_outcome":true,"confidence":0.88,"reason_text":"lender needs more information","required_items":[]}',
-    'input: "Summary: Customer asked about rates and said he will think about it." output: {"outcome":"none","explicit_outcome":false,"confidence":0.93,"reason_text":"","required_items":[]}'
+    'input: "Summary: Customer asked about rates and said he will think about it." output: {"outcome":"none","explicit_outcome":false,"confidence":0.93,"reason_text":"","required_items":[]}',
+    ...FINANCE_OUTCOME_UNREACHABLE_EXAMPLES
   ];
   const prompt = [
     "You parse dealership call transcripts/summaries for finance outcome.",
@@ -12722,12 +12722,14 @@ export async function parseFinanceOutcomeFromCallWithLLM(args: {
     "Outcome mapping:",
     "- approved: explicit approval/pre-approval/funded/clear to buy/approved with terms.",
     "- declined: explicit not approved/declined/denied/couldn't approve/unable to approve.",
-    "- needs_more_info: lender needs additional contingencies (e.g., co-signer, pay stubs, references, proof/clarification of address, residence history, insurance/docs).",
+    "- needs_more_info: THE LENDER needs additional contingencies (e.g., co-signer, pay stubs, references, proof/clarification of address, residence history, insurance/docs).",
+    FINANCE_OUTCOME_UNREACHABLE_MAPPING,
     "- none: no explicit finance outcome.",
     "",
     "Rules:",
     "- Do not infer outcome from generic discussion about rates/payments alone.",
     "- 'Needs cosigner' or 'waiting on docs' should map to needs_more_info unless explicitly 'not approved/declined'.",
+    FINANCE_OUTCOME_UNREACHABLE_RULE,
     "- explicit_outcome=true only when clearly stated.",
     "- reason_text should be short phrase from transcript/summary when approved/declined/needs_more_info; else empty string.",
     "- required_items: ONLY for needs_more_info — one short noun phrase per distinct thing the LENDER is waiting on, taken from what was actually said (e.g. 'Two recent pay stubs', 'Proof of residence', 'A qualified co-signer', 'Proof of insurance'). Never invent an item the call did not name; if the call only says 'they need more info' with no specifics, return an empty array. Return an empty array for approved/declined/none.",
@@ -12763,14 +12765,9 @@ export async function parseFinanceOutcomeFromCallWithLLM(args: {
   if (!parsed) return null;
 
   const outcomeRaw = String(parsed.outcome ?? "").toLowerCase();
-  const outcome: FinanceOutcomeFromCallParse["outcome"] =
-    outcomeRaw === "approved" || outcomeRaw === "declined" || outcomeRaw === "needs_more_info"
-      ? outcomeRaw
-      : "none";
-  const confidence =
-    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
-      ? Math.max(0, Math.min(1, parsed.confidence))
-      : undefined;
+  const ACCEPTED = ["approved", "declined", "needs_more_info", "unreachable"];
+  const outcome = (ACCEPTED.includes(outcomeRaw) ? outcomeRaw : "none") as FinanceOutcomeFromCallParse["outcome"];
+  const confidence = typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence) ? Math.max(0, Math.min(1, parsed.confidence)) : undefined;
 
   // Itemized lender needs only mean anything for needs_more_info; ignore stray items elsewhere so a
   // chatty model can't attach a checklist to an approval.

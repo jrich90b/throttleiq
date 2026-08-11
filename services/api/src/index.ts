@@ -1036,6 +1036,7 @@ import {
   applyCadenceQuietWindow,
   applyPrequalStageReply,
   resolveLeadAdvanceGoal,
+  recordFinanceCustomerUnreachable,
   applyCadenceRevival,
   applyCadenceReplacement,
   applyAppointmentAttribution,
@@ -21025,14 +21026,10 @@ async function maybeHandleStaffOutcomeSms(event: InboundMessageEvent): Promise<{
       })
     );
     const financeMin = Number(process.env.LLM_FINANCE_OUTCOME_CONFIDENCE_MIN ?? 0.8);
-    const reasonText =
-      String(financeParsed?.reasonText ?? "").trim() || String(cleanedText || body).trim();
+    const reasonText = String(financeParsed?.reasonText ?? "").trim() || String(cleanedText || body).trim();
     if (
-      financeParsed?.explicitOutcome &&
-      (financeParsed.confidence ?? 0) >= financeMin &&
-      (financeParsed.outcome === "approved" ||
-        financeParsed.outcome === "declined" ||
-        financeParsed.outcome === "needs_more_info")
+      financeParsed?.explicitOutcome && (financeParsed.confidence ?? 0) >= financeMin &&
+      (financeParsed.outcome === "approved" || financeParsed.outcome === "declined" || financeParsed.outcome === "needs_more_info")
     ) {
       await applyFinanceOutcomeStatusFromSignal(
         conv,
@@ -37969,13 +37966,12 @@ app.get("/public/appointment/outcome", async (req, res) => {
           <option value="approved">Approved</option>
           <option value="declined">Declined / not approved</option>
           <option value="needs_more_info">Needs more information</option>
+          <option value="unreachable">Couldn't reach them</option>
           <option value="pending">Still pending</option>
         </select>
-        <label>Notes (optional)</label>
-        <textarea name="note" id="finance-note-field" placeholder="Add any finance context for the team..."></textarea>
+        <label>Notes (optional)</label><textarea name="note" id="finance-note-field" placeholder="Add any finance context for the team..."></textarea>
         <div class="muted">Tap the microphone to add a quick voice note.</div>
-        <button type="button" class="rec-btn" id="finance-rec-btn">🎤 Tap to talk</button>
-        <div class="muted" id="finance-rec-status"></div>
+        <button type="button" class="rec-btn" id="finance-rec-btn">🎤 Tap to talk</button><div class="muted" id="finance-rec-status"></div>
         <div class="muted">This updates the conversation and stops the staff outcome prompt when a final outcome is selected.</div>
         <button type="submit">Submit outcome</button>
       </form>
@@ -38762,6 +38758,11 @@ app.post("/public/appointment/outcome", upload.none(), async (req, res) => {
   const financeOutcomeRaw = String(req.body?.financeOutcome ?? "").trim().toLowerCase();
   if (isFinanceOutcomeTokenForConversation(conv, token) && financeOutcomeRaw) {
     const nowIso = new Date().toISOString();
+    if (financeOutcomeRaw === "unreachable") {
+      recordFinanceCustomerUnreachable(conv, { note, token, nowIso });
+      await flushConversationStore();
+      return res.send("Thanks — noted that you couldn't reach them.");
+    }
     if (financeOutcomeRaw === "pending") {
       applyFinanceOutcomeNotifyState(conv, { lane: "public_link_pending", nowIso });
       addTodo(

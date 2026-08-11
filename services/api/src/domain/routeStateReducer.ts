@@ -7661,6 +7661,7 @@ export type FinanceOutcomeNotifyLane =
   | "prompt_sent"
   | "notify_sent"
   | "public_link_pending"
+  | "public_link_unreachable"
   | "public_link_resolved"
   | "staff_sms_pending"
   | "staff_sms_resolved";
@@ -7754,6 +7755,15 @@ export function decideFinanceOutcomeNotifyState(
         // Divergence 1, the half the QA audit can see.
         divergence: "public_link_pending_writes_a_status_the_staff_sms_lane_never_writes",
         why: "public_link_pending: the manager pressed PENDING on the link — status + pendingAt"
+      };
+    case "public_link_unreachable":
+      return {
+        ...base,
+        // The manager ANSWERED, so the prompt stops nagging — but no finance status is written,
+        // because "couldn't reach them" is not a lender verdict. Deliberately NOT "resolved": the
+        // outcome is still unknown and a person still owns it (Joe, 2026-08-11).
+        answerStamp: "responded",
+        why: "public_link_unreachable: the manager could not reach the customer — stop prompting, write no outcome"
       };
     case "public_link_resolved":
       return {
