@@ -88,7 +88,12 @@ async function main() {
   assert.equal(combined.handled, true);
   assert.match(combined.reply ?? "", /Financing Special/i);
   assert.match(combined.reply ?? "", /2\.99%/);
-  assert.match(combined.reply ?? "", /confirm the current price/i);
+  // The guarantee here is that a price+finance answer ACKNOWLEDGES the price is still pending — not
+  // any particular sentence. On 2026-08-11 the wording changed (Joe: say WHY we cannot answer), and
+  // this fixture's unit is matched-but-unpriced, which is now the `not_posted` case. Followed to the
+  // new wording rather than loosened, and split into the two properties that actually matter.
+  assert.match(combined.reply ?? "", /isn’t posted with a price yet/i);
+  assert.match(combined.reply ?? "", /get the number from my manager/i);
   assert.match(combined.todoSummary ?? "", /Confirm price and final finance eligibility/i);
 
   const capped = await buildInventoryBackedVehicleFactAnswer({
@@ -107,7 +112,10 @@ async function main() {
   });
   assert.equal(priceOnly.handled, true);
   assert.doesNotMatch(priceOnly.reply ?? "", /2\.99%|Financing Special/i);
-  assert.match(priceOnly.reply ?? "", /confirm the current price/i);
+  // Same unit, price-only question: still the matched-but-unpriced case, so still the honest line.
+  assert.match(priceOnly.reply ?? "", /isn’t posted with a price yet/i);
+  // And a deferral never invents a figure, whatever the wording.
+  assert.doesNotMatch(priceOnly.reply ?? "", /\$\s?\d/);
 
   const staleLatestLeadConv = {
     latestLead: {
