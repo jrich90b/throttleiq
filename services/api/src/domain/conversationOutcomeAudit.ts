@@ -153,7 +153,7 @@ type AuditableConv = {
   inventoryWatches?: Array<{ status?: string | null }> | null;
   draftHeld?: { at?: string | null; reason?: string | null; heldKind?: string | null; frame?: string | null } | null;
   contextFidelityShadow?: { at?: string | null; frame?: string | null; severity?: string | null; reason?: string | null; draftPreview?: string | null } | null;
-  humanCorrection?: { at?: string | null; category?: string | null; reason?: string | null; steering?: string | null; messageId?: string | null } | null;
+  humanCorrection?: { at?: string | null; category?: string | null; reason?: string | null; steering?: string | null; messageId?: string | null; agentCouldHaveKnown?: boolean | null } | null;
   cadenceQualityShadow?: { at?: string | null; overall?: string | null; reason?: string | null; cadenceKind?: string | null; gateHeld?: boolean | null; gateReason?: string | null } | null;
   messages?: Array<{ direction?: string | null; provider?: string | null; at?: string | null; body?: string | null; sid?: string | null; draftStatus?: string | null; feedback?: { rating?: string | null; at?: string | null } | null }> | null;
   questions?: Array<{ text?: string | null; status?: string | null; createdAt?: string | null }> | null;
@@ -321,9 +321,20 @@ export function auditConversationOutcome(conv: AuditableConv, opts: { now?: Date
   //     human already corrected it — and the very class Joe kept catching by hand. Surface it so the
   //     loop turns the correction into a parser-first fix (frame + steering are the inputs). Recent only
   //     (a fresh signal; old ones age out — the loop's dedup prevents re-work). Comprehension P2.
+  //     The judge ALSO answers "could the agent have known this?", and that answer is persisted
+  //     (index.ts, human_correction.material). When it says NO, the staff edit added something from
+  //     outside the thread — an out-of-band trade update, a phone call, dealer news — and there is no
+  //     parser-first fix to make: the row is un-actionable by construction and burns a review slot
+  //     every run (measured 2026-08-11 on +17163160886). This is the same rule
+  //     agentCorrectionRate.bucketDraftEdit already applies to the correction RATE, so the detector
+  //     and the rate now agree on when the agent is at fault.
+  //     FAIL DIRECTION: only an affirmative `false` suppresses. Absent/null — every record written
+  //     before the field existed (2026-08-01) — stays a finding, so we fail toward surfacing a real
+  //     miss rather than silencing one.
   const hc = conv.humanCorrection;
   const hcAtMs = Date.parse(String(hc?.at ?? ""));
-  if (hc && Number.isFinite(hcAtMs)) {
+  const agentCouldNotHaveKnown = hc?.agentCouldHaveKnown === false;
+  if (hc && Number.isFinite(hcAtMs) && !agentCouldNotHaveKnown) {
     const ageDays = (now.getTime() - hcAtMs) / (1000 * 60 * 60 * 24);
     if (ageDays >= 0 && ageDays <= 21) {
       const proactive = correctedSendWasProactive(conv, hc.messageId);

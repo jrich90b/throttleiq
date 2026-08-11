@@ -142,6 +142,30 @@ eq(dims({ id: "c5c", contextFidelityShadow: { at: "2026-06-25T01:00:00.000Z", se
 // Older than the 21-day window => aged out (the loop already had its chance; dedup handles recurrence).
 eq(dims({ id: "c5e", humanCorrection: { at: "2026-05-01T00:00:00.000Z", category: "wrong_fact" } }), [], "material correction older than 21d => not surfaced");
 
+// The judge's OWN `agentCouldHaveKnown: false` verdict = the staff edit added something from outside
+// the thread (an out-of-band trade update, a phone call). There is no parser-first fix for that, so
+// filing it as a work order just burns a review slot. Measured 2026-08-11 on +17163160886: staff
+// replaced a follow-up with "the customer did not bring in his 2025 Road Glide for trade this past
+// Saturday" — the agent had no record of it. Same rule agentCorrectionRate.bucketDraftEdit uses.
+eq(
+  dims({ id: "c5d-oob", humanCorrection: { at: "2026-06-25T01:00:00.000Z", category: "missing_info", reason: "out-of-band trade status", agentCouldHaveKnown: false } }),
+  [],
+  "judge says the agent could NOT have known => un-actionable, never surfaced"
+);
+// FAIL DIRECTION: only an affirmative `false` suppresses. `true`, null and absent all still fire —
+// absent is every record written before the field existed (2026-08-01), and silencing those would
+// hide real comprehension misses.
+eq(
+  dims({ id: "c5d-known", humanCorrection: { at: "2026-06-25T01:00:00.000Z", category: "wrong_intent", agentCouldHaveKnown: true } }),
+  ["human_correction_material"],
+  "judge says the agent COULD have known => still surfaced"
+);
+eq(
+  dims({ id: "c5d-null", humanCorrection: { at: "2026-06-25T01:00:00.000Z", category: "wrong_intent", agentCouldHaveKnown: null } }),
+  ["human_correction_material"],
+  "no verdict on the field (null) => still surfaced, we fail toward surfacing"
+);
+
 // --- 5f. cadence-quality suppressed/held (folded from the cadence-quality judge) => comprehension. ---
 {
   const a = auditConversationOutcome({ id: "c5g", cadenceQualityShadow: { at: "2026-06-25T01:00:00.000Z", overall: "suppress", reason: "nagging on a closed deal", cadenceKind: "standard" } }, { now: NOW });
