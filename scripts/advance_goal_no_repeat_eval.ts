@@ -150,9 +150,27 @@ async function main(): Promise<void> {
     /drop the goal for this turn/i.test(rulesWithGoal),
     "and the goal is explicitly droppable when it does not fit what they said"
   );
+  // ORDER, and it was deliberately REVERSED on 2026-08-11. It first sat AFTER the goal; it now sits
+  // BEFORE it. The reasoning that produced both is the same measured lesson — "a strong OPENING
+  // instruction beats a caveat further down, every time" — and on re-reading, that argues for
+  // answering the customer being the LEADING imperative, with the goal following as intent. The goal
+  // is a statement of where we are trying to get; answering them is the order.
   const goalAt = rulesWithGoal.indexOf(goal!);
   const answerFirstAt = rulesWithGoal.search(/ANSWER WHAT THEY ACTUALLY SAID FIRST/i);
-  assert.ok(answerFirstAt > goalAt, "the answer-first instruction sits AFTER the goal, so it reads as the binding one");
+  assert.ok(answerFirstAt < goalAt, "answering the customer is the LEADING instruction; the goal follows it");
+
+  // And it is UNCONDITIONAL (Joe, 2026-08-11: "if the customer responds with questions the agent needs
+  // to know how to handle this"). It used to live inside the goal block, so it only reached lanes that
+  // happened to carry one — backwards, since every lane that asks someone in can get a question back.
+  const rulesNoGoalAnswerFirst = buildChannelRules({ channel: "sms", history: [] } as any);
+  assert.ok(
+    /ANSWER WHAT THEY ACTUALLY SAID FIRST/i.test(rulesNoGoalAnswerFirst),
+    "answer-them-first binds a lane with NO goal too — Room58 is exactly that lane"
+  );
+  assert.ok(
+    /say so plainly/i.test(rulesNoGoalAnswerFirst),
+    "…and tells it what to do when it does NOT have the answer, which is the common case on price"
+  );
 
   // A lane with no goal is untouched — every non-prequal lead keeps today's behaviour exactly.
   const rulesNoGoal = buildChannelRules({ channel: "sms", history: [] } as any);

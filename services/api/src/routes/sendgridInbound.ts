@@ -9585,8 +9585,6 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const yearLabel = conv.lead?.vehicle?.year ? `${conv.lead?.vehicle?.year} ` : "";
     const bikeLabel = modelLabel ? `${yearLabel}${modelLabel}`.trim() : "the bike";
     const hasIdentifiers = !!conv.lead?.vehicle?.stockId || !!conv.lead?.vehicle?.vin;
-    const isRequestDetails = /request details/i.test(leadSourceLower);
-    const questionTail = isRequestDetails ? " Any specific questions about the bike?" : "";
     // A "Request a Quote" source is a structured pricing ask (an ADF source/CTA signal, not
     // free-text comprehension). The email path always names pricing (its helpLine); the SMS
     // must not drop it to a bare availability invite, or the quote ask goes unanswered
@@ -9595,10 +9593,27 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     // proactivity = WAIT), so the first touch acknowledges pricing and still invites a visit.
     const isQuoteRequestLead = isQuoteRequestSourceLead({ inferredCta, leadSourceLower });
     if (initialAvailability === "in_stock") {
+      // ASK THEM IN, straight away (Joe, 2026-08-11). The old copy waited — "if you'd like to stop in,
+      // just let me know" is an invitation the CUSTOMER has to act on, and the Request-details variant
+      // then asked "any specific questions I can answer?", which is a second question aimed at more
+      // conversation rather than at a visit.
+      //
+      // MEASURED on `Room58 - Request details` (71 leads, our most engaged lane at 69% reply and only
+      // 7% booked): 100% name a bike and **54% type no message at all** — they clicked a button on a
+      // bike page. There is nothing to answer for over half of them, so the whole first touch is ours
+      // to shape, and Joe's call was to use it on the visit rather than on a qualifying question.
+      //
+      // DIRECT, and Joe was specific about the wording (2026-08-11): "want to stop in and check it
+      // out" — asking about the VISIT, not about arranging one. "Let me know if you want to stop in"
+      // is the shape he ruled out; "want to set up a time to" is a step removed from the thing itself.
+      // It only reads this way because the bike is KNOWN — the no-bike branch still asks which one.
+      //
+      // Still soft on timing: no day, no clock time. The concrete slot comes on their reply, where the
+      // scheduling flow already owns it. If they come back with a QUESTION instead, the composer
+      // answers that first — see answerThemFirstRule in draftChannelRules.
       draft = isQuoteRequestLead
-        ? `Thanks for your inquiry about the ${bikeLabel}. Happy to help with pricing, options, and availability — if you’d like to stop in and check it out, just let me know.`
-        : `Thanks for your inquiry about the ${bikeLabel}. ` +
-          `If you’d like to stop in and check it out, just let me know.${questionTail ? " Any specific questions I can answer?" : ""}`;
+        ? `Thanks for your inquiry about the ${bikeLabel}. Happy to help with pricing, options, and availability — want to stop in and check it out?`
+        : `Thanks for your inquiry about the ${bikeLabel}. Want to stop in and check it out?`;
     } else if (initialAvailability === "on_hold") {
       draft =
         `Thanks for your inquiry about the ${bikeLabel}. ` +
@@ -9635,10 +9650,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
           reason: noSubjectHandoff.reason
         });
       } else {
+        // Same call as the in-stock branch above (Joe, 2026-08-11): ask them in rather than waiting.
+        // "I'm here to help" + "any specific questions?" is two sentences of availability and no ask.
+        // When we do not know WHICH bike, that question still outranks everything — you cannot invite
+        // someone to see a machine you cannot name.
         draft =
           bikeLabel === "the bike"
             ? "Thanks — I got your inquiry. Which bike are you asking about?"
-            : `Thanks — I saw you wanted to learn more about the ${bikeLabel}.${isRequestDetails ? " Any specific questions about the bike?" : ""} I’m here to help.`;
+            : `Thanks — I saw you wanted to learn more about the ${bikeLabel}. Want to stop in and check it out?`;
       }
       suppressAvailabilityAppend = true;
     }
