@@ -242,6 +242,30 @@ async function main(): Promise<void> {
     "and it adds no second question — the ceiling is one per message"
   );
 
+  // --- END TO END on the real lead, because testing the PIECES does not prove the WIRE ------------
+  // Two sabotages survived the first cut of this eval: making the copy dispatcher fall back to the
+  // generic line, and making the writer never read the form at all. Both passed because every
+  // assertion above calls a helper DIRECTLY. This one drives `applyPrequalStageReply` — the function
+  // production actually calls — on Branson Stockwell's REAL inquiry string, and kills both.
+  const BRANSON_INQUIRY =
+    "PreQual: N, PreQualified Amount; $0 Please note non-prequalified customers can still be considered for approval with a completed credit application.";
+  const declined: any = prequalConv({ lead: { vehicle: { model: "2025 Road Glide" }, inquiry: BRANSON_INQUIRY } });
+  const declinedLine = applyPrequalStageReply(declined, { isPrequalLead: true, creditAppUrl: URL });
+  assert.ok(declinedLine.includes(URL), "a lead whose soft check did not clear gets the application");
+  assert.ok(/soft check/i.test(declinedLine), "...with the not-cleared wording, not the generic one");
+  assert.ok(/stop in/i.test(declinedLine), "...and the visit door still open");
+  assert.equal(declined.prequalFlow?.visitOffersMade ?? 0, 0, "it never had to be invited twice first");
+  assert.ok(declined.prequalFlow?.creditAppSentAt, "and the send is stamped so it cannot go twice");
+
+  // The same lead with a CLEARED soft check is invited in, exactly as before this rung existed.
+  const cleared: any = prequalConv({
+    lead: { vehicle: { model: "2025 Road Glide" }, inquiry: "Model Year: 2022, Model: Iron 883, PreQual: Y, PreQualified Amount; $13,000 or up to $33,000." }
+  });
+  const clearedLine = applyPrequalStageReply(cleared, { isPrequalLead: true, creditAppUrl: URL });
+  assert.ok(!clearedLine.includes(URL), "a cleared prequal is still invited in, not handed an application");
+  assert.equal(cleared.prequalFlow?.visitOffersMade, 1, "and that invitation is counted");
+  console.log("end to end: the real not-cleared form reaches the application through the real writer");
+
   console.log("writer: counts invitations, sends the application once, respects the finish line");
   console.log("PASS prequal stage ladder — bike, then budget, then the visit, then the application.");
 }
