@@ -59,7 +59,16 @@ export function advanceEveryReplySuppressed(ctx: {
   dispositionClosing?: boolean | null;
   alreadyPurchased?: boolean | null;
   appointment?: any;
+  /**
+   * FIFTH EXCEPTION (Joe, 2026-08-10): we already have enough for a salesperson to take the lead —
+   * reachable, money path known, bike question settled — so the turn is a HAND-OFF. Another
+   * question past that point is not advancing anything; John Zimmerman (+17169902571) answered our
+   * own either/or with "Couple options" and was asked what he meant. Decided by
+   * decideSalesHandoffReadiness in routeStateReducer, never here and never in prompt text.
+   */
+  enoughInfoHandoff?: boolean | null;
 }): boolean {
+  if (ctx.enoughInfoHandoff) return true;
   if (ctx.needsEmpathy) return true;
   if (ctx.dispositionClosing) return true;
   if (ctx.alreadyPurchased) return true;

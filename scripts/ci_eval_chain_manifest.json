@@ -253,6 +253,7 @@
     "rider_course_schedule:eval",
     "riding_academy_status_lane:eval",
     "finance_process_handoff:eval",
+    "enough_info_handoff:eval",
     "budget_gated_on_financing:eval",
     "finance_hardship_handoff:eval",
     "new_sales_journey_fork:eval",

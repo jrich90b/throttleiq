@@ -341,7 +341,14 @@ const CEILINGS: Ceiling[] = [
     // pauseInventoryWatches, markInventoryWatchOptOut — moved beside it in conversationStore.ts,
     // and the close-out copy lives in agentVoice.ts with the other watch templates, so index.ts
     // pays only for two call sites and still ratchets DOWN.
-    max: 70_608,
+    // 70_608 -> 70_505. The enough-info hand-off (John Zimmerman +17169902571; Joe 8/10: "the agent
+    // has to know when we have enough info and to handoff"). Funded by moving the pure future-timeframe
+    // date readers — parseFutureTimeframe + parseRelativeDaysOrWeeks + computeMidWeekFollowUpDate +
+    // parseRelativeDurationCount — into domain/futureTimeframe.ts. They were already pure and already
+    // took their clock as a parameter, so nothing there reads a wall clock. The readiness RULE is pure
+    // too and lives in domain/salesHandoffReadiness.ts; index.ts keeps only the parse call and the
+    // side effects it alone owns.
+    max: 70_505,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
