@@ -105,8 +105,14 @@ async function main(): Promise<void> {
 
   // The steering must demand a REWORD and must not let the question be dropped.
   const steering = buildSelfHealSteering({ original: REAL_REPEAT, judgeSteering: "", echoesInbound: false, repeatsOwnQuestion: true });
-  assert.ok(/different way|do not repeat/i.test(steering), "the steering asks for a different wording");
-  assert.ok(/not drop the question|something to answer/i.test(steering), "…and keeps them with something to answer");
+  // Asserted as SEPARATE properties, not an OR. The first cut used /different way|do not repeat/ and
+  // a sabotage that deleted the "ask it a different way" half sailed through on the other alternative
+  // — an OR assertion only proves that SOMETHING survived, which is not what we mean.
+  assert.ok(/different way/i.test(steering), "the steering asks for a different wording");
+  assert.ok(/do not repeat the sentence/i.test(steering), "…and forbids the verbatim repeat outright");
+  assert.ok(/shorter|another angle|choice of two/i.test(steering), "…and says HOW to vary it");
+  assert.ok(/not drop the question/i.test(steering), "…and refuses to let the question be dropped");
+  assert.ok(/something to answer/i.test(steering), "…leaving them something to answer");
 
   // --- 4. the prompt rules ----------------------------------------------------------------------
   // THE NO-REPEAT RULE BINDS EVERY REPLY, arm on or off. The first cut nested it inside the
