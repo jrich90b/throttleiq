@@ -406,7 +406,7 @@ import {
   contextFidelityHeldSurfacingEnabled,
   CONTEXT_FIDELITY_HANDOFF_ACK
 } from "./domain/contextFidelityHold.js";
-import { customerVisitConfirmed, rideOutcomeImpliesVisit, phantomVisitGuardEnabled } from "./domain/visitFraming.js";
+import { customerVisitConfirmed, dealerRecordedDemoRide, rideOutcomeImpliesVisit, phantomVisitGuardEnabled, buildWalkInSoftTimingAsk } from "./domain/visitFraming.js";
 import { isSpecificModel, isPlaceholderModel } from "./domain/modelDeflection.js";
 import { resolveCadenceAckSuppression } from "./domain/cadenceAckGate.js";
 import { PORTAL_RUNNER_KINDS, resolveRunnerKindsToRetire } from "./domain/portalRunnerHandoff.js";
@@ -16553,15 +16553,14 @@ function buildDealerLeadAppPostRideReply(args: {
   // Phantom-visit guard (dark behind PHANTOM_VISIT_GUARD): only thank for a past ride when one
   // actually happened; otherwise an initial-touch intro. Assuming a visit that didn't happen is the
   // single biggest out-of-context miss in production (the Knighton/Krugov class).
-  const visited = customerVisitConfirmed(args.conv);
+  // A Dealer Lead App lead with a recorded demo ride HAS been in (Joe, 8/11) — see dealerRecordedDemoRide.
+  const visited = customerVisitConfirmed(args.conv) || dealerRecordedDemoRide(args.conv);
   const useVisitFraming = !phantomVisitGuardEnabled() || visited;
   const intro = useVisitFraming
     ? `${greeting}This is ${senderFirst} at ${dealerName}. Thanks again for coming in for the test ride on the ${modelLabel}.`
     : `${greeting}This is ${senderFirst} at ${dealerName}. Thanks for your interest in the ${modelLabel}.`;
   if (args.inventoryStatus === "in_stock") {
-    return useVisitFraming
-      ? `${intro} If any questions come up or you want to come back in and go over options, just text me anytime.`
-      : `${intro} It's in stock — want to set up a time to come ride it? Any questions, just text me anytime.`;
+    return `${intro}${buildWalkInSoftTimingAsk(useVisitFraming, true)}`;
   }
   if (args.inventoryStatus === "on_hold") {
     return `${intro} That ${modelLabel} is on hold right now. If it opens back up, I can text you first, or I can help you compare similar options.`;
@@ -16569,7 +16568,7 @@ function buildDealerLeadAppPostRideReply(args: {
   if (args.inventoryStatus === "sold") {
     return `${intro} That ${modelLabel} is no longer available, but I can help you compare similar options if you want.`;
   }
-  return `${intro} If any questions come up or you want to go over options, just text me anytime.`;
+  return `${intro}${buildWalkInSoftTimingAsk(useVisitFraming, false)}`;
 }
 
 function getDealerLeadAppConversationText(conv: any): string {
