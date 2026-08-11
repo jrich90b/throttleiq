@@ -140,10 +140,20 @@ async function main(): Promise<void> {
   const booked: any = prequalConv({ appointment: { whenIso: "2026-08-20T15:00:00.000Z" } });
   assert.equal(applyPrequalStageReply(booked, { isPrequalLead: true, creditAppUrl: URL }), "", "booked means stop");
 
-  // No configured URL: keep inviting, never emit a broken link.
-  const noUrl: any = prequalConv({ prequalFlow: { visitOffersMade: 5 } });
-  const line = applyPrequalStageReply(noUrl, { isPrequalLead: true, creditAppUrl: "" });
-  assert.ok(line && !/http/i.test(line), "with no real url we invite instead of inventing one");
+  // No configured URL: keep inviting, never emit a broken link. BOTH shapes of "no url" —
+  // a sabotage that only checked for emptiness survived this eval until the second case was added,
+  // and a dealer profile carrying a note instead of a link is exactly how that reaches a customer.
+  for (const badUrl of ["", "   ", "call the store", "creditapplication.harley-davidson.com", "TBD"]) {
+    const noUrl: any = prequalConv({ prequalFlow: { visitOffersMade: 5 } });
+    const line = applyPrequalStageReply(noUrl, { isPrequalLead: true, creditAppUrl: badUrl });
+    assert.ok(line, `a lead past the invitation limit still gets a reply with url=${JSON.stringify(badUrl)}`);
+    assert.ok(
+      !line.includes(badUrl.trim()) || !badUrl.trim(),
+      `never hand the customer a non-link as if it were one (url=${JSON.stringify(badUrl)})`
+    );
+    assert.ok(line.includes("?"), `with no usable url we INVITE instead (url=${JSON.stringify(badUrl)})`);
+    assert.ok(!noUrl.prequalFlow?.creditAppSentAt, "and nothing is stamped as sent");
+  }
 
   console.log("writer: counts invitations, sends the application once, respects the finish line");
   console.log("PASS prequal stage ladder — bike, then budget, then the visit, then the application.");
