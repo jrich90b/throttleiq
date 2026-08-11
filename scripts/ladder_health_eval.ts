@@ -73,8 +73,19 @@ async function main(): Promise<void> {
   // --- SMALL LANES NEVER ALARM ------------------------------------------------------------------
   // MEASURED PRECEDENT: the canary's ratio rule tripped on a healthy build off ~2 drafts. Most lanes
   // here run single digits a month, so the floor is absolute.
-  const tiny = Array.from({ length: LADDER_MIN_RECENT_LEADS - 1 }, (_, i) => lead("Lane D", 3 + i, { asks: false }));
-  assert.equal(assessLadderHealth({ conversations: tiny, now: NOW }).alarms.length, 0, "below the floor, never an alarm");
+  // ⚠️ LITERAL counts, never `LADDER_MIN_RECENT_LEADS - 1`. The first cut sized this fixture off the
+  // constant it was testing, so lowering the floor to 1 shrank the fixture to zero leads and the
+  // assertion still passed — a test defined in terms of the thing it checks cannot detect a change to
+  // that thing.
+  assert.ok(LADDER_MIN_RECENT_LEADS >= 5, "the alarm floor must stay at 5 or more recent leads");
+  const tiny = Array.from({ length: 4 }, (_, i) => lead("Lane D", 3 + i, { asks: false }));
+  assert.equal(assessLadderHealth({ conversations: tiny, now: NOW }).alarms.length, 0, "4 leads is below the floor — never an alarm");
+  const sevenQuiet = Array.from({ length: 7 }, (_, i) => lead("Lane D2", 3 + i, { asks: false }));
+  assert.equal(
+    assessLadderHealth({ conversations: sevenQuiet, now: NOW }).alarms.length,
+    0,
+    "7 quiet leads with no history is still below the never-asks floor of 8"
+  );
 
   // --- DECLARED NO-LADDER LANES ARE SILENT, AND SAY WHY -----------------------------------------
   // Without this the sweep flags the VOICE lane on every run, and an instrument that always shows a
