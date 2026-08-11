@@ -59,7 +59,48 @@ function formatUnitReference(unitLabel: string | null | undefined): string {
   return `the ${label}`;
 }
 
-function buildPendingPriceConfirmationReply(unitLabel: string | null | undefined): string {
+/**
+ * WHY we cannot answer a price question right now. Three different situations were all producing the
+ * same vague sentence.
+ *
+ * MEASURED 2026-08-11 on the live inventory snapshot (66 units): **17 carry no price at all, and it
+ * is concentrated in USED — 13 of 26 used (50%) against 4 of 40 new (10%).** Joe's read was right:
+ * *"there might be no price listed on the website sometimes."* Half the used floor, in fact.
+ *
+ * `findInventoryPrice` already distinguishes all three — a null result means no unit matched, an
+ * item with no usable price means the unit is real but unpriced — so this only has to name them.
+ */
+export type PriceAnswerability = "priced" | "not_posted" | "unit_unknown";
+
+export function classifyPriceAnswerability(
+  lookup: { price?: number | null; item?: unknown } | null | undefined
+): PriceAnswerability {
+  if (!lookup || !lookup.item) return "unit_unknown";
+  const numeric = Number(lookup.price);
+  return Number.isFinite(numeric) && numeric > 0 ? "priced" : "not_posted";
+}
+
+/**
+ * The deferral, now specific about which of the three it is (Joe, 2026-08-11: *"that works"*).
+ *
+ * `not_posted` is the one that changes: we KNOW the unit and the website simply has no price on it,
+ * so "I'll have the team confirm the current price" is a vague promise where a plain fact would do.
+ * Saying it is not posted and naming who is getting the number is honest, and it sets a real
+ * expectation instead of an errand.
+ *
+ * It NEVER quotes a figure. Whether to quote a price we DO hold is a money-path decision and Joe's
+ * alone, so `priced` keeps today's wording untouched — and so does `unit_unknown`, which is the
+ * fail-safe default whenever we are not sure what we are looking at.
+ */
+export function buildPendingPriceConfirmationReply(
+  unitLabel: string | null | undefined,
+  answerability: PriceAnswerability = "unit_unknown"
+): string {
+  if (answerability === "not_posted") {
+    const reference = formatUnitReference(unitLabel);
+    const opener = reference.charAt(0).toUpperCase() + reference.slice(1);
+    return `${opener} isn’t posted with a price yet — let me get the number from my manager and come right back to you.`;
+  }
   return `I’ll have the team confirm the current price on ${formatUnitReference(unitLabel)} and send it over.`;
 }
 
@@ -302,7 +343,7 @@ export async function buildInventoryBackedVehicleFactAnswer(args: {
     }
     return {
       handled: true,
-      reply: buildPendingPriceConfirmationReply(unitLabel),
+      reply: buildPendingPriceConfirmationReply(unitLabel, "not_posted"),
       needsTodo: true,
       todoReason: "pricing",
       todoSummary: `Confirm sale price for ${unitLabel}. Customer asked: ${args.text}`,
@@ -330,7 +371,7 @@ export async function buildInventoryBackedVehicleFactAnswer(args: {
     const priceClause = priceText ? ` The listed price I see is ${priceText} before tax and fees.` : "";
     const missingPriceClause =
       !priceText && asksPriceInFinanceQuestion
-        ? ` ${buildPendingPriceConfirmationReply(unitLabel)} I’ll also have them confirm final eligibility.`
+        ? ` ${buildPendingPriceConfirmationReply(unitLabel, "not_posted")} I’ll also have them confirm final eligibility.`
         : " I’ll still have the team confirm final finance eligibility before quoting exact terms.";
     return {
       handled: true,
@@ -498,7 +539,7 @@ export function mergeRecentPriceQuestionIntoFinanceAnswer(args: {
   const unitLabel = args.answer.unitLabel ?? "bike";
   const priceSentence = args.answer.priceText
     ? `The listed price I see on the ${unitLabel} is ${args.answer.priceText} before tax and fees.`
-    : buildPendingPriceConfirmationReply(unitLabel);
+    : buildPendingPriceConfirmationReply(unitLabel, args.answer.item ? "not_posted" : "unit_unknown");
   const financeReply = normalizeText(args.answer.reply);
   const reply = [priceSentence, financeReply].filter(Boolean).join(" ");
   const summaryPrefix = args.answer.missingPrice
