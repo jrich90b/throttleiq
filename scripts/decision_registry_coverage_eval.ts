@@ -86,6 +86,10 @@ for (const fn of [
   // parser's measured verdicts.
   "decideNoSubjectWebLeadHandoff",
   "decideFinanceProcessQuestionTurn",
+  // Reads THIS turn's bike-scope parse plus live classification/lead state; the parse is never
+  // persisted, so a stored conversation cannot reproduce the inputs. Pinned by
+  // enough_info_handoff:eval, which executes the table directly.
+  "decideSalesHandoffReadiness",
   // Reads THIS turn's budget-gated-on-financing parse (intent + confidence) only; none of it is
   // persisted, so a stored conversation cannot reproduce the inputs. Its decision table is pinned
   // instead by budget_gated_on_financing:eval, which executes it directly.

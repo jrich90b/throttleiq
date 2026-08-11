@@ -140,8 +140,27 @@ assert.match(
   /Day group must allow ordinal suffixes/,
   "parsePauseUntil ordinal fix must be documented at the regex"
 );
+// parseFutureTimeframe moved to domain/futureTimeframe.ts (2026-08-11) to fund the enough-info
+// hand-off, so this invariant now lives in TWO files. Counted per-file rather than as a total, so
+// the pair cannot silently collapse into one place and still pass.
+const futureTimeframeSource = await fs.readFile(
+  path.resolve("services/api/src/domain/futureTimeframe.ts"),
+  "utf8"
+);
+const monthGuard = /never the\s+(?:\/\/ )?same month next year/g;
 assert.equal(
-  (apiSource.match(/never the\s+(?:\/\/ )?same month next year/g) ?? []).length,
+  (apiSource.match(monthGuard) ?? []).length,
+  1,
+  "parsePauseUntil (index.ts) must keep the bare current-month guard"
+);
+assert.equal(
+  (futureTimeframeSource.match(monthGuard) ?? []).length,
+  1,
+  "parseFutureTimeframe (domain/futureTimeframe.ts) must keep the bare current-month guard"
+);
+assert.equal(
+  (apiSource.match(monthGuard) ?? []).length +
+    (futureTimeframeSource.match(monthGuard) ?? []).length,
   2,
   "bare current-month mentions must stay in the current month in BOTH parsePauseUntil and parseFutureTimeframe"
 );

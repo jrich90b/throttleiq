@@ -2093,6 +2093,54 @@ export function decideBudgetGatedOnFinancingTurn(
   return { kind: "finance_handoff" };
 }
 
+// --- "We have enough — hand off instead of asking again" (John Zimmerman, 2026-08-10) ------
+//
+// He arrived on a SUBMITTED HDFS credit application for a 2026 Road Glide. We asked "Are you
+// looking at the Road Glide, or open to a couple of options?"; he answered "Couple options" — our
+// own second option, in our own words — and the routing parser returned fallback_action "clarify",
+// so the draft asked him what he meant. Reachable customer, submitted credit app, bike question
+// settled, and we interrogated him.
+//
+// Joe, 2026-08-10: "the agent has to know when we have enough info and to handoff — we don't need
+// the agent to keep asking questions."
+//
+// This is the FIFTH C1.7 exception (see advanceEveryReplySuppressed in draftChannelRules.ts): a
+// question is advancing while we are still discovering and stalling once a salesperson could take
+// the lead as-is. All three inputs must be POSITIVELY known — the money path via a real artefact
+// (cta hdfs_coa / an explicit cash-or-finance answer), never a prequal ORIGIN label, mirroring
+// decideBusinessManagerFinanceOutcomePrompt's artefact-not-origin rule.
+//
+// FAIL DIRECTION: unsure => keep_asking. A premature handoff spends a salesperson on a lead still
+// qualifying itself; a late one costs one more question.
+// ---------------------------------------------------------------------------
+export type SalesHandoffReadinessKind = "handoff" | "keep_asking";
+
+export type SalesHandoffReadinessInput = {
+  /** A phone or email we can actually reach them on. */
+  contactable: boolean;
+  /** A real finance ARTEFACT or an explicit cash/finance answer — never a prequal origin label. */
+  moneyPathKnown: boolean;
+  /** The parser settled which bike: a specific model, or explicit openness to a shortlist. */
+  bikeScopeSettled: boolean;
+  /** Already on a person's desk — never hand off twice. */
+  alreadyHandedOff: boolean;
+  /** A booked appointment already settles the thread (C1.7 exception #2). */
+  appointmentBooked: boolean;
+};
+
+export type SalesHandoffReadinessDecision = { kind: SalesHandoffReadinessKind; reason: string };
+
+export function decideSalesHandoffReadiness(
+  input: SalesHandoffReadinessInput
+): SalesHandoffReadinessDecision {
+  if (input.alreadyHandedOff) return { kind: "keep_asking", reason: "already_handed_off" };
+  if (input.appointmentBooked) return { kind: "keep_asking", reason: "appointment_booked" };
+  if (!input.contactable) return { kind: "keep_asking", reason: "no_contact_method" };
+  if (!input.moneyPathKnown) return { kind: "keep_asking", reason: "money_path_unknown" };
+  if (!input.bikeScopeSettled) return { kind: "keep_asking", reason: "bike_scope_unsettled" };
+  return { kind: "handoff", reason: "enough_info_for_a_salesperson" };
+}
+
 export function decideFinanceProcessQuestionTurn(
   input: FinanceProcessQuestionTurnInput
 ): FinanceProcessQuestionTurnDecision {

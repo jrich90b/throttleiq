@@ -28,6 +28,7 @@ export {
   isRealReplyProvider,
   decideBudgetGatedOnFinancingTurn,
   decideFinanceProcessQuestionTurn,
+  decideSalesHandoffReadiness,
   decideServiceSchedulingHandoffTurn,
   decideFinanceHardshipTurn,
   decideIncomingInventoryPurpose,
