@@ -480,6 +480,7 @@
     "web_text_widget_seller_bucket:eval",
     "web_text_widget_model_shape:eval",
     "ci_eval_runner:eval",
-    "answer_to_own_question:eval"
+    "answer_to_own_question:eval",
+    "hiring_lead_not_a_sales_lead:eval"
   ]
 }
