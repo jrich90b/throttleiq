@@ -8648,6 +8648,57 @@ export function applyInventoryWatchListNormalization(
  * `send_credit_app` yields null on purpose: that stage carries a URL, and a customer-facing link is
  * never LLM-composed.
  */
+/**
+ * A recorded finance APPROVAL is the hottest signal we get, and today it changes nothing.
+ *
+ * MEASURED 2026-08-11 on `HDFS COA Online`: of the leads whose business manager recorded an outcome,
+ * **11 were approved and ZERO of them booked an appointment** — while 10 of the 11 were messaged
+ * after the approval. Their financing is arranged and nobody asks them in.
+ *
+ * ⚠️ THE OTHER TWO OUTCOMES ARE DELIBERATELY NOT HANDLED HERE:
+ *  - `declined` — never tell a customer they were declined. Adverse-action notice is the LENDER's
+ *    job, the same rule as a `PreQual: N` lead. Today's copy keeps the door open without saying why,
+ *    which is right.
+ *  - `needs_more_info` — MEASURED as not meaning that. Its `reasonText` is dominated by "Phone number
+ *    is not reachable", "4th call attempt that does not go through", "remind stone to follow up".
+ *    Staff use it as a catch-all for customers they cannot REACH, so acting on it would text
+ *    "can you send a pay stub?" to someone who simply has not answered the phone. The prior fix is a
+ *    separate staff disposition for unreachable, not a comprehension change.
+ *
+ * ⚠️ AND IT NEVER QUOTES THE APPROVAL. The recorded reasons carry amounts ("HD preapproval up to
+ * fifty three grand"); an amount, a rate or a term is the business manager's to give, never the
+ * agent's. The goal is a TIME, not a number.
+ */
+const FINANCE_APPROVAL_GOAL_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+export function resolveFinanceApprovedAdvanceGoal(conv: Conversation, nowMs?: number): string | null {
+  const outcome = (conv as any)?.financeOutcome;
+  if (String(outcome?.status ?? "").trim().toLowerCase() !== "approved") return null;
+  // A credit approval expires — the staff notes say so themselves ("valid for 30 days"). An approval
+  // from three months ago must not drive today's turn.
+  const at = Date.parse(String(outcome?.updatedAt ?? ""));
+  const now = Number.isFinite(nowMs) ? Number(nowMs) : Date.now();
+  if (!Number.isFinite(at) || now - at > FINANCE_APPROVAL_GOAL_MAX_AGE_MS) return null;
+  // The four shared suppressions still own the turn — including a booked appointment, which is this
+  // goal's own finish line.
+  if (advanceEveryReplySuppressed({ appointment: conv.appointment, alreadyPurchased: !!(conv as any).sale })) {
+    return null;
+  }
+  return (
+    "their financing is already approved, so the only thing left is finishing up in person — get a " +
+    "day and time on the books. Do NOT quote any amount, rate, term or how long the approval lasts: " +
+    "those are the business manager's to give, never yours"
+  );
+}
+
+/**
+ * The ONE goal resolver both reply paths call. Lanes are checked in priority order, and an approval
+ * outranks everything below it: it is the warmest state a lead can be in.
+ */
+export function resolveLeadAdvanceGoal(conv: Conversation, creditAppUrl?: string | null): string | null {
+  return resolveFinanceApprovedAdvanceGoal(conv) ?? resolvePrequalAdvanceGoal(conv, creditAppUrl);
+}
+
 export function resolvePrequalAdvanceGoal(conv: Conversation, creditAppUrl?: string | null): string | null {
   // ONE definition of "is this a prequal lead", read off the lead SOURCE (a machine record).
   const source = String((conv.lead as any)?.source ?? (conv.lead as any)?.leadSource ?? "");
