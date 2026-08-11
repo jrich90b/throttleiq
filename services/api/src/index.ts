@@ -761,7 +761,7 @@ import {
   isInboundReplyActionParserAccepted,
   isAcceptedInboundReplyAction,
   isSchedulingConflictStillOpen,
-  canUseInboundReplyActionFallback
+  auditInboundReplyActionFallbackGate
 } from "./domain/inboundReplyActionPrompt.js";
 import { pickRegenerateInbound } from "./domain/regenerateSelection.js";
 import { applyDraftStateInvariants, repairLikelyTruncatedDraftText } from "./domain/draftStateInvariants.js";
@@ -53943,9 +53943,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   if (process.env.LLM_INBOUND_REPLY_ACTION_PARSER_DEBUG === "1" && regenInboundReplyActionParse) {
     console.log("[llm-inbound-reply-action-parser][regen]", regenInboundReplyActionParse);
   }
-  const regenInboundReplyActionFallbackAllowed = canUseInboundReplyActionFallback({
-    parserEligible: regenInboundReplyActionParserEligible,
-    parsed: regenInboundReplyActionParse
+  const regenInboundReplyActionFallbackAllowed = auditInboundReplyActionFallbackGate({
+    lane: "regen", convId: conv.id, messageId: event.providerMessageId ?? null, text: event.body ?? "",
+    parserEligible: regenInboundReplyActionParserEligible, parsed: regenInboundReplyActionParse
   });
   const regenParserLocationQuestion = isAcceptedInboundReplyAction(
     regenInboundReplyActionParse,
@@ -59896,9 +59896,9 @@ if (authToken && signature) {
   if (process.env.LLM_INBOUND_REPLY_ACTION_PARSER_DEBUG === "1" && inboundReplyActionParse) {
     console.log("[llm-inbound-reply-action-parser][live]", inboundReplyActionParse);
   }
-  const inboundReplyActionFallbackAllowed = canUseInboundReplyActionFallback({
-    parserEligible: inboundReplyActionParserEligible,
-    parsed: inboundReplyActionParse
+  const inboundReplyActionFallbackAllowed = auditInboundReplyActionFallbackGate({
+    lane: "live", convId: conv.id, messageId: event.providerMessageId ?? null, text: event.body ?? "",
+    parserEligible: inboundReplyActionParserEligible, parsed: inboundReplyActionParse
   });
   const inboundParserLocationQuestion = isAcceptedInboundReplyAction(
     inboundReplyActionParse,

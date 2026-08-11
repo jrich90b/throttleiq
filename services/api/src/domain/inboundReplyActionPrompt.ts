@@ -1,4 +1,6 @@
 import type { InboundReplyActionParse } from "./llmDraft.js";
+import { recordParserFallbackAudit } from "./parserFallbackAudit.js";
+import { hasInventoryWatchConfirmationText } from "./workflowRegressionGuards.js";
 // ---------------------------------------------------------------------------
 // Inbound-reply-action parser prompt surface: the strict JSON schema + the
 // few-shot corpus for parseInboundReplyActionWithLLM (llmDraft.ts).
@@ -205,7 +207,89 @@ export function canUseInboundReplyActionFallback(args: {
   parserEligible: boolean;
   parsed: InboundReplyActionParse | null;
 }): boolean {
-  if (!args.parserEligible) return true;
-  if (!args.parsed) return true;
-  return inboundReplyActionConfidence(args.parsed) < inboundReplyActionConfidenceMin();
+  return classifyInboundReplyActionFallback(args).allowed;
+}
+
+/**
+ * WHY the keyword fallback was allowed — the same three branches
+ * `canUseInboundReplyActionFallback` always had, now named instead of collapsed into one boolean.
+ * Pure; it is the audited wrapper below that writes anything down.
+ *
+ * `hedged_below_floor` is the branch that matters. AGENTS.md "Fallback-vs-Parser Precedence" says a
+ * fallback may only fill a gap when there is NO reading at all — "including a hedged one below the
+ * accept floor... a hedged reading of the sentence beats a keyword that never read it." This branch
+ * is the code doing the opposite of that rule, and until now nothing counted it.
+ */
+export type InboundReplyActionFallbackReason =
+  | "parser_disabled"
+  | "no_parse"
+  | "hedged_below_floor"
+  | "reading_at_or_above_floor";
+
+export type InboundReplyActionFallbackGate = {
+  allowed: boolean;
+  reason: InboundReplyActionFallbackReason;
+  confidence: number | null;
+  floor: number;
+  action: string | null;
+  explicitAction: boolean | null;
+};
+
+export function classifyInboundReplyActionFallback(args: {
+  parserEligible: boolean;
+  parsed: InboundReplyActionParse | null;
+}): InboundReplyActionFallbackGate {
+  const floor = inboundReplyActionConfidenceMin();
+  const base = {
+    floor,
+    action: args.parsed ? String(args.parsed.action ?? "") || null : null,
+    explicitAction: args.parsed ? !!args.parsed.explicitAction : null,
+    confidence: args.parsed ? inboundReplyActionConfidence(args.parsed) : null
+  };
+  if (!args.parserEligible) return { ...base, allowed: true, reason: "parser_disabled" };
+  if (!args.parsed) return { ...base, allowed: true, reason: "no_parse" };
+  return inboundReplyActionConfidence(args.parsed) < floor
+    ? { ...base, allowed: true, reason: "hedged_below_floor" }
+    : { ...base, allowed: false, reason: "reading_at_or_above_floor" };
+}
+
+/**
+ * The gate, plus a durable record of what it decided. **Returns exactly what the pure gate returns**
+ * — this is an instrument, not a behaviour change, and `decision_equivalence` proves it.
+ *
+ * `keywordWatchConfirmation` is what ONE of the eleven flag-gated keyword predicates would have
+ * said about this turn. `hasInventoryWatchConfirmationText` was chosen because it sits on the
+ * side-effecting path (it can create an inventory watch, which texts the customer later), and
+ * because it lives in a domain module — `isWatchConfirmationIntentText`, its sibling, is still
+ * inside index.ts and importing it would mean moving code, which an instrument has no business
+ * doing. So `disagreesWithKeyword` is a FLOOR on the real disagreement rate, never the whole of it;
+ * say so when the numbers are read.
+ */
+export function auditInboundReplyActionFallbackGate(args: {
+  lane: "live" | "regen";
+  parserEligible: boolean;
+  parsed: InboundReplyActionParse | null;
+  text?: string | null;
+  convId?: string | null;
+  messageId?: string | null;
+}): boolean {
+  const gate = classifyInboundReplyActionFallback(args);
+  const keywordWatchConfirmation = hasInventoryWatchConfirmationText(args.text ?? "");
+  recordParserFallbackAudit({
+    kind: "inbound_reply_action_fallback_gate",
+    lane: args.lane,
+    allowed: gate.allowed,
+    reason: gate.reason,
+    confidence: gate.confidence,
+    floor: gate.floor,
+    action: gate.action,
+    explicitAction: gate.explicitAction,
+    keywordWatchConfirmation,
+    // The question this instrument exists to answer: the parser DID read the turn, its reading was
+    // hedged, and a keyword that never read it is now allowed to speak — and wants to.
+    disagreesWithKeyword: gate.reason === "hedged_below_floor" && keywordWatchConfirmation,
+    convId: args.convId ?? null,
+    messageId: args.messageId ?? null
+  });
+  return gate.allowed;
 }

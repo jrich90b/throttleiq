@@ -29,6 +29,7 @@
     "ci_eval_chain_guard:eval",
     "pitch_numbers:eval",
     "manufactured_confidence_ratchet:eval",
+    "parser_fallback_gate_audit:eval",
     "inbound_reply_cross_dealer:eval",
     "accessory_request:eval",
     "appointment_timing:eval",
