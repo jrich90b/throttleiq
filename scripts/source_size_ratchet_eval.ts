@@ -395,7 +395,10 @@ const CEILINGS: Ceiling[] = [
     // that reads it (which also let the pure decision-table eval EXECUTE the mapping without needing
     // an OPENAI_API_KEY to import llmDraft at all). The slice added a schema field and ~20 prompt
     // lines and still lands 53 under.
-    max: 16_312,
+    // 16_312 -> 16_158. The routing-decision parser's schema + rules + few-shot corpus moved to
+    // domain/routingDecisionParserPrompt.ts, so the prompt that decides how EVERY inbound turn is
+    // routed is editable on its own (and the "answering our own question" rule landed there).
+    max: 16158,
     note: "every parser prompt + JSON schema; second-largest and on the same trajectory"
   }
 ];
