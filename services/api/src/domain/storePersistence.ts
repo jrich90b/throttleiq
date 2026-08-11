@@ -265,13 +265,61 @@ async function readFileTextOrNull(filePath: string): Promise<string | null> {
   }
 }
 
-async function writeFileTextAtomic(filePath: string, text: string): Promise<void> {
+/**
+ * "Atomic" write: temp file, then rename.
+ *
+ * A FIXED `<file>.tmp` name is not atomic once two writes to the same store overlap. Both writes
+ * open the same temp path, so the second clobbers the first; then one rename publishes the wrong
+ * content and the other rename fails `ENOENT: ... rename '<file>.tmp' -> '<file>'`. That error is
+ * real and measured, not theoretical: the production API error log carried 44 of them for
+ * `sessions.json` and 25 for `twilio_inbound_jobs.json` (2026-08-10). Reproduced at 12 concurrent
+ * writes: 11 of 12 rejected, i.e. eleven writes lost, and the rejections surfaced as UNHANDLED
+ * promise rejections because these writes are fired without a catch.
+ *
+ * Two fixes, both of which the codebase already uses elsewhere (`dealerPayments`,
+ * `inventoryWatchSnapshot`, `inventoryFirstSeen`):
+ *  1. every write gets its OWN temp name, so no write can clobber another's temp file;
+ *  2. writes to the same path are serialised, so a burst applies in order instead of interleaving.
+ *
+ * Fail direction: a write that used to throw and be lost now completes.
+ */
+let atomicWriteSeq = 0;
+const atomicWriteChains = new Map<string, Promise<void>>();
+
+async function writeFileTextAtomicOnce(filePath: string, text: string): Promise<void> {
   const { promises: fs } = await import("node:fs");
   const path = await import("node:path");
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  const tmp = `${filePath}.tmp`;
-  await fs.writeFile(tmp, text, "utf8");
-  await fs.rename(tmp, filePath);
+  const tmp = `${filePath}.${process.pid}.${++atomicWriteSeq}.tmp`;
+  try {
+    await fs.writeFile(tmp, text, "utf8");
+    await fs.rename(tmp, filePath);
+  } catch (err) {
+    // Never leave a half-written temp file behind for the next deploy's dirty-tree rail to trip on.
+    await fs.rm(tmp, { force: true }).catch(() => {});
+    throw err;
+  }
+}
+
+async function writeFileTextAtomic(filePath: string, text: string): Promise<void> {
+  const previous = atomicWriteChains.get(filePath) ?? Promise.resolve();
+  // Run after the previous write settles, whether it succeeded or failed — one failure must not
+  // strand every later write for that path.
+  const run = previous.then(
+    () => writeFileTextAtomicOnce(filePath, text),
+    () => writeFileTextAtomicOnce(filePath, text)
+  );
+  // The chain link must never reject, or an unhandled rejection appears on the link itself.
+  const settled = run.then(
+    () => {},
+    () => {}
+  );
+  atomicWriteChains.set(filePath, settled);
+  void settled.then(() => {
+    // Drop the entry once this write is the tail, so the map cannot grow without bound.
+    if (atomicWriteChains.get(filePath) === settled) atomicWriteChains.delete(filePath);
+  });
+  return run;
 }
 
 export async function readStoreDocumentText(store: string): Promise<string | null> {

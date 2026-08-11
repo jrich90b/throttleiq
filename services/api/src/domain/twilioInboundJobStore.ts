@@ -35,6 +35,7 @@ const MAX_ROWS = Number(process.env.TWILIO_INBOUND_JOBS_MAX_ROWS ?? "1000");
 let loaded = false;
 let rows: TwilioInboundJob[] = [];
 let saveTimer: NodeJS.Timeout | null = null;
+let saveSeq = 0;
 
 function normalizePayload(payload: Record<string, unknown>): Record<string, string> {
   const out: Record<string, string> = {};
@@ -174,14 +175,48 @@ function scheduleSave() {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     saveTimer = null;
-    void saveNow();
+    // Fire-and-forget, so it must swallow-and-log: an uncaught rejection here is an unhandled
+    // promise rejection in the API process, which is how this bug first showed up in the error log.
+    void saveNow().catch(err => {
+      console.warn("⚠️ twilio inbound job store save failed:", err?.message ?? err);
+    });
   }, 100);
   (saveTimer as any).unref?.();
 }
 
-async function saveNow() {
+/**
+ * This is the inbound-SMS job queue, so a lost write is a customer message we may not answer.
+ *
+ * The debounced `scheduleSave()` timer and an awaited `flushTwilioInboundJobs()` can overlap, and
+ * with a FIXED `<file>.tmp` name that overlap loses writes: both open the same temp path, one
+ * rename publishes the other's bytes, and the loser fails
+ * `ENOENT: ... rename 'twilio_inbound_jobs.json.tmp' -> 'twilio_inbound_jobs.json'` — 25 of those in
+ * the production error log as of 2026-08-10. Same defect and same fix as `writeFileTextAtomic` in
+ * `storePersistence.ts`: a unique temp name per write, and one write at a time.
+ */
+let saveChain: Promise<void> = Promise.resolve();
+
+async function saveOnce() {
   await fs.mkdir(path.dirname(STORE_PATH), { recursive: true });
-  const tmpPath = `${STORE_PATH}.tmp`;
-  await fs.writeFile(tmpPath, `${JSON.stringify(rows, null, 2)}\n`);
-  await fs.rename(tmpPath, STORE_PATH);
+  const tmpPath = `${STORE_PATH}.${process.pid}.${++saveSeq}.tmp`;
+  try {
+    await fs.writeFile(tmpPath, `${JSON.stringify(rows, null, 2)}\n`);
+    await fs.rename(tmpPath, STORE_PATH);
+  } catch (err) {
+    await fs.rm(tmpPath, { force: true }).catch(() => {});
+    throw err;
+  }
+}
+
+async function saveNow() {
+  // Chain off the previous save whether it settled ok or not, so one failure cannot strand the rest.
+  const run = saveChain.then(
+    () => saveOnce(),
+    () => saveOnce()
+  );
+  saveChain = run.then(
+    () => {},
+    () => {}
+  );
+  return run;
 }
