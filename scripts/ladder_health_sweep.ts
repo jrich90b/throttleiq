@@ -35,15 +35,24 @@ const pct = (v: number | null) => (v == null ? "  — " : `${String(Math.round(v
 console.log(
   `Ladder health — last ${report.windowDays}d vs the ${report.baselineDays}d before it. ` +
     `${report.summary.lanesScanned} lanes, ${report.summary.leadsRecent} leads, ` +
-    `${report.summary.askedRecent} asked something, ${report.summary.bookedRecent} booked.`
+    `${report.summary.askedRecent} of ${report.summary.agentFirstTouchesRecent} agent-owned first touches asked something, ` +
+    `${report.summary.bookedRecent} booked.`
 );
-// `reach` = leads carrying a phone or an email. It sits next to `asked` because the two together are
-// the diagnosis: 0 asked with full reach is a missing ladder; 0 asked with 0 reach is a broken feed.
-console.log("\n  recent  reach  asked  replied  booked | was  | source");
+console.log(
+  `  (${report.summary.staffFirstTouchesRecent} first touches were typed by staff and ` +
+    `${report.summary.neverTextedRecent} leads were never texted — counted, never graded.)`
+);
+// The columns ARE the diagnosis, and each sends you to a different building:
+//   reach 0             → a broken lead feed: nobody to send to
+//   staff > ours        → a lane a salesperson opens; our copy is not what it reads
+//   ours healthy, 0%    → a missing ladder, and the fix is the copy
+console.log("\n  recent  reach   ours  staff  none  asked  replied  booked | was  | source");
 for (const lane of report.lanes) {
   if (lane.recent.leads === 0) continue;
   console.log(
-    `  ${String(lane.recent.leads).padStart(6)}  ${String(lane.recent.contactable).padStart(5)}  ${pct(lane.askRateRecent)}  ` +
+    `  ${String(lane.recent.leads).padStart(6)}  ${String(lane.recent.contactable).padStart(5)}  ` +
+      `${String(lane.recent.agentFirstTouches).padStart(5)}  ${String(lane.recent.staffFirstTouches).padStart(5)}  ` +
+      `${String(lane.recent.neverTexted).padStart(4)}  ${pct(lane.askRateRecent)}  ` +
       `${String(lane.recent.replied).padStart(7)}  ${String(lane.recent.booked).padStart(6)} | ${pct(lane.askRateBaseline)} | ` +
       `${lane.alarm ? "⚠ " : "  "}${lane.source}`
   );
