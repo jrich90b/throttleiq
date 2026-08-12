@@ -5802,8 +5802,40 @@ input[type="reset"],
 }
 
 @media (max-width: 760px) {
+  /*
+    THE COMPOSER TURNS SIDEWAYS HERE, AND ITS TAILWIND CLASSES DO NOT KNOW IT.
+    The markup is `flex gap-2 items-start` with `flex-1` on the textarea — both written for the
+    desktop ROW. This query flips the container to a COLUMN, which silently reverses what each
+    one means, and the draft box loses on both axes:
+
+      `items-start` (align-items: flex-start) — in a row this aligns items to the top. In a
+        column it is the CROSS axis, so the box stops stretching and shrinks to its content:
+        220px inside a 375px phone, while the buttons underneath span the full 317px because
+        `.lr-message-composer-actions` below sets `width: 100%` explicitly. The textarea had no
+        such override, so it was the only child left behind.
+
+      `flex-1` (flex: 1 1 0%) — in a row this shares the WIDTH. In a column it sets the HEIGHT
+        basis to zero, so the box collapses to `min-height` and the auto-grow in the `onInput`
+        handler is overruled. That handler works: it was measured writing `height: 252px` inline
+        while the box still rendered 58px.
+
+    MEASURED on a 375px phone, 2026-08-12, editing an ordinary 171-character draft: the text
+    needed 9 lines, the box showed 2.1, and 196px of the reply was hidden — you scrolled a
+    two-line porthole to read a message you were about to send a customer. Joe reported it as
+    "you can't see the whole draft window".
+
+    `align-items: stretch` restores the width; `flex: none` hands the height back to the
+    auto-grow. 40vh caps it so a long draft still leaves the Send button on screen. After:
+    317px wide, 168px tall, 6 lines, 2px hidden — the whole draft, visible.
+  */
   .lr-app-theme .lr-message-composer {
     flex-direction: column;
+    align-items: stretch;
+  }
+
+  .lr-app-theme .lr-message-composer-input {
+    flex: none;
+    max-height: 40vh;
   }
 
   .lr-app-theme .lr-message-composer-actions {
