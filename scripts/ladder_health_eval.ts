@@ -16,6 +16,7 @@
  * Run: npx tsx scripts/ladder_health_eval.ts
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 const NOW = Date.parse("2026-08-11T12:00:00.000Z");
 const daysAgo = (n: number) => new Date(NOW - n * 24 * 60 * 60 * 1000).toISOString();
@@ -43,8 +44,13 @@ const lead = (
 });
 
 async function main(): Promise<void> {
-  const { assessLadderHealth, messageAsksSomething, laneHasNoLadderByDesign, LADDER_MIN_RECENT_LEADS } =
-    await import("../services/api/src/domain/ladderHealth.ts");
+  const {
+    assessLadderHealth,
+    messageAsksSomething,
+    laneHasNoLadderByDesign,
+    laneIsRelayByDesign,
+    LADDER_MIN_RECENT_LEADS
+  } = await import("../services/api/src/domain/ladderHealth.ts");
 
   // --- what counts as "asked" -------------------------------------------------------------------
   assert.equal(messageAsksSomething("Want to stop in and check it out?"), true);
@@ -83,16 +89,19 @@ async function main(): Promise<void> {
   assert.equal(laneC.recent.contactable, 12, "…and every one of those leads WAS reachable");
 
   // --- A LANE WITH NOBODY TO REACH (the real AutoDealers.Digital shape) -------------------------
-  // MEASURED 2026-08-11: 18 of 18 recent AutoDealers.Digital leads carried no phone and no email —
-  // the ADF is a name, a stock number and "Inquiry: Lead arrived". Reported as `never_asks` it sent a
-  // run hunting for missing copy; no wording reaches someone with no address. Separate alarm, because
-  // the fix is in the vendor feed, not in our templates.
+  // Reported as `never_asks` this sent a run hunting for missing copy; no wording reaches someone with
+  // no address, so it earns a separate alarm.
+  // ⚠️ 2026-08-12: "Lane F" is now a lane NOBODY HAS RULED ON. The measurement that produced this
+  // branch came from AutoDealers.Digital, which turned out to be a declared RELAY lane — unreachable
+  // by design and already answered from a staff task — so it is classified below and never reaches
+  // here. An undeclared unreachable lane still alarms, because "the feed is broken" and "this is a
+  // relay we have not declared" are both live hypotheses and someone has to choose.
   const unreachable = Array.from({ length: 12 }, (_, i) => lead("Lane F", 3 + i * 2, { asks: false, unreachable: true }));
   const laneF = assessLadderHealth({ conversations: unreachable, now: NOW }).lanes.find(l => l.source === "Lane F")!;
-  assert.equal(laneF.alarm, "uncontactable", "a lane whose leads carry no phone and no email is a FEED defect");
+  assert.equal(laneF.alarm, "uncontactable", "an UNDECLARED lane whose leads carry no phone and no email still alarms");
   assert.equal(laneF.recent.contactable, 0, "…and the reach count proves it");
   assert.ok(/phone or an email/i.test(laneF.why), "…and the reason names the real cause in words");
-  assert.ok(/feed defect/i.test(laneF.why), "…and points at the feed, not at our copy");
+  assert.ok(/feed defect/i.test(laneF.why), "…and points upstream, not at our copy");
   // It still ALARMS — an unreachable lane is a real problem, not something to quiet.
   assert.equal(
     assessLadderHealth({ conversations: unreachable, now: NOW }).alarms.length,
@@ -107,6 +116,62 @@ async function main(): Promise<void> {
   ];
   const laneG = assessLadderHealth({ conversations: oneReachable, now: NOW }).lanes.find(l => l.source === "Lane G")!;
   assert.equal(laneG.alarm, "never_asks", "a single reachable lead falls back to the missing-ladder diagnosis");
+
+  // --- A RELAY LANE: OFF-CHANNEL BY DESIGN, ANSWERED FROM A STAFF TASK --------------------------
+  // Joe ruled this 2026-07-24 and restated it 2026-08-12: "you cannot sms email or call dealer digital
+  // leads through lead rider." AutoDealers.Digital leads are Facebook Marketplace relays — the ADF
+  // carries no phone and no email because the customer lives in the Marketplace inbox, and a rep
+  // answers from a paste-ready task (domain/marketplaceRelay.ts, PR #285). LIVE on 2026-08-12: 18 of
+  // 18 leads had no channel, 18 of 18 got the task, ZERO outbound rows.
+  //
+  // The sweep alarmed `uncontactable` on it anyway and called it a vendor-feed defect, and that reached
+  // Joe as an open item TWICE. A repeat alarm on a ruled behaviour is worse than no alarm.
+  const relaySource = "AutoDealers.Digital - autodealersdigital.com";
+  assert.ok(laneIsRelayByDesign(relaySource), "the Marketplace relay lane is declared");
+  assert.equal(laneIsRelayByDesign("Traffic Log Pro"), null, "and the declaration does not blanket other lanes");
+  const relayLeads = Array.from({ length: 12 }, (_, i) => lead(relaySource, 3 + i * 2, { asks: false, unreachable: true }));
+  const allHandled = relayLeads.map(l => ({ convId: l.id }));
+
+  const relayOk = assessLadderHealth({ conversations: relayLeads, todos: allHandled, now: NOW });
+  const laneR = relayOk.lanes.find(l => l.source === relaySource)!;
+  assert.equal(laneR.alarm, null, "a relay lane with every lead handed to a rep does NOT alarm");
+  assert.equal(relayOk.alarms.length, 0, "…and raises nothing for a human to read");
+  assert.ok(laneR.relayByDesign, "…but it is LABELLED, so the lane never reads as unexplained silence");
+  assert.equal(laneR.recent.relayHandedToStaff, 12, "…and the coverage count is what carries the claim");
+
+  // REDIRECTED, NOT SILENCED (#663's lesson). The one thing that CAN break here is the rep never being
+  // told, and that still alarms — a lead with no channel and no task is a lead nobody can answer.
+  const oneMissed = assessLadderHealth({ conversations: relayLeads, todos: allHandled.slice(1), now: NOW });
+  const laneRmiss = oneMissed.lanes.find(l => l.source === relaySource)!;
+  assert.equal(laneRmiss.alarm, "relay_task_missing", "a relay lead with no staff task is the real failure mode");
+  assert.ok(/no staff task/i.test(laneRmiss.why), "…and the reason says which way it broke");
+
+  // FAIL DIRECTION: an instrument that cannot SEE the tasks must not accuse anyone.
+  const noTodos = assessLadderHealth({ conversations: relayLeads, now: NOW });
+  const laneRunknown = noTodos.lanes.find(l => l.source === relaySource)!;
+  assert.equal(laneRunknown.alarm, null, "no todo list supplied ⇒ no alarm");
+  assert.ok(/NOT CHECKED/.test(laneRunknown.why), "…and it says out loud that it did not check");
+
+  // A relay lane must never be graded on copy or reach — those are the two wrong diagnoses it produced.
+  for (const l of [laneR, laneRmiss, laneRunknown]) {
+    assert.notEqual(l.alarm, "uncontactable", "a declared relay lane is never a feed defect");
+    assert.notEqual(l.alarm, "never_asks", "…nor a missing ladder");
+  }
+
+  // ⚠️ THE SWEEP MUST ACTUALLY PASS THE TODOS. Everything above proves the MODULE behaves; none of it
+  // can see the caller. Drop `todos` from the sweep and every relay lane silently reads "NOT CHECKED"
+  // for ever — a degradation with no symptom, which is the failure mode this eval exists to prevent
+  // (SKILL trap 3: a source-text eval cannot prove a script still runs, so pin the EXACT call shape).
+  // `.includes` rather than assert.match on purpose: eval_source_pin_ratchet counts escaped parens.
+  const sweepSrc = readFileSync(new URL("./ladder_health_sweep.ts", import.meta.url), "utf8");
+  assert.ok(
+    sweepSrc.includes("assessLadderHealth({ conversations, todos, now:"),
+    "the sweep must hand assessLadderHealth the todo list, or relay coverage is never checked"
+  );
+  assert.ok(
+    sweepSrc.includes("Array.isArray(raw?.todos) ? raw.todos : []"),
+    "…and must read them from the store's top-level todos"
+  );
 
   // --- SMALL LANES NEVER ALARM ------------------------------------------------------------------
   // MEASURED PRECEDENT: the canary's ratio rule tripped on a healthy build off ~2 drafts. Most lanes

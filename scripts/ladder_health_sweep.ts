@@ -23,7 +23,10 @@ const raw = JSON.parse(fs.readFileSync(dbPath, "utf8"));
 const conversations: any[] = Array.isArray(raw?.conversations) ? raw.conversations : Array.isArray(raw) ? raw : [];
 
 const { assessLadderHealth } = await import("../services/api/src/domain/ladderHealth.ts");
-const report = assessLadderHealth({ conversations, now: new Date() });
+// `todos` is what tells a RELAY lane apart from a broken one: a relay lead has no channel by design
+// and its whole outreach is the staff task, so the task's presence IS that lane's health.
+const todos: any[] = Array.isArray(raw?.todos) ? raw.todos : [];
+const report = assessLadderHealth({ conversations, todos, now: new Date() });
 
 const reportRoot = process.env.REPORT_ROOT || path.resolve("reports");
 const outDir = path.join(reportRoot, "ladder_health");
@@ -43,7 +46,10 @@ console.log(
     `${report.summary.neverTextedRecent} leads were never texted — counted, never graded.)`
 );
 // The columns ARE the diagnosis, and each sends you to a different building:
-//   reach 0             → a broken lead feed: nobody to send to
+//   reach 0             → nobody to send to. Ask WHICH kind before reporting it: a declared RELAY
+//                         lane (off-channel by design, answered from a staff task — Joe 7/24) is the
+//                         expected state and is marked `relay`, NOT an alarm; an undeclared one may
+//                         be a broken feed.
 //   staff > ours        → a lane a salesperson opens; our copy is not what it reads
 //   ours healthy, 0%    → a missing ladder, and the fix is the copy
 console.log("\n  recent  reach   ours  staff  none  asked  replied  booked | was  | source");
@@ -54,7 +60,7 @@ for (const lane of report.lanes) {
       `${String(lane.recent.agentFirstTouches).padStart(5)}  ${String(lane.recent.staffFirstTouches).padStart(5)}  ` +
       `${String(lane.recent.neverTexted).padStart(4)}  ${pct(lane.askRateRecent)}  ` +
       `${String(lane.recent.replied).padStart(7)}  ${String(lane.recent.booked).padStart(6)} | ${pct(lane.askRateBaseline)} | ` +
-      `${lane.alarm ? "⚠ " : "  "}${lane.source}`
+      `${lane.alarm ? "⚠ " : "  "}${lane.source}${lane.relayByDesign ? "  [relay: answered off-channel from a staff task]" : ""}`
   );
 }
 if (report.alarms.length) {

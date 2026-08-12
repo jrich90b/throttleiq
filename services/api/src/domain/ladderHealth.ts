@@ -84,10 +84,17 @@ export type LadderWindowCounts = {
   /**
    * Leads carrying a phone number or an email address — i.e. someone we can actually reach.
    *
-   * Counted because a lane can score 0% asked for two completely different reasons, and the fix is in
-   * a different building for each: no ladder (write one) versus nobody to send it to (call the vendor).
+   * Counted because a lane can score 0% asked for three completely different reasons, and the fix is
+   * in a different building for each: no ladder (write one), nobody to send it to (a broken feed), or
+   * a RELAY lane where no channel is supposed to exist and a rep answers off-channel (nothing to fix
+   * — see RELAY_LANES).
    */
   contactable: number;
+  /**
+   * RELAY lanes only: leads whose staff task exists — the relay lead's entire outreach. Left at 0 on
+   * every other lane, and reported as UNKNOWN when the caller supplies no todo list.
+   */
+  relayHandedToStaff: number;
   /**
    * First touches the AGENT owns — a message it sent, or a draft it wrote that staff edited before
    * sending. This is the ask rate's denominator: the only population our copy can move.
@@ -113,7 +120,15 @@ export type LadderLaneHealth = {
   baseline: LadderWindowCounts;
   askRateRecent: number | null;
   askRateBaseline: number | null;
-  alarm: "ask_rate_collapsed" | "never_asks" | "uncontactable" | "staff_owned_first_touch" | null;
+  /** Set when the lane is a DECLARED relay lane — carries the reason, and redirects the check. */
+  relayByDesign?: string | null;
+  alarm:
+    | "ask_rate_collapsed"
+    | "never_asks"
+    | "uncontactable"
+    | "staff_owned_first_touch"
+    | "relay_task_missing"
+    | null;
   why: string;
 };
 
@@ -187,6 +202,60 @@ export function laneHasNoLadderByDesign(source: string): string | null {
   return NO_LADDER_LANES.find(l => l.pattern.test(source))?.why ?? null;
 }
 
+/**
+ * RELAY LANES — the customer has NO SMS, email or phone channel BY DESIGN, and is answered by hand
+ * off-channel. Not a lane we failed to write copy for, and not a broken feed.
+ *
+ * **Joe ruled this on 2026-07-24 and restated it on 2026-08-12: "you cannot sms email or call dealer
+ * digital leads through lead rider."** AutoDealers.Digital leads are Facebook Marketplace relays —
+ * the customer lives in the Marketplace inbox, so the ADF carries a name, a stock number and
+ * "Inquiry: Lead arrived" and nothing else. Full Facebook automation is RULED OUT (driving a personal
+ * account's Messenger UI = Meta ToS violation + ban risk). What we ship instead already exists:
+ * `domain/marketplaceRelay.ts` hands the LEAD OWNER a task with a ready-to-paste first reply, and the
+ * publish gate suppresses any sendable draft (`marketplace_relay_no_draft:eval`, PR #285, 7/24).
+ *
+ * ⚠️ **Why this list exists at all — I got this wrong twice.** The sweep raised `uncontactable` here
+ * and this file concluded "the fix is upstream, with the vendor feed". That went into the alarm text,
+ * into memory, and into two run reports to Joe as an open item needing a vendor call — for a question
+ * he had already answered and BUILT three weeks earlier, in this repo, with an eval. A repeat alarm on
+ * a ruled behaviour is worse than no alarm: it spends the attention a hands-off loop exists to save.
+ * Before calling an absence a defect, grep the source name in `services/api/src` and find out whether
+ * we already have a deliberate path for it.
+ *
+ * ⚠️ **And this is NOT the #663 mistake in reverse.** That failure was a lane silenced on an
+ * unverified reason. This one is verified three ways: Joe's ruling, the shipped relay path, and the
+ * live store — 18 of 18 leads carry no phone and no email, 18 of 18 got the relay task, and there are
+ * ZERO outbound rows (measured 2026-08-12). A relay lane is therefore not silenced, it is REDIRECTED:
+ * the sweep stops grading copy nobody can receive and starts watching the only thing that can
+ * actually break here — whether the rep still gets the task.
+ */
+export const RELAY_LANES: { pattern: RegExp; why: string }[] = [
+  {
+    pattern: /autodealers\.digital|autodealersdigital|facebook marketplace/i,
+    why: "a Facebook Marketplace relay — no SMS/email/phone channel exists (Joe 7/24, restated 8/12); a rep answers it in the Marketplace inbox from a paste-ready task"
+  }
+];
+
+export function laneIsRelayByDesign(source: string): string | null {
+  return RELAY_LANES.find(l => l.pattern.test(source))?.why ?? null;
+}
+
+/**
+ * Did this relay lead reach a human at all? A relay lead's whole outreach IS the staff task, so its
+ * presence is the lane's health and its absence is the only real failure mode.
+ *
+ * Deliberately checks that a task EXISTS rather than matching the task's wording. The summary text
+ * has already changed once (the 7/24 build folded the paste-ready reply into it, so 13 of the 18
+ * leads in today's window carry the older one-liner) — a wording match would have read those 13 as
+ * "no task" and raised the false alarm this change exists to remove.
+ *
+ * FAIL DIRECTION: no todo list supplied ⇒ coverage is reported as UNKNOWN and nothing alarms. An
+ * instrument that cannot see the task must not accuse anyone.
+ */
+export function relayLeadHasStaffTask(convId: string, todosByConv: Map<string, number>): boolean {
+  return (todosByConv.get(convId) ?? 0) > 0;
+}
+
 export const LADDER_MIN_RECENT_LEADS = 5;
 /** Never-asked needs a bigger base: a lane can legitimately go 5 quiet leads without a ladder break. */
 export const LADDER_MIN_NEVER_ASKS_LEADS = 8;
@@ -236,6 +305,7 @@ function emptyCounts(): LadderWindowCounts {
     replied: 0,
     booked: 0,
     contactable: 0,
+    relayHandedToStaff: 0,
     agentFirstTouches: 0,
     staffFirstTouches: 0,
     neverTexted: 0
@@ -264,6 +334,12 @@ function rate(counts: LadderWindowCounts): number | null {
 
 export function assessLadderHealth(input: {
   conversations: any[];
+  /**
+   * The store's top-level `todos`. Optional, and RELAY lanes are the only thing that reads it: a relay
+   * lead's whole outreach is its staff task. Omit it and relay coverage reads UNKNOWN and nothing
+   * alarms — an instrument that cannot see the task must not accuse anyone.
+   */
+  todos?: any[];
   now: Date | number;
   windowDays?: number;
   baselineDays?: number;
@@ -273,6 +349,13 @@ export function assessLadderHealth(input: {
   const baselineDays = input.baselineDays ?? 60;
   const recentFrom = nowMs - windowDays * 24 * 60 * 60 * 1000;
   const baselineFrom = recentFrom - baselineDays * 24 * 60 * 60 * 1000;
+
+  const todosSupplied = Array.isArray(input.todos);
+  const todosByConv = new Map<string, number>();
+  for (const t of input.todos ?? []) {
+    const id = String((t as any)?.convId ?? "").trim();
+    if (id) todosByConv.set(id, (todosByConv.get(id) ?? 0) + 1);
+  }
 
   const lanes = new Map<string, { recent: LadderWindowCounts; baseline: LadderWindowCounts }>();
   for (const conv of input.conversations ?? []) {
@@ -284,6 +367,9 @@ export function assessLadderHealth(input: {
     const counts = lanes.get(source)![bucket as "recent" | "baseline"];
     counts.leads += 1;
     if (leadIsContactable(conv)) counts.contactable += 1;
+    if (todosSupplied && laneIsRelayByDesign(source) && relayLeadHasStaffTask(String(conv?.id ?? ""), todosByConv)) {
+      counts.relayHandedToStaff += 1;
+    }
 
     const messages: any[] = Array.isArray(conv?.messages) ? conv.messages : [];
     // The first thing the customer actually RECEIVED — not the first outbound row, which is a draft
@@ -320,8 +406,24 @@ export function assessLadderHealth(input: {
     let why = "healthy or below the reporting floor";
 
     const byDesign = laneHasNoLadderByDesign(source);
+    const relayWhy = laneIsRelayByDesign(source);
     if (byDesign) {
       why = `no ladder by design: ${byDesign}`;
+    } else if (relayWhy) {
+      // A RELAY lane is off-channel BY DESIGN (Joe 7/24, restated 8/12) — see RELAY_LANES. Grading its
+      // copy or its reach is grading something that is supposed to be absent, so neither `never_asks`
+      // nor `uncontactable` may fire here. What CAN break is the rep never being told, so that is what
+      // this checks instead. Redirected, not silenced.
+      if (!todosSupplied) {
+        why = `relay lane: ${relayWhy} — staff-task coverage NOT CHECKED (no todo list supplied)`;
+      } else if (w.recent.relayHandedToStaff >= w.recent.leads) {
+        why = `relay lane: ${relayWhy} — all ${w.recent.leads} handed to the lead owner`;
+      } else {
+        // The real failure mode: a lead with no channel AND nobody told to answer it is a lead nobody
+        // can reach at all.
+        alarm = "relay_task_missing";
+        why = `${w.recent.leads - w.recent.relayHandedToStaff} of ${w.recent.leads} relay leads got NO staff task — this lane has no other way to be answered`;
+      }
     } else if (w.recent.leads >= LADDER_MIN_RECENT_LEADS) {
       const collapsed =
         w.baseline.leads >= LADDER_MIN_RECENT_LEADS &&
@@ -338,8 +440,16 @@ export function assessLadderHealth(input: {
         // contactable, so this test discriminates rather than blankets.
         //
         // It still ALARMS — a lane we cannot reach is a real problem — but calling it `never_asks` sent
-        // a run hunting for missing copy, and no wording change can reach someone with no address. The
-        // fix is upstream, with the vendor feed.
+        // a run hunting for missing copy, and no wording change can reach someone with no address.
+        //
+        // ⚠️ CORRECTED 2026-08-12: this comment used to end "the fix is upstream, with the vendor
+        // feed", and on the lane that produced the measurement above that was WRONG — AutoDealers.
+        // Digital is a Facebook Marketplace RELAY, unreachable by design and already handled by a
+        // paste-ready staff task (Joe ruled it 7/24, `domain/marketplaceRelay.ts`, PR #285). It is now
+        // classified above as a relay lane and never reaches this branch. What survives here is the
+        // GENUINELY undeclared case: a lane nobody has ruled on, where "call the vendor" is one
+        // hypothesis and "this is a relay we have not declared yet" is the other. Establish which
+        // before reporting it as a defect.
         //
         // Checked BEFORE never_asks on purpose: a lane with nobody to reach obviously never asks, so
         // whichever runs first owns the diagnosis, and the contact defect is the deeper cause.
@@ -376,7 +486,7 @@ export function assessLadderHealth(input: {
             : "");
       }
     }
-    out.push({ source, noLadderByDesign: byDesign, recent: w.recent, baseline: w.baseline, askRateRecent, askRateBaseline, alarm, why });
+    out.push({ source, noLadderByDesign: byDesign, relayByDesign: relayWhy, recent: w.recent, baseline: w.baseline, askRateRecent, askRateBaseline, alarm, why });
   }
 
   out.sort((a, b) => b.recent.leads - a.recent.leads);
