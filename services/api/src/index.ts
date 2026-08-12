@@ -1070,6 +1070,8 @@ import {
   listOpenTodos,
   CONTEXT_FIDELITY_HELD_TODO_MARKER,
   shouldNudgeStaleHandoffLead,
+  buildStaleHandoffNudge,
+  staleHandoffNudgeRetireReason,
   shouldSurfaceUnsentFirstTouch,
   isFirstTouchTodo,
   decideFirstTouchTodoResolution,
@@ -31824,12 +31826,22 @@ async function processDueFollowUpsUnlocked() {
   // actionable window) — self-cleans the over-broad first batch and keeps the inbox accurate going
   // forward (e.g. once the visit is on the calendar, or the lead goes cold past the max-idle window).
   let schedulingLeakTodosRetired = 0;
+  // Stale-handoff nudges retire the same way (Joe 2026-08-12: 90 of 136 open tasks were these,
+  // 63 of them themselves >7d old). Reasons + fail direction live with staleHandoffNudgeRetireReason;
+  // a still-quiet lead re-surfaces as a FRESH nudge via shouldNudgeStaleHandoffLead's reNudge window.
+  let staleHandoffNudgesRetired = 0;
   {
     const convByIdForLeak = new Map(convs.map(c => [c.id, c]));
     for (const t of openTodos) {
-      if (!String(t.summary ?? "").includes(SCHEDULING_LEAK_TODO_MARKER)) continue;
       const conv = convByIdForLeak.get(t.convId);
       if (!conv) continue;
+      const nudgeRetireReason = staleHandoffNudgeRetireReason(t, conv, now);
+      if (nudgeRetireReason && markTodoDone(conv.id, t.id)) {
+        staleHandoffNudgesRetired += 1;
+        recordRouteOutcome("manual", "stale_handoff_nudge_retired", { convId: conv.id, leadKey: conv.leadKey, reason: nudgeRetireReason });
+        continue;
+      }
+      if (!String(t.summary ?? "").includes(SCHEDULING_LEAK_TODO_MARKER)) continue;
       if (isSchedulingLeakConversation(conv, now)) continue; // still a live leak — keep the todo
       if (markTodoDone(conv.id, t.id)) {
         conv.schedulingLeakFlaggedAt = undefined;
@@ -31840,6 +31852,9 @@ async function processDueFollowUpsUnlocked() {
   }
   if (schedulingLeakTodosRetired > 0) {
     console.log(`[state-reconcile] retired ${schedulingLeakTodosRetired} stale scheduling-leak todo(s) (booked/closed/aged out)`);
+  }
+  if (staleHandoffNudgesRetired > 0) {
+    console.log(`[state-reconcile] retired ${staleHandoffNudgesRetired} stale-handoff nudge(s) (activity resumed / expired unread)`);
   }
   const SCHEDULING_LEAK_TODOS_PER_TICK = 15;
   const SCHEDULING_LEAK_RENUDGE_MS = 3 * 24 * 60 * 60 * 1000;
@@ -31881,33 +31896,15 @@ async function processDueFollowUpsUnlocked() {
   for (const conv of convs) {
     if (staleHandoffCreated >= STALE_HANDOFF_TODOS_PER_TICK) break;
     if (!shouldNudgeStaleHandoffLead(conv, convIdsWithOpenTodo.has(conv.id), now)) continue;
-    let lastMs = 0;
-    for (const m of conv.messages ?? []) {
-      const ms = Date.parse(String(m?.at ?? ""));
-      if (Number.isFinite(ms) && ms > lastMs) lastMs = ms;
-    }
-    const idleDays = lastMs ? Math.floor((now.getTime() - lastMs) / 86_400_000) : 0;
     const who = normalizeDisplayCase(conv.lead?.firstName) || conv.lead?.name || "this lead";
-    const handoffReason = String(conv.followUp?.reason ?? "handoff").replace(/_/g, " ");
-    const todo = addTodo(
-      conv,
-      "call",
-      `Follow up with ${who} — handed off (${handoffReason}), no activity in ${idleDays} days and no follow-up scheduled.`,
-      undefined,
-      conv.leadOwner,
-      undefined,
-      "followup"
-    );
+    // Summary composed beside its recogniser (isStaleHandoffNudgeTodo) so they can never drift.
+    const nudge = buildStaleHandoffNudge(conv, who, now);
+    const todo = addTodo(conv, "call", nudge.summary, undefined, conv.leadOwner, undefined, "followup");
     if (todo) {
       conv.staleHandoffNudgedAt = now.toISOString();
       saveConversation(conv);
       staleHandoffCreated += 1;
-      recordRouteOutcome("manual", "stale_handoff_followup_todo", {
-        convId: conv.id,
-        leadKey: conv.leadKey,
-        reason: handoffReason,
-        idleDays
-      });
+      recordRouteOutcome("manual", "stale_handoff_followup_todo", { convId: conv.id, leadKey: conv.leadKey, reason: nudge.handoffReason, idleDays: nudge.idleDays });
     }
   }
 

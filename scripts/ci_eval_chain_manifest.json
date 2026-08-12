@@ -44,6 +44,7 @@
     "manual_cadence_context:eval",
     "manual_outbound_appointment:eval",
     "manual_outbound_day_from_context:eval",
+    "stale_handoff_nudge_retire:eval",
     "parts_catalog_lexicon:eval",
     "purchase_delivery_logistics:eval",
     "recent_vehicle_discussion:eval",
