@@ -189,12 +189,25 @@ export function decideRiderCourseScheduleAnswer(input: {
  * hands off, which is the point: a person answers, and a task says so. If a feed ever populates the
  * rows, the same call starts answering from them with no other change.
  *
+ * EQUIPMENT is answered separately and BEFORE the schedule, because the two are different facts and
+ * answering one with the other is its own bug. Ulises HernandezPerez (+17167857284, 2026-08-11) asked
+ * *"are the motorcycle provided or do we need to bring our own?"* and Joe typed the answer himself
+ * eight minutes later, then filed: *"Should be able to answer this. Motorcycles are provided. They
+ * are Harley-Davidson X350 RA's."* The class TABLE would never have answered him — a schedule says
+ * when and where, never what is provided — so a dealer-supplied `courseProvides` is what closes it.
+ * WHICH kind of logistics question this is comes from the parser (`classLogisticsTopic`), never from
+ * scanning the customer's words.
+ *
  * Returns `handled: false` for anything that is not a class-logistics question, so every other
  * first-time-rider answer is untouched.
  */
 export function resolveRiderCourseLogisticsReply(input: {
   intent?: string | null;
   asksClassLogistics?: boolean;
+  /** Parser-supplied. Only "equipment" changes anything; everything else behaves exactly as before. */
+  classLogisticsTopic?: string | null;
+  /** Dealer profile `policies.firstTimeRider.riderCourseProvides`. Blank ⇒ hand off, as today. */
+  courseProvides?: string | null;
   firstName?: string | null;
   rows?: ReadonlyArray<RiderCourseClassRow | null | undefined> | null;
   studentClassDate?: string | null;
@@ -205,6 +218,24 @@ export function resolveRiderCourseLogisticsReply(input: {
     String(input?.intent ?? "") === "enrolled_class_logistics" || input?.asksClassLogistics === true;
   if (!asking) {
     return { handled: false, reply: "", needsTodo: false, todoSummary: "", why: "not a class-logistics question" };
+  }
+
+  // EQUIPMENT first. Both halves must hold — the parser has to have said this is an equipment
+  // question, and the dealer has to have supplied the fact. Either missing ⇒ fall through to the
+  // schedule/hand-off path below, so the fail direction is the promise of a person, never a guess
+  // about someone's class.
+  const provides = String(input?.courseProvides ?? "").trim();
+  if (String(input?.classLogisticsTopic ?? "") === "equipment" && provides) {
+    const who = String(input?.firstName ?? "").trim();
+    return {
+      handled: true,
+      // States the dealer's fact and nothing around it. No "bring your own X" invention, no gear
+      // list we do not hold — anything beyond `provides` is the hand-off's job.
+      reply: `Good news${who ? `, ${who}` : ""} - ${provides} are provided for the class. If you need anything else for the day, I'll have the team that runs it confirm.`,
+      needsTodo: false,
+      todoSummary: "",
+      why: "equipment question answered from the dealer profile"
+    };
   }
 
   const decision = decideRiderCourseScheduleAnswer({

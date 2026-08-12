@@ -74,7 +74,10 @@ import { decideDraftModelArm, type DraftModelArm } from "./routeStateReducer.js"
 import { passesModelRelevanceGuard } from "./turnUnderstandingAuthority.js";
 import { appendParserCaptureRecord, buildParserCaptureRecord } from "./parserCapture.js";
 import { formatCadenceQualityUnitFacts, type CadenceQualityInventoryFacts } from "./cadenceQualityFacts.js";
-import { FIRST_TIME_RIDER_GUIDANCE_EXAMPLES } from "./firstTimeRiderGuidanceExamples.js";
+import {
+  FIRST_TIME_RIDER_GUIDANCE_EXAMPLES,
+  FIRST_TIME_RIDER_GUIDANCE_PARSER_JSON_SCHEMA
+} from "./firstTimeRiderGuidanceExamples.js";
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -2474,6 +2477,19 @@ export type FirstTimeRiderGuidanceParse = {
   asksRiderCourse?: boolean;
   /** True when the question is about attending a class they already hold a seat in. */
   asksClassLogistics?: boolean;
+  /**
+   * WHICH class-logistics question this is. An enrolled student's "what do I need to bring?" and
+   * "what time do I show up?" are answered from completely different facts, and answering one with
+   * the other is its own bug — so the split is COMPREHENSION and belongs to the parser, never to a
+   * keyword scan of the customer's words (AGENTS.md).
+   *
+   * - `equipment`: what is PROVIDED or what to bring — bikes, helmets, gloves, gear, clothing.
+   * - `schedule`: when/where — start time, arrival, address, room, parking, how many days.
+   * - `other`: anything else about attending (what happens on the day, missing a session).
+   *
+   * Absent/unrecognised ⇒ treated as `other`, which keeps today's hand-off-to-a-person behaviour.
+   */
+  classLogisticsTopic?: "equipment" | "schedule" | "other" | null;
   confidence?: number;
 };
 
@@ -3809,39 +3825,6 @@ const WEB_TEXT_WIDGET_SALES_LEAD_PARSER_JSON_SCHEMA: { [key: string]: unknown } 
 };
 
 
-const FIRST_TIME_RIDER_GUIDANCE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
-  type: "object",
-  additionalProperties: false,
-  required: [
-    "intent",
-    "explicit_request",
-    "endorsement_status",
-    "asks_test_ride",
-    "asks_beginner_bike",
-    "asks_rider_course",
-    "confidence"
-  ],
-  properties: {
-    intent: {
-      type: "string",
-      enum: [
-        "first_time_rider",
-        "no_motorcycle_endorsement",
-        "beginner_bike_advice",
-        "rider_course_info",
-        "enrolled_class_logistics",
-        "none"
-      ]
-    },
-    explicit_request: { type: "boolean" },
-    endorsement_status: { type: "string", enum: ["yes", "no", "unknown"] },
-    asks_test_ride: { type: "boolean" },
-    asks_beginner_bike: { type: "boolean" },
-    asks_rider_course: { type: "boolean" },
-    asks_class_logistics: { type: "boolean" },
-    confidence: { type: "number" }
-  }
-};
 
 const DEALER_TRANSACTION_POLICY_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   type: "object",
@@ -7556,6 +7539,7 @@ export async function parseFirstTimeRiderGuidanceWithLLM(args: {
     "- asks_test_ride true when they ask to test ride/demo/ride the bike.",
     "- asks_beginner_bike true when they ask for beginner/first-bike/manageable fit advice.",
     "- asks_rider_course true when they ask about training/course/school/academy, including awkward phrasing like \"course motorcycle\" or \"course so I can get my license\".",
+    "- class_logistics_topic (only meaningful with enrolled_class_logistics): \"equipment\" when they ask what is PROVIDED or what to bring — motorcycles, bikes, helmets, gloves, gear, boots, what to wear; \"schedule\" when they ask when or where — start time, what time to arrive, the address, the room, parking, how many days; \"other\" for anything else about attending. Use \"other\" when unsure.",
     "- Do not classify returning riders as first-time riders unless they explicitly say they are new or never rode.",
     "- confidence is 0..1.",
     "",
@@ -7599,6 +7583,9 @@ export async function parseFirstTimeRiderGuidanceWithLLM(args: {
       : "none";
   const endorsementStatus = String(parsed.endorsement_status ?? "unknown").toLowerCase();
   const hasEndorsement = endorsementStatus === "yes" ? true : endorsementStatus === "no" ? false : null;
+  // Anything the model did not say, or said in a way we do not recognise, falls to "other" — which
+  // is the hand-off-to-a-person branch, i.e. exactly today's behaviour.
+  const rawTopic = String(parsed.class_logistics_topic ?? "").toLowerCase();
   const confidence =
     typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
       ? Math.max(0, Math.min(1, parsed.confidence))
@@ -7612,6 +7599,8 @@ export async function parseFirstTimeRiderGuidanceWithLLM(args: {
     asksBeginnerBike: !!parsed.asks_beginner_bike,
     asksRiderCourse: !!parsed.asks_rider_course,
     asksClassLogistics: !!parsed.asks_class_logistics,
+    classLogisticsTopic:
+      rawTopic === "equipment" || rawTopic === "schedule" ? rawTopic : "other",
     confidence
   };
 }

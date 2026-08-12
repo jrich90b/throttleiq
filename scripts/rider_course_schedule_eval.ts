@@ -180,6 +180,66 @@ const stale = ask({ rows: [{ ...CLASS, updatedAt: ago(45) }], studentClassDate: 
 ok(stale.needsTodo === true && /I don't want to guess/.test(stale.reply), "a stale feed reverts to a person");
 
 // ---------------------------------------------------------------------------
+// EQUIPMENT — "are the motorcycles provided?" (Joe, 2026-08-12)
+//
+// Ulises HernandezPerez (+17167857284) asked "are the motorcycle provided or do we need to bring our
+// own?" and Joe typed the answer himself eight minutes later: "Should be able to answer this.
+// Motorcycles are provided. They are Harley-Davidson X350 RA's."
+//
+// The class TABLE could never have answered him — a schedule says when and where, never what is
+// provided — so this is a separate fact, and it comes from the dealer profile.
+// ---------------------------------------------------------------------------
+const PROVIDES = "H-D X350 RAs";
+const equip = (over: Record<string, unknown> = {}) =>
+  ask({ classLogisticsTopic: "equipment", courseProvides: PROVIDES, ...over });
+
+const answered = equip();
+ok(answered.handled === true && answered.needsTodo === false, "with the fact on file we answer, no task needed");
+ok(answered.reply.includes(PROVIDES), "and the answer states the dealer's own words");
+ok(answered.reply.startsWith("Good news, Maya"), "using the customer's name when we have it");
+ok(equip({ firstName: null }).reply.startsWith("Good news -"), "and reading correctly without one");
+// It answers the question it was asked and nothing more — no invented gear list, no invented time.
+ok(
+  !/helmet|gloves|boots|jacket|wear|[0-9]{1,2}\s*(am|pm)/i.test(answered.reply),
+  "states what is provided and invents nothing else"
+);
+ok(!/\$|price|sign up|best place to start/i.test(answered.reply), "and still never quotes the sign-up price");
+
+// BOTH halves are required. Either one missing falls back to today's promise-a-person hand-off,
+// which is the safe direction: never guess about somebody's class.
+for (const over of [{ courseProvides: "" }, { courseProvides: null }, { courseProvides: "   " }]) {
+  const r = equip(over);
+  ok(/I don't want to guess/.test(r.reply) && r.needsTodo === true, "no dealer fact ⇒ hand off to a person");
+  ok(!r.reply.includes(PROVIDES), "…and obviously never states a fact we do not hold");
+}
+// A SCHEDULE question must not be answered with the equipment fact — that is the bug this shape
+// exists to prevent, and it is why the topic comes from the parser rather than the question's words.
+const sched = ask({ classLogisticsTopic: "schedule", courseProvides: PROVIDES });
+ok(!sched.reply.includes(PROVIDES), "a when/where question is never answered with what is provided");
+ok(/I don't want to guess/.test(sched.reply), "it hands off, exactly as before");
+// Same for "other", and for a parse that carries no topic at all (an older model, or a miss).
+for (const topic of ["other", "", null, undefined, "EQUIPMENT_TYPO"]) {
+  const r = ask({ classLogisticsTopic: topic, courseProvides: PROVIDES });
+  ok(!r.reply.includes(PROVIDES), `topic ${String(topic)} does not unlock the equipment answer`);
+  ok(/I don't want to guess/.test(r.reply), `topic ${String(topic)} keeps today's hand-off`);
+}
+// And a confirmed class table still answers the schedule question — equipment did not shadow it.
+ok(
+  /8:00 AM/.test(ask({ classLogisticsTopic: "schedule", courseProvides: PROVIDES, rows: [CLASS], studentClassDate: "8/22/2026" }).reply),
+  "a fed schedule still answers a when/where question"
+);
+
+// ⚠️ PORTABILITY. The value is DEALER DATA and must never be a literal in the API source — the
+// AH-literal ratchet only goes down, and this is the exact shape that raises it.
+const srcFs = await import("node:fs");
+const policySrc = srcFs.readFileSync(new URL("../services/api/src/domain/firstTimeRiderPolicy.ts", import.meta.url), "utf8");
+const replySrc = srcFs.readFileSync(new URL("../services/api/src/domain/riderCourseSchedule.ts", import.meta.url), "utf8");
+for (const [name, src] of [["firstTimeRiderPolicy", policySrc], ["riderCourseSchedule", replySrc]] as const) {
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/.*$/gm, " ");
+  ok(!/X350/i.test(code), `${name} carries no dealer bike model in CODE (comments may cite the report)`);
+}
+
+// ---------------------------------------------------------------------------
 // THE WIRING — EXECUTED, not read. The shared builder is what the live path and the regenerate
 // path both call, so running it here runs the real decision. (An earlier draft of this section
 // asserted on index.ts source text; source text cannot prove a branch ordering actually holds,
@@ -240,6 +300,61 @@ ok(R.asksRiderCourseLogistics({ intent: "none", asksClassLogistics: true }) === 
 ok(R.asksRiderCourseLogistics({ intent: "rider_course_info" }) === false, "and no other intent does");
 ok(R.asksRiderCourseLogistics(null) === false, "a missing decision mints nothing");
 ok(/Riding Academy student/.test(R.RIDER_COURSE_LOGISTICS_TODO), "the task names the class, so staff know what to confirm");
+
+// EQUIPMENT through the REAL builder, with the REAL profile key. ⚠️ `riderCourseProvides` is the key
+// readFirstTimeRiderPolicy actually reads — with an invented key the fact is blank and every
+// assertion below would pass against a hand-off. The fixture IS the measurement.
+const PROFILE_WITH_PROVIDES = {
+  policies: {
+    firstTimeRider: {
+      ...PROFILE_WITH_SIGNUP_COPY.policies.firstTimeRider,
+      riderCourseProvides: "H-D X350 RAs"
+    }
+  }
+};
+const guidanceProvides = (parsed: Record<string, unknown>, text: string) =>
+  R.buildFirstTimeRiderGuidanceReply({
+    parsed: { explicitRequest: true, ...parsed } as never,
+    dealerProfile: PROFILE_WITH_PROVIDES,
+    text,
+    firstName: "Ulises",
+    studentClassDate: null
+  });
+
+// Ulises's real message, through the path the live webhook and regenerate both call.
+const ulises = guidanceProvides(
+  { intent: "enrolled_class_logistics", asksClassLogistics: true, classLogisticsTopic: "equipment" },
+  "Hi, I'm so sorry to bother, question, are the motorcycle provided or do we need to bring our own? Thanks."
+);
+ok(ulises.includes("H-D X350 RAs"), "the enrolled student finally gets the answer");
+ok(!ulises.includes("$321"), "…and still not the sign-up price");
+ok(!/I don't want to guess/.test(ulises), "…and no longer a promise to get back to them");
+
+// The same dealer, the same profile, a WHEN question: still a hand-off, because we hold no schedule.
+const ulisesWhen = guidanceProvides(
+  { intent: "enrolled_class_logistics", asksClassLogistics: true, classLogisticsTopic: "schedule" },
+  "what time do I show up?"
+);
+ok(/I don't want to guess/.test(ulisesWhen) && !ulisesWhen.includes("X350"), "a when question is unchanged");
+
+// A dealer who has NOT supplied the fact keeps today's behaviour, unchanged in every respect.
+const noFact = guidance({ intent: "enrolled_class_logistics", asksClassLogistics: true, classLogisticsTopic: "equipment" });
+ok(/I don't want to guess/.test(noFact), "a dealer without the fact still promises a person");
+
+// The profile reader itself — the fact has to survive the read, and a blank one must stay blank.
+const P = await import("../services/api/src/domain/firstTimeRiderPolicy.ts");
+ok(P.readFirstTimeRiderPolicy(PROFILE_WITH_PROVIDES).courseProvides === "H-D X350 RAs", "the reader carries the fact");
+ok(P.readFirstTimeRiderPolicy(PROFILE_WITH_SIGNUP_COPY).courseProvides === "", "and an unset fact reads blank");
+ok(P.readFirstTimeRiderPolicy({}).courseProvides === "", "…as does a profile with no policies at all");
+
+// The SHIPPED American Harley profile carries Joe's fact, or none of this reaches a customer.
+const shipped = JSON.parse(
+  srcFs.readFileSync(new URL("../services/api/data/dealer_profile.json", import.meta.url), "utf8")
+);
+ok(
+  P.readFirstTimeRiderPolicy(shipped).courseProvides.length > 0,
+  "the dealer profile actually carries what the class provides"
+);
 
 // Route-parity law: the task has to fire in BOTH paths. Only source can count call SITES.
 const fs = await import("node:fs");
