@@ -16,7 +16,7 @@ import sharp from "sharp";
 import { orchestrateInbound, evaluateTestRideInventoryGate, buildBlockedTestRideInventoryDraft } from "./domain/orchestrator.js";
 import { resolveWatchOptOutOutcome } from "./domain/watchOptOutTurn.js";
 import { resolveAdfFirstTouchAckKind, buildAdfFirstTouchAck, resolveEnrollmentAckExtras } from "./domain/ridingAcademy.js";
-import { readFirstTimeRiderPolicy, hasRiderCoursePublicInfo, readEnrollmentRidingHistory, applyRiderExperienceState } from "./domain/firstTimeRiderPolicy.js";
+import { readFirstTimeRiderPolicy, hasRiderCoursePublicInfo, readEnrollmentRidingHistory, isThreadParkedOnUpcomingClass, applyRiderExperienceState } from "./domain/firstTimeRiderPolicy.js";
 import { buildFirstTimeRiderGuidanceReply, buildInitialAdfFirstTimeRiderGuidanceReply, hasExplicitRiderCourseInfoText, hasAmbiguousRiderCourseInfoText, asksRiderCourseLogistics, RIDER_COURSE_LOGISTICS_TODO } from "./domain/firstTimeRiderReply.js";
 import { readRidingAcademyRecordFields } from "./domain/ridingAcademy.js";
 import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildRidingAcademyEnrollmentAck, buildJumpstartOneOnOneInvite, buildFirstTimeRiderBeginnerReply, buildAcquiredVehicleAck, buildWatchAvailableReply, buildCholoWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, resolveIntroducedOwnerFirstName, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, hasCustomerReceivedOutbound, hasRecentDeliveredHumanOutbound } from "./domain/agentVoice.js";
@@ -31735,6 +31735,7 @@ async function processDueFollowUpsUnlocked() {
         lastMessageAtMs: Date.parse(String(lastMsg?.at ?? "")),
         hasOpenFutureDatedTodo: hasOpenFutureDatedTodo(openTodos, conv.id, now.getTime()),
         parkedOnInventoryPromise: isThreadParkedOnInventoryPromise(conv),
+        parkedOnUpcomingClass: isThreadParkedOnUpcomingClass(conv, now.getTime()),
         nudgeCount: conv.humanThreadNudge?.count ?? 0,
         lastNudgeAtMs: Date.parse(String(conv.humanThreadNudge?.lastAt ?? "")),
         nowMs: now.getTime(),
@@ -31780,9 +31781,8 @@ async function processDueFollowUpsUnlocked() {
           windowMs: 24 * 60 * 60 * 1000,
           nearDuplicate: true
         })
-      ) {
+      )
         continue;
-      }
       let nudgeDelivery: "draft" | "sent" = "draft";
       if (isHumanThreadNudgeAutosendEnabled()) {
         const accountSid = process.env.TWILIO_ACCOUNT_SID;
