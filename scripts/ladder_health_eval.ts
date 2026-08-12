@@ -187,6 +187,156 @@ async function main(): Promise<void> {
     "leads / reach / asked / replied / booked are all counted"
   );
 
+  // --- WHOSE FIRST TOUCH, AND WAS IT EVER SENT (2026-08-12) -------------------------------------
+  // The ask rate answers "does OUR LADDER advance this lane?". Three populations used to ride in on
+  // the looser reading (the first outbound ROW, whoever wrote it and whether or not it was sent):
+  // drafts sitting in the approval box (`draft_ai` was the first outbound row on 108 of ~475 leads in
+  // 90 days), messages a salesperson typed themselves, and leads nobody ever texted.
+  //
+  // Each of these EXECUTES the assessor — a source-text assertion could not tell the difference.
+  const outRow = (over: Record<string, unknown>) => ({ direction: "out", at: daysAgo(3), ...over });
+  const withFirstTouch = (source: string, ageDays: number, msgs: Record<string, unknown>[]) => ({
+    id: `c_${source}_${ageDays}_${Math.random()}`,
+    createdAt: daysAgo(ageDays),
+    lead: { source, phone: "+17165550101" },
+    messages: msgs
+  });
+
+  // (1) A DRAFT IS NOT A TOUCH. The draft asks nothing and the delivered message does; the lane must
+  //     be graded on the one the customer actually read.
+  const draftThenSend = assessLadderHealth({
+    conversations: [
+      withFirstTouch("Lane Draft", 3, [
+        outRow({ provider: "draft_ai", draftStatus: "stale", body: "Thanks, I'll be in touch." }),
+        outRow({ provider: "twilio", body: "Thanks — want to stop in and check it out?" })
+      ])
+    ],
+    now: NOW
+  }).lanes.find(l => l.source === "Lane Draft")!;
+  assert.equal(draftThenSend.recent.agentFirstTouches, 1, "the delivered message is the first touch");
+  assert.equal(draftThenSend.recent.asked, 1, "…and it is what gets graded, not the draft above it");
+
+  // …and a lead whose ONLY outbound is a draft was never texted at all. It must not read as a first
+  // touch that asked nothing — that is a rung nobody sent, which no wording change can fix.
+  const draftOnly = assessLadderHealth({
+    conversations: [
+      withFirstTouch("Lane Unsent", 3, [outRow({ provider: "draft_ai", draftStatus: "stale", body: "Thanks." })])
+    ],
+    now: NOW
+  }).lanes.find(l => l.source === "Lane Unsent")!;
+  assert.equal(draftOnly.recent.neverTexted, 1, "a lead whose only outbound is a draft was never texted");
+  assert.equal(draftOnly.recent.agentFirstTouches, 0, "…so it is not one of our first touches");
+  assert.equal(draftOnly.askRateRecent, null, "…and it cannot drag an ask rate down");
+
+  // (2) A SALESPERSON'S OWN TEXT IS NOT OUR LADDER — counted, never graded.
+  const staffTyped = assessLadderHealth({
+    conversations: [
+      withFirstTouch("Lane Staff", 3, [
+        outRow({ provider: "twilio", actorUserName: "Scott Hartrich", body: "https://www.dragspecialties.com/search/parts/18002744" })
+      ])
+    ],
+    now: NOW
+  }).lanes.find(l => l.source === "Lane Staff")!;
+  assert.equal(staffTyped.recent.staffFirstTouches, 1, "a message staff typed is attributed to staff");
+  assert.equal(staffTyped.recent.agentFirstTouches, 0, "…and never to the agent");
+  assert.equal(staffTyped.askRateRecent, null, "…so it cannot score against our ladder");
+
+  // (3) …but an agent draft staff EDITED stays OURS. The agent wrote the rung; if it shipped without
+  //     an ask, that is our miss. `originalDraftBody` is what holds that line.
+  const editedDraft = assessLadderHealth({
+    conversations: [
+      withFirstTouch("Lane Edited", 3, [
+        outRow({
+          provider: "twilio",
+          actorUserName: "Scott Hartrich",
+          originalDraftBody: "Hi Larry — this is Scott at American Harley-Davidson. Thanks for stopping in today - I'll follow up about pre-owned trikes.",
+          body: "Hi Larry — this is Scott at American Harley-Davidson. Thanks for chatting on SAturday - I'll follow up about pre-owned trikes."
+        })
+      ])
+    ],
+    now: NOW
+  }).lanes.find(l => l.source === "Lane Edited")!;
+  assert.equal(editedDraft.recent.agentFirstTouches, 1, "an agent draft staff edited is still the agent's rung");
+  assert.equal(editedDraft.recent.asked, 0, "…and it asked nothing, which is ours to answer for");
+
+  // (4) THE NEW ALARM: a lane a salesperson opens. It still alarms — a lane the agent never opens is
+  //     worth a decision — but it must NOT send the next run to write copy nobody will send.
+  const staffLane = assessLadderHealth({
+    conversations: [
+      ...Array.from({ length: 7 }, (_, i) =>
+        withFirstTouch("Lane StaffOwned", 3 + i, [
+          outRow({ provider: "twilio", actorUserName: "Scott Hartrich", body: "Thanks for your time today." })
+        ])
+      ),
+      ...Array.from({ length: 2 }, (_, i) =>
+        withFirstTouch("Lane StaffOwned", 12 + i, [outRow({ provider: "twilio", body: "Thanks, I'll be in touch." })])
+      )
+    ],
+    now: NOW
+  }).lanes.find(l => l.source === "Lane StaffOwned")!;
+  assert.equal(staffLane.alarm, "staff_owned_first_touch", "a lane staff open themselves gets its own diagnosis");
+  assert.ok(staffLane.why.includes("typed by staff"), "…and the reason names who is writing");
+  assert.ok(
+    !staffLane.why.includes("may have no ladder"),
+    "…and must NOT read as missing copy — that is the wrong building, which is the whole point"
+  );
+
+  // (5) THE FINDING THIS CHANGE CAME FROM MUST SURVIVE THE SHARPENING. Traffic Log Pro's real 30-day
+  //     shape, measured 2026-08-12: 5 pure agent sends, 9 agent drafts staff edited, 5 staff-typed,
+  //     4 never texted — and 0 of the 14 agent-owned first touches asked anything. The count moves
+  //     from 0/23 to 0/14; the alarm, and the build candidate, stay exactly where they were.
+  //     If sharpening a count makes a finding vanish, re-read the finding before believing it.
+  const tlpReal = [
+    ...Array.from({ length: 5 }, (_, i) =>
+      withFirstTouch("Traffic Log Pro", 3 + i, [outRow({ provider: "twilio", body: "Thanks for stopping in, I'll keep an eye out." })])
+    ),
+    ...Array.from({ length: 9 }, (_, i) =>
+      withFirstTouch("Traffic Log Pro", 9 + i, [
+        outRow({
+          provider: "twilio",
+          actorUserName: "Scott Hartrich",
+          originalDraftBody: "Hi — this is Scott at American Harley-Davidson. Thanks for stopping in today.",
+          body: "Hi — this is Scott at American Harley-Davidson. Thanks for chatting Saturday."
+        })
+      ])
+    ),
+    ...Array.from({ length: 5 }, (_, i) =>
+      withFirstTouch("Traffic Log Pro", 19 + i, [
+        outRow({ provider: "twilio", actorUserName: "Scott Hartrich", body: "Thank you for your time over the phone." })
+      ])
+    ),
+    ...Array.from({ length: 4 }, (_, i) =>
+      withFirstTouch("Traffic Log Pro", 25 + i, [outRow({ provider: "draft_ai", draftStatus: "stale", body: "Thanks." })])
+    )
+  ];
+  const tlpLane = assessLadderHealth({ conversations: tlpReal, now: NOW }).lanes.find(
+    l => l.source === "Traffic Log Pro"
+  )!;
+  assert.deepEqual(
+    {
+      leads: tlpLane.recent.leads,
+      ours: tlpLane.recent.agentFirstTouches,
+      staff: tlpLane.recent.staffFirstTouches,
+      none: tlpLane.recent.neverTexted,
+      asked: tlpLane.recent.asked
+    },
+    { leads: 23, ours: 14, staff: 5, none: 4, asked: 0 },
+    "the live Traffic Log Pro shape splits 14 ours / 5 staff / 4 never texted"
+  );
+  assert.equal(tlpLane.alarm, "never_asks", "and it STILL alarms — sharpening the count did not erase the finding");
+  assert.ok(tlpLane.why.includes("14 agent-owned"), "…on the honest denominator, not on all 23 leads");
+  assert.ok(
+    tlpLane.why.includes("5 were staff-typed and 4 never texted"),
+    "…and the row says what it left out, so nobody has to re-derive the split"
+  );
+
+  // (6) ORDERING: a lane with nobody to reach is a FEED defect first. `uncontactable` has no delivered
+  //     outbound at all, so it would otherwise fall into the staff/never-texted arms and be renamed.
+  const unreachableLane = assessLadderHealth({
+    conversations: Array.from({ length: 12 }, (_, i) => lead("Lane Feed", 3 + i, { unreachable: true }))
+  , now: NOW }).lanes.find(l => l.source === "Lane Feed")!;
+  assert.equal(unreachableLane.alarm, "uncontactable", "a feed defect keeps its diagnosis — it is checked first for a reason");
+
   // --- a lead with no source still gets counted, never dropped ----------------------------------
   const noSource = assessLadderHealth({ conversations: [{ createdAt: daysAgo(2), messages: [] }], now: NOW });
   assert.ok(noSource.lanes.some(l => l.source === "(no source)"), "unsourced leads are a lane, not a hole");

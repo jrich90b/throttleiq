@@ -27,13 +27,57 @@
  *                          change can reach someone with no address, so the fix is upstream in the
  *                          vendor feed. Added 2026-08-11 after `never_asks` sent a run hunting for
  *                          missing copy on AutoDealers.Digital, whose 18 leads had nobody to send to.
+ *   `staff_owned_first_touch` — a salesperson gets the first word on most of this lane. Our copy is
+ *                          not what these customers read, so writing more of it cannot move the
+ *                          number. Added 2026-08-12; see "WHOSE FIRST TOUCH" below.
+ *
+ * ## WHOSE FIRST TOUCH, AND WAS IT EVER SENT (2026-08-12)
+ *
+ * The ask rate exists to answer *"does OUR LADDER advance this lane?"*. As first written it answered a
+ * looser question — *"did the first outbound ROW in the array ask anything?"* — and three populations
+ * rode in on that looseness. All three drag the rate DOWN, so the instrument fails toward false
+ * alarms rather than false silence; but a run sent to write copy for a lane whose number copy cannot
+ * move is a tick spent in the wrong building, which is the exact failure #663 was about.
+ *
+ * MEASURED on the live store, 30-day window (173 leads), and the 60 days before it (327):
+ *
+ * - **A draft is not a touch.** `draft_ai` is the first outbound row on **108 of ~475 leads in 90
+ *   days** — 23%. A `draft_ai` row is a draft in the approval box; when it is approved and sent it is
+ *   re-recorded as `twilio`. So the row the sweep graded was, for a fifth of all leads, a message the
+ *   customer never received. Same class as the cadence referee counting a stale draft as a delivered
+ *   touch. Baseline Dealer Lead App read 0/32 asking on the old selection and 3/19 on the agent's own
+ *   delivered first touches — a different answer to the question we meant to ask.
+ * - **A salesperson's own text is not our ladder.** Staff type into the same thread from the console.
+ *   `isStaffAuthoredOutbound` (the settled convention for every other scorer — the marker's PRESENCE
+ *   proves a human sent it, its absence proves nothing) says 5 of 23 recent Traffic Log Pro first
+ *   touches were typed by staff, one of them a bare parts URL that duly scored as "asked nothing".
+ *   In the baseline window the unsourced lane ran **19 staff-typed against 2 agent-owned**.
+ * - **A lead nobody texted is not a ladder that failed.** 4 of 23 recent Traffic Log Pro leads
+ *   received no customer-facing message at all.
+ *
+ * An agent draft that staff EDITED before sending stays AGENT-owned: the agent wrote the rung, and if
+ * it shipped without an ask that is ours. That split is what settled the lane this change came from —
+ * of 23 Traffic Log Pro first touches, 5 were pure agent sends, 9 agent drafts staff edited, 5
+ * staff-typed and 4 never sent; **0 of the 14 agent-owned asked anything, and only 1 of the 9 original
+ * drafts did before staff touched it.** So the lane's `never_asks` alarm is TRUE and survives this
+ * change — the count moves from 0/23 to 0/14, and the build candidate is still the copy.
+ *
+ * That is the outcome to want from an instrument fix: it sharpens the number without erasing the
+ * finding. If sharpening a count makes a finding vanish, re-read the finding before believing it.
  *
  * FAIL DIRECTION: it only ever REPORTS. It cannot hold a reply, change a route, or fail a deploy. The
  * worst a false alarm costs is one person reading one line.
  */
 
+// ONE OWNER for "did a human type this?". `scoringExclusions` has carried that predicate since
+// 2026-07-23 and its own header records why a second hand-maintained copy is the bug: the copies
+// drift, and only one of them learns. Fail-safe by construction — the author marker's PRESENCE proves
+// a human sent it; its ABSENCE proves nothing and is never used to skip.
+import { isStaffAuthoredOutbound } from "./scoringExclusions.js";
+
 export type LadderWindowCounts = {
   leads: number;
+  /** Agent-owned first touches that asked the customer something. Denominator is `agentFirstTouches`. */
   asked: number;
   replied: number;
   booked: number;
@@ -44,6 +88,21 @@ export type LadderWindowCounts = {
    * a different building for each: no ladder (write one) versus nobody to send it to (call the vendor).
    */
   contactable: number;
+  /**
+   * First touches the AGENT owns — a message it sent, or a draft it wrote that staff edited before
+   * sending. This is the ask rate's denominator: the only population our copy can move.
+   */
+  agentFirstTouches: number;
+  /**
+   * First touches a staff member typed from scratch. Counted and reported, never graded — see
+   * `staff_owned_first_touch`.
+   */
+  staffFirstTouches: number;
+  /**
+   * Leads that never received a customer-facing message at all. NOT a ladder failure: a rung that was
+   * never sent cannot ask anything, and the fix is upstream of the wording.
+   */
+  neverTexted: number;
 };
 
 export type LadderLaneHealth = {
@@ -54,7 +113,7 @@ export type LadderLaneHealth = {
   baseline: LadderWindowCounts;
   askRateRecent: number | null;
   askRateBaseline: number | null;
-  alarm: "ask_rate_collapsed" | "never_asks" | "uncontactable" | null;
+  alarm: "ask_rate_collapsed" | "never_asks" | "uncontactable" | "staff_owned_first_touch" | null;
   why: string;
 };
 
@@ -63,7 +122,16 @@ export type LadderHealthReport = {
   baselineDays: number;
   lanes: LadderLaneHealth[];
   alarms: LadderLaneHealth[];
-  summary: { lanesScanned: number; leadsRecent: number; askedRecent: number; bookedRecent: number };
+  summary: {
+    lanesScanned: number;
+    leadsRecent: number;
+    /** Agent-owned first touches that asked something — out of `agentFirstTouchesRecent`, not `leadsRecent`. */
+    askedRecent: number;
+    agentFirstTouchesRecent: number;
+    staffFirstTouchesRecent: number;
+    neverTextedRecent: number;
+    bookedRecent: number;
+  };
 };
 
 /**
@@ -136,8 +204,42 @@ export function messageAsksSomething(body: string | null | undefined): boolean {
   return String(body ?? "").replace(/https?:\/\/\S+/g, " ").includes("?");
 }
 
+/**
+ * Outbound rows that are NOT a message the customer received.
+ *
+ * MEASURED over 90 days of outbound rows: `draft_ai` 504 (first row on 108 leads), `voice_summary`
+ * 280, `voice_call` 219 (first on 7), `voice_transcript` 194, `payment_event` 1. None of those is
+ * text we sent someone; `twilio` (1,872), `sendgrid` (93) and `human` (13) are.
+ *
+ * A DENY-list, not an allow-list, and deliberately so: an unrecognised provider stays COUNTED. A false
+ * "delivered" leaves the lane on today's diagnosis and costs one line; a false "never sent" would drop
+ * a whole lane out of the ask rate silently, and a wrong suppression is invisible forever (#663).
+ */
+export const NON_DELIVERED_OUTBOUND_PROVIDERS = new Set([
+  "draft_ai",
+  "voice_summary",
+  "voice_transcript",
+  "voice_call",
+  "payment_event"
+]);
+
+/** Did the customer actually receive this outbound row? See NON_DELIVERED_OUTBOUND_PROVIDERS. */
+export function isDeliveredCustomerText(msg: { direction?: string | null; provider?: string | null }): boolean {
+  if (String(msg?.direction) !== "out") return false;
+  return !NON_DELIVERED_OUTBOUND_PROVIDERS.has(String(msg?.provider ?? "").trim());
+}
+
 function emptyCounts(): LadderWindowCounts {
-  return { leads: 0, asked: 0, replied: 0, booked: 0, contactable: 0 };
+  return {
+    leads: 0,
+    asked: 0,
+    replied: 0,
+    booked: 0,
+    contactable: 0,
+    agentFirstTouches: 0,
+    staffFirstTouches: 0,
+    neverTexted: 0
+  };
 }
 
 /**
@@ -152,8 +254,12 @@ export function leadIsContactable(conv: any): boolean {
   return !!String(lead.phone ?? "").trim() || !!String(lead.email ?? "").trim();
 }
 
+/**
+ * Ask rate over the population our copy can actually move: agent-owned first touches. Staff-typed
+ * messages and leads we never texted are counted separately and reported, never graded.
+ */
 function rate(counts: LadderWindowCounts): number | null {
-  return counts.leads > 0 ? counts.asked / counts.leads : null;
+  return counts.agentFirstTouches > 0 ? counts.asked / counts.agentFirstTouches : null;
 }
 
 export function assessLadderHealth(input: {
@@ -180,9 +286,21 @@ export function assessLadderHealth(input: {
     if (leadIsContactable(conv)) counts.contactable += 1;
 
     const messages: any[] = Array.isArray(conv?.messages) ? conv.messages : [];
-    const outbound = messages.filter(m => String(m?.direction) === "out");
-    const firstOut = outbound[0];
-    if (firstOut && messageAsksSomething(firstOut.body)) counts.asked += 1;
+    // The first thing the customer actually RECEIVED — not the first outbound row, which is a draft
+    // in the approval box on ~23% of leads. See NON_DELIVERED_OUTBOUND_PROVIDERS.
+    const firstOut = messages.find(isDeliveredCustomerText);
+    if (!firstOut) {
+      counts.neverTexted += 1;
+    } else if (isStaffAuthoredOutbound(firstOut)) {
+      // A salesperson typed this themselves. Reported, never graded: our copy is not what this
+      // customer read, so it can neither earn credit nor take blame for the lane's ask rate.
+      counts.staffFirstTouches += 1;
+    } else {
+      // Ours — either the agent sent it, or the agent drafted it and staff edited before sending
+      // (`originalDraftBody` present, which is what keeps an edited draft on our side of the line).
+      counts.agentFirstTouches += 1;
+      if (messageAsksSomething(firstOut.body)) counts.asked += 1;
+    }
 
     const firstOutAt = Date.parse(String(firstOut?.at ?? ""));
     if (
@@ -229,12 +347,33 @@ export function assessLadderHealth(input: {
         why = `${w.recent.leads} leads and not one carries a phone or an email — nothing we write can reach them; this is a lead-feed defect, not a missing ladder`;
       } else if (
         w.recent.leads >= LADDER_MIN_NEVER_ASKS_LEADS &&
+        w.recent.staffFirstTouches > w.recent.agentFirstTouches
+      ) {
+        // NOT a ladder problem either. A salesperson gets the first word on most of this lane, so what
+        // these customers read is not our copy and writing more of it cannot move the number. Measured
+        // 2026-08-12: the unsourced baseline lane ran 19 staff-typed first touches against 2 of ours.
+        //
+        // It still ALARMS — a lane the agent never opens is worth a decision (is that deliberate?) —
+        // but naming it `never_asks` would send the next run to write copy nobody will send.
+        //
+        // Checked BEFORE never_asks for the same reason `uncontactable` is: a lane we do not open
+        // obviously never asks, and whichever test runs first owns the diagnosis.
+        alarm = "staff_owned_first_touch";
+        why =
+          `${w.recent.staffFirstTouches} of ${w.recent.leads} first touches were typed by staff and only ` +
+          `${w.recent.agentFirstTouches} by the agent — our copy is not what this lane reads, so a wording change cannot move it`;
+      } else if (
+        w.recent.leads >= LADDER_MIN_NEVER_ASKS_LEADS &&
         w.recent.asked === 0 &&
         w.baseline.asked === 0
       ) {
         // Not a break — a lane that never had a ladder at all.
         alarm = "never_asks";
-        why = `${w.recent.leads} leads and not one first touch asked anything — this lane may have no ladder`;
+        why =
+          `${w.recent.agentFirstTouches} agent-owned first touches and not one asked anything — this lane may have no ladder` +
+          (w.recent.staffFirstTouches || w.recent.neverTexted
+            ? ` (of ${w.recent.leads} leads, ${w.recent.staffFirstTouches} were staff-typed and ${w.recent.neverTexted} never texted — neither is graded)`
+            : "");
       }
     }
     out.push({ source, noLadderByDesign: byDesign, recent: w.recent, baseline: w.baseline, askRateRecent, askRateBaseline, alarm, why });
@@ -250,6 +389,9 @@ export function assessLadderHealth(input: {
       lanesScanned: out.length,
       leadsRecent: out.reduce((n, l) => n + l.recent.leads, 0),
       askedRecent: out.reduce((n, l) => n + l.recent.asked, 0),
+      agentFirstTouchesRecent: out.reduce((n, l) => n + l.recent.agentFirstTouches, 0),
+      staffFirstTouchesRecent: out.reduce((n, l) => n + l.recent.staffFirstTouches, 0),
+      neverTextedRecent: out.reduce((n, l) => n + l.recent.neverTexted, 0),
       bookedRecent: out.reduce((n, l) => n + l.recent.booked, 0)
     }
   };
