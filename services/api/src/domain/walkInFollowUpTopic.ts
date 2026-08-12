@@ -374,3 +374,109 @@ export function resolveWalkInFollowUpSubject(input: {
   const spec = year && !modelCarriesYear ? `${year} ${model}` : model;
   return `the ${spec}`;
 }
+
+/**
+ * Answer the PRICE the salesperson wrote down, instead of offering to watch for a bike the
+ * customer has already been shown.
+ *
+ * Mike Marcaccio (+17165702519, Traffic Log Pro ref 11775, 2026-08-11). The note read "Mike was in
+ * on Saturday 8/8 talking with Brian. Asked if we had any used Street Glides in stock and showed
+ * him the 2023. Follow up on price (Step 2)" — so we HAVE the bike, he has SEEN it, and the one
+ * open item is the number. The first text back was "I'll keep an eye out for Street Glide and let
+ * you know if one comes in": it contradicts our own note, drops the price ask, and asks nothing.
+ * The availability tail had overwritten the pricing tail set a few lines above it, because the
+ * block that writes it was gated on every other walk-in signal except this one.
+ *
+ * Built ONLY from parsed slots (condition / year / model), never the note prose — same law as
+ * `buildWalkInSpecRecapClause` beside it, and for the same reason: a Traffic Log Pro inquiry field
+ * is an internal staff log ("talking with Brian", "($8000)") and nothing in it may be echoed.
+ *
+ * IT NEVER STATES A FIGURE. The promise is that a person will bring the numbers, which is true the
+ * moment it is sent; quoting money is not this module's job and not the agent's.
+ *
+ * The closing ask is the caller's `buildWalkInSoftTimingAsk` string (visitFraming.ts), passed in
+ * rather than imported so this file stays a dependency-free leaf. Walk-ins have already been here,
+ * so it is the "stop BACK in" wording — Joe ruling 31, dealer-lead-app-is-a-walk-in.
+ *
+ * FAIL DIRECTION: replaces a FALSE availability claim with a truthful commitment. It promises no
+ * figure, no booking, no watch and no callback window. With no model it degrades to today's exact
+ * pricing line, so the worst case is the sentence that ships today plus one question. Pinned by
+ * walkin_pricing_ask_tail:eval.
+ */
+export function buildWalkInPricingFollowUpTail(input: {
+  modelLabel?: string | null;
+  yearLabel?: string | null;
+  condition?: "new" | "used" | null;
+  softAsk?: string | null;
+}): string {
+  const ask = String(input.softAsk ?? "").trim();
+  const withAsk = (base: string) => (ask ? `${base} ${ask}` : base);
+  const model = String(input.modelLabel ?? "").replace(/\s+/g, " ").trim();
+  // "bike" is `formatWatchModelForMessage`'s placeholder for "no model resolved", not a model.
+  if (!model || /^bike$/i.test(model)) {
+    return withAsk("I’ll follow up with pricing details and next steps.");
+  }
+  const year = String(input.yearLabel ?? "").replace(/\s+/g, " ").trim();
+  const modelCarriesYear = /(?:^|\s)(?:19|20)\d{2}(?:\s|-|$)/.test(model);
+  const condition = input.condition === "new" ? "new" : input.condition === "used" ? "pre-owned" : "";
+  const spec = [condition, year && !modelCarriesYear ? year : "", model].filter(Boolean).join(" ");
+  return withAsk(`I’ll get you the numbers on the ${spec}.`);
+}
+
+/**
+ * May the availability/watch tail speak on a walk-in first touch?
+ *
+ * Lifted verbatim out of `routes/sendgridInbound.ts` so it can be EXECUTED by an eval — a
+ * source-text assertion cannot prove a route file still asks the question (the ratchet trap:
+ * un-wiring a guard leaves every pure assertion green). The only NEW term is the pricing one.
+ *
+ * `hasPricingFollowupIntent` outranks it because the two sentences answer different questions and
+ * only one of them was asked. "I'll keep an eye out for a used Street Glide" is a reply to "do you
+ * have one"; the note that carries a price follow-up has already answered that — usually by saying
+ * the customer stood next to the bike. Availability is what we say when we have nothing else.
+ */
+export function shouldWalkInAvailabilityTailSpeak(input: {
+  modelLabel?: string | null;
+  hasPricingFollowupIntent?: boolean | null;
+  hasCompletedTestRideSignal?: boolean | null;
+  hasDealProgressSignal?: boolean | null;
+  hasHoldSignal?: boolean | null;
+  hasResumeHoldSignal?: boolean | null;
+  hasReminderRequest?: boolean | null;
+}): boolean {
+  if (!String(input.modelLabel ?? "").trim()) return false;
+  if (input.hasPricingFollowupIntent) return false;
+  return !(
+    input.hasCompletedTestRideSignal ||
+    input.hasDealProgressSignal ||
+    input.hasHoldSignal ||
+    input.hasResumeHoldSignal ||
+    input.hasReminderRequest
+  );
+}
+
+/**
+ * Does a walk-in staff note state that the open item is the PRICE?
+ *
+ * Moved here from `routes/sendgridInbound.ts` unchanged, for the reason `hasWatchIntentPhrase`
+ * moved into walkInInventoryWant.ts: an eval must exercise the expression that actually runs, not
+ * a hand-copy that drifts (PR #432). Behaviour is byte-identical to the inline version.
+ *
+ * KEEP arm under the fail-direction test (AGENTS.md): this reads a SALESPERSON'S OWN LOG, not a
+ * customer's intent — "Follow up on price (Step 2)" is a staff instruction with a fixed vocabulary,
+ * and it is deterministic structured extraction, not comprehension. It also only ever selects which
+ * true sentence we send; removing it fails toward the generic availability line, which is the bug.
+ * The parser arm still runs beside it at the call site and either one is enough.
+ */
+export function hasWalkInPricingFollowUpPhrase(text?: string | null): boolean {
+  const source = String(text ?? "");
+  if (!source.trim()) return false;
+  return (
+    /\b(follow up|follow-up|check in|circle back|touch base)\b[\s\S]{0,40}\b(pricing|price|numbers?)\b/i.test(
+      source
+    ) ||
+    /\b(pricing|price|numbers?)\b[\s\S]{0,40}\b(follow up|follow-up|check in|circle back|touch base)\b/i.test(
+      source
+    )
+  );
+}

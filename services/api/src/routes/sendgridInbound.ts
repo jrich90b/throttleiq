@@ -13,7 +13,11 @@ import {
   modelDiscontinuationReplyEnabled
 } from "../domain/modelDiscontinuation.js";
 import { decideWatchYearPin, decideWatchConditionPin } from "../domain/watchYearPin.js";
-import { customerVisitConfirmed, phantomVisitGuardEnabled } from "../domain/visitFraming.js";
+import {
+  buildWalkInSoftTimingAsk,
+  customerVisitConfirmed,
+  phantomVisitGuardEnabled
+} from "../domain/visitFraming.js";
 import { hasDeliveredOrPendingDealerRideThankYou } from "../domain/dealerRideThankYouDedup.js";
 import {
   upsertConversationByLeadKey,
@@ -173,7 +177,10 @@ import {
   formatWalkInReturnDayLabel,
   formatWalkInReturnDayIso,
   formatWalkInFamilyLabel,
-  resolveWalkInFollowUpSubject
+  resolveWalkInFollowUpSubject,
+  buildWalkInPricingFollowUpTail,
+  shouldWalkInAvailabilityTailSpeak,
+  hasWalkInPricingFollowUpPhrase
 } from "../domain/walkInFollowUpTopic.js";
 // SHADOW judge on this lane's drafts (Joe Step 2, 2026-08-02) — fire-and-forget, never awaited.
 import { runEmailLaneJudgeShadow } from "../domain/emailLaneJudgeShadow.js";
@@ -7548,13 +7555,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
     const hasWatchIntent = walkInWatchDecision.watch;
     const pricingFollowupIntentFromParser = pricingInquiryIntentFromParser;
-    const pricingFollowupIntentFromText =
-      /\b(follow up|follow-up|check in|circle back|touch base)\b[\s\S]{0,40}\b(pricing|price|numbers?)\b/i.test(
-        walkInCleanedComment
-      ) ||
-      /\b(pricing|price|numbers?)\b[\s\S]{0,40}\b(follow up|follow-up|check in|circle back|touch base)\b/i.test(
-        walkInCleanedComment
-      );
+    const pricingFollowupIntentFromText = hasWalkInPricingFollowUpPhrase(walkInCleanedComment);
     const hasPricingFollowupIntent = pricingFollowupIntentFromParser || pricingFollowupIntentFromText;
     const trafficLogProStep =
       isTrafficLogProPayloadHint || isExplicitWalkInLeadSource || inferredBucket === "in_store"
@@ -7845,7 +7846,15 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     } else if (walkInReminderRequest?.timeHint && modelLabel) {
       tail = `I’ll follow up ${walkInReminderRequest.timeHint.toLowerCase()} about the ${formatWatchModelForMessage(modelLabel)}.`;
     } else if (hasPricingFollowupIntent) {
-      tail = "I’ll follow up with pricing details and next steps.";
+      // Name the bike the note named and ask the one question that moves it (Mike Marcaccio
+      // +17165702519). Slots only — never the note prose — and never a figure. The soft ask is
+      // the walk-in wording: everyone on this lane has already been here (Joe ruling 31).
+      tail = buildWalkInPricingFollowUpTail({
+        modelLabel: modelLabel ? formatWatchModelForMessage(modelLabel) : null,
+        yearLabel: yearRangeLabel || (singleYear ? String(singleYear) : ""),
+        condition: wantsUsed ? "used" : wantsNew ? "new" : null,
+        softAsk: buildWalkInSoftTimingAsk(true, false).trim()
+      });
     }
     const walkInTestRideRequested =
       walkInOutcomeAccepted && !!llmWalkInOutcome?.testRideRequested;
@@ -7862,13 +7871,19 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         tail = "I’ll check back next week and we can line up your test ride.";
       }
     }
+    // The availability/watch line answers "do you have one" — so it must not overwrite a tail that
+    // answers a question the note actually asked. Condition lifted to a named domain predicate so
+    // an eval can execute it (a source assertion cannot prove a route file still asks).
     if (
-      modelLabel &&
-      !hasCompletedTestRideSignal &&
-      !hasDealProgressSignal &&
-      !hasHoldSignal &&
-      !hasResumeHoldSignal &&
-      !walkInReminderRequest
+      shouldWalkInAvailabilityTailSpeak({
+        modelLabel,
+        hasPricingFollowupIntent,
+        hasCompletedTestRideSignal,
+        hasDealProgressSignal,
+        hasHoldSignal,
+        hasResumeHoldSignal,
+        hasReminderRequest: !!walkInReminderRequest
+      })
     ) {
       if (wantsUsed) {
         const usedLabel = `used ${rangeLabel}${formatWatchModelForMessage(modelLabel)}`;
