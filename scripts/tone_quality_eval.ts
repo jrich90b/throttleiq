@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { evaluateTurnToneQuality, normalizeText } from "./lib/toneQuality.ts";
-import { matchInboundReply } from "./lib/toneResponseMatch.ts";
+import { matchInboundReply, voiceCallAnsweredTurn } from "./lib/toneResponseMatch.ts";
 import {
   hasPendingFirstTouchEmailDraft,
   isAutomatedSenderInbound,
@@ -249,6 +249,18 @@ function main() {
           skippedReasonMap.set(
             "staff_owned_turn_no_agent_reply",
             (skippedReasonMap.get("staff_owned_turn_no_agent_reply") ?? 0) + 1
+          );
+          continue;
+        }
+        // We rang them instead of texting back. A phone-call record is not a text
+        // reply (so `matchInboundReply` steps over it), but it is not a DROPPED
+        // turn either — scoring it `missing_response` would just swap one phantom
+        // for a worse one. Skip; the call lane is graded by voice_charter.
+        if (voiceCallAnsweredTurn(messages, i)) {
+          skippedTurns += 1;
+          skippedReasonMap.set(
+            "answered_by_phone_call",
+            (skippedReasonMap.get("answered_by_phone_call") ?? 0) + 1
           );
           continue;
         }

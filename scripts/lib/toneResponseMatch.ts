@@ -28,6 +28,36 @@ function toMs(value: string): number {
   return Number.isFinite(ms) ? ms : Number.NaN;
 }
 
+// PHONE-CALL RECORDS ARE NOT TEXT REPLIES. The store writes three outbound row
+// kinds for a call — `voice_call` ("Call initiated to +1716…"), `voice_transcript`
+// (the raw transcript) and `voice_summary` (the AI recap) — 1,741 rows in the
+// americanharley store. None is something the agent wrote back to the customer,
+// so grading one as the answer is a guaranteed phantom: Dominik Leidolph
+// (+17164233156) asked to reschedule a missed appointment on 2026-08-11 and the
+// audit graded the stub "Automated phone system — no conversation recorded."
+// 65 / `intent_mismatch`, while his REAL reply sat four minutes later.
+// Step over them and keep looking for the actual text reply.
+const VOICE_RECORD_PROVIDERS = new Set(["voice_call", "voice_transcript", "voice_summary"]);
+
+export function isVoiceRecordOutbound(message: any): boolean {
+  return VOICE_RECORD_PROVIDERS.has(String(message?.provider ?? "").trim().toLowerCase());
+}
+
+/**
+ * Did a phone call answer this turn? Used ONLY to tell "we rang them instead of
+ * texting" apart from a genuinely dropped turn, so the first is skipped rather
+ * than scored `missing_response`. Bounded exactly like Phase 2: the span before
+ * the customer's next message.
+ */
+export function voiceCallAnsweredTurn(messages: any[], inboundIndex: number): boolean {
+  for (let j = inboundIndex + 1; j < messages.length; j += 1) {
+    const m = messages[j];
+    if (m?.direction === "in" && normalizeText(m?.body)) return false;
+    if (m?.direction === "out" && isVoiceRecordOutbound(m)) return true;
+  }
+  return false;
+}
+
 /**
  * Find the outbound reply that answers the inbound turn at `inboundIndex`.
  * `messages` MUST be sorted ascending by time. Returns null when the turn was
@@ -54,6 +84,7 @@ export function matchInboundReply(
     if (outAtMs > maxOutMs) break;
     if (out?.direction !== "out") continue;
     if (!normalizeText(out?.body)) continue;
+    if (isVoiceRecordOutbound(out)) continue;
     return { matchedOut: out, withinWindow: true, latencySec: Math.max(0, Math.round((outAtMs - inboundAtMs) / 1000)) };
   }
 
@@ -65,6 +96,7 @@ export function matchInboundReply(
     const mAtMs = toMs(String(m?.at ?? ""));
     if (!Number.isFinite(mAtMs)) continue;
     if (m?.direction === "in" && normalizeText(m?.body)) return null;
+    if (m?.direction === "out" && isVoiceRecordOutbound(m)) continue;
     if (m?.direction === "out" && normalizeText(m?.body)) {
       return { matchedOut: m, withinWindow: false, latencySec: Math.max(0, Math.round((mAtMs - inboundAtMs) / 1000)) };
     }

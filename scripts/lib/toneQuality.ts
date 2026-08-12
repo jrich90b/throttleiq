@@ -348,6 +348,45 @@ export function stripAdfDealerQuestionnaire(text: string): string {
   return raw.slice(0, cut);
 }
 
+/**
+ * Third fingerprint in the same class (2026-08-12): the lead header's IDENTITY
+ * fields are not customer speech, and their values are arbitrary person-chosen
+ * words. Bryon Price (+17162648151, ref 11772) sent a `Trade Accelerator` lead
+ * whose whole inquiry was "trade-in appraisal request"; the agent answered it
+ * correctly ("we can give you a firm number after a quick in-person appraisal —
+ * what day works?"), and it scored **35 / poor** on `intent_mismatch` +
+ * `adf_direct_ask_unanswered: pricing`, because his SURNAME matched the pricing
+ * keyword. That single phantom is what took the release gate DIRTY on 8/12.
+ *
+ * Blank the VALUES of the identity fields (`Name:` / `Email:`) before any tone
+ * judgement, keeping the LABELS so `isAdfInboundText` still recognises the
+ * shape. Nothing real is lost: a pricing/trade/scheduling ask that appears ONLY
+ * inside a customer's name or email address is not an ask. Same failure family
+ * as the Charles Desalvo salesperson-name and Riding Academy enrollment-record
+ * phantoms above.
+ */
+export function stripAdfIdentityFieldValues(text: string): string {
+  const raw = String(text ?? "");
+  if (!isAdfInboundText(raw)) return raw;
+  return raw.replace(
+    new RegExp(
+      `\\b(name|email):([ \\t]*)([^\\n]*?)(?=[ \\t]+(?:${ADF_FIELD_LABELS})[ \\t]*:|[ \\t]*(?:\\n|$))`,
+      "gi"
+    ),
+    (_m, label: string, gap: string) => `${label}:${gap}`
+  );
+}
+
+/**
+ * NOTE (2026-08-12): on a single-line ADF the `Inquiry:` marker below misses and
+ * this falls back to the ENTIRE raw lead. That fallback is DELIBERATE and load-
+ * bearing — the header carries genuine structured intent that the inquiry body
+ * does not: `Source: HD.com Request a Quote` IS a pricing ask (Nicholas Braun,
+ * Taliea Lloyd) and `Trade-In: 2019 Indian Chief` IS a trade ask, and all three
+ * fixtures pinning that broke when this was "tidied" to body-only. Only the
+ * IDENTITY fields are noise, and `stripAdfIdentityFieldValues` removes exactly
+ * those. Do not narrow this to the inquiry body.
+ */
 function extractAdfCustomerText(text: string): string {
   const raw = String(text ?? "");
   const marker = raw.match(/(?:^|\n)\s*(?:inquiry|your inquiry|customer comments?|comments?):\s*/i);
@@ -807,7 +846,9 @@ export function outboundAcknowledgesHardship(text: string): boolean {
 }
 
 export function evaluateTurnToneQuality(input: ToneEvalInput): ToneEvalResult {
-  const rawInboundText = stripAdfDealerQuestionnaire(String(input.inboundText ?? ""));
+  const rawInboundText = stripAdfIdentityFieldValues(
+    stripAdfDealerQuestionnaire(String(input.inboundText ?? ""))
+  );
   const inboundText = normalizeText(rawInboundText);
   const outboundText = normalizeText(input.outboundText);
   const intent = detectPrimaryIntent(inboundText);

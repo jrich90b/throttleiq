@@ -1,5 +1,5 @@
 import { evaluateTurnToneQuality } from "./lib/toneQuality.ts";
-import { matchInboundReply } from "./lib/toneResponseMatch.ts";
+import { matchInboundReply, voiceCallAnsweredTurn } from "./lib/toneResponseMatch.ts";
 
 type Fixture = {
   id: string;
@@ -205,6 +205,35 @@ const FIXTURES: Fixture[] = [
     }
   },
   {
+    // Bryon Price (+17162648151, ref 11772, 2026-08-11) — his SURNAME is the
+    // pricing keyword. A single-line `Trade Accelerator` ADF whose whole inquiry
+    // is "trade-in appraisal request"; the reply answers it exactly right (no
+    // firm number before an in-person appraisal, plus an advancing ask) and
+    // scored 35 / poor on `intent_mismatch` + `adf_direct_ask_unanswered:
+    // pricing`. That one phantom took the release gate DIRTY on 8/12. The lead
+    // header's identity fields are not customer speech.
+    id: "adf_identity_field_name_is_not_a_pricing_ask",
+    inboundText:
+      "WEB LEAD (ADF) Source: Trade Accelerator - Trade In Ref: 11772 Name: Bryon Price Email: blpricesr2@gmail.com Phone: 7162648151 Year: 2026 Vehicle: Harley-Davidson Other Trade-In: 2018 Harley-Davidson FLHX Street Glide Inquiry: trade-in appraisal request",
+    outboundText:
+      "Hey Bryon, it's Alexandra over at American Harley-Davidson. Thanks — I got your trade-in request for 2018 FLHX Street Glide. We can give you a firm number after a quick in-person appraisal. What day and time works best to stop in? Reply STOP to opt out.",
+    expect: {
+      minScore: 85,
+      mustNotIncludeIssues: ["adf_direct_ask_unanswered", "intent_mismatch", "question_not_answered_first"]
+    }
+  },
+  {
+    // Guard the other direction on the SAME single-line shape the fix touches: a
+    // real pricing question typed into the inquiry body is still caught, so the
+    // identity-field strip can never widen into a blanket pricing amnesty.
+    id: "adf_single_line_real_pricing_ask_still_caught",
+    inboundText:
+      "WEB LEAD (ADF) Source: Trade Accelerator - Trade In Ref: 11773 Name: Bryon Price Email: blpricesr2@gmail.com Phone: 7162648151 Year: 2026 Vehicle: Harley-Davidson Street Glide Inquiry: what's the out the door price on the 2026 Street Glide?",
+    outboundText:
+      "Hey Bryon, it's Alexandra over at American Harley-Davidson. Thanks for reaching out — what day works for you to stop in?",
+    expect: { mustIncludeIssues: ["adf_direct_ask_unanswered"] }
+  },
+  {
     // Guard the other direction: a REAL pricing question in the customer comment
     // is still caught even though the questionnaire block follows it.
     id: "adf_real_ask_before_dealer_questionnaire_still_caught",
@@ -385,9 +414,9 @@ const at = (minAfter: number) => new Date(T0 + minAfter * 60 * 1000).toISOString
 
 type MatchFixture = {
   id: string;
-  messages: Array<{ direction: "in" | "out"; at: string; body: string }>;
+  messages: Array<{ direction: "in" | "out"; at: string; body: string; provider?: string }>;
   inboundIndex: number;
-  expect: { matched: boolean; withinWindow?: boolean };
+  expect: { matched: boolean; withinWindow?: boolean; matchedBody?: string; voiceAnswered?: boolean };
 };
 
 const MATCH_FIXTURES: MatchFixture[] = [
@@ -446,6 +475,44 @@ const MATCH_FIXTURES: MatchFixture[] = [
     ],
     inboundIndex: 1,
     expect: { matched: true, withinWindow: false }
+  },
+  {
+    // Dominik Leidolph (+17164233156, 2026-08-11): a phone-call RECORD row sat
+    // between his reschedule request and the real reply, and the audit graded
+    // the stub "Automated phone system — no conversation recorded." as our
+    // answer — a guaranteed `intent_mismatch` on every call. Step over the call
+    // record; grade the text reply that actually went out.
+    id: "voice_record_row_is_not_the_reply",
+    messages: [
+      { direction: "in", at: at(0), body: "Sorry I missed the appointment — can we reschedule for tomorrow?" },
+      { direction: "out", at: at(43), body: "Automated phone system — no conversation recorded.", provider: "voice_summary" },
+      { direction: "out", at: at(47), body: "No problem at all — you're all set for 3:00 PM tomorrow." }
+    ],
+    inboundIndex: 0,
+    expect: { matched: true, withinWindow: false, matchedBody: "No problem at all — you're all set for 3:00 PM tomorrow." }
+  },
+  {
+    // All three call-record providers, and nothing else: not a text reply, but
+    // NOT a dropped turn either — we rang them. `matchInboundReply` returns null
+    // and the audit skips it as `answered_by_phone_call` rather than swapping one
+    // phantom for a worse `missing_response`.
+    id: "phone_call_only_is_skipped_not_a_missing_response",
+    messages: [
+      { direction: "in", at: at(0), body: "Can you call me about the Road Glide?" },
+      { direction: "out", at: at(5), body: "Call initiated to +17165550101.", provider: "voice_call" },
+      { direction: "out", at: at(9), body: "Customer: Hello? Joe: Hey, calling about the Road Glide…", provider: "voice_transcript" },
+      { direction: "out", at: at(12), body: "Customer wants to see the Road Glide Saturday.", provider: "voice_summary" }
+    ],
+    inboundIndex: 0,
+    expect: { matched: false, voiceAnswered: true }
+  },
+  {
+    // Fail-direction guard: a genuinely dropped turn with NO call record must
+    // still be a miss, so the skip above can never become a blanket amnesty.
+    id: "no_reply_and_no_call_is_still_a_miss",
+    messages: [{ direction: "in", at: at(0), body: "Still interested, any update?" }],
+    inboundIndex: 0,
+    expect: { matched: false, voiceAnswered: false }
   }
 ];
 
@@ -456,6 +523,10 @@ function runMatchFixtures(): number {
     let pass = true;
     if (f.expect.matched !== Boolean(match)) pass = false;
     if (match && f.expect.withinWindow !== undefined && match.withinWindow !== f.expect.withinWindow) pass = false;
+    if (match && f.expect.matchedBody !== undefined && match.matchedOut?.body !== f.expect.matchedBody) pass = false;
+    if (f.expect.voiceAnswered !== undefined) {
+      if (voiceCallAnsweredTurn(f.messages, f.inboundIndex) !== f.expect.voiceAnswered) pass = false;
+    }
     if (!pass) failing += 1;
     const got = match ? `matched(withinWindow=${match.withinWindow})` : "no-match";
     console.log(`${pass ? "PASS" : "FAIL"} match:${f.id} -> ${got}`);
