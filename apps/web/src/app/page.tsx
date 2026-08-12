@@ -3041,6 +3041,20 @@ export default function Home() {
   const [kpiCallOwnerFilter, setKpiCallOwnerFilter] = useState("all");
   const [kpiFrom, setKpiFrom] = useState<string>("");
   const [kpiTo, setKpiTo] = useState<string>("");
+  /**
+   * KPI filters are COLLAPSED on a phone by default (2026-08-12).
+   *
+   * The filter panel and the numbers are flex siblings that stack below 640px. Whichever comes
+   * first buries the other: filters-first pushed the first number 879px down (a full screen);
+   * numbers-first pushed the filters below 9,598px of cards — about fourteen screens — which is
+   * how Joe ended up with "nowhere to actually change the KPIs, just a refresh button". Reordering
+   * only ever moves the problem to the other end.
+   *
+   * So on a phone the panel collapses to a single "Filters" button: numbers are the first thing on
+   * screen, and the controls are one tap away instead of a scroll away. Desktop and tablet keep the
+   * sidebar and never render the toggle.
+   */
+  const [kpiFiltersOpenMobile, setKpiFiltersOpenMobile] = useState(false);
   const [campaigns, setCampaigns] = useState<CampaignEntry[]>([]);
   const [campaignLoading, setCampaignLoading] = useState(false);
   const [campaignSaving, setCampaignSaving] = useState(false);
@@ -14043,16 +14057,26 @@ export default function Home() {
         number sat at 188px. iPad is fine in both orientations (768 -> 187px). So the fault is
         phones-upright only, and the payload is the thing being pushed away.
 
-        Reordering rather than hiding: the numbers come first on a phone and the filters follow
-        underneath, so nothing becomes unreachable and no control is removed from a small screen.
-        `md:order-none` hands the layout straight back to DOM order once the sidebar exists.
+        ⚠️ REORDERING WAS TRIED TWICE AND IS THE WRONG TOOL — do not reach for it again.
+        #670 put the numbers first with `order-1`/`order-2`. That shipped two faults in a row:
+          1. the content panel collapsed to 48px (a column's `flex-1` has a zero HEIGHT basis, and
+             the filter panel had already eaten the fixed-height container) — "I only see filters";
+          2. once that was repaired (#674), the filters sat below 9,598px of cards, about FOURTEEN
+             screens down — "nowhere to actually change the KPIs, just a refresh button".
+        Both are the same lesson: with two stacked siblings, whichever goes first buries the other.
+        Order moves the problem to the opposite end; it does not solve it.
+
+        WHAT ACTUALLY WORKS: shrink one sibling instead of moving it. On a phone the filter panel
+        collapses to a single "Filters" button (`kpiFiltersOpenMobile`), so the numbers are the
+        first thing on screen AND the controls are one tap away. Desktop and tablet keep the
+        sidebar untouched and never render the toggle.
       */}
       <section
         className={`w-full ${
           section === "contacts" ? "md:w-[620px]" : "md:w-96"
         } border-r border-[var(--border)] bg-[var(--surface)] p-4 overflow-y-auto shadow-[0_10px_30px_rgba(0,0,0,0.08)] lr-app-sidebar-panel ${
           isCampaignSection ? "lr-campaign-sidebar" : ""
-        } ${section !== "calendar" && !isMdfSection ? "lr-tablet-list-panel" : ""} ${section === "calendar" || isMdfSection ? "hidden" : ""} ${isConversationSection && mobilePanel === "detail" ? "hidden md:block" : ""} ${section === "kpi" ? "order-2 md:order-none" : ""}`}
+        } ${section !== "calendar" && !isMdfSection ? "lr-tablet-list-panel" : ""} ${section === "calendar" || isMdfSection ? "hidden" : ""} ${isConversationSection && mobilePanel === "detail" ? "hidden md:block" : ""}`}
         data-campaign-sidebar={isCampaignSection ? "true" : "false"}
       >
         <div className="flex items-start justify-between gap-4">
@@ -14678,6 +14702,22 @@ export default function Home() {
           )
         ) : section === "kpi" ? (
           <div className="mt-4 space-y-3">
+            {/*
+              PHONE ONLY (`sm:hidden` — Tailwind `sm` is 640px, the exact width at which this panel
+              stops being a sidebar and starts stacking above the numbers). Collapsed by default so
+              the KPI cards are the first thing on screen; the controls are one tap away rather than
+              a scroll away at either end of a very long page.
+            */}
+            <button
+              type="button"
+              className="lr-kpi-filter-toggle sm:hidden w-full flex items-center justify-between rounded border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2.5 text-sm font-semibold"
+              aria-expanded={kpiFiltersOpenMobile}
+              onClick={() => setKpiFiltersOpenMobile(v => !v)}
+            >
+              <span>Filters</span>
+              <span aria-hidden="true">{kpiFiltersOpenMobile ? "▲" : "▼"}</span>
+            </button>
+            <div className={kpiFiltersOpenMobile ? "space-y-3" : "hidden sm:block space-y-3"}>
             <div className="text-xs text-gray-600">Date range</div>
             <div className="grid grid-cols-2 gap-2">
               <input
@@ -14799,6 +14839,7 @@ export default function Home() {
               </select>
             </div>
             {kpiError ? <div className="text-xs text-red-600">{kpiError}</div> : null}
+            </div>
           </div>
         ) : section === "inbox" ? (
           <InboxSection
@@ -15773,7 +15814,7 @@ export default function Home() {
             : "bg-[var(--surface)] shadow-[inset_0_1px_0_rgba(255,255,255,0.6)] lr-app-main-panel"
         } ${
           section === "calendar" ? "p-2 overflow-hidden" : "p-6 overflow-y-auto"
-        } lr-tablet-main-panel ${isConversationSection && mobilePanel === "list" ? "hidden md:block" : ""} ${section === "kpi" ? "order-1 md:order-none" : ""}`}
+        } lr-tablet-main-panel ${isConversationSection && mobilePanel === "list" ? "hidden md:block" : ""}`}
         data-campaign-main={isCampaignSection ? "true" : "false"}
       >
         {isCampaignSection ? (
