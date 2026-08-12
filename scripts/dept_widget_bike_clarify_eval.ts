@@ -7,6 +7,12 @@
  * apparel handoff ack (staying apparel-only) and a later draft pivoted straight to sales. Joe ruled:
  * CLARIFY (bike vs department) and let staff route.
  *
+ * OWNED-UNIT RULE (Joe report 2026-08-12, Michael McGary +17165502654): the same clarify fired on a
+ * SERVICE-widget customer asking after a bike he already OWNS ("Can I ask what is going on with my
+ * 2026 street glide?"). The prompt had no rule for that, so the verdict was a coin flip — 2 of 10
+ * measured runs returned the clarify. An owner asking for a STATUS update is not shopping; he needs
+ * the department. The rule carves out the owner who ALSO asks about a different bike.
+ *
  * Pins: the pure decision (parser verdict → clarify or plain-ack), the approved clarify template
  * (offers BOTH sides, no fabricated price, no reply-time promise), the cost hint, the parser kill
  * switch + LLM-off fail-safe (deterministic), the index.ts wiring in ALL THREE sites (widget arrival
@@ -26,8 +32,10 @@ import {
   hasDeptWidgetBikeHint,
   buildDeptBikeClarifyReply,
   buildDeptWidgetAcquisitionReply,
+  buildDeptWidgetBikeInterestPrompt,
   decideDeptWidgetBikeClarify,
-  DEPT_WIDGET_BIKE_CLARIFY_CONFIDENCE_MIN
+  DEPT_WIDGET_BIKE_CLARIFY_CONFIDENCE_MIN,
+  DEPT_WIDGET_BIKE_INTEREST_JSON_SCHEMA
 } from "../services/api/src/domain/webWidgetDeptBikeClarify.ts";
 import {
   decideDeptWidgetIntakeTurn,
@@ -300,6 +308,67 @@ assert.match(
   "the widget-arrival dept path emits the sell-to-dealer route outcome"
 );
 
+// --- OWNED-UNIT RULE: the deterministic ratchet (Joe report 2026-08-12, +17165502654) ---
+// This asserts on the OUTPUT of the executed prompt builder, not on source text — the rule and its
+// worked examples must survive any future edit of the prompt surface. It is the RELIABLE net for
+// this fix; the LLM assertion below is the behavioural proof but cannot be a strong sabotage
+// detector on its own (see the sizing note there). Uses .includes() deliberately: an assert.match
+// carrying an escaped paren counts against eval_source_pin_ratchet even when it asserts on output.
+{
+  const prompt = buildDeptWidgetBikeInterestPrompt({
+    message: "Can I ask what is going on with my 2026 street glide?",
+    deptLabel: "Service"
+  });
+  assert.ok(prompt.includes("Can I ask what is going on with my 2026 street glide?"), "the prompt carries the message");
+  assert.ok(prompt.includes('"Service" web widget'), "the prompt names the department the widget is for");
+  assert.ok(
+    prompt.includes("ALREADY OWN, already bought, or already have on order"),
+    "the prompt states the owned-unit rule (a status question about a bike they own is not shopping)"
+  );
+  // Both the RULE line and the EXAMPLES block quote Michael's phrasing, so assert on the tail that
+  // only the worked example carries — otherwise deleting the example passes on the rule's copy.
+  assert.ok(
+    prompt.includes("(he owns it; this is a service-status question)"),
+    "the prompt carries Michael McGary's exact production turn as a worked example, not just as a rule"
+  );
+  assert.ok(
+    prompt.includes('"Any update on my bike? Dropped it off last week" (Service) → false'),
+    "the prompt carries an owned-unit example with no model named at all"
+  );
+  assert.ok(
+    prompt.includes("Only flip to true if they ALSO ask about a DIFFERENT bike"),
+    "the owned-unit rule carries its carve-out, so an owner shopping a second bike still clarifies"
+  );
+  assert.ok(
+    prompt.includes("gloves for my Street Glide"),
+    "the pre-existing gear-for-a-named-bike rule survived the extraction"
+  );
+  // The schema is what makes this a strict structured output — it moved modules with the prompt.
+  const required = (DEPT_WIDGET_BIKE_INTEREST_JSON_SCHEMA as any).required as string[];
+  assert.deepEqual(
+    [...required].sort(),
+    ["asksAboutMotorcycle", "confidence", "motorcycleReference"],
+    "the parser schema still requires all three fields"
+  );
+  assert.equal(
+    (DEPT_WIDGET_BIKE_INTEREST_JSON_SCHEMA as any).additionalProperties,
+    false,
+    "the parser schema stays strict"
+  );
+}
+// The parser must actually USE the shared builder — an inline prompt in llmDraft.ts would drift.
+{
+  const llmDraftSrc = fs.readFileSync(path.resolve("services/api/src/domain/llmDraft.ts"), "utf8");
+  assert.ok(
+    llmDraftSrc.includes("buildDeptWidgetBikeInterestPrompt({ message, deptLabel })"),
+    "classifyDeptWidgetBikeInterestWithLLM builds its prompt from the shared builder"
+  );
+  assert.ok(
+    llmDraftSrc.includes("schema: DEPT_WIDGET_BIKE_INTEREST_JSON_SCHEMA"),
+    "the parser passes the shared strict schema"
+  );
+}
+
 const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
 assert.ok(
   String(pkg.scripts?.["ci:eval"] ?? "").includes("dept_widget_bike_clarify:eval"),
@@ -367,6 +436,50 @@ if (process.env.OPENAI_API_KEY) {
   });
   assert.doesNotMatch(lynnReply, /right person|gear\/support/i, `Lynn must not be asked which department: ${lynnReply}`);
   console.log(`  LLM coverage (Lynn, acquisition): ${lynnReply}`);
+
+  // --- OWNED-UNIT family: the DECISION, not the label (Joe report 2026-08-12, +17165502654) ---
+  // Michael McGary asked the SERVICE widget "Can I ask what is going on with my 2026 street glide?"
+  // and got the sales-vs-service clarify. The bug was a MISSING rule, and its symptom was
+  // INSTABILITY: measured on the pre-fix prompt, his exact text returned the clarify 2 of 10 runs.
+  //
+  // SAMPLE SIZE, stated honestly (the trap this file must not fall into): post-fix these three
+  // messages measured 18/18 plain-ack (6 runs each), so one run apiece keeps the gate green. But
+  // because the defect itself only fired ~20% of the time, NO affordable number of runs makes this
+  // assertion a strong sabotage detector — deleting the rule would slip past it most runs. That is
+  // why the reliable ratchet for this fix is the DETERMINISTIC prompt-output block above; this
+  // block proves the behaviour end-to-end, and is sized to stay green rather than to catch drift.
+  //
+  // We assert the DECISION (plain dept ack, i.e. no clarify) rather than the boolean, because that
+  // is the branch the system actually takes: plain ack => the department task/handoff runs, which
+  // is exactly what the human did on Michael's thread.
+  const ownedUnitCases: { id: string; message: string; deptLabel: string }[] = [
+    { id: "mcgary_service_status", message: "Can I ask what is going on with my 2026 street glide?", deptLabel: "Service" },
+    { id: "owned_update_no_model", message: "Any update on my bike? Dropped it off last week", deptLabel: "Service" },
+    { id: "order_timing", message: "When will my order be in? I ordered a Road Glide in June", deptLabel: "Service" }
+  ];
+  for (const row of ownedUnitCases) {
+    const parse = await classifyDeptWidgetBikeInterestWithLLM({ message: row.message, deptLabel: row.deptLabel });
+    assert.ok(parse, `LLM returns a verdict for the owned-unit case [${row.id}]`);
+    const reply = decideDeptWidgetBikeClarify({ parse, firstName: "Michael", deptLabel: row.deptLabel });
+    assert.equal(
+      reply,
+      null,
+      `an owner asking after his OWN bike keeps the plain dept ack, never the sales-vs-service clarify [${row.id}]: ${reply}`
+    );
+  }
+  console.log(`  LLM coverage (owned-unit): ${ownedUnitCases.length} cases keep the plain dept ack`);
+
+  // The carve-out must survive: an owner who ALSO shops a different bike still gets the clarify,
+  // so the new rule cannot quietly swallow real sales interest arriving on a service widget.
+  const ownerShopping = await classifyDeptWidgetBikeInterestWithLLM({
+    message: "While my Road King is in for service, do you have a Low Rider ST on the floor?",
+    deptLabel: "Service"
+  });
+  assert.ok(ownerShopping, "LLM returns a verdict for the owner-also-shopping case");
+  assert.ok(
+    decideDeptWidgetBikeClarify({ parse: ownerShopping, firstName: "Michael", deptLabel: "Service" }),
+    "an owner asking about a DIFFERENT bike he might buy still gets the clarify (the rule's carve-out)"
+  );
 } else {
   console.log("  (LLM coverage skipped — no OPENAI_API_KEY)");
 }

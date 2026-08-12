@@ -428,7 +428,12 @@ const CEILINGS: Ceiling[] = [
     // 16_154 -> 16_124. The staff-outbound appointment parser's state mapping, rules and few-shots
     // moved to domain/manualOutboundAppointment.ts, so the day-from-context rule and its production
     // few-shots are editable — and executable in a pure eval — without an API key.
-    max: 16_124,
+    // 16_124 -> 16_099. The dept-widget bike-interest parser's strict schema and its whole prompt
+    // (rules + worked examples) moved to domain/webWidgetDeptBikeClarify.ts, beside the decision
+    // they gate — the walkInInventoryWant.ts shape. That is what paid for the owned-unit rule
+    // (Michael McGary +17165502654, Joe 8/12): the prompt surface now grows on its own budget, and
+    // a pure eval can EXECUTE the builder and assert the rule survives without an API key.
+    max: 16_099,
     note: "every parser prompt + JSON schema; second-largest and on the same trajectory"
   }
 ];

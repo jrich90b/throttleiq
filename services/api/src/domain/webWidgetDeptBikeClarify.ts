@@ -27,6 +27,84 @@ import type { DeptWidgetBikeInterestParse } from "./llmDraft.js";
 export const DEPT_WIDGET_BIKE_CLARIFY_CONFIDENCE_MIN = 0.6;
 
 /**
+ * The parser's strict-structured-output schema. It lives HERE, next to the decision it gates (the
+ * walkInInventoryWant.ts precedent), so the prompt surface can be edited without spending
+ * llmDraft.ts's size budget. classifyDeptWidgetBikeInterestWithLLM imports both.
+ */
+export const DEPT_WIDGET_BIKE_INTEREST_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["asksAboutMotorcycle", "motorcycleReference", "confidence"],
+  properties: {
+    asksAboutMotorcycle: { type: "boolean" },
+    motorcycleReference: { type: ["string", "null"] },
+    confidence: { type: "number" }
+  }
+};
+
+/**
+ * The parser prompt.
+ *
+ * OWNED-UNIT RULE (Joe report 2026-08-12, Michael McGary +17165502654). He came through the
+ * SERVICE widget with "Can I ask what is going on with my 2026 street glide?" and got the
+ * sales-vs-service clarify — Joe: "This is a service widget. It implies his bike is in service and
+ * wants an update." The prompt had no rule for a customer asking about a bike he ALREADY OWNS, so
+ * the model had to guess and guessed differently run to run: MEASURED 2 of 10 runs on his exact
+ * text returned asksAboutMotorcycle=true (-> clarify), 8 returned false (-> plain dept ack). This
+ * was never a wrong rule, it was a MISSING one, and the symptom was instability.
+ *
+ * The possessive is the tell the rules already used on the apparel side ("gloves for my Street
+ * Glide" is apparel, not shopping); it just was not stated for a STATUS question about the unit
+ * itself. A customer asking after a bike they own, bought or ordered is not shopping — they need
+ * the department, which is exactly what the human did on this thread ("I'll have the American H-D
+ * service team text you with an update on your 2026 Street Glide").
+ *
+ * Fail direction is unchanged and safe: false -> the plain dept ack + the department task/handoff
+ * (the status quo path), never a send, a close, or a skipped handoff.
+ */
+export function buildDeptWidgetBikeInterestPrompt(args: { message: string; deptLabel: string }): string {
+  const message = String(args.message ?? "").trim();
+  const deptLabel = String(args.deptLabel ?? "team").trim() || "team";
+  return [
+    "You classify one inbound message from a customer who reached a Harley-Davidson dealership",
+    `through the "${deptLabel}" web widget (a NON-SALES department: apparel/MotorClothes, parts, or service).`,
+    "Decide whether the customer's message is actually about a MOTORCYCLE (a bike model, buying/",
+    "looking at a bike, availability, a test ride, pricing on a unit) rather than the department the",
+    "widget is for.",
+    "",
+    "RULES:",
+    '- asksAboutMotorcycle=true ONLY when the message references an actual motorcycle interest',
+    '  (a bike model like "Pan America"/"Street Glide", "looking at bikes", "test ride", "buy a bike").',
+    "- A request that fits the department itself (gear/clothing/helmet for apparel; a part/accessory",
+    "  for parts; a repair/oil change/inspection for service) is NOT a motorcycle-buying interest →",
+    "  asksAboutMotorcycle=false, even if a bike model is named only as the bike the gear/part is FOR",
+    '  (e.g. "gloves for my Street Glide" is apparel, not motorcycle interest).',
+    "- A customer asking about a unit they ALREADY OWN, already bought, or already have on order —",
+    "  a STATUS or update question about that bike — is NOT motorcycle-buying interest →",
+    "  asksAboutMotorcycle=false. The tell is a possessive plus a status question rather than a",
+    '  shopping question: "what is going on with my 2026 Street Glide?", "any update on my bike?",',
+    '  "when will my order be in?", "is my Road King done yet?". They are not shopping; they need',
+    "  this department. Only flip to true if they ALSO ask about a DIFFERENT bike they might buy",
+    '  (e.g. "while my Road King is in, do you have a Low Rider ST I could look at?").',
+    "- motorcycleReference = the bike the customer named (verbatim-ish), or null if none.",
+    "- confidence in [0,1].",
+    "",
+    "EXAMPLES:",
+    '- "Checking out Pan America HD" (Motor Clothes) → asksAboutMotorcycle=true, reference "Pan America".',
+    '- "Do you have XL riding gloves for my Street Glide" (Motor Clothes) → false, reference "Street Glide".',
+    '- "Can I ask what is going on with my 2026 street glide?" (Service) → false, reference',
+    '  "2026 street glide" (he owns it; this is a service-status question).',
+    '- "Any update on my bike? Dropped it off last week" (Service) → false, reference null.',
+    '- "While my Road King is in for service, do you have a Low Rider ST on the floor?" (Service) →',
+    '  true, reference "Low Rider ST" (he asks about a DIFFERENT bike he might buy).',
+    "",
+    `Message: ${message}`,
+    "",
+    'Return only JSON: { "asksAboutMotorcycle": <bool>, "motorcycleReference": <string|null>, "confidence": <0..1> }'
+  ].join("\n");
+}
+
+/**
  * Cheap cost hint (NOT comprehension — the parser owns the verdict): a bike-ish token that makes it
  * worth spending one parser call. Deliberately broad; a false hit costs one parser call that then
  * returns asksAboutMotorcycle=false and nothing changes.
