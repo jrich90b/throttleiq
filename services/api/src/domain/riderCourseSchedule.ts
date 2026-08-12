@@ -231,7 +231,11 @@ export function resolveRiderCourseLogisticsReply(input: {
       handled: true,
       // States the dealer's fact and nothing around it. No "bring your own X" invention, no gear
       // list we do not hold — anything beyond `provides` is the hand-off's job.
-      reply: `Good news${who ? `, ${who}` : ""} - ${provides} are provided for the class. If you need anything else for the day, I'll have the team that runs it confirm.`,
+      //
+      // NO "Good news" opener (Joe, 2026-08-12). It is a plain factual answer to a plain factual
+      // question — he asked what the class provides, not for a reaction to it. The lead-in is just
+      // his name when we have one. Pinned by rider_course_schedule_eval.
+      reply: `${who ? `${who} - ` : ""}${provides} are provided for the class. If you need anything else for the day, I'll have the team that runs it confirm.`,
       needsTodo: false,
       todoSummary: "",
       why: "equipment question answered from the dealer profile"

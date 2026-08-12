@@ -196,8 +196,12 @@ const equip = (over: Record<string, unknown> = {}) =>
 const answered = equip();
 ok(answered.handled === true && answered.needsTodo === false, "with the fact on file we answer, no task needed");
 ok(answered.reply.includes(PROVIDES), "and the answer states the dealer's own words");
-ok(answered.reply.startsWith("Good news, Maya"), "using the customer's name when we have it");
-ok(equip({ firstName: null }).reply.startsWith("Good news -"), "and reading correctly without one");
+ok(answered.reply.startsWith("Maya - "), "leads with the customer's name when we have it");
+ok(equip({ firstName: null }).reply.startsWith(PROVIDES), "and opens on the fact itself without one");
+// NO "Good news" opener (Joe, 2026-08-12): a plain factual question gets a plain factual answer,
+// not a reaction to it. Asserted on BOTH shapes so it cannot creep back in via either branch.
+ok(!/good news/i.test(answered.reply), "no Good-news opener with a name");
+ok(!/good news/i.test(equip({ firstName: null }).reply), "no Good-news opener without one");
 // It answers the question it was asked and nothing more — no invented gear list, no invented time.
 ok(
   !/helmet|gloves|boots|jacket|wear|[0-9]{1,2}\s*(am|pm)/i.test(answered.reply),
