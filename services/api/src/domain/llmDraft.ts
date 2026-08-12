@@ -14,6 +14,7 @@ import type { Conversation } from "./conversationStore.js";
 import { dataPath } from "./dataDir.js";
 import { buildSelfHealSteering, deterministicHealTriggers, stillTriggered } from "./selfHealSteering.js";
 import { FINANCE_OUTCOME_UNREACHABLE_EXAMPLES, FINANCE_OUTCOME_UNREACHABLE_MAPPING, FINANCE_OUTCOME_UNREACHABLE_RULE } from "./financeOutcomePrompt.js";
+import { MANUAL_OUTBOUND_APPOINTMENT_EXAMPLES, MANUAL_OUTBOUND_APPOINTMENT_PROMPT_RULES } from "./manualOutboundAppointment.js";
 import { buildChannelRules, advanceEveryReplyEnabled, advanceEveryReplySuppressed } from "./draftChannelRules.js";
 export { advanceEveryReplyEnabled, advanceEveryReplySuppressed };
 import { isFabricatedGratitudeLeadIn } from "./leadInGuards.js";
@@ -6374,45 +6375,17 @@ export async function parseManualOutboundAppointmentWithLLM(args: {
     .join(" | ");
   const apptStatus = args.appointment?.status ?? "none";
 
-  const examples = [
-    'input: "Staff: I will schedule an inspection for the 12th at noon for you" output: {"state":"confirmed_booking","explicit_state":true,"requested":{"day":"12th","time_text":"noon","time_window":"exact"},"reference":"none","normalized_text":"12th at noon","confidence":0.96}',
-    'input: "Staff: Hey Rafael, sorry, that would work ill schedule you in between 11-12 tomorrow" output: {"state":"confirmed_booking","explicit_state":true,"requested":{"day":"tomorrow","time_text":"between 11-12","time_window":"range"},"reference":"none","normalized_text":"tomorrow between 11-12","confidence":0.96}',
-    'input: "Staff: I will have you meet with Giovanni tomorrow around 4:30-5:00" output: {"state":"confirmed_booking","explicit_state":true,"requested":{"day":"tomorrow","time_text":"around 4:30-5:00","time_window":"range"},"reference":"none","normalized_text":"tomorrow around 4:30-5:00","confidence":0.96}',
-    'input: "Staff: Hey Jen, lets shoot for 9:30 if that works" output: {"state":"proposed_time","explicit_state":true,"requested":{"day":"","time_text":"9:30","time_window":"exact"},"reference":"none","normalized_text":"9:30 if that works","confidence":0.96}',
-    'input: "Staff: I’ll schedule you in at 9:30 if that works" output: {"state":"proposed_time","explicit_state":true,"requested":{"day":"","time_text":"9:30","time_window":"exact"},"reference":"none","normalized_text":"9:30 if that works","confidence":0.95}',
-    'input: "Staff: I have Thu, May 7, 9:30 AM or Thu, May 7, 11:30 AM — do either work?" output: {"state":"slot_offer","explicit_state":true,"requested":{"day":"Thu, May 7","time_text":"9:30 AM or 11:30 AM","time_window":"range"},"reference":"none","normalized_text":"Thu, May 7 9:30 AM or 11:30 AM","confidence":0.96}',
-    'input: "Staff: What time tomorrow are you thinking?" output: {"state":"asks_for_time","explicit_state":true,"requested":{"day":"tomorrow","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"tomorrow","confidence":0.95}',
-    'input: "Staff: We can reschedule that for next week" output: {"state":"reschedule_request","explicit_state":true,"requested":{"day":"next week","time_text":"","time_window":"unknown"},"reference":"last_appointment","normalized_text":"next week","confidence":0.92}',
-    'input: "Staff: That works!" output: {"state":"none","explicit_state":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.93}',
-    'input: "Staff: Can you call me?" output: {"state":"none","explicit_state":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.95}'
-  ];
-
   const prompt = [
     "You parse dealership staff-authored outbound appointment state.",
     "Return only JSON matching the schema.",
     "",
-    "State mapping:",
-    "- confirmed_booking: staff clearly says the customer is scheduled, booked, set, or will be scheduled for a concrete day/time.",
-    "- proposed_time: staff proposes a time but needs customer confirmation, especially phrases like 'if that works', 'would that work', 'let's shoot for'.",
-    "- asks_for_time: staff asks the customer what day/time works.",
-    "- slot_offer: staff offers one or more appointment slots and asks the customer to choose/confirm.",
-    "- reschedule_request: staff asks to change/move an already booked appointment.",
-    "- none: no appointment state should be changed.",
-    "",
-    "Rules:",
-    "- Do not mark proposed_time as confirmed_booking.",
-    "- 'if that works' means proposed_time unless the staff also says the customer already confirmed.",
-    "- 'That works' alone is not a booking confirmation because it lacks the appointment details.",
-    "- Keep time ranges like 11-12 or 4:30-5:00 as ranges.",
-    "- Do not classify phone calls, inventory, parts, service, or pricing replies as appointment state.",
-    "- Use empty strings for unknown requested.day and requested.time_text.",
-    "- confidence is 0 to 1.",
+    ...MANUAL_OUTBOUND_APPOINTMENT_PROMPT_RULES,
     "",
     `Appointment status: ${apptStatus}`,
     history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
     lastSlots ? `Last suggested slots: ${lastSlots}` : "Last suggested slots: (none)",
     "Examples:",
-    ...examples,
+    ...MANUAL_OUTBOUND_APPOINTMENT_EXAMPLES,
     `Message: ${text}`
   ].join("\n");
 

@@ -355,7 +355,13 @@ const CEILINGS: Ceiling[] = [
     // decide call it feeds, and the past-event suppression receipt collapsed onto one line. The
     // parked question itself is answered in conversationStore.ts beside hasActiveInventoryWatch —
     // index.ts pays one line for the call and one for the import name, and still ratchets DOWN.
-    max: 70_499,
+    // 70_499 -> 70_497. The day-from-context booking slice (+17169902571). index.ts was sitting
+    // EXACTLY on the ceiling again, so the slice funded itself twice over: the local
+    // manualOutboundAppointmentRequestedPhrase builder moved to domain/manualOutboundAppointment.ts
+    // beside the prompt it shapes, and the booking parser's hand-inlined COPY of that same
+    // composition (a 7-line day+timeText join) now calls the one helper. index.ts pays one line for
+    // the import and keeps only the past-slot invariant guard, which is genuinely its job.
+    max: 70_497,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
@@ -415,7 +421,10 @@ const CEILINGS: Ceiling[] = [
     // 16_158 -> 16_154. The hiring demotion gate (its vocabulary regex + the `explicitHiringRequest`
     // decision) moved to domain/conversationStateParserPrompt.ts beside the vendor guard it mirrors,
     // so a pure eval can EXECUTE the decision against recorded parser verdicts with no API key.
-    max: 16154,
+    // 16_154 -> 16_124. The staff-outbound appointment parser's state mapping, rules and few-shots
+    // moved to domain/manualOutboundAppointment.ts, so the day-from-context rule and its production
+    // few-shots are editable — and executable in a pure eval — without an API key.
+    max: 16_124,
     note: "every parser prompt + JSON schema; second-largest and on the same trajectory"
   }
 ];

@@ -86,5 +86,93 @@
       "state": "none",
       "explicit_state": false
     }
+  },
+  {
+    "id": "staff_confirms_time_day_from_context_today_1",
+    "text": "Ok sounds good John, see you around 3!",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Ok cool, Just let me know when a good time for you is to stop in. My name is Joe"
+      },
+      {
+        "direction": "in",
+        "body": "Okay Joe what time are you guys open Intill 5pm ?"
+      },
+      {
+        "direction": "out",
+        "body": "Our hours this week are Mon-Fri 9:00 AM-6:00 PM, Sat 9:00 AM-3:00 PM."
+      },
+      {
+        "direction": "in",
+        "body": "Oh okay I get out at 3 joe I should be able to stop today"
+      }
+    ],
+    "expected": {
+      "state": "confirmed_booking",
+      "explicit_state": true,
+      "day_contains": "today",
+      "time_contains": "3"
+    }
+  },
+  {
+    "id": "staff_confirms_time_day_from_context_today_2",
+    "text": "Ok 3:45 works!",
+    "history": [
+      {
+        "direction": "in",
+        "body": "Oh okay I get out at 3 joe I should be able to stop today"
+      },
+      {
+        "direction": "out",
+        "body": "Ok sounds good John, see you around 3!"
+      },
+      {
+        "direction": "in",
+        "body": "Im in Lockport so maybe around like 3:45 ish it's not that far from me"
+      }
+    ],
+    "expected": {
+      "state": "confirmed_booking",
+      "explicit_state": true,
+      "day_contains": "today",
+      "time_contains": "3:45"
+    }
+  },
+  {
+    "id": "staff_confirms_time_day_from_context_tomorrow_1",
+    "text": "I will see you at 10:00 Am. Text me if anything changes.",
+    "history": [
+      {
+        "direction": "in",
+        "body": "I will most likely be there around 10am tomorrow If thats ok ?"
+      }
+    ],
+    "expected": {
+      "state": "confirmed_booking",
+      "explicit_state": true,
+      "day_contains": "tomorrow",
+      "time_contains": "10"
+    }
+  },
+  {
+    "id": "staff_confirms_time_no_day_anywhere_stays_empty_1",
+    "text": "Ok 3:45 works!",
+    "history": [
+      {
+        "direction": "in",
+        "body": "Do you have that Road Glide in stock?"
+      },
+      {
+        "direction": "out",
+        "body": "We do — want to come take a look at it?"
+      }
+    ],
+    "expected": {
+      "state": "confirmed_booking",
+      "explicit_state": true,
+      "day_contains": null,
+      "time_contains": "3:45"
+    }
   }
 ]
