@@ -66,6 +66,10 @@ import {
   type WalkInOutcomeState,
   type WalkInReturnVisit
 } from "./walkInInventoryWant.js";
+import {
+  DEPT_WIDGET_BIKE_INTEREST_JSON_SCHEMA,
+  buildDeptWidgetBikeInterestPrompt
+} from "./webWidgetDeptBikeClarify.js";
 import { decideDraftModelArm, type DraftModelArm } from "./routeStateReducer.js";
 import { passesModelRelevanceGuard } from "./turnUnderstandingAuthority.js";
 import { appendParserCaptureRecord, buildParserCaptureRecord } from "./parserCapture.js";
@@ -555,17 +559,8 @@ export type DeptWidgetBikeInterestParse = {
   confidence: number;
 };
 
-const DEPT_WIDGET_BIKE_INTEREST_JSON_SCHEMA: { [key: string]: unknown } = {
-  type: "object",
-  additionalProperties: false,
-  required: ["asksAboutMotorcycle", "motorcycleReference", "confidence"],
-  properties: {
-    asksAboutMotorcycle: { type: "boolean" },
-    motorcycleReference: { type: ["string", "null"] },
-    confidence: { type: "number" }
-  }
-};
-
+// The strict schema + the prompt (rules, few-shots) live in domain/webWidgetDeptBikeClarify.ts,
+// next to the decision they gate — so the prompt surface is editable on its own.
 export async function classifyDeptWidgetBikeInterestWithLLM(args: {
   message: string;
   deptLabel: string;
@@ -578,27 +573,7 @@ export async function classifyDeptWidgetBikeInterestWithLLM(args: {
   if (!message) return null;
   const deptLabel = String(args.deptLabel ?? "team").trim() || "team";
   const model = process.env.OPENAI_MODEL || "gpt-5-mini";
-  const prompt = [
-    "You classify one inbound message from a customer who reached a Harley-Davidson dealership",
-    `through the "${deptLabel}" web widget (a NON-SALES department: apparel/MotorClothes, parts, or service).`,
-    "Decide whether the customer's message is actually about a MOTORCYCLE (a bike model, buying/",
-    "looking at a bike, availability, a test ride, pricing on a unit) rather than the department the",
-    "widget is for.",
-    "",
-    "RULES:",
-    '- asksAboutMotorcycle=true ONLY when the message references an actual motorcycle interest',
-    '  (a bike model like "Pan America"/"Street Glide", "looking at bikes", "test ride", "buy a bike").',
-    "- A request that fits the department itself (gear/clothing/helmet for apparel; a part/accessory",
-    "  for parts; a repair/oil change/inspection for service) is NOT a motorcycle-buying interest →",
-    "  asksAboutMotorcycle=false, even if a bike model is named only as the bike the gear/part is FOR",
-    '  (e.g. "gloves for my Street Glide" is apparel, not motorcycle interest).',
-    "- motorcycleReference = the bike the customer named (verbatim-ish), or null if none.",
-    "- confidence in [0,1].",
-    "",
-    `Message: ${message}`,
-    "",
-    'Return only JSON: { "asksAboutMotorcycle": <bool>, "motorcycleReference": <string|null>, "confidence": <0..1> }'
-  ].join("\n");
+  const prompt = buildDeptWidgetBikeInterestPrompt({ message, deptLabel });
   try {
     const parsed = await requestStructuredJson({
       model,
