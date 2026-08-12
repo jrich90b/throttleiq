@@ -13797,7 +13797,7 @@ export default function Home() {
         </div>
       </div>
       ) : null}
-      <div className="flex-1 flex md:flex-row flex-col min-h-0 lr-tablet-workspace-body">
+      <div className={`flex-1 flex md:flex-row flex-col min-h-0 lr-tablet-workspace-body ${section === "kpi" ? "lr-kpi-phone-flow" : ""}`}>
       {isMessagingWorkspace ? (
       <aside className={`fixed inset-y-0 left-0 md:relative md:inset-auto z-50 w-16 md:h-full border-r border-[var(--palette-graphite)] bg-[var(--palette-graphite)] text-white flex flex-col items-center py-3 cursor-pointer overflow-x-visible overflow-y-hidden transform transition-transform duration-200 ${mobileNavOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"} md:flex lr-tablet-side-nav`}>
         <div className="text-lg font-semibold shrink-0">TI</div>

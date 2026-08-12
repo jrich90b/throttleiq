@@ -5801,6 +5801,50 @@ input[type="reset"],
   cursor: not-allowed;
 }
 
+/*
+  KPI ON A PHONE SCROLLS AS ONE PAGE — REPAIRING A REGRESSION I SHIPPED IN #670.
+
+  The workspace is two flex siblings: the filter panel and the main content. Below 640px they
+  stack in a COLUMN inside a container whose height is fixed to the screen (`h-screen` +
+  `min-h-0`), and each panel scrolls independently. #670 reordered them so the numbers came
+  first — and that was verified by measuring WHERE the first number sat (310px, correct) while
+  never checking whether the panel holding it had any HEIGHT.
+
+  It did not. MEASURED 2026-08-12 at 320px on the deployed build: the main panel rendered
+  **48px tall against 9,598px of content**. The filter panel, sized to its own content, ate the
+  fixed-height container, and `flex-1` on the main panel — whose basis is 0 in a column — got
+  what was left, which was nothing. Joe's report was exact: "I only see filters."
+
+  The real fault is the two-independent-scroll-panes model, which suits a desktop with a sidebar
+  and does not survive being stacked. So on a phone, for KPI only, the workspace scrolls as ONE
+  page: both panels take their natural height and the container does the scrolling. Numbers
+  first, filters underneath, one thumb movement through the lot. After: main panel 9,598px,
+  first card on screen without scrolling, no sideways scroll.
+
+  Scoped to KPI (`lr-kpi-phone-flow`) on purpose — the inbox, contacts and watches panels ARE
+  the payload and rely on their own scroll pane; giving the whole app one scroll is a much
+  larger change than this bug earns.
+
+  640px, not 768px: `.lr-tablet-workspace-body` is forced back to a row from 640px up
+  (globals.css `@media (min-width: 640px) and (max-width: 1023.98px)`), so below 640 is the only
+  range that actually stacks. Verified unchanged at 768 and 1280: side-by-side, panel keeps its
+  own `overflow-y: auto`, container stays `visible`.
+
+  ⚠️ VERIFY A CONTAINER'S HEIGHT, NOT JUST ITS CHILD'S POSITION. A correct coordinate inside a
+  collapsed box reads as a pass and ships a regression. That is exactly how #670 went out green.
+*/
+@media (max-width: 639.98px) {
+  .lr-app-theme .lr-kpi-phone-flow {
+    overflow-y: auto;
+  }
+
+  .lr-app-theme .lr-kpi-phone-flow > .lr-app-main-panel,
+  .lr-app-theme .lr-kpi-phone-flow > .lr-app-sidebar-panel {
+    flex: 0 0 auto;
+    overflow-y: visible;
+  }
+}
+
 @media (max-width: 760px) {
   /*
     THE COMPOSER TURNS SIDEWAYS HERE, AND ITS TAILWIND CLASSES DO NOT KNOW IT.
