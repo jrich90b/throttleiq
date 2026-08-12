@@ -361,7 +361,11 @@ const CEILINGS: Ceiling[] = [
     // beside the prompt it shapes, and the booking parser's hand-inlined COPY of that same
     // composition (a 7-line day+timeText join) now calls the one helper. index.ts pays one line for
     // the import and keeps only the past-slot invariant guard, which is genuinely its job.
-    max: 70_497,
+    // 70_497 -> 70_494. The task-inbox de-pile slice (Joe 2026-08-12): the stale-handoff nudge's
+    // summary + idle-days computation moved into buildStaleHandoffNudge (conversationStore, beside
+    // its recogniser and the new retire decision), which funded the retire sweep index.ts gained
+    // inside the same reconcile block the scheduling-leak retire already lived in.
+    max: 70_494,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

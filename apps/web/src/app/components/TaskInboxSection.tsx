@@ -102,6 +102,19 @@ function isDealerRideOutcomeTodo(todo: any): boolean {
   );
 }
 
+// The "handed off, gone quiet" robot nudge — same recogniser as the API's isStaleHandoffNudgeTodo
+// (conversationStore.ts): our own summary template, never customer text. These roll up into ONE
+// collapsed section so dozens of quiet-lead reminders stop burying the day's real work
+// (Joe, 2026-08-12: 90 of 136 open tasks were this one nudge class).
+function isQuietHandoffTodo(todo: any): boolean {
+  const summary = String(todo?.summary ?? "");
+  return (
+    String(todo?.taskClass ?? "") === "followup" &&
+    summary.includes("handed off (") &&
+    summary.includes("no activity in")
+  );
+}
+
 export function TaskInboxSection(props: any) {
   const {
     todoQuery,
@@ -151,6 +164,8 @@ export function TaskInboxSection(props: any) {
   } = props;
   const [nowMs, setNowMs] = React.useState(() => Date.now());
   const [snoozeOpenId, setSnoozeOpenId] = React.useState<string | null>(null);
+  // The quiet-handoff rollup starts COLLAPSED — that is the whole point (one row, not ninety).
+  const [quietHandoffOpen, setQuietHandoffOpen] = React.useState(false);
   // Bulk selection (Phase 2): clearing a messy pile one click at a time was the #1 friction
   // (UX audit 7/22). Appointment-class tasks are excluded — their close routes through the
   // outcome modal and must never be bulk-dismissed.
@@ -308,6 +323,7 @@ export function TaskInboxSection(props: any) {
             urgencyMs: number;
             salesCritical: boolean;
             stale: boolean;
+            quietHandoff: boolean;
           }> = [];
           for (const g of byConv.values()) {
             g.tasks.sort((a: any, b: any) => {
@@ -331,10 +347,15 @@ export function TaskInboxSection(props: any) {
               // Stale demotion (Phase 2): a card whose EVERY task is overdue >14d isn't urgent —
               // it's a "still relevant?" review item. Demoted below all live buckets so ancient
               // overdue stops burying today's fresh work. A card with ANY fresher task stays put.
-              stale: g.tasks.every((t: any) => isStaleOverdueTask(t, nowMs))
+              stale: g.tasks.every((t: any) => isStaleOverdueTask(t, nowMs)),
+              // Rollup: a card whose EVERY task is the "handed off, gone quiet" nudge collapses
+              // into the one-line section at the bottom. A card with ANY other task stays put —
+              // never hide a real task behind the rollup.
+              quietHandoff: g.tasks.every((t: any) => isQuietHandoffTodo(t))
             });
           }
           groups.sort((a, b) => {
+            if (a.quietHandoff !== b.quietHandoff) return a.quietHandoff ? 1 : -1; // rollup last
             if (a.stale !== b.stale) return a.stale ? 1 : -1; // stale sinks below everything live
             const ra = dueBucketRank(a.bucket);
             const rb = dueBucketRank(b.bucket);
@@ -343,8 +364,8 @@ export function TaskInboxSection(props: any) {
             if (a.salesCritical !== b.salesCritical) return a.salesCritical ? -1 : 1;
             return a.urgencyMs - b.urgencyMs;
           });
-          const sectionKeyOf = (g: { stale: boolean; bucket: DueBucket }) =>
-            g.stale ? "stale" : g.bucket;
+          const sectionKeyOf = (g: { stale: boolean; bucket: DueBucket; quietHandoff: boolean }) =>
+            g.quietHandoff ? "quiet_handoff" : g.stale ? "stale" : g.bucket;
           const bucketCounts = new Map<string, number>();
           for (const g of groups) {
             const key = sectionKeyOf(g);
@@ -370,7 +391,31 @@ export function TaskInboxSection(props: any) {
             const sectionKey = sectionKeyOf(group);
             const isNewBucket =
               groupIdx === 0 || sectionKeyOf(groups[groupIdx - 1]) !== sectionKey;
-            const cardUrgencyClass = group.stale
+            // The quiet-handoff rollup: ONE header row for the whole pile, cards only on demand.
+            // These leads are already in the re-nudge safety net, so hiding the cards drops no work.
+            if (sectionKey === "quiet_handoff" && !quietHandoffOpen) {
+              if (!isNewBucket) return null;
+              return (
+                <div key={group.convId} className="lr-task-bucket-h lr-task-bucket-h--no_date">
+                  <span aria-hidden className="inline-flex">
+                    <SideNavIcon name="bell" className="w-3.5 h-3.5" />
+                  </span>
+                  <span>Handed off — gone quiet</span>
+                  <span className="lr-task-bucket-count">{bucketCounts.get(sectionKey) ?? 0}</span>
+                  <button
+                    type="button"
+                    className="lr-task-btn px-2.5"
+                    onClick={() => setQuietHandoffOpen(true)}
+                    title="These handed-off leads went quiet. They re-surface on their own — open the list when you have call time."
+                  >
+                    Show list
+                  </button>
+                </div>
+              );
+            }
+            const cardUrgencyClass = group.quietHandoff
+              ? " lr-task-card--stale"
+              : group.stale
               ? " lr-task-card--stale"
               : group.salesCritical
                 ? " lr-task-card--priority"
@@ -382,6 +427,23 @@ export function TaskInboxSection(props: any) {
             return (
               <React.Fragment key={group.convId}>
                 {isNewBucket ? (
+                  sectionKey === "quiet_handoff" ? (
+                    <div className="lr-task-bucket-h lr-task-bucket-h--no_date">
+                      <span aria-hidden className="inline-flex">
+                        <SideNavIcon name="bell" className="w-3.5 h-3.5" />
+                      </span>
+                      <span>Handed off — gone quiet</span>
+                      <span className="lr-task-bucket-count">{bucketCounts.get(sectionKey) ?? 0}</span>
+                      <button
+                        type="button"
+                        className="lr-task-btn px-2.5"
+                        onClick={() => setQuietHandoffOpen(false)}
+                        title="Collapse the quiet handed-off leads back to one row"
+                      >
+                        Hide list
+                      </button>
+                    </div>
+                  ) : (
                   <div className={`lr-task-bucket-h lr-task-bucket-h--${group.stale ? "no_date" : group.bucket}`}>
                     <span aria-hidden className="inline-flex">
                       <SideNavIcon name={group.stale ? "clock" : BUCKET_ICON[group.bucket]} className="w-3.5 h-3.5" />
@@ -389,6 +451,7 @@ export function TaskInboxSection(props: any) {
                     <span>{group.stale ? "Stale — still relevant?" : dueBucketLabel(group.bucket)}</span>
                     <span className="lr-task-bucket-count">{bucketCounts.get(sectionKey) ?? 0}</span>
                   </div>
+                  )
                 ) : null}
               <div className={`lr-task-card${cardUrgencyClass}`}>
                 <div className="min-w-0">

@@ -7620,6 +7620,76 @@ export function shouldNudgeStaleHandoffLead(
   return idleMs >= minIdleMs && idleMs <= maxIdleMs;
 }
 
+// The one place the nudge's summary is composed, so the writer and the recogniser below can never
+// drift apart. `who` stays a caller input (display-casing lives in index.ts).
+export function buildStaleHandoffNudge(
+  conv: Conversation,
+  who: string,
+  now: Date
+): { summary: string; handoffReason: string; idleDays: number } {
+  let lastMs = 0;
+  for (const m of conv.messages ?? []) {
+    const ms = Date.parse(String(m?.at ?? ""));
+    if (Number.isFinite(ms) && ms > lastMs) lastMs = ms;
+  }
+  const idleDays = lastMs ? Math.floor((now.getTime() - lastMs) / 86_400_000) : 0;
+  const handoffReason = String(conv.followUp?.reason ?? "handoff").replace(/_/g, " ");
+  return {
+    summary: `Follow up with ${who} — handed off (${handoffReason}), no activity in ${idleDays} days and no follow-up scheduled.`,
+    handoffReason,
+    idleDays
+  };
+}
+
+// The nudge above, recognised by its own template (OUR string, never customer text — same pattern
+// as SCHEDULING_LEAK_TODO_MARKER). Matches every generation of the summary in the live store.
+export function isStaleHandoffNudgeTodo(todo: Pick<TodoTask, "taskClass" | "summary">): boolean {
+  const summary = String(todo?.summary ?? "");
+  return (
+    String(todo?.taskClass ?? "") === "followup" &&
+    summary.includes("handed off (") &&
+    summary.includes("no activity in")
+  );
+}
+
+/**
+ * The retire twin of shouldNudgeStaleHandoffLead (Joe, 2026-08-12: "the inbox is overwhelming" —
+ * 90 of 136 open tasks were these nudges and 63 of the 90 were themselves over a week old).
+ * A nudge exists to say "this handed-off lead has gone quiet"; it stops being true two ways:
+ *  - `activity_resumed`: ANY message moved on the thread after the nudge was created — the
+ *    premise is gone, whether staff followed up or the customer wrote in.
+ *  - `expired`: nobody touched it for EXPIRE days. It retires rather than fossilising; a lead
+ *    that is STILL handed-off + quiet re-surfaces as a FRESH nudge via the caller's existing
+ *    reNudgeDays window, so expiry can never permanently drop a live lead.
+ * A task staff snoozed to a future due time is theirs — expiry leaves it alone (activity still
+ * retires it, since resumed activity makes the nudge moot regardless of the snooze).
+ * Fail direction: closing a staff reminder never messages a customer, never closes a lead.
+ */
+export function staleHandoffNudgeRetireReason(
+  todo: Pick<TodoTask, "taskClass" | "summary" | "createdAt" | "dueAt" | "reminderAt">,
+  conv: Conversation | null | undefined,
+  now: Date = new Date(),
+  opts?: { expireDays?: number }
+): "activity_resumed" | "expired" | null {
+  if (!isStaleHandoffNudgeTodo(todo)) return null;
+  const createdMs = Date.parse(String(todo?.createdAt ?? ""));
+  if (!Number.isFinite(createdMs)) return null;
+  const messages = Array.isArray(conv?.messages) ? conv!.messages : [];
+  const activityResumed = messages.some(m => {
+    if (m?.draftStatus) return false; // a held/stale draft is not activity — nobody saw it
+    const ms = Date.parse(String(m?.at ?? ""));
+    return Number.isFinite(ms) && ms > createdMs;
+  });
+  if (activityResumed) return "activity_resumed";
+  const snoozedToFuture = [todo?.dueAt, todo?.reminderAt].some(iso => {
+    const ms = Date.parse(String(iso ?? ""));
+    return Number.isFinite(ms) && ms > now.getTime();
+  });
+  if (snoozedToFuture) return null;
+  const expireMs = (opts?.expireDays ?? 7) * 24 * 60 * 60 * 1000;
+  return now.getTime() - createdMs >= expireMs ? "expired" : null;
+}
+
 // Unsent first-touch safety net (2026-06-25): a NEVER-contacted lead whose initial outreach was DRAFTED
 // but never sent (e.g. an email-preferred / email-only ADF lead whose `conv.emailDraft` sits in the
 // Email tab, in suggest mode, with no cadence and no todo — the silence pool of 8 old AutoDealers.Digital
