@@ -72,7 +72,11 @@ for (const t of [
   { taskClass: "reminder", summary: "Notify Mohamed Ahmed when the 2026 Deadwood (on order) arrives or is ready to show." },
   { taskClass: "appointment", summary: "Appointment scheduled for Sat, Aug 15, 12:00 PM." },
   // Same words in a DIFFERENT class: still not the nudge.
-  { taskClass: "todo", summary: "Follow up with James — handed off (credit app), no activity in 9 days and no follow-up scheduled." }
+  { taskClass: "todo", summary: "Follow up with James — handed off (credit app), no activity in 9 days and no follow-up scheduled." },
+  // Each marker substring must be individually load-bearing — a followup carrying only ONE of
+  // them is some other task and must never retire.
+  { taskClass: "followup", summary: "Nudge Stevie? Deal in process, quiet a while — no activity in 14 days." },
+  { taskClass: "followup", summary: "Customer was handed off (service request) — book the drop-off when they call back." }
 ]) {
   assert.equal(isStaleHandoffNudgeTodo(t as any), false, `must NOT match [${t.taskClass}]: ${t.summary.slice(0, 45)}`);
   assert.equal(
@@ -187,8 +191,8 @@ assert.ok(
   "the console must file quiet-handoff cards under their own rollup section"
 );
 assert.ok(
-  inboxSource.includes("React.useState(false)") && inboxSource.includes("quietHandoffOpen"),
-  "the rollup must start collapsed — one row, not ninety"
+  inboxSource.includes("const [quietHandoffOpen, setQuietHandoffOpen] = React.useState(false)"),
+  "the rollup must start collapsed — one row, not ninety (bulkBusy's useState(false) does not count)"
 );
 assert.ok(
   inboxSource.includes("g.tasks.every((t: any) => isQuietHandoffTodo(t))"),
