@@ -247,6 +247,8 @@ export interface HumanThreadNudgeInput {
   hasOpenFutureDatedTodo?: boolean;
   /** isThreadParkedOnInventoryPromise(conv) — the thread is quiet because WE said we'd call it. */
   parkedOnInventoryPromise?: boolean;
+  /** isThreadParkedOnUpcomingClass(conv, nowMs) — quiet because their booked class hasn't run yet. */
+  parkedOnUpcomingClass?: boolean;
   nudgeCount?: number;
   lastNudgeAtMs?: number | null;
   nowMs: number;
@@ -311,6 +313,12 @@ export function decideHumanThreadNudge(input: HumanThreadNudgeInput): HumanThrea
   // — see isThreadParkedOnInventoryPromise. Like the department stop this is a CLASS exclusion, so
   // it sits ABOVE the quiet clock: the answer must not change with how long the customer waits.
   if (input.parkedOnInventoryPromise) return { nudge: false, reason: "parked_on_inventory_promise" };
+  // A rider-course enrollee whose class hasn't run yet — see isThreadParkedOnUpcomingClass. Joe
+  // (2026-08-10, Savannah Niver +13155211619): "between the sign up date and the class, there
+  // really should not be a follow up cadence for riding academy regsitrations." Also above the
+  // quiet clock, for the same reason as the two stops before it — but note this one is keyed to the
+  // CLASS date, not to the customer's silence, so it lifts by itself once the class day is past.
+  if (input.parkedOnUpcomingClass) return { nudge: false, reason: "parked_on_upcoming_class" };
   // An unanswered CUSTOMER message stays the owner's job (the "needs YOUR reply" task, PR #223) —
   // the agent must not bump a customer who is waiting on the rep.
   if (input.lastMessageDirection !== "out") return { nudge: false, reason: "owner_reply_needed" };

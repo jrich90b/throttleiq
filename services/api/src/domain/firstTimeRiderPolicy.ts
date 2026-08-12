@@ -130,6 +130,53 @@ export function readEnrollmentCourseName(inquiry?: string | null): string {
 }
 
 /**
+ * The enrollment record's `Class Start Date:` — the day their course begins, as the riding school
+ * wrote it (`M/D/YYYY`). Same machine record, same field-boundary rule as the reads above.
+ *
+ * Returns epoch ms for the END of that calendar day, or null when the lead has no enrollment
+ * record or the date is unreadable. Null means "we do not know", never "already happened".
+ */
+export function readEnrollmentClassStartMs(inquiry?: string | null): number | null {
+  const hit = String(inquiry ?? "").match(
+    /\bclass start date:\s*(\d{1,2})\/(\d{1,2})\/(\d{4})(?=-[A-Z][A-Za-z /]*:|\D|$)/i
+  );
+  if (!hit) return null;
+  const [month, day, year] = [Number(hit[1]), Number(hit[2]), Number(hit[3])];
+  // Round-trip the calendar so an impossible day (2/31) reads as UNKNOWN rather than silently
+  // rolling into the next month and stretching the window.
+  const start = new Date(year, month - 1, day);
+  if (start.getFullYear() !== year || start.getMonth() !== month - 1 || start.getDate() !== day) return null;
+  // END of the class day, not its start: the seat is still ahead of them for the whole of it, and
+  // a suppression that errs a few hours long fails toward NOT texting — the safe direction.
+  const end = new Date(year, month - 1, day + 1).getTime();
+  return Number.isFinite(end) ? end : null;
+}
+
+/**
+ * Is this thread quiet because the customer is WAITING FOR A CLASS THEY ALREADY BOOKED?
+ *
+ * Joe, operator report on Savannah Niver +13155211619 (2026-08-10): *"between the sign up date and
+ * the class, there really should not be a follow up cadence for riding academy regsitrations."*
+ * She enrolled, we acked, and three quiet days later the nudge drafted *"Quick check — any
+ * questions about the Riding Academy before class starts, Savannah?"*. Nothing has happened yet
+ * and nothing is expected to: the next event on that thread is the class itself.
+ *
+ * DATE-AWARE ON PURPOSE, not a lane exclusion. Joe's rule has two ends — "between the sign up date
+ * AND the class" — so once the class day is behind them the thread is an ordinary quiet thread
+ * again and the nudge is welcome. Measured by executing decideHumanThreadNudge against the live
+ * store 2026-08-12: three enrolled leads are nudge-eligible, and advancing the clock five days
+ * turns two of them into `nudge:true` — one legitimately (class already past), one not (Ulises
+ * +17167857284, class still five days out). A blanket lane bail would have eaten both.
+ *
+ * FAIL DIRECTION: unknown / unreadable / no enrollment record all return false, so the nudge keeps
+ * its current behaviour everywhere it cannot read a class date.
+ */
+export function isThreadParkedOnUpcomingClass(conv: any, nowMs: number): boolean {
+  const classEndMs = readEnrollmentClassStartMs(conv?.lead?.inquiry);
+  return classEndMs !== null && Number.isFinite(nowMs) && nowMs < classEndMs;
+}
+
+/**
  * Does the enrollment record plainly say the seat is NOT settled?
  *
  * ALLOWLIST of not-paid wordings, on purpose. Across the whole americanharley store there are

@@ -34,6 +34,10 @@ import {
   HUMAN_THREAD_NUDGE_MIN_ANCHOR_CHARS
 } from "../services/api/src/domain/humanThreadNudge.ts";
 import { isThreadParkedOnInventoryPromise } from "../services/api/src/domain/conversationStore.ts";
+import {
+  isThreadParkedOnUpcomingClass,
+  readEnrollmentClassStartMs
+} from "../services/api/src/domain/firstTimeRiderPolicy.ts";
 
 const failures: string[] = [];
 const eq = (id: string, actual: unknown, expected: unknown) => {
@@ -162,6 +166,66 @@ eq("referee_empty_conv_not_parked", isThreadParkedOnInventoryPromise({}), false)
 eq("referee_null_conv_not_parked", isThreadParkedOnInventoryPromise(null), false);
 eq("referee_junk_shapes_not_parked", isThreadParkedOnInventoryPromise({ inventoryWatches: "nope", followUpCadence: null, hold: null }), false);
 
+// ---------------------------------------------------------------------------
+// PARKED ON A CLASS THEY ALREADY BOOKED (Joe, operator report on Savannah Niver +13155211619,
+// 2026-08-10): "between the sign up date and the class, there really should not be a follow up
+// cadence for riding academy regsitrations." She enrolled, we acked, and three quiet days later the
+// nudge drafted "Quick check — any questions about the Riding Academy before class starts,
+// Savannah?" — nothing had happened and nothing was due to until the class itself.
+//
+// Reproduced by EXECUTING decideHumanThreadNudge against the live store 2026-08-12: three enrolled
+// leads are nudge-eligible, held back today only by the quiet/spacing clocks. Advance the clock
+// five days and two flip to nudge:true — Savannah legitimately (her 8/15 class is past by then) and
+// Ulises HernandezPerez +17167857284 wrongly (his 8/22 class is still five days out). That split is
+// why the stop is keyed to the CLASS DATE and is not a blanket Riding-Academy lane exclusion.
+// ---------------------------------------------------------------------------
+eq("class_no", D({ ...base, parkedOnUpcomingClass: true }), { nudge: false, reason: "parked_on_upcoming_class" });
+eq("handoff_class_no", D({ ...base, conversationMode: "suggest", followUpMode: "manual_handoff", parkedOnUpcomingClass: true }).nudge, false);
+// Above the quiet clock at BOTH ends, like the two stops before it.
+eq("class_precedes_clock", D({ ...base, parkedOnUpcomingClass: true, lastMessageAtMs: NOW - 1 * DAY }).reason, "parked_on_upcoming_class");
+eq("class_precedes_ceiling", D({ ...base, parkedOnUpcomingClass: true, lastMessageAtMs: NOW - 200 * DAY }).reason, "parked_on_upcoming_class");
+// ...but the inventory promise still answers first when both are true, so the reason stays stable.
+eq("inventory_promise_reported_first", D({ ...base, parkedOnInventoryPromise: true, parkedOnUpcomingClass: true }).reason, "parked_on_inventory_promise");
+// FAIL DIRECTION: false and absent both leave every other thread exactly as it was.
+eq("not_class_parked_still_fires", D({ ...base, parkedOnUpcomingClass: false }).nudge, true);
+eq("class_field_absent_still_fires", D(base).nudge, true);
+
+// The referee: Savannah's REAL enrollment blob, copied from the live store (machine record, machine
+// read — customer prose is never parsed here).
+const SAVANNAH_INQUIRY =
+  "Enrollment Status: Enrolled-Course: New Rider Course - eCourse + Range-Class Start Date: 8/15/2026-Gender: Female-Motivation: Obtain a license-Motorcycle Riding History: I have operated an on-road motorcycle within the last 12 months-Training Experience: No-Payment Status: Failed-Future Motorcycle Purchase Expectation: Yes in 1-3 years-Future Motorcycle Purchase Brand: Honda-Accepted Terms and Conditions: true-Brand of Bike Owned:Honda";
+const savannahConv = { lead: { inquiry: SAVANNAH_INQUIRY } };
+const AUG_14 = new Date(2026, 7, 14, 12, 0, 0).getTime();
+const AUG_15_NOON = new Date(2026, 7, 15, 12, 0, 0).getTime();
+const AUG_16 = new Date(2026, 7, 16, 12, 0, 0).getTime();
+// The whole point of the date read: it must survive the hyphen-packed record and stop at the next
+// field label, exactly like the riding-history and course reads beside it.
+eq("class_date_read_from_savannahs_record", readEnrollmentClassStartMs(SAVANNAH_INQUIRY), new Date(2026, 7, 16).getTime());
+eq("referee_class_ahead_is_parked", isThreadParkedOnUpcomingClass(savannahConv, AUG_14), true);
+// The class DAY itself still counts as ahead of them — a suppression that errs long fails toward
+// NOT texting, which is the safe direction.
+eq("referee_class_day_itself_is_parked", isThreadParkedOnUpcomingClass(savannahConv, AUG_15_NOON), true);
+// ...and it lifts BY ITSELF the day after. Joe's rule has two ends; after the class this is an
+// ordinary quiet thread and the nudge is welcome again.
+eq("referee_class_past_is_not_parked", isThreadParkedOnUpcomingClass(savannahConv, AUG_16), false);
+// Ulises +17167857284, the second report behind this: same lane, a later class, still parked on the
+// day Savannah's has already run.
+eq("referee_ulises_later_class_still_parked", isThreadParkedOnUpcomingClass({ lead: { inquiry: "Enrollment Status: Enrolled-Class Start Date: 8/22/2026-Gender: Male" } }, AUG_16), true);
+// UNKNOWN never means "already happened": no record, no date, an unreadable one, an impossible
+// calendar day, and junk shapes all leave the nudge exactly as it was.
+eq("referee_no_enrollment_record_not_parked", isThreadParkedOnUpcomingClass({ lead: { inquiry: "I want a Road Glide" } }, AUG_14), false);
+eq("referee_empty_conv_not_parked_class", isThreadParkedOnUpcomingClass({}, AUG_14), false);
+eq("referee_null_conv_not_parked_class", isThreadParkedOnUpcomingClass(null, AUG_14), false);
+eq("class_date_unreadable_reads_null", readEnrollmentClassStartMs("Class Start Date: soon-Gender: Female"), null);
+eq("class_date_impossible_day_reads_null", readEnrollmentClassStartMs("Class Start Date: 2/31/2026-Gender: Female"), null);
+eq("class_date_absent_reads_null", readEnrollmentClassStartMs("Enrollment Status: Enrolled-Gender: Female"), null);
+// The field-boundary lookahead is load-bearing, not decoration: a run-on number must read UNKNOWN
+// rather than silently truncating to a year we then act on. (A trailing LETTER is still a fine
+// boundary — only more digits are ambiguous.)
+eq("class_date_run_on_year_reads_null", readEnrollmentClassStartMs("Class Start Date: 8/15/20261-Gender: Female"), null);
+eq("class_date_letter_boundary_still_reads", readEnrollmentClassStartMs("Class Start Date: 8/15/2026x"), new Date(2026, 7, 16).getTime());
+eq("class_date_null_input_reads_null", readEnrollmentClassStartMs(null), null);
+
 // A plain suggest-mode thread (no handoff) has its own cadence/auto-draft lane — never nudged.
 eq("suggest_no_handoff_no", D({ ...base, conversationMode: "suggest" }), { nudge: false, reason: "not_human_or_handoff" });
 eq("suggest_active_followup_no", D({ ...base, conversationMode: "suggest", followUpMode: "active" }), { nudge: false, reason: "not_human_or_handoff" });
@@ -246,6 +310,9 @@ eq("lane_passes_followUpReason", /followUpReason: conv\.followUp\?\.reason \?\? 
 // The parked answer comes from the SHARED referee in conversationStore (beside hasActiveInventoryWatch),
 // not a second copy of "is there a watch" written here. Without this line the decision is blind to it.
 eq("lane_passes_parked_from_the_referee", lane.includes("parkedOnInventoryPromise: isThreadParkedOnInventoryPromise(conv)"), true);
+// Same for the class stop, and it must be handed the TICK's clock — a referee that read the wall
+// clock itself would be untestable and would drift from every other date decision in this lane.
+eq("lane_passes_class_from_the_referee", lane.includes("parkedOnUpcomingClass: isThreadParkedOnUpcomingClass(conv, now.getTime())"), true);
 eq("lane_calls_pure_decision", /decideHumanThreadNudge\(\{/.test(lane), true);
 eq("lane_composes_via_llm", /composeHumanThreadNudgeWithLLM\(\{/.test(lane), true);
 eq("draft_mode_lands_in_queue", /appendOutbound\(conv, "salesperson", nudgeTo, nudgeMessage, "draft_ai"\)/.test(lane), true);

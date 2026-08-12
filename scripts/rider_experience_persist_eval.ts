@@ -208,7 +208,13 @@ check("the writer is called from BOTH paths, via the one existing state applier"
   );
   assert.ok(applierBody.length > 0, "the state applier still exists");
   assert.ok(applierBody.includes("applyRiderExperienceState"), "the applier invokes the persist step");
-  assert.ok(idx.includes("applyRiderExperienceState } from \"./domain/firstTimeRiderPolicy.js\""), "and imports it");
+  // Read the import STATEMENT, then look inside it. The older form matched the literal
+  // `applyRiderExperienceState } from "..."`, which also asserted the symbol was LAST in the list —
+  // so on 2026-08-12 an unrelated slice adding a sibling import to the same module red-lined a full
+  // 6.7-minute gate for a name ordering nobody had ever decided. Same guarantee, no tripwire.
+  const policyImport = idx.match(/import \{([^}]*)\} from "\.\/domain\/firstTimeRiderPolicy\.js";/);
+  assert.ok(policyImport, "index.ts imports from domain/firstTimeRiderPolicy");
+  assert.ok(/\bapplyRiderExperienceState\b/.test(policyImport![1]), "and imports the persist step");
 
   // THREE call sites, and they are the live twilio turn plus BOTH regenerate turns. An expected
   // COUNT, because unwiring one of three leaves every other guard in this file green.
