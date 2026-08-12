@@ -222,6 +222,25 @@ const row = (over: Partial<ReplayRow>): ReplayRow => ({
   assert.equal(findings.length, 1, "exactly one finding survives: the reachable lead's");
 }
 
+// --- The KNOWN BOUNDARY, pinned so it cannot widen unnoticed ---
+// A lead that ARRIVED contactless but later picked up a phone (adf_ref_11422, 14 real sends) loses
+// only its INTAKE ACK to this rule. Every later turn carries a plain customer body, so it fails the
+// envelope test and is graded exactly as before. Measured 2026-08-12: 26 intake turns excluded, 24
+// of them leads that never received anything, 2 that did. If this assertion ever fails, the rule has
+// started eating real conversation turns and needs the conversation-level reachability lookup.
+{
+  const laterTurn: ReplayRow = row({
+    conversationId: "adf_ref_11422",
+    body: "Fair enough. And I need a front tire and probably back. I appreciate the advice.",
+    draft: "Thanks for the details — I'll have the team check service records (battery/tires) and follow up."
+  });
+  assert.equal(
+    isUnreachableLeadRow(laterTurn),
+    false,
+    "a real conversation turn on a lead that became reachable is STILL graded — only the intake ack is excluded"
+  );
+}
+
 // --- ci:eval wiring ---
 {
   const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));

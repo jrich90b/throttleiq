@@ -610,6 +610,17 @@ export type ScoreAdjustment =
  * Fail direction: this EXCLUDES turns from scoring, so it stays narrow. All conditions are required,
  * it only ever applies to an ADF intake envelope (the one body shape that declares its contact
  * fields), and every exclusion is COUNTED in the summary — never silently dropped.
+ *
+ * KNOWN BOUNDARY, measured on the live store 2026-08-12 — declared, not hidden. The predicate sees
+ * one ROW, so it cannot know that a lead which ARRIVED contactless later acquired a phone. Of the
+ * 26 conversations whose intake turn this excludes, 24 never received anything and 2 did:
+ * adf_ref_11422 (14 real sends) and adf_ref_11558 (3), both of which picked up a phone number after
+ * intake. For those two we stop grading their INTAKE ACK and nothing else — every later turn
+ * carries a plain customer body, fails the envelope test, and is graded exactly as before (the
+ * adf_ref_11422 tire question sat in the queue the day this shipped and stays in it). Accepted
+ * deliberately: 2 intake acks unmeasured against 21 phantom P1s a night that were crowding real
+ * findings out of the queue. Closing it properly means giving adjustScore a reachability lookup for
+ * the whole conversation instead of the row — worth doing if that number ever grows.
  */
 export function isUnreachableLeadRow(row: ReplayRow): boolean {
   const convId = String(row.conversationId ?? "").trim();
