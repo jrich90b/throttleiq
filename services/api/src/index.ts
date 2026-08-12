@@ -1079,6 +1079,7 @@ import {
   REAL_OUTBOUND_CONTACT_PROVIDERS,
   collectInventoryWatches,
   hasActiveInventoryWatch,
+  isThreadParkedOnInventoryPromise,
   pauseInventoryWatches,
   markInventoryWatchOptOut,
   applyUnansweredWatchAlertPause,
@@ -31719,7 +31720,6 @@ async function processDueFollowUpsUnlocked() {
       if (nudgeCompositions >= 10) break;
       if (!isHumanThreadNudgeEligibleClass((conv as any).mode, conv.followUp?.mode)) continue;
       const { thread: delivered, last: lastMsg } = selectHumanThreadNudgeThread(conv.messages);
-      const openFutureTodo = hasOpenFutureDatedTodo(openTodos, conv.id, now.getTime());
       const nudgeDecision = decideHumanThreadNudge({
         conversationMode: (conv as any).mode ?? null,
         followUpMode: conv.followUp?.mode ?? null,
@@ -31733,7 +31733,8 @@ async function processDueFollowUpsUnlocked() {
         hasPendingDraft: !!getLatestPendingDraft(conv),
         lastMessageDirection: lastMsg?.direction ?? null,
         lastMessageAtMs: Date.parse(String(lastMsg?.at ?? "")),
-        hasOpenFutureDatedTodo: openFutureTodo,
+        hasOpenFutureDatedTodo: hasOpenFutureDatedTodo(openTodos, conv.id, now.getTime()),
+        parkedOnInventoryPromise: isThreadParkedOnInventoryPromise(conv),
         nudgeCount: conv.humanThreadNudge?.count ?? 0,
         lastNudgeAtMs: Date.parse(String(conv.humanThreadNudge?.lastAt ?? "")),
         nowMs: now.getTime(),
@@ -31747,12 +31748,8 @@ async function processDueFollowUpsUnlocked() {
       // Everything knowable WITHOUT paying for a composition. Reasoning lives in the module.
       const nudgeGate = resolveHumanThreadNudgeComposeGate({ toE164: nudgeTo, anchors: nudgeAnchors, nowMs: now.getTime() });
       if (!nudgeGate.compose) {
-        if (nudgeGate.reason === "past_dated_anchor") {
-          recordRouteOutcome("manual", "human_thread_nudge_past_event_suppressed", {
-            convId: conv.id,
-            leadKey: conv.leadKey
-          });
-        }
+        if (nudgeGate.reason === "past_dated_anchor")
+          recordRouteOutcome("manual", "human_thread_nudge_past_event_suppressed", { convId: conv.id, leadKey: conv.leadKey });
         continue;
       }
       nudgeCompositions += 1;

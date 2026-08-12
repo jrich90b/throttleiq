@@ -350,7 +350,12 @@ const CEILINGS: Ceiling[] = [
     // side effects it alone owns.
     // 70_505 -> 70_502. The advance-goal + no-repeat slice paid for its 3 lines of wiring by collapsing
     // two multi-line expressions in the same object literal, and banked the difference.
-    max: 70_502,
+    // 70_502 -> 70_499. The parked-thread nudge bail. index.ts was sitting EXACTLY on the ceiling
+    // again, so the slice funded itself: the single-use openFutureTodo local was inlined into the
+    // decide call it feeds, and the past-event suppression receipt collapsed onto one line. The
+    // parked question itself is answered in conversationStore.ts beside hasActiveInventoryWatch —
+    // index.ts pays one line for the call and one for the import name, and still ratchets DOWN.
+    max: 70_499,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

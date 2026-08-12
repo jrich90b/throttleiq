@@ -33,6 +33,7 @@ import {
   anchorsHaveSomethingToContinue,
   HUMAN_THREAD_NUDGE_MIN_ANCHOR_CHARS
 } from "../services/api/src/domain/humanThreadNudge.ts";
+import { isThreadParkedOnInventoryPromise } from "../services/api/src/domain/conversationStore.ts";
 
 const failures: string[] = [];
 const eq = (id: string, actual: unknown, expected: unknown) => {
@@ -112,6 +113,55 @@ eq("dept_stop_precedes_clock", D({ ...narendra, lastMessageAtMs: NOW - 1 * DAY }
 eq("spence_sales_handoff_still_fires", D({ ...narendra, followUpReason: "web_text_widget_sales" }).nudge, true);
 eq("unknown_reason_still_fires", D({ ...narendra, followUpReason: null }).nudge, true);
 eq("human_mode_beats_dept_reason", D({ ...narendra, conversationMode: "human" }).nudge, true);
+// ---------------------------------------------------------------------------
+// PARKED ON A PROMISE WE MADE (Joe, operator reports 2026-08-10 and 2026-08-11). The nudge asked
+// "is this thread quiet?" and never "why?". Reproduced by executing decideHumanThreadNudge against
+// the live records: three threads whose silence was deliberate got bumped anyway.
+//   Jason Marshall +17165230421 — $500 deposit on a 2026 CVO Road Glide ST (hold.onOrder), active
+//   watch, cadence stopped for it. We had just promised to text him when it lands; 3 days later the
+//   nudge drafted "Any update on your timing for Unadilla, Jason...". Joe: "There is no reason to
+//   follow up when he is waiting for a bike to be delivered."
+//   Mark Griffin +15416478489 — active watch on a 2023 Fat Bob. Joe: "there should not be a cadence
+//   or nudge on a set watch."
+// Measured on the live store 2026-08-12: 17 of 376 nudge-eligible threads are parked, and 5 of the
+// 33 nudges this feature has ever produced landed on one.
+// ---------------------------------------------------------------------------
+eq("parked_no", D({ ...base, parkedOnInventoryPromise: true }), { nudge: false, reason: "parked_on_inventory_promise" });
+eq("handoff_parked_no", D({ ...base, conversationMode: "suggest", followUpMode: "manual_handoff", parkedOnInventoryPromise: true }).nudge, false);
+// A CLASS exclusion like the department stop: the answer must not move with the quiet clock.
+eq("parked_precedes_clock", D({ ...base, parkedOnInventoryPromise: true, lastMessageAtMs: NOW - 1 * DAY }).reason, "parked_on_inventory_promise");
+eq("parked_precedes_ceiling", D({ ...base, parkedOnInventoryPromise: true, lastMessageAtMs: NOW - 200 * DAY }).reason, "parked_on_inventory_promise");
+// FAIL DIRECTION: not-parked (and an absent field) changes nothing about the existing behaviour.
+eq("not_parked_still_fires", D({ ...base, parkedOnInventoryPromise: false }).nudge, true);
+eq("parked_field_absent_still_fires", D(base).nudge, true);
+// The referee itself — ONE answer to "is there an active watch", shared with the watch lanes.
+eq("referee_active_single_watch", isThreadParkedOnInventoryPromise({ inventoryWatch: { status: "active" } }), true);
+eq("referee_active_in_array", isThreadParkedOnInventoryPromise({ inventoryWatches: [{ status: "active" }] }), true);
+// Jason's shape: single + array + a cadence stopped for the watch + a unit on order.
+eq(
+  "referee_jason_marshall_shape",
+  isThreadParkedOnInventoryPromise({
+    inventoryWatch: { status: "active" },
+    inventoryWatches: [{ status: "active" }],
+    followUpCadence: { status: "stopped", stopReason: "inventory_watch" },
+    hold: { onOrder: true }
+  }),
+  true
+);
+// A cadence STOPPED for a watch reads exactly like no cadence from the nudge's side — the stop
+// reason is the only thing that tells them apart, so it has to be read on its own.
+eq("referee_cadence_stopped_for_watch", isThreadParkedOnInventoryPromise({ followUpCadence: { status: "stopped", stopReason: "inventory_watch" } }), true);
+eq("referee_unit_on_order", isThreadParkedOnInventoryPromise({ hold: { onOrder: true } }), true);
+// ...and everything else is NOT parked. A paused watch is one the fire engine skips; a cadence
+// stopped for some other reason, a hold that is not an order, and an empty/absent record all leave
+// the nudge exactly as it was.
+eq("referee_paused_watch_not_parked", isThreadParkedOnInventoryPromise({ inventoryWatch: { status: "paused" } }), false);
+eq("referee_other_stop_reason_not_parked", isThreadParkedOnInventoryPromise({ followUpCadence: { status: "stopped", stopReason: "customer_declined" } }), false);
+eq("referee_hold_not_on_order_not_parked", isThreadParkedOnInventoryPromise({ hold: { onOrder: false, reason: "test_ride" } }), false);
+eq("referee_empty_conv_not_parked", isThreadParkedOnInventoryPromise({}), false);
+eq("referee_null_conv_not_parked", isThreadParkedOnInventoryPromise(null), false);
+eq("referee_junk_shapes_not_parked", isThreadParkedOnInventoryPromise({ inventoryWatches: "nope", followUpCadence: null, hold: null }), false);
+
 // A plain suggest-mode thread (no handoff) has its own cadence/auto-draft lane — never nudged.
 eq("suggest_no_handoff_no", D({ ...base, conversationMode: "suggest" }), { nudge: false, reason: "not_human_or_handoff" });
 eq("suggest_active_followup_no", D({ ...base, conversationMode: "suggest", followUpMode: "active" }), { nudge: false, reason: "not_human_or_handoff" });
@@ -193,6 +243,9 @@ eq("lane_widened_to_manual_handoff", /if \(!isHumanThreadNudgeEligibleClass\(\(c
 eq("lane_passes_followUpMode", /followUpMode: conv\.followUp\?\.mode \?\? null/.test(lane), true);
 // Without the reason the decision cannot tell an apparel handoff from a sales handoff (Narendra).
 eq("lane_passes_followUpReason", /followUpReason: conv\.followUp\?\.reason \?\? null/.test(lane), true);
+// The parked answer comes from the SHARED referee in conversationStore (beside hasActiveInventoryWatch),
+// not a second copy of "is there a watch" written here. Without this line the decision is blind to it.
+eq("lane_passes_parked_from_the_referee", lane.includes("parkedOnInventoryPromise: isThreadParkedOnInventoryPromise(conv)"), true);
 eq("lane_calls_pure_decision", /decideHumanThreadNudge\(\{/.test(lane), true);
 eq("lane_composes_via_llm", /composeHumanThreadNudgeWithLLM\(\{/.test(lane), true);
 eq("draft_mode_lands_in_queue", /appendOutbound\(conv, "salesperson", nudgeTo, nudgeMessage, "draft_ai"\)/.test(lane), true);

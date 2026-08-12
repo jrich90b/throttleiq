@@ -5786,6 +5786,46 @@ export function hasActiveInventoryWatch(conv: any): boolean {
   return collectInventoryWatches(conv).some((w: any) => w && w.status !== "paused");
 }
 
+// Is this thread quiet because WE PARKED IT — the customer is waiting on a promise we already made
+// — rather than because a lead went cold?
+//
+// The quiet-thread nudge (domain/humanThreadNudge.ts) asks "is this thread quiet?" and, until
+// 2026-08-12, never "why?". Three production threads show what that costs — operator reports from
+// Joe on 8/10 and 8/11, each reproduced by executing decideHumanThreadNudge against the live record:
+//
+//   Jason Marshall +17165230421 — $500 deposit on a 2026 CVO Road Glide ST (hold.onOrder), an active
+//   watch, and a cadence stopped with stopReason "inventory_watch". We told him on 8/08 "I'll keep an
+//   eye on the 2026 CVO Road Glide ST you've got on order and let you know as soon as it's here" —
+//   three days later the nudge drafted "Any update on your timing for Unadilla, Jason - still want me
+//   to let you know if it's built before Thursday?". Joe: "There is no reason to follow up when he is
+//   waiting for a bike to be delivered. I told him I will let him know when it arrives."
+//
+//   Mark Griffin +15416478489 — active watch on a 2023 Fat Bob, cadence stopped for it; nudged with
+//   "You still set on a 2023 Fat Bob, Mark, or want me to watch any year that pops up?". Joe: "there
+//   should not be a cadence or nudge on a set watch."
+//
+// Three more threads (+17162512324, +17164728139, +17165445915) were nudged on the same footing and
+// never reported: 5 of the 33 nudges this feature has ever produced landed on a parked thread, and
+// 17 of the 376 nudge-eligible threads are parked right now (measured 2026-08-12 on the live store).
+//
+// A watch, a cadence stopped FOR that watch, and a unit on order are the same promise — we will text
+// you when it lands — and that promise already has its own outreach program (the watch-alert lane
+// plus the unanswered-watch pause + close-out of PR #637). A bump here is a second voice on the
+// thread AND us breaking the promise three days early.
+//
+// Lives beside hasActiveInventoryWatch so the watch question has ONE answer: humanThreadNudge.ts is
+// a pure decision module and must not import the store, so index.ts reads this and passes the
+// boolean in. FAIL DIRECTION: absent or unreadable state ⇒ NOT parked ⇒ the nudge decision is
+// exactly what it was before, so a malformed record can never silence a thread by accident.
+export function isThreadParkedOnInventoryPromise(conv: any): boolean {
+  if (hasActiveInventoryWatch(conv)) return true;
+  // A cadence STOPPED for a watch reads exactly like no cadence at all from the nudge's side — the
+  // stop reason is the only thing that tells the two apart.
+  if (String(conv?.followUpCadence?.stopReason ?? "").trim().toLowerCase() === "inventory_watch") return true;
+  // A unit on order or deposit-held: its arrival IS the next contact.
+  return conv?.hold?.onOrder === true;
+}
+
 // Remove a customer from active inventory-watch alerts: pause every active watch (the watch-fire
 // engine skips paused watches). Reversible — keeps the record so they can be re-added if they ask.
 // Returns how many were paused. Unions single + array so neither is left active.
