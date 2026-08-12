@@ -1185,6 +1185,7 @@ import {
   buildStaffPingRecord
 } from "./domain/staffPing.js";
 import { isFinanceOutcomeContext, shouldPromptBusinessManagerFinanceOutcome } from "./domain/financeOutcomeGates.js";
+import { composeManualOutboundRequestedPhrase } from "./domain/manualOutboundAppointment.js";
 import {
   buildGateBlockerDigestMessage,
   collectGateBlockers,
@@ -10822,14 +10823,6 @@ function isManualOutboundAppointmentParserAccepted(parsed: ManualOutboundAppoint
   const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
   const min = Number(process.env.LLM_MANUAL_OUTBOUND_APPOINTMENT_CONFIDENCE_MIN ?? 0.72);
   return confidence >= min;
-}
-
-function manualOutboundAppointmentRequestedPhrase(parsed: ManualOutboundAppointmentParse | null): string {
-  const requested = parsed?.requested ?? {};
-  const day = String(requested.day ?? "").trim();
-  const time = String(requested.timeText ?? "").trim();
-  const normalized = String(parsed?.normalizedText ?? "").trim();
-  return normalized || [day, time].filter(Boolean).join(" ").trim();
 }
 
 function buildAppointmentArrivalAck(_parsed: AppointmentTimingParse | null): string {
@@ -52415,7 +52408,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       (bookingParse.intent === "schedule" || bookingParse.intent === "reschedule");
 
     const parserRequestedText = parserConfirmedBooking
-      ? manualOutboundAppointmentRequestedPhrase(manualOutboundAppointmentParse)
+      ? composeManualOutboundRequestedPhrase(manualOutboundAppointmentParse)
       : "";
     // The staff text is the primary day/time source, but an affirmative confirm usually names NO
     // time ("Sounds good! See you then") — the time lives in the PENDING request. Fall through to
@@ -52425,20 +52418,25 @@ app.post("/conversations/:id/send", async (req, res) => {
       (confirmsPendingAppointmentRequest
         ? parseRequestedDayTime(pendingAppointmentRequestText, schedulerTimezone)
         : null);
+    // Same composition for the booking parser's fields — it was a hand-inlined copy of the helper.
     const normalizedText = String(
-      parserRequestedText ||
-        (bookingParse?.normalizedText ??
-        [String(bookingParse?.requested?.day ?? "").trim(), String(bookingParse?.requested?.timeText ?? "").trim()]
-          .filter(Boolean)
-          .join(" "))
+      parserRequestedText || composeManualOutboundRequestedPhrase(bookingParse)
     ).trim();
     const parseSource = manualOutboundRequested ? text : normalizedText || text;
 
     let requested = manualOutboundRequested ?? parseRequestedDayTime(parseSource, schedulerTimezone);
 
+    // Invariant guard on a day the PARSER carried in from the thread (the staff text named none of
+    // its own — see domain/manualOutboundAppointment.ts): context can only mean an UPCOMING visit,
+    // so never book a slot already past. Fails toward no booking, exactly where this path used to.
+    const contextDayResolvedInThePast =
+      !!requested &&
+      !hasDayToken &&
+      localPartsToUtcDate(schedulerTimezone, requested).getTime() < Date.now() - 5 * 60_000;
     const shouldInferManualAppointment =
       !didSetAppointment &&
       !!requested &&
+      !contextDayResolvedInThePast &&
       !hasCallCue &&
       (bookingAccepted || explicitBookingStatement || confirmsPendingAppointmentRequest);
 
