@@ -13714,7 +13714,26 @@ export default function Home() {
               {isMdfSection ? "MDF Assistant" : "Dealer Workspace"}
             </div>
           </div>
-          <div className="flex w-full gap-2 md:w-auto lr-tablet-header-tabs">
+          {/*
+            THE THREE WORKSPACE TABS MUST NOT PUSH THE PAGE WIDER THAN THE SCREEN.
+            `flex-1` cannot shrink a button below its text's min-content width, and "Messaging
+            Platform" + "MDF Assistant" + "Warranty/RMA" with `px-4` do not fit a 320px screen:
+            MEASURED 2026-08-12 at 320px, the row ran 33px past the edge and made the WHOLE PAGE
+            scroll sideways, which drags every other element out of view with it — the KPI filters
+            and buttons included, which is what the phone screenshot showed.
+
+            320px is not hypothetical. It is an iPhone SE, and it is also roughly what a modern
+            iPhone reports with Display Zoom ("Larger Text") switched on — reachable on current
+            hardware by changing one accessibility setting.
+
+            ⚠️ THE EARLIER SWEEP CALLED THIS PAGE CLEAN. It tested 375/768/844/1280 and was right
+            at every width it tried, and silent about the one it did not. Widths are part of the
+            test matrix, not a detail: check the NARROWEST device we support, not the common one.
+
+            `flex-wrap` lets the third tab drop to its own line rather than overflow; `md:flex-nowrap`
+            keeps the single desktop row exactly as it was.
+          */}
+          <div className="flex w-full flex-wrap gap-2 md:w-auto md:flex-nowrap lr-tablet-header-tabs">
             <button
               type="button"
               className={[
