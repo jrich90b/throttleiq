@@ -148,8 +148,21 @@ export function MorningDigestModal(props: {
                             : "border-slate-200 bg-white"
                       }`}
                     >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
+                      {/*
+                        WHO the task is for must survive a narrow screen. Measured on a 375px phone
+                        (2026-08-12): the name column was `min-w-0` with no flex-grow while the badge
+                        group is `shrink-0`, so two badges ("Financing" + "Overdue") took what they
+                        wanted and left the name 36px against the 96px it needed — "Franklin Collins"
+                        rendered as "Fra…", and the vehicle line as "Used…". Nine clipped items on one
+                        screen. A task you cannot attribute to a customer is not a usable task.
+
+                        `flex-1` + a floor of 8rem makes the name claim the row and stop collapsing;
+                        `flex-wrap` on both rows lets the badges drop to their own line instead of
+                        eating the name. Truncation still applies past the floor, so a very long name
+                        degrades gracefully rather than breaking the card.
+                      */}
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div className="min-w-[8rem] flex-1">
                           <div className="truncate text-sm font-semibold text-slate-900">
                             {displayCaseName(t.leadName || "") || t.leadKey}
                           </div>
@@ -157,7 +170,7 @@ export function MorningDigestModal(props: {
                             <div className="truncate text-xs text-slate-600">{vehicleLine}</div>
                           ) : null}
                         </div>
-                        <div className="flex shrink-0 items-center gap-1.5">
+                        <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
                           {reasonMeta ? (
                             <span className="inline-flex items-center gap-1 rounded-full border border-orange-200 bg-orange-50 px-2 py-0.5 text-[11px] font-semibold text-orange-700">
                               <SideNavIcon name={reasonMeta.icon as SideNavIconName} className="h-3 w-3" />

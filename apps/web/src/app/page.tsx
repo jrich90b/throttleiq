@@ -14012,12 +14012,28 @@ export default function Home() {
           )
         : null}
 
+      {/*
+        THE PANEL AND THE MAIN AREA ARE FLEX SIBLINGS, stacked below `md` (768px) and side-by-side
+        above it. For most sections that stacking is right — the panel IS the payload (the inbox
+        list, the contact list), so it belongs on top.
+
+        KPI IS THE EXCEPTION, and Joe reported it: "the KPI section is hard to see unless you turn
+        the phone sideways." MEASURED 2026-08-12 on the live console — on a 375px phone the first
+        number sat 879px down, a full screen (1.08x) below nine stacked filter controls; turned
+        sideways (844px) it crossed the 768px breakpoint, the panel became a sidebar, and the same
+        number sat at 188px. iPad is fine in both orientations (768 -> 187px). So the fault is
+        phones-upright only, and the payload is the thing being pushed away.
+
+        Reordering rather than hiding: the numbers come first on a phone and the filters follow
+        underneath, so nothing becomes unreachable and no control is removed from a small screen.
+        `md:order-none` hands the layout straight back to DOM order once the sidebar exists.
+      */}
       <section
         className={`w-full ${
           section === "contacts" ? "md:w-[620px]" : "md:w-96"
         } border-r border-[var(--border)] bg-[var(--surface)] p-4 overflow-y-auto shadow-[0_10px_30px_rgba(0,0,0,0.08)] lr-app-sidebar-panel ${
           isCampaignSection ? "lr-campaign-sidebar" : ""
-        } ${section !== "calendar" && !isMdfSection ? "lr-tablet-list-panel" : ""} ${section === "calendar" || isMdfSection ? "hidden" : ""} ${isConversationSection && mobilePanel === "detail" ? "hidden md:block" : ""}`}
+        } ${section !== "calendar" && !isMdfSection ? "lr-tablet-list-panel" : ""} ${section === "calendar" || isMdfSection ? "hidden" : ""} ${isConversationSection && mobilePanel === "detail" ? "hidden md:block" : ""} ${section === "kpi" ? "order-2 md:order-none" : ""}`}
         data-campaign-sidebar={isCampaignSection ? "true" : "false"}
       >
         <div className="flex items-start justify-between gap-4">
@@ -15738,7 +15754,7 @@ export default function Home() {
             : "bg-[var(--surface)] shadow-[inset_0_1px_0_rgba(255,255,255,0.6)] lr-app-main-panel"
         } ${
           section === "calendar" ? "p-2 overflow-hidden" : "p-6 overflow-y-auto"
-        } lr-tablet-main-panel ${isConversationSection && mobilePanel === "list" ? "hidden md:block" : ""}`}
+        } lr-tablet-main-panel ${isConversationSection && mobilePanel === "list" ? "hidden md:block" : ""} ${section === "kpi" ? "order-1 md:order-none" : ""}`}
         data-campaign-main={isCampaignSection ? "true" : "false"}
       >
         {isCampaignSection ? (
