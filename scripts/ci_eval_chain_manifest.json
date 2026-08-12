@@ -120,6 +120,7 @@
     "long_term_message:eval",
     "intent_handled:eval",
     "corpus_replay_flywheel:eval",
+    "replay_unreachable_lead_exclusion:eval",
     "replay_fidelity:eval",
     "inbound_shadow_api_env:eval",
     "intent_handled_anomaly:eval",

@@ -579,11 +579,57 @@ export function scoreTurn(row: ReplayRow, judge: IntentVerdict | null | undefine
 export type ScoreAdjustment =
   | "none"
   | "excluded_test_lead"
+  | "excluded_unreachable_lead"
   | "excluded_anachronistic"
   | "design_accepted_handoff"
   | "deflection_downgraded"
   | "nondeterministic_recovered"
   | "excluded_harness_error";
+
+/**
+ * A lead we have NO WAY TO REACH — no phone, no email, and a conversation id that is itself neither.
+ *
+ * These are the Facebook Marketplace relay leads (Joe ruled 2026-07-24, re-stated 8/12: they
+ * "cannot be SMS'd, emailed or called through LeadRider at all"). The customer lives inside the
+ * Facebook inbox; a rep answers by hand, and `domain/marketplaceRelay.ts` puts a paste-ready reply
+ * on a task for the lead owner. The publish gate already suppresses any sendable draft for them —
+ * measured 2026-08-12: 18 of 18 such leads got the relay task and ZERO outbound rows exist.
+ *
+ * The replay harness, however, still drafts a reply for them and LLM-judges it. The judge then
+ * correctly observes that the draft "doesn't confirm availability or price" and files a P1 — against
+ * text no customer could ever receive. MEASURED 2026-08-12: 21 of the 41 work orders in the queue
+ * were exactly this, and the same 21 are re-filed every night. That is not a finding about the
+ * agent; it is the instrument grading a turn the live system never sends.
+ *
+ * FILTER ON THE CONTACT CHANNEL, NEVER ON THE SOURCE NAME. A source name is a label that can change
+ * or be reused; "we hold no address for this person" is the actual fact that makes the reply
+ * unsendable. If one of these leads ever arrives WITH a phone or an email it is reachable and gets
+ * graded like anything else — which is what we want, and a source-name check would have silently
+ * suppressed it.
+ *
+ * Fail direction: this EXCLUDES turns from scoring, so it stays narrow. All conditions are required,
+ * it only ever applies to an ADF intake envelope (the one body shape that declares its contact
+ * fields), and every exclusion is COUNTED in the summary — never silently dropped.
+ */
+export function isUnreachableLeadRow(row: ReplayRow): boolean {
+  const convId = String(row.conversationId ?? "").trim();
+  // A phone-number or email conversation id IS a delivery address — reachable, so grade it.
+  if (/^\+?\d[\d\s().-]{8,}$/.test(convId)) return false;
+  if (convId.includes("@")) return false;
+  const body = String(row.body ?? "");
+  // Only an ADF intake envelope declares Phone:/Email: fields. Anything else cannot be judged from
+  // the row alone, so we grade it (fail toward measuring, never toward silence).
+  if (!/^\s*WEB LEAD \(ADF\)/i.test(body)) return false;
+  const usable = (value: string | undefined): boolean => {
+    const v = String(value ?? "").trim();
+    if (!v) return false;
+    return !/^(n\/?a|none|null|unknown|-+)$/i.test(v);
+  };
+  // The `m` flag is load-bearing: these are their own lines inside the envelope.
+  const phone = (body.match(/^\s*Phone:\s*(.+)$/im) ?? [])[1];
+  const email = (body.match(/^\s*Email:\s*(.+)$/im) ?? [])[1];
+  return !usable(phone) && !usable(email);
+}
 
 /**
  * Apply the design-policy post-classification to a raw score (fidelity v2). Pure + auditable:
@@ -596,6 +642,11 @@ export type ScoreAdjustment =
 export function adjustScore(score: TurnScore, row: ReplayRow): TurnScore & { adjustment: ScoreAdjustment; excluded?: boolean } {
   if (isTestLeadRow(row)) {
     return { ...score, adjustment: "excluded_test_lead", excluded: true };
+  }
+  // A lead we hold no address for cannot receive the reply we just judged. Excluded before any
+  // judge-based adjustment so the P1 is never minted — see isUnreachableLeadRow.
+  if (isUnreachableLeadRow(row)) {
+    return { ...score, critical: false, adjustment: "excluded_unreachable_lead", excluded: true };
   }
   // The temporary API never booted / never loaded the prepared thread, so this turn produced NO
   // evidence about the agent in either direction. Scoring it would make an ops incident (a deploy
@@ -870,6 +921,8 @@ export type FlywheelSummary = {
   replaySource: string;
   totalTurns: number;
   excludedTestLeads: number;
+  /** Leads with no phone and no email — the reply could never be delivered, so it is not graded. */
+  excludedUnreachableLeads: number;
   excludedAnachronistic: number;
   /** Turns the harness never managed to run (boot/infra), so they carry no verdict. */
   harnessErrors: number;
@@ -1047,6 +1100,7 @@ async function main() {
     return adjustScore(scoreTurn(row, verdicts.get(turnKeyOf(row))), row);
   });
   const excludedTestLeads = adjustedAll.filter(s => s.adjustment === "excluded_test_lead").length;
+  const excludedUnreachableLeads = adjustedAll.filter(s => s.adjustment === "excluded_unreachable_lead").length;
   const excludedAnachronistic = adjustedAll.filter(s => s.adjustment === "excluded_anachronistic").length;
   const harnessErrors = adjustedAll.filter(s => s.adjustment === "excluded_harness_error").length;
   const scores = adjustedAll.filter(s => !s.excluded);
@@ -1143,6 +1197,7 @@ async function main() {
     replaySource: replayJson,
     totalTurns: scores.length,
     excludedTestLeads,
+    excludedUnreachableLeads,
     excludedAnachronistic,
     harnessErrors,
     coverage: computeCoverage(scores.length, harnessErrors),
