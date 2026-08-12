@@ -27,6 +27,21 @@ type Example = {
      * FALSE there. The action/explicit metrics count only the rows that assert them.
      */
     action?: Action;
+    /**
+     * Optional, and DO NOT pin it on a row whose action is `none`.
+     *
+     * Both consumers read action FIRST and stop: `shouldTakeInboundReplyAction`
+     * (inboundReplyActionPrompt.ts) is `action === "none" || !explicitAction -> false`, and the
+     * email lane's `parsed.action !== action` guard never reaches the field either. So on a
+     * `none` row this label steers no decision, while the parser is genuinely split on it —
+     * "I'll pass, I'm not doing it this year" is a withdrawal, which reads as an explicit act to
+     * one sample and as no action to the next.
+     *
+     * MEASURED on origin/main 2026-08-12: pinning it on that one row failed **2 of 6** runs, all
+     * on this field. With the runner's single flake-retry that is ~11% of every full gate run
+     * going red, for everyone, over a value nothing branches on. Assert the DECISION, not the
+     * label. (Dropping it from that row: 6/6 clean, explicit-action coverage 18/18 intact.)
+     */
     explicit_action?: boolean;
     /**
      * Optional: omit on rows where the field is incidental to what the row is pinning. The

@@ -345,7 +345,6 @@
     "dialogState": "schedule_request",
     "expected": {
       "action": "none",
-      "explicit_action": false,
       "scheduling_conflict_open": false
     }
   },
