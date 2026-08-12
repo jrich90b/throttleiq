@@ -81,6 +81,7 @@
       "riderCourseName": "Riding Academy course",
       "riderCoursePrice": "",
       "riderCourseUrl": "https://americanharley-davidson.com/news-article/42851/riding-academy",
+      "riderCourseProvides": "H-D X350 RAs",
       "testRideRequiresEndorsement": true,
       "requiresMotorcycleEndorsementForTestRide": true
     },

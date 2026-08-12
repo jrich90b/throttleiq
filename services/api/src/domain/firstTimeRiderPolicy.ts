@@ -59,6 +59,16 @@ export type FirstTimeRiderPolicy = {
    * NEVER an amount: this says WHERE to pay, never HOW MUCH.
    */
   unpaidSeatPaymentMethods: string;
+  /**
+   * What the dealer PROVIDES for the class, in the dealer's own words — American Harley's is
+   * "H-D X350 RAs" (Joe, 2026-08-12: "Motorcycles are provided. They are Harley-Davidson X350 RA's").
+   *
+   * A dealer FACT, so it lives in the profile and never in source: writing "X350 RA" into
+   * services/api/src would be an American-Harley literal, and the portability ratchet only goes
+   * DOWN. Blank ⇒ the agent says nothing about equipment and hands the question to a person, which
+   * is exactly what it does today.
+   */
+  courseProvides: string;
 };
 
 /**
@@ -93,7 +103,8 @@ export function readFirstTimeRiderPolicy(dealerProfile: any): FirstTimeRiderPoli
       p.requiresMotorcycleEndorsementForTestRide !== false && p.testRideRequiresEndorsement !== false,
     jumpstartEnabled: p.jumpstartEnabled === true,
     registrationNote: readDealerNote(p.registrationNote),
-    unpaidSeatPaymentMethods: readDealerNote(p.unpaidSeatPaymentMethods)
+    unpaidSeatPaymentMethods: readDealerNote(p.unpaidSeatPaymentMethods),
+    courseProvides: readDealerNote(p.riderCourseProvides)
   };
 }
 

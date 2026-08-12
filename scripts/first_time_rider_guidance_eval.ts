@@ -7,6 +7,14 @@ type Expected = {
   asksTestRide?: boolean;
   asksBeginnerBike?: boolean;
   asksRiderCourse?: boolean;
+  asksClassLogistics?: boolean;
+  /**
+   * WHICH class question this is. Asserted as an exact label ON PURPOSE, against the usual rule of
+   * pinning the decision rather than the word: here the label IS the decision — only "equipment"
+   * unlocks the dealer's what-is-provided answer, and every other value keeps the hand-off. Measured
+   * over 5 runs before it was written down (see the case comments).
+   */
+  classLogisticsTopic?: string | null;
 };
 
 type Case = {
@@ -16,6 +24,39 @@ type Case = {
 };
 
 const cases: Case[] = [
+  {
+    // THE REAL MESSAGE. Ulises HernandezPerez +17167857284, 2026-08-11 16:08Z, verbatim — the
+    // apology and the "question," hedge are how a polite enrolled student actually writes. Joe typed
+    // the answer himself 8 minutes later and reported: "Should be able to answer this. Motorcycles
+    // are provided. They are Harley-Davidson X350 RA's."
+    id: "enrolled_asks_if_bikes_provided",
+    text: "Hi, I'm so sorry to bother, question, are the motorcycle provided or do we need to bring our own? Thanks.",
+    expected: {
+      intent: "enrolled_class_logistics",
+      explicitRequest: true,
+      asksClassLogistics: true,
+      classLogisticsTopic: "equipment"
+    }
+  },
+  {
+    // The other side of the split, and the one that matters most: a WHEN question must NOT come back
+    // as equipment, or a student asking about their start time is told what bikes are provided.
+    id: "enrolled_asks_when_to_arrive",
+    text: "What time should I show up on Saturday?",
+    expected: {
+      intent: "enrolled_class_logistics",
+      explicitRequest: true,
+      asksClassLogistics: true,
+      classLogisticsTopic: "schedule"
+    }
+  },
+  {
+    // Somebody still DECIDING is not an enrolled student, and carries no class topic at all — the
+    // sign-up branch (price + link) still owns them.
+    id: "signup_price_question_is_not_class_logistics",
+    text: "How much is the riding academy course?",
+    expected: { intent: "rider_course_info", explicitRequest: true, asksRiderCourse: true }
+  },
   {
     id: "first_bike_advice",
     text: "This would be my first bike. What do you recommend?",
@@ -101,6 +142,8 @@ function matchesExpected(actual: Awaited<ReturnType<typeof parseFirstTimeRiderGu
   if ("asksTestRide" in expected && actual.asksTestRide !== expected.asksTestRide) return false;
   if ("asksBeginnerBike" in expected && actual.asksBeginnerBike !== expected.asksBeginnerBike) return false;
   if ("asksRiderCourse" in expected && actual.asksRiderCourse !== expected.asksRiderCourse) return false;
+  if ("asksClassLogistics" in expected && actual.asksClassLogistics !== expected.asksClassLogistics) return false;
+  if ("classLogisticsTopic" in expected && actual.classLogisticsTopic !== expected.classLogisticsTopic) return false;
   return true;
 }
 

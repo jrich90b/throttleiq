@@ -93,6 +93,8 @@ export function buildFirstTimeRiderGuidanceReply(args: {
   const classLogistics = resolveRiderCourseLogisticsReply({
     intent: parsed.intent,
     asksClassLogistics: parsed.asksClassLogistics,
+    classLogisticsTopic: parsed.classLogisticsTopic ?? null,
+    courseProvides: policy.courseProvides,
     firstName: args.firstName ?? null,
     rows: policy.classSchedule,
     studentClassDate: args.studentClassDate ?? null,

@@ -433,7 +433,15 @@ const CEILINGS: Ceiling[] = [
     // they gate — the walkInInventoryWant.ts shape. That is what paid for the owned-unit rule
     // (Michael McGary +17165502654, Joe 8/12): the prompt surface now grows on its own budget, and
     // a pure eval can EXECUTE the builder and assert the rule survives without an API key.
-    max: 16_099,
+    // 16_099 -> 16_088. The rider-course "what does the class provide" slice. Adding a field to
+    // a parser costs a schema property, a prompt rule and a docstring, so it funded itself by moving
+    // FIRST_TIME_RIDER_GUIDANCE_PARSER_JSON_SCHEMA out to firstTimeRiderGuidanceExamples.ts — beside
+    // the few-shots, which is the pair that always has to change together.
+    // NOTE (rebase, 2026-08-12): this branch was authored against a 16_154 ceiling and proposed
+    // 16_140. Main had since ratcheted to 16_099 (#678), so landing 16_140 verbatim would have
+    // RAISED the ceiling and undone two reductions — the #418 trap. Re-derived from the real
+    // post-rebase count.
+    max: 16_088,
     note: "every parser prompt + JSON schema; second-largest and on the same trajectory"
   }
 ];
