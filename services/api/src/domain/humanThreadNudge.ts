@@ -245,6 +245,8 @@ export interface HumanThreadNudgeInput {
   lastMessageAtMs?: number | null;
   /** An open todo with a FUTURE due date exists (a dated staff promise owns the follow-up). */
   hasOpenFutureDatedTodo?: boolean;
+  /** isThreadParkedOnInventoryPromise(conv) — the thread is quiet because WE said we'd call it. */
+  parkedOnInventoryPromise?: boolean;
   nudgeCount?: number;
   lastNudgeAtMs?: number | null;
   nowMs: number;
@@ -305,6 +307,10 @@ export function decideHumanThreadNudge(input: HumanThreadNudgeInput): HumanThrea
   if (!isHumanOwned && NON_SALES_HANDOFF_REASONS.has(String(input.followUpReason ?? "").trim().toLowerCase())) {
     return { nudge: false, reason: "non_sales_department_handoff" };
   }
+  // A thread parked on a promise we made (active watch / cadence stopped for one / a unit on order)
+  // — see isThreadParkedOnInventoryPromise. Like the department stop this is a CLASS exclusion, so
+  // it sits ABOVE the quiet clock: the answer must not change with how long the customer waits.
+  if (input.parkedOnInventoryPromise) return { nudge: false, reason: "parked_on_inventory_promise" };
   // An unanswered CUSTOMER message stays the owner's job (the "needs YOUR reply" task, PR #223) —
   // the agent must not bump a customer who is waiting on the rep.
   if (input.lastMessageDirection !== "out") return { nudge: false, reason: "owner_reply_needed" };
