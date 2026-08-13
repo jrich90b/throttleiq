@@ -1215,11 +1215,51 @@ export const CAMPAIGN_COPY_MAX_OUTPUT_TOKENS = 6000;
  * instructions and keep the required email fields trivial; email/"both" channels keep the full set.
  * Exported so campaign_sms_prompt:eval can pin the channel split.
  */
+/**
+ * The Agent Voice Charter, applied to CAMPAIGN SMS copy.
+ *
+ * Campaign copy was the one customer-facing text surface that never learned the charter. Its
+ * entire instruction was "1-2 short sentences grounded in the brief", so it did the only thing
+ * that asks for: it restated the brief and bolted a CTA on. Joe, 2026-08-13, on his "Pre-Owned
+ * Special" blast: *"I also want to make the sms more sounding like a human instead of just
+ * generating verbatim what i typed."* He was right, and the diff proves it —
+ *
+ *   brief: "Get 10% Customer Cash on pre-owned purchase through the end of August. Credit can be
+ *           used toward the price of the bike, a trade in credit or towards parts and accessories."
+ *   copy:  "Get 10% Customer Cash on any pre-owned Harley through Aug 31 — credit can go toward
+ *           the bike price, your trade-in, or parts & accessories. Call (716) 692-7200 or book…"
+ *
+ * — the same sentence with "end of August" swapped for "Aug 31". Ad copy, not a text message.
+ *
+ * The rules below are lifted from the charter (AGENTS.md "Agent Voice Charter"): the staff
+ * texting register rather than corporate copy, contractions, the em-dash diet (~6 across 388
+ * staff texts vs 529 across 1147 AI ones), the short-name dealer forms, and the measured banned
+ * filler list. Two are specific to a broadcast: **the brief is an instruction, not a draft**, and
+ * **no greeting** — the send path owns the greeting because it is the only place that knows the
+ * recipient (`campaignPersonalization.ts`). Joe ruled 2026-08-13 that campaigns speak in the
+ * DEALER's voice, not a named rep's, so no message signs as a person.
+ *
+ * Exported so `campaign_sms_prompt:eval` can pin the rules that actually reach the model.
+ */
+export function campaignSmsVoiceRules(): string[] {
+  return [
+    "- VOICE (highest priority): sms_body must read like a text from someone at the dealership to a customer who already knows us. Not an ad, not a flyer, not a press release.",
+    "- The brief is an INSTRUCTION, not a draft. Never restate or lightly reword it — say the same offer the way a person would text it.",
+    "- Name the dealer naturally and casually, using a SHORT everyday form of the dealer name given above (drop Inc/LLC and any legal suffix; the full formal name only if there is no natural short form). Never sign as a person.",
+    "- Use contractions and short sentences. No marketing register (\"unlock\", \"don't miss\", \"limited time\", \"act now\", \"exclusive offer\").",
+    "- Punctuation: at most ONE dash of any kind in the whole message. Write \"and\" rather than \"&\". No ALL CAPS words, no emojis unless the prompt has them.",
+    "- Banned filler: \"if helpful\", \"if it helps\", \"simple compare\", \"next-step options\", \"quick walkaround\", \"payment snapshot\", \"narrow it down\", \"keep it dialed in\", \"I'm here if you need anything\", \"all good either way\", \"just checking in\".",
+    "- Do NOT write a greeting and do NOT use the customer's name or any placeholder for it. The send step adds the greeting.",
+    "- Close with ONE clear ask (reply, call, or stop in). One ask, not three."
+  ];
+}
+
 export function campaignCopyOutputRequirements(
   requiresEmailHtml: boolean,
   channelSupportsEmailDigest: boolean
 ): string[] {
   const lines = ["Output requirements:", "- sms_body: 1-2 short sentences grounded in the brief/context."];
+  lines.push(...campaignSmsVoiceRules());
   if (!requiresEmailHtml) {
     lines.push(
       "- This is an SMS-only campaign: put all the real promotion content in sms_body.",
