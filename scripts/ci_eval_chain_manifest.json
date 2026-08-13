@@ -477,6 +477,7 @@
     "inventory_watch_opt_out_durable:eval",
     "promised_unit_not_in_stock:eval",
     "cross_lead_leak:eval",
+    "lead_identity_join:eval",
     "backfill_runner:eval",
     "trade_vehicle_repair:eval",
     "hardship_empathy_ack:eval",

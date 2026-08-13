@@ -372,7 +372,17 @@ const CEILINGS: Ceiling[] = [
     // predicate the schedule-invite gate reads moved next to that gate in domain/inboundPipeline.ts
     // (the handler passes the department in rather than the module deriving it). index.ts keeps
     // only the config fetches, which is genuinely its job.
-    max: 70_486,
+    // 70_486 -> 70_384. The lead-identity join moved to domain/leadIdentity.ts: index.ts kept two
+    // hand-rolled identity readers that treated a lead feed's "Email: n/a" as a real person, which
+    // joined 11 unrelated walk-in customers into one identity and let one booking stop four other
+    // leads' cadences. `firstNonBlank` went with them — it had no other caller left.
+    //
+    // RE-DERIVED 2026-08-13 at merge time against current main, not against this branch's base
+    // (the #418 trap). Written on a base whose index.ts was larger, this line read 70_459 — but
+    // main had already reached 70_411 through later merges, so shipping 70_459 would have handed
+    // back 75 lines of headroom this ratchet had already won. 70_384 is the file's ACTUAL size
+    // with this change applied, which is what "ceilings are set at the CURRENT size" means.
+    max: 70_384,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
