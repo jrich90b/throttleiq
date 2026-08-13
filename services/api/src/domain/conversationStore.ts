@@ -842,6 +842,21 @@ export type Message = {
   to: string;
   body: string;
   originalDraftBody?: string;
+  /**
+   * "agent" when this message came from an agent draft a human approved — WHETHER OR NOT they
+   * edited it. Absent means it did not come from a draft, or predates 2026-08-13.
+   *
+   * WHY IT EXISTS. `originalDraftBody` is stamped only when the text CHANGED, so a draft approved
+   * untouched was byte-identical to a message a rep typed from scratch. MEASURED 2026-08-13 over 45
+   * days: 179 messages provably edited, 280 drafts never sent as written, and **919 in that
+   * ambiguous bucket** — which in suggest mode is the most common way an agent message reaches a
+   * customer. It made the one number that says whether this product saves labour or creates it
+   * unanswerable: the agent's work is used as written somewhere between **24% and 79%** of the
+   * time, and nothing in the store could narrow it.
+   *
+   * Write-once, at `finalizeDraftAsSent` — the single door an approved draft passes through.
+   */
+  authoredBy?: "agent";
   mediaUrls?: string[];
   at: string; // ISO
   provider?: MessageProvider;
@@ -3138,6 +3153,12 @@ export function finalizeDraftAsSent(
   if (original.trim() !== tonedFinalBody.trim()) {
     msg.originalDraftBody = original;
   }
+  // UNCONDITIONAL, and that is the whole point. `originalDraftBody` above only survives an EDIT, so
+  // until now a draft approved untouched left no trace that the agent wrote it — 919 messages in 45
+  // days sat in that blind spot, and it is the most common way an agent message reaches a customer
+  // in suggest mode. This is the only door an approved draft passes through, so one line here makes
+  // agent authorship countable for the first time.
+  msg.authoredBy = "agent";
   msg.body = tonedFinalBody;
   msg.provider = provider;
   msg.providerMessageId = providerMessageId;

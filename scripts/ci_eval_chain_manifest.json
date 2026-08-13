@@ -149,6 +149,7 @@
     "reservation_intent:eval",
     "reservation_confirm:eval",
     "manual_send_draft_guard:eval",
+    "agent_authorship_stamp:eval",
     "operator_draft_endpoint:eval",
     "feedback_redraft:eval",
     "feedback_note_carry:eval",
