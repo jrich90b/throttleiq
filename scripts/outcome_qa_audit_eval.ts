@@ -279,6 +279,44 @@ const store = {
             "Hey Pat, it's Alexandra over at American Harley-Davidson. Thanks again for coming in for the test ride today — anything you want me to pull together while you think it over?"
         }
       ]
+    },
+    // JOHN ZIMMERMAN (+17169902571), rebuilt from the live store, 2026-08-12. The finance
+    // outcome went `needs_more_info` at 13:59Z; he then CAME IN that afternoon and a rep
+    // recorded the appointment outcome at 21:07Z ("approved... Need to stay in touch"), which
+    // repointed the single `conv.followUp` slot at `appointment_outcome_follow_up` and armed the
+    // right cadence. The finance routing check graded that LATER state against the EARLIER
+    // outcome and raised a P1 — the release gate's `outcome QA P1 1 > 0` failure for 2026-08-13.
+    // Nothing here went wrong, so nothing here may be reported.
+    {
+      id: "conv_finance_superseded",
+      leadKey: "+17160000009",
+      mode: "human",
+      leadOwner: { name: "Joe Hartrich" },
+      lead: {
+        leadRef: "FIN9",
+        firstName: "John",
+        lastName: "Northfield",
+        phone: "7160000009"
+      },
+      followUp: { mode: "active", reason: "appointment_outcome_follow_up", updatedAt: isoMinutesAgo(60) },
+      followUpCadence: { status: "active", kind: "engaged", nextDueAt: isoMinutesAgo(-600) },
+      financeOutcome: {
+        status: "needs_more_info",
+        reasonText: "Manual outbound indicated finance/credit application needs more information.",
+        updatedAt: isoMinutesAgo(480)
+      },
+      appointment: {
+        staffNotify: {
+          outcome: {
+            status: "follow_up",
+            primaryStatus: "showed",
+            secondaryStatus: "not_ready",
+            note: "approved. went over numbers on new and pre-owned road glides. Need to stay in touch",
+            updatedAt: isoMinutesAgo(60)
+          }
+        }
+      },
+      messages: []
     }
   ],
   todos: []
@@ -289,7 +327,10 @@ const report = buildOutcomeQaReport(store, {
   sinceHours: 24
 });
 
-assertCheck("outcome_count", report.summary.outcomeCount, 8);
+// 10 = the original 8 plus the two the superseded fixture carries (its finance outcome and the
+// later appointment outcome that supersedes it). Both are still INSPECTED; only the routing
+// verdict on the older one is withheld.
+assertCheck("outcome_count", report.summary.outcomeCount, 10);
 assertCheck("missing_dealer_ride_thank_you_detected", hasIssue(report, "missing_dealer_ride_customer_thank_you"), true);
 assertCheck(
   "missing_dealer_ride_thank_you_still_fires_when_absent",
@@ -315,6 +356,21 @@ assertCheck("assumed_next_steps_detected", hasIssue(report, "assumed_agreed_next
 assertCheck("vague_noted_language_detected", hasIssue(report, "dealer_ride_vague_noted_language"), true);
 assertCheck("wrong_salesperson_identity_detected", hasIssue(report, "wrong_salesperson_identity"), true);
 assertCheck("finance_needs_info_state_detected", hasIssue(report, "finance_needs_info_missing_manual_handoff"), true);
+// The negative control for the pair below: conv_finance_unsafe is the SAME needs-more-info state
+// with NO later outcome, and it must keep firing. If this ever goes false the guard has stopped
+// discriminating and is simply silencing the check.
+assertCheck(
+  "finance_needs_info_still_fires_without_a_later_outcome",
+  hasIssueForConv(report, "finance_needs_info_missing_manual_handoff", "conv_finance_unsafe"),
+  true
+);
+// The phantom itself: a finance outcome whose follow-up slot was rewritten by a LATER outcome
+// cannot be graded on that slot, so it must not be reported.
+assertCheck(
+  "finance_needs_info_superseded_by_later_outcome_is_not_a_finding",
+  hasIssueForConv(report, "finance_needs_info_missing_manual_handoff", "conv_finance_superseded"),
+  false
+);
 assertCheck("finance_unsafe_claim_detected", hasIssue(report, "finance_outcome_unsafe_specific_claim"), true);
 assertCheck("appointment_missing_action_detected", hasIssue(report, "appointment_outcome_missing_follow_up_action"), true);
 assertCheck("related_party_seed_detected", hasSeedCue(report, "related_party_context"), true);
