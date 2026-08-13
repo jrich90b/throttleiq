@@ -24,7 +24,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { isNonSalesConversation, isShadowReplayMessage } from "../services/api/src/domain/scoringExclusions.ts";
+import {
+  isHumanModeStaffReply,
+  isNonSalesConversation,
+  isShadowReplayMessage
+} from "../services/api/src/domain/scoringExclusions.ts";
 import { decideIntentHandledAnomaly } from "../services/api/src/domain/conversationOutcomeAudit.ts";
 import { describeWalkInNoteProvenance } from "../services/api/src/domain/walkInFollowUpTopic.ts";
 
@@ -93,9 +97,10 @@ function msgTime(m: any): number {
 export function selectIntentJudgeCandidates(
   convs: any[],
   opts: { windowStartMs: number; maxCandidates?: number }
-): { candidates: IntentJudgeCandidate[]; eligibleTotal: number } {
+): { candidates: IntentJudgeCandidate[]; eligibleTotal: number; staffOwnedSkipped: number } {
   const out: IntentJudgeCandidate[] = [];
   let eligibleTotal = 0;
+  let staffOwnedSkipped = 0;
   const REPLY_WINDOW = 7 * 24 * 60 * 60 * 1000;
 
   for (const conv of convs ?? []) {
@@ -134,6 +139,14 @@ export function selectIntentJudgeCandidates(
       }
       if (!reply) continue;
 
+      // The reply is a person's own words on a thread a person owns — the agent is code-gated
+      // out of answering in human mode, so this can never be an agent comprehension miss.
+      // Counted, not silently dropped, so the report says how much of the window it removed.
+      if (isHumanModeStaffReply({ conversationMode: conv?.mode, reply })) {
+        staffOwnedSkipped++;
+        continue;
+      }
+
       eligibleTotal++;
       const context = msgs
         .slice(Math.max(0, i - 6), i)
@@ -156,7 +169,7 @@ export function selectIntentJudgeCandidates(
   }
 
   const max = opts.maxCandidates ?? Infinity;
-  return { candidates: out.slice(0, max), eligibleTotal };
+  return { candidates: out.slice(0, max), eligibleTotal, staffOwnedSkipped };
 }
 
 export function buildIntentJudgePrompt(c: IntentJudgeCandidate): string {
@@ -248,8 +261,8 @@ export async function realJudge(c: IntentJudgeCandidate): Promise<IntentVerdict 
 export async function runIntentAudit(
   convs: any[],
   opts: { windowStartMs: number; maxCandidates: number; judge: JudgeFn }
-): Promise<{ findings: IntentFinding[]; eligibleTotal: number; capped: boolean }> {
-  const { candidates, eligibleTotal } = selectIntentJudgeCandidates(convs, {
+): Promise<{ findings: IntentFinding[]; eligibleTotal: number; capped: boolean; staffOwnedSkipped: number }> {
+  const { candidates, eligibleTotal, staffOwnedSkipped } = selectIntentJudgeCandidates(convs, {
     windowStartMs: opts.windowStartMs,
     maxCandidates: opts.maxCandidates
   });
@@ -258,7 +271,7 @@ export async function runIntentAudit(
     const verdict = await opts.judge(c);
     if (verdict) findings.push({ ...c, verdict });
   }
-  return { findings, eligibleTotal, capped: eligibleTotal > candidates.length };
+  return { findings, eligibleTotal, capped: eligibleTotal > candidates.length, staffOwnedSkipped };
 }
 
 function selfTest() {
@@ -341,13 +354,47 @@ function selfTest() {
         { direction: "out", provider: "draft_ai", at: t(1), body: "phantom dismissed draft", draftStatus: "stale" },
         { direction: "out", provider: "twilio", at: t(2), body: "Yes, it's on the floor right now — want to swing by today?" }
       ]
+    },
+    {
+      // Human takeover (mode: "human"): the agent is code-gated out of replying, so this send is
+      // a person's own words. Rich Retzlaff +17168640008, 2026-08-12 — Joe dictated the sentence,
+      // a rep typed it 42s later, and the judge filed a Tier-1 miss against it.
+      id: "human_mode",
+      mode: "human",
+      messages: [
+        { direction: "in", provider: "twilio", at: t(0), body: "I listed it for $12000 and dropped it to $10800 and have a few reach out now" },
+        { direction: "out", provider: "twilio", at: t(1), body: "Ok, Let me know how you make out! Scott will be in tomorrow if you want to touch base with him." }
+      ]
+    },
+    {
+      // ...but the AGENT'S OWN WORDS stay graded even on a human-owned thread: a live draft is
+      // agent output whoever owns the thread. Keyed on the reply, never on the conversation.
+      id: "human_mode_agent_draft",
+      mode: "human",
+      messages: [
+        { direction: "in", provider: "twilio", at: t(0), body: "What do I have to do to reserve one" },
+        { direction: "out", provider: "draft_ai", at: t(1), body: "Ok, will do. I'll keep this tied to the 2026 Other trade and let you know when it's ready to look at." }
+      ]
+    },
+    {
+      // Same, for an APPROVED draft: `finalizeDraftAsSent` stamps authoredBy "agent" (2026-08-13),
+      // so a sent message the agent wrote is still judged on a human-owned thread.
+      id: "human_mode_approved_draft",
+      mode: "human",
+      messages: [
+        { direction: "in", provider: "twilio", at: t(0), body: "Is the bike in store?" },
+        { direction: "out", provider: "twilio", authoredBy: "agent", at: t(1), body: "Yes, the Street Glide is on the floor right now. Want to swing by today?" }
+      ]
     }
   ];
 
-  const { candidates, eligibleTotal } = selectIntentJudgeCandidates(convs, { windowStartMs: Date.parse(base) - 1000 });
+  const { candidates, eligibleTotal, staffOwnedSkipped } = selectIntentJudgeCandidates(convs, { windowStartMs: Date.parse(base) - 1000 });
   const ids = candidates.map(c => c.convId).sort();
-  assert(JSON.stringify(ids) === JSON.stringify(["good", "nicholas", "takeover"]), `candidates should be [good, nicholas, takeover], got ${JSON.stringify(ids)}`);
-  assert(eligibleTotal === 3, `eligibleTotal should be 3, got ${eligibleTotal}`);
+  const expectedIds = ["good", "human_mode_agent_draft", "human_mode_approved_draft", "nicholas", "takeover"];
+  assert(JSON.stringify(ids) === JSON.stringify(expectedIds), `candidates should be ${JSON.stringify(expectedIds)}, got ${JSON.stringify(ids)}`);
+  assert(eligibleTotal === 5, `eligibleTotal should be 5, got ${eligibleTotal}`);
+  assert(!candidates.some(c => c.convId === "human_mode"), "a person's reply on a human-mode thread is not an agent comprehension miss");
+  assert(staffOwnedSkipped === 1, `staffOwnedSkipped should be 1, got ${staffOwnedSkipped}`);
   assert(!candidates.some(c => c.convId === "dismissed"), "a dismissed (stale) draft with no send is not a judged reply");
   const take = candidates.find(c => c.convId === "takeover")!;
   assert(take.replyKind === "sent" && /on the floor/.test(take.replyText), "takeover judges the SENT reply, not the dismissed draft");
@@ -378,10 +425,12 @@ async function main() {
       if (v) findings.push({ ...c, verdict: v });
     }
     const summary = summarizeFindings(findings);
-    // 3 judged (good, nicholas, takeover); only nicholas is unaddressed. The
-    // takeover's SENT reply is judged (addressed); the dismissed stale draft it
-    // superseded is never judged. The "dismissed" conv yields no candidate.
-    if (summary.judged !== 3 || summary.unaddressed !== 1 || summary.major !== 1 || summary.draftMisses !== 1) {
+    // 5 judged (good, nicholas, takeover, and the two human-mode threads whose reply the AGENT
+    // wrote). Unaddressed: nicholas and human_mode_agent_draft, which carry the same watch-collapse
+    // non-answer the stub judge flags — both drafts. The takeover's SENT reply is judged
+    // (addressed); the dismissed stale draft it superseded is never judged; "dismissed" yields no
+    // candidate; and "human_mode" (a person's own send) is excluded before judging.
+    if (summary.judged !== 5 || summary.unaddressed !== 2 || summary.major !== 2 || summary.draftMisses !== 2) {
       console.error(`SELF-TEST FAIL: summary ${JSON.stringify(summary)}`);
       process.exit(1);
     }
@@ -415,7 +464,7 @@ async function main() {
   const convs: any[] = Array.isArray(raw?.conversations) ? raw.conversations : [];
   const windowStartMs = Date.now() - sinceHours * 60 * 60 * 1000;
 
-  const { findings, eligibleTotal, capped } = await runIntentAudit(convs, {
+  const { findings, eligibleTotal, capped, staffOwnedSkipped } = await runIntentAudit(convs, {
     windowStartMs,
     maxCandidates,
     judge: realJudge
@@ -427,7 +476,7 @@ async function main() {
 
   const report = {
     generatedAt: new Date().toISOString(),
-    source: { conversationsPath, sinceHours, eligibleTotal, capped },
+    source: { conversationsPath, sinceHours, eligibleTotal, capped, staffOwnedSkipped },
     summary,
     findings: findings
       .filter(f => !f.verdict.addressed)
@@ -451,6 +500,9 @@ async function main() {
     `Generated: ${report.generatedAt}`,
     `Window: last ${sinceHours}h | judged: ${summary.judged} | unaddressed: ${summary.unaddressed} (${summary.unaddressedRatePct}%) | major: ${summary.major}`,
     capped ? `Capped at ${findings.length} of ${eligibleTotal} eligible.` : "",
+    staffOwnedSkipped
+      ? `Skipped ${staffOwnedSkipped} staff-owned turn(s): a person's reply on a human-mode thread is not agent output.`
+      : "",
     "",
     "## Unaddressed turns",
     ...report.findings.map(

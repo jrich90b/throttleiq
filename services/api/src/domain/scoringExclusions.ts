@@ -516,6 +516,50 @@ export function isReplyToRecentStaffTypedOutbound(args: {
 }
 
 /**
+ * A reply a PERSON sent on a thread a person owns. `conv.mode === "human"` is manual takeover:
+ * the code refuses to let the agent answer there at all — `/conversations/:id/regenerate` returns
+ * `human_override`, and the inbound handler's human-mode branch records dispositions and sends
+ * nothing (the only exception is the compliance-mandated opt-out confirmation). So an outbound
+ * that reached the customer on a human-mode thread is a staff member's own words, and grading it
+ * as an agent comprehension miss manufactures a work order no code change can fix.
+ *
+ * Production 2026-08-12 (Rich Retzlaff +17168640008): Joe left a thumbs-down note asking for a
+ * specific wording, a person typed that exact sentence and sent it 42 seconds later, and the
+ * nightly intent-handled judge filed a Tier-1 `intent_unaddressed` against it. BOTH of that
+ * night's two findings were this class. Measured over 30 days on the live store: 225 of 323
+ * judged turns were human-mode threads.
+ *
+ * The AGENT'S OWN WORDS STAY GRADED. A pending `draft_ai` reply, or a sent message stamped
+ * `authoredBy: "agent"` (an approved draft — the marker `finalizeDraftAsSent` writes since
+ * 2026-08-13), is agent output no matter who owns the thread, and this returns false for it.
+ * That is the whole reason the rule is keyed on the REPLY and not on the conversation: skipping
+ * whole threads would drop real agent misses on any thread staff later took over.
+ *
+ * NOT keyed on `actorUserId`. That marker records who clicked Send, and an approved-unedited
+ * agent draft carries it too, so using it here would blind the judge to the most common way an
+ * agent message reaches a customer in suggest mode. Mode is the discriminator that is honest
+ * for the whole history; `authoredBy` only accrues forward from 2026-08-13.
+ *
+ * Sibling scorers already skip human-mode turns and it is settled law — tone and reply-coverage
+ * (`c5ae6e32`), open-critic (`open_critic_human_send_exclusion:eval`), corpus replay
+ * (`corpus_replay_human_mode_silence:eval`). This is the one that was never given it.
+ */
+export function isHumanModeStaffReply(args: {
+  conversationMode?: string | null;
+  reply:
+    | { provider?: string | null; authoredBy?: string | null; draftStatus?: string | null }
+    | null
+    | undefined;
+}): boolean {
+  if (String(args?.conversationMode ?? "").trim().toLowerCase() !== "human") return false;
+  const reply = args?.reply;
+  if (!reply) return false;
+  if (String(reply.authoredBy ?? "").trim().toLowerCase() === "agent") return false;
+  if (String(reply.provider ?? "").trim().toLowerCase() === "draft_ai") return false;
+  return true;
+}
+
+/**
  * Year-rollover park fingerprint. The fixed-but-must-stay-caught cadence bug
  * (parsePauseUntil / bumpCadenceNextDueAt parking a lead a year out) lands on
  * the FIRST of a month at a round 9-o'clock boundary: 09:00 UTC (`{month}-01T09:00Z`,
