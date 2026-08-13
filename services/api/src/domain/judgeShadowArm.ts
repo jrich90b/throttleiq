@@ -34,6 +34,8 @@
  * verdict to a caller, it swallows its own errors, and with the flag unset it does nothing at all.
  * The worst case is a missing log line.
  */
+import fs from "node:fs";
+
 import { anthropicMessagesRequest, extractAnthropicToolInput } from "./anthropicRequest.js";
 
 /**
@@ -115,6 +117,97 @@ export function judgeVerdictsAgree(
 }
 
 /**
+ * WHERE THE VERDICT PAIRS GO — a durable JSONL file, not just the pm2 log.
+ *
+ * The arm's whole purpose is a comparison read a WEEK after it starts, and `console.log` cannot
+ * survive that trip: pm2 lines truncate and the log rotates. That exact artifact already produced
+ * one wrong conclusion on this codebase — the self-heal review read "~21 events in 5 weeks" off the
+ * pm2 tail when the real volume was 4-8 a day. A shadow arm whose evidence evaporates before the
+ * readout is worse than no arm, because it looks like it ran.
+ *
+ * Same shape and same fail-direction as `parserCapture.ts`: daily files, every error swallowed,
+ * nothing the reply path can ever depend on. Disabled by the same flag as the arm itself, so with
+ * `JUDGE_SHADOW_ARM` unset this writes nothing at all.
+ */
+export function resolveJudgeShadowDir(env: {
+  JUDGE_SHADOW_DIR?: string;
+  REPORT_ROOT?: string;
+}): string | null {
+  const explicit = String(env.JUDGE_SHADOW_DIR ?? "").trim();
+  if (explicit) return explicit;
+  const root = String(env.REPORT_ROOT ?? "").trim();
+  if (root) return `${root}/judge_shadow`;
+  return null;
+}
+
+export type JudgeShadowRecord = {
+  at: string;
+  operation: string;
+  primaryModel: string;
+  primaryVerdict: string | null;
+  shadowModel: string;
+  shadowVerdict: string | null;
+  /**
+   * NULL is a third state and the readout must not flatten it: it means the two verdicts were not
+   * COMPARABLE (the challenger errored, or returned nothing), which is neither agreement nor
+   * disagreement. Counting a null as "agree" would quietly inflate the incumbent's score by exactly
+   * the number of times the challenger failed to answer.
+   */
+  agree: boolean | null;
+  shadowMs: number | null;
+  status: number | null;
+  retriedWithoutTemperature: boolean;
+};
+
+/**
+ * Build the record, separately from writing it — the same split as
+ * `buildParserCaptureRecord` / `appendParserCaptureRecord`.
+ *
+ * This exists so the NULL rule is testable. `judgeVerdictsAgree` returns null when the two verdicts
+ * are not comparable (the challenger errored or returned nothing), and that must reach the file as
+ * null. Coercing it to `false` invents a disagreement; coercing it to `true` credits the incumbent
+ * for a call that never happened. Both quietly decide the very question the arm was built to answer,
+ * and neither is visible once the row is on disk — which is why it is pinned here rather than
+ * trusted to a reviewer.
+ */
+export function buildJudgeShadowRecord(args: {
+  at: string;
+  operation: string;
+  primaryModel: string;
+  primaryVerdict: string | null | undefined;
+  shadowModel: string;
+  shadowVerdict: string | null;
+  shadowMs?: number | null;
+  status?: number | null;
+  retriedWithoutTemperature?: boolean | null;
+}): JudgeShadowRecord {
+  return {
+    at: args.at,
+    operation: args.operation,
+    primaryModel: args.primaryModel,
+    primaryVerdict: args.primaryVerdict ?? null,
+    shadowModel: args.shadowModel,
+    shadowVerdict: args.shadowVerdict,
+    agree: judgeVerdictsAgree(args.primaryVerdict, args.shadowVerdict),
+    shadowMs: args.shadowMs ?? null,
+    status: args.status ?? null,
+    retriedWithoutTemperature: !!args.retriedWithoutTemperature
+  };
+}
+
+export function appendJudgeShadowRecord(record: JudgeShadowRecord): void {
+  try {
+    const dir = resolveJudgeShadowDir(process.env as any);
+    if (!dir) return;
+    fs.mkdirSync(dir, { recursive: true });
+    const day = record.at.slice(0, 10).replace(/-/g, "") || "unknown";
+    fs.appendFileSync(`${dir}/judge_shadow_${day}.jsonl`, `${JSON.stringify(record)}\n`);
+  } catch {
+    // best-effort by design — the arm must never disturb the live path
+  }
+}
+
+/**
  * Fire the same judgment at every challenger and log the answers beside the shipped one. Returns
  * void deliberately — nothing may consume a shadow verdict.
  */
@@ -154,17 +247,20 @@ export function runJudgeShadowArm(args: {
         .then(result => {
           const payload = result.ok ? extractAnthropicToolInput(result.data, args.schemaName) : null;
           const shadowVerdict = payload ? String((payload as any)[args.verdictField] ?? "") : null;
-          console.log("[judge_shadow_arm]", {
+          const record = buildJudgeShadowRecord({
+            at: new Date().toISOString(),
             operation: args.operation,
             primaryModel: args.primaryModel,
-            primaryVerdict: args.primaryVerdict ?? null,
+            primaryVerdict: args.primaryVerdict,
             shadowModel: model,
             shadowVerdict,
-            agree: judgeVerdictsAgree(args.primaryVerdict, shadowVerdict),
             shadowMs: result.elapsedMs,
             status: result.status,
             retriedWithoutTemperature: result.retriedWithoutTemperature
           });
+          // The pm2 line stays for live tailing; the JSONL is what the readout reads.
+          console.log("[judge_shadow_arm]", record);
+          appendJudgeShadowRecord(record);
         })
         .catch(() => {
           // A shadow arm must never surface an error into the reply path.
