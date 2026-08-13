@@ -317,6 +317,72 @@ const store = {
         }
       },
       messages: []
+    },
+    // BRENT MARSHALL (+17169941544), rebuilt from the live store, 2026-08-13. `financeOutcome`
+    // went `needs_more_info` at 17:27:43Z off a manual outbound about DMV title paperwork; at
+    // 17:47:32Z the deal-progress route moved the thread into `in_process_deal`, which is
+    // `setFollowUpMode(conv, "manual_handoff", "in_process_deal")` + `stopFollowUpCadence`. The
+    // thread is HELD — nothing automated is talking finance at him — which is exactly what this
+    // check asks for, so it must not be reported just because the reason string is not
+    // `credit_app_needs_info`.
+    {
+      id: "conv_finance_in_process_deal",
+      leadKey: "+17160000011",
+      mode: "human",
+      leadOwner: { name: "Joe Hartrich" },
+      lead: {
+        leadRef: "FIN11",
+        firstName: "Brent",
+        lastName: "Riverside",
+        phone: "7160000011"
+      },
+      followUp: { mode: "manual_handoff", reason: "in_process_deal", updatedAt: isoMinutesAgo(60) },
+      followUpCadence: {
+        status: "stopped",
+        kind: "engaged",
+        stepIndex: 0,
+        contextTag: "finance_docs",
+        stopReason: "in_process_deal"
+      },
+      financeOutcome: {
+        status: "needs_more_info",
+        reasonText: "Manual outbound indicated finance/credit application needs more information.",
+        updatedAt: isoMinutesAgo(80)
+      },
+      messages: [
+        {
+          id: "msg_finance_in_process_deal",
+          direction: "out",
+          provider: "twilio",
+          at: isoMinutesAgo(79),
+          body:
+            "I will make sure the docking hardware is on the bike. As for Saturday I will have to confirm with you because we are in a situation with the DMV system."
+        }
+      ]
+    },
+    // The discriminating control for the fixture above: `manual_handoff` is only a hold while the
+    // cadence is actually stopped. A needs-more-info thread whose cadence is still RUNNING is the
+    // failure this check exists for — automation free to keep talking finance — and must still be
+    // a P1 no matter what the mode says.
+    {
+      id: "conv_finance_handoff_but_cadence_running",
+      leadKey: "+17160000012",
+      mode: "suggest",
+      leadOwner: { name: "Joe Hartrich" },
+      lead: {
+        leadRef: "FIN12",
+        firstName: "Dana",
+        lastName: "Lakeshore",
+        phone: "7160000012"
+      },
+      followUp: { mode: "manual_handoff", reason: "in_process_deal", updatedAt: isoMinutesAgo(60) },
+      followUpCadence: { status: "active", kind: "engaged", nextDueAt: isoMinutesAgo(-600) },
+      financeOutcome: {
+        status: "needs_more_info",
+        reasonText: "Lender asked for proof of income before moving forward.",
+        updatedAt: isoMinutesAgo(80)
+      },
+      messages: []
     }
   ],
   todos: []
@@ -327,10 +393,10 @@ const report = buildOutcomeQaReport(store, {
   sinceHours: 24
 });
 
-// 10 = the original 8 plus the two the superseded fixture carries (its finance outcome and the
-// later appointment outcome that supersedes it). Both are still INSPECTED; only the routing
-// verdict on the older one is withheld.
-assertCheck("outcome_count", report.summary.outcomeCount, 10);
+// 12 = the original 8, plus the two the superseded fixture carries (its finance outcome and the
+// later appointment outcome that supersedes it), plus the two in-process-deal fixtures. Every one
+// is still INSPECTED; only the routing verdict on a thread already held for staff is withheld.
+assertCheck("outcome_count", report.summary.outcomeCount, 12);
 assertCheck("missing_dealer_ride_thank_you_detected", hasIssue(report, "missing_dealer_ride_customer_thank_you"), true);
 assertCheck(
   "missing_dealer_ride_thank_you_still_fires_when_absent",
@@ -370,6 +436,19 @@ assertCheck(
   "finance_needs_info_superseded_by_later_outcome_is_not_a_finding",
   hasIssueForConv(report, "finance_needs_info_missing_manual_handoff", "conv_finance_superseded"),
   false
+);
+// A thread held for staff (manual handoff, cadence stopped) already satisfies what this check
+// asks for, whatever reason string parked it there.
+assertCheck(
+  "finance_needs_info_held_for_staff_is_not_a_finding",
+  hasIssueForConv(report, "finance_needs_info_missing_manual_handoff", "conv_finance_in_process_deal"),
+  false
+);
+// ...and the hold has to be real: a cadence still running is the failure the check exists for.
+assertCheck(
+  "finance_needs_info_still_fires_when_the_cadence_is_running",
+  hasIssueForConv(report, "finance_needs_info_missing_manual_handoff", "conv_finance_handoff_but_cadence_running"),
+  true
 );
 assertCheck("finance_unsafe_claim_detected", hasIssue(report, "finance_outcome_unsafe_specific_claim"), true);
 assertCheck("appointment_missing_action_detected", hasIssue(report, "appointment_outcome_missing_follow_up_action"), true);
