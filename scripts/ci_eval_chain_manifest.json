@@ -119,6 +119,7 @@
     "multi_intent_reply_advance:eval",
     "long_term_message:eval",
     "intent_handled:eval",
+    "intent_handled_human_mode:eval",
     "corpus_replay_flywheel:eval",
     "replay_unreachable_lead_exclusion:eval",
     "replay_fidelity:eval",
