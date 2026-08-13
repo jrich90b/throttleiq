@@ -15,14 +15,40 @@
  * redundant task is cheap; the current false-negative drops the lead. addTodo merges by
  * (conv, open, "followup") so repeat inbounds refresh one task instead of stacking.
  *
+ * WHICH TURNS COUNT AS "SUBSTANTIVE" — Joe ruled 2026-08-13: the BARE reading, not the wide one.
+ *
+ * Until then the exclusion was `isShortAckText`, a word list that asks only "does a courtesy word
+ * appear anywhere in a short sentence?". It swallowed whole messages that happened to end politely,
+ * and on a thread a rep already owns that means the rep is told nothing at all. Measured on the live
+ * store the day of the ruling: 39 human-mode inbound turns in 44 days (~0.9/day) were short-ack but
+ * NOT bare, and they include
+ *
+ *   "Ok. Friday. Afternoon"                                (a day + day-part — a soft commitment)
+ *   "Found a better offer. Thanks"                         (a lost sale, +13105956498)
+ *   "Oh okay I get out at 3 joe I should be able to stop today"
+ *   "Joe, theirs 62,500 miles on it. Thanks"               (an appraisal fact we asked for)
+ *
+ * plus courteous sign-offs ("Not a problem, sir thank you") that will now also raise a task. That
+ * cost is bounded and was accepted deliberately: `taskFulfillmentAutoClose` closes a
+ * "needs YOUR reply" task the moment the rep's next outbound goes out (43 ever / 0 open, median
+ * close 2.7 min), and addTodo merges by (conv, open, "followup") so repeats refresh one row.
+ *
+ * The gate is now `!humanModeDispositionShortAck` — isBareAcknowledgementText, which requires that
+ * NOTHING be left once courtesy words and filler are stripped. "Awesome" and "Ok thanks" stay
+ * silent (+17169400722, PR #695); anything carrying content reaches the owner. The two PARSER
+ * eligibility gates above keep the wide `humanModeShortAck`: they are cost gates deciding whether
+ * to spend an LLM call, and widening those buys nothing.
+ *
  * Pins (source-guard — the arm is inline wiring, not a pure decision fn):
  *  1. The terminus surfaces the task: addTodo("call", ..., conv.leadOwner, "followup") + records
- *     the route outcome, gated on !short-ack AND !watch-handled.
+ *     the route outcome, gated on !BARE-ack AND !watch-handled.
  *  2. It NEVER auto-drafts on this path (no publishLiveTwilioReply between the task and the
  *     empty-Response return).
  *  3. The watch-handled flag is declared and set inside the watch arm, so a watch-set turn does
  *     not double-task.
- *  4. The short-ack exclusion uses the canonical isShortAckText/isEmojiOnlyText helpers.
+ *  4. The ack exclusion uses the canonical helpers, never a bespoke regex — and the TASK gate reads
+ *     the bare one while the parser cost gates keep the wide one. Both halves are pinned, because
+ *     collapsing them back into one predicate is exactly how this regresses.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -53,8 +79,16 @@ assert.ok(
   "the arm records the human_mode_reengagement_reply_needed route outcome"
 );
 
-// 1b. Gated on NOT a short-ack AND NOT already handled as a watch.
-assert.ok(armBlock.includes("!humanModeShortAck"), "the task is skipped for short-acks/reactions");
+// 1b. Gated on NOT a BARE ack AND NOT already handled as a watch. The wide predicate here would
+// swallow "Ok. Friday. Afternoon" and tell the rep nothing (Joe, 2026-08-13).
+assert.ok(
+  armBlock.includes("!humanModeDispositionShortAck"),
+  "the task is skipped only for BARE acks/reactions, not any short polite sentence"
+);
+assert.ok(
+  !armBlock.includes("!humanModeShortAck"),
+  "the wide short-ack predicate must not gate the owner task — it hides substantive turns"
+);
 assert.ok(
   armBlock.includes("!humanModeInventoryWatchHandled"),
   "the task is skipped when the turn was already surfaced as an inventory watch"
@@ -83,18 +117,20 @@ assert.ok(
   "the watch arm marks the turn handled so the terminus does not also task it"
 );
 
-// 4. The short-ack exclusion uses the canonical comprehension-safe helpers, never a bespoke regex.
-//    Since 2026-08-13 (+17169400722, Joe: "why did this create a task when the customer just said
-//    awesome?") it ALSO reuses `humanModeDispositionShortAck` — the same turn already read by
-//    isBareAcknowledgementText a few hundred lines up — so a turn that is nothing but a courtesy
-//    word stops tasking the owner. Reused, not re-called: one bare-ack gate site is a rule of its
-//    own (bare_acknowledgement_disposition:eval). Content after the courtesy word is unaffected:
-//    "Awesome let's do it" is not bare and still surfaces. See bare_ack_courtesy:eval.
+// 4. The ack exclusions use the canonical comprehension-safe helpers, never a bespoke regex, and
+//    the two families stay SEPARATE: the wide predicate is a cost gate for the parsers, the bare
+//    one gates the owner's task. `humanModeShortAck` still exists and still folds the bare reading
+//    in, so a bare turn skips the parser spend too — it just no longer decides the task.
 assert.ok(
   apiIndex.includes(
     "const humanModeShortAck = isShortAckText(humanModeText) || isEmojiOnlyText(humanModeText) || humanModeDispositionShortAck;"
   ),
   "the short-ack gate reuses the canonical isShortAckText/isEmojiOnlyText helpers plus the bare-ack reading"
+);
+// The parser cost gates keep the wide predicate — widening those buys nothing but LLM spend.
+assert.ok(
+  apiIndex.includes("!humanModeShortAck;"),
+  "the parser eligibility gates still read the wide short-ack predicate"
 );
 
 console.log(
