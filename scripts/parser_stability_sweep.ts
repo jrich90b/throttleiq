@@ -146,6 +146,7 @@ async function main(): Promise<void> {
     return i >= 0 ? String(argv[i + 1] ?? "") : null;
   };
   const runs = Math.max(1, Number(arg("--runs") ?? 6) || 6);
+  const perturbRuns = Math.max(1, Number(arg("--perturb-runs") ?? 3) || 3);
   const only = arg("--case");
   const asJson = argv.includes("--json");
 
@@ -173,11 +174,15 @@ async function main(): Promise<void> {
     for (let i = 0; i < runs; i++) {
       observations.push({ caseId: c.id, variantId: "base", decision: await c.run(c.text) });
     }
-    // Perturbed: each surface rewrite once. This is the FRAGILITY measurement.
+    // Perturbed: each surface rewrite several times. Running a perturbation ONCE cannot tell
+    // deterministic fragility from a variant that merely tips the reader into wobbling — the first
+    // version did exactly that and reported a one-run difference as a defect.
     for (const p of PERTURBATIONS) {
       const text = p.apply(c.text);
       if (text === c.text) continue; // a no-op rewrite proves nothing
-      observations.push({ caseId: c.id, variantId: p.id, decision: await c.run(text) });
+      for (let i = 0; i < perturbRuns; i++) {
+        observations.push({ caseId: c.id, variantId: p.id, decision: await c.run(text) });
+      }
     }
   }
 
@@ -192,6 +197,7 @@ async function main(): Promise<void> {
   const report = {
     generatedAt: new Date().toISOString(),
     runsPerCase: runs,
+    runsPerPerturbation: perturbRuns,
     perturbations: PERTURBATIONS.map(p => p.id),
     summary,
     verdicts,
@@ -234,7 +240,8 @@ async function main(): Promise<void> {
     if (!v.measured) {
       console.log("          reader did not run — a flag is off or a key is missing. NOT a wrong answer.");
     }
-    if (v.fragileUnder.length) console.log(`          breaks under: ${v.fragileUnder.join(", ")}`);
+    if (v.fragileUnder.length) console.log(`          breaks EVERY time under: ${v.fragileUnder.join(", ")}`);
+    if (v.unstableUnder.length) console.log(`          wobbles under: ${v.unstableUnder.join(", ")}`);
   }
   console.log(`\nReport written: ${path.join(dir, "latest.json")}`);
   // Always exit 0: this is an instrument, not a gate. A finding here opens a slice, it does not
