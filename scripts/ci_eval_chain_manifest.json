@@ -314,6 +314,7 @@
     "web_text_widget:eval",
     "web_widget_department_ack:eval",
     "dept_widget_bike_clarify:eval",
+    "parser_stability_sweep:eval",
     "inbound_pipeline:eval",
     "workflow_regression:eval",
     "orchestrator_regression:eval",
