@@ -116,6 +116,7 @@
     "voice_charter:eval",
     "voice_banned_phrase:eval",
     "template_charter_clean:eval",
+    "post_sale_compliment_reply:eval",
     "multi_intent_reply_advance:eval",
     "long_term_message:eval",
     "intent_handled:eval",

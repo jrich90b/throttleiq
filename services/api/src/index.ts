@@ -967,7 +967,8 @@ import {
   shouldCarryLeadYearForRequestedModel,
   shouldRebaseWeekdayReplyToPriorNextWeek,
   shouldSuppressInitialInventoryPhotoAppend,
-  shouldSuppressVoiceCallbackTodoForAppointment
+  shouldSuppressVoiceCallbackTodoForAppointment,
+  buildComplimentOnlyReply
 } from "./domain/workflowRegressionGuards.js";
 import {
   HELD_GUARD_WATCH_NOTE,
@@ -27068,10 +27069,6 @@ function isComplimentOnlyText(text: string): boolean {
   const steppingBackSignal = isSteppingBackDispositionText(t) || /\bnot ready\b/.test(t);
   const watchIntent = isWatchConfirmationIntentText(t);
   return !explicitAsk && !watchIntent && !steppingBackSignal;
-}
-
-function buildComplimentReply(): string {
-  return "Glad you like it! I can send more photos or a walkaround video. Anything specific you want to see?";
 }
 
 function isDirectMediaRequestText(text: string): boolean {
@@ -57711,7 +57708,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       callbackSignal: regenParserCallbackIntent
     })
   ) {
-    const reply = buildComplimentReply();
+    const reply = buildComplimentOnlyReply({
+      suppression: { appointment: conv.appointment, alreadyPurchased: !!conv.sale }
+    });
     if (channel === "email") {
       return respondWithEmailRegeneratedDraft(reply);
     }
@@ -61743,7 +61742,9 @@ if (authToken && signature) {
       schedulingSignal: complimentHasSchedulingSignal
     })
   ) {
-    const reply = buildComplimentReply();
+    const reply = buildComplimentOnlyReply({
+      suppression: { appointment: conv.appointment, alreadyPurchased: !!conv.sale }
+    });
     return publishLiveTwilioReply(reply);
   }
 

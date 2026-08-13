@@ -394,6 +394,38 @@ export function allowComplimentOnlyReply(args: {
   );
 }
 
+/**
+ * The compliment-only reply, in ONE place, judged by the SAME C1.7 referee the composer uses.
+ *
+ * MEASURED 2026-08-13 against the live store: this template has fired exactly TWICE across 852
+ * conversations, and BOTH times the customer had already BOUGHT the bike they were complimenting.
+ * +17169570162 tapped a ❤️ on his post-sale thank-you the day after taking delivery of a Road
+ * Glide Special and was AUTO-SENT "I can send more photos or a walkaround video" — for the bike in
+ * his garage. +17169086716 wrote "Enjoyed the ride home.. hoping to put some miles on the Deadwood
+ * nxt week" and drew the same offer; Joe deleted the clause by hand, sent "Glad you like it!", and
+ * filed the report: "should have not asked follow up questions. if you look the bike is already
+ * sold."
+ *
+ * So the shopping offer is not a fallback that occasionally lands wrong — its entire measured
+ * population is owners. Charter C1.7's `alreadyPurchased` exception is decided in CODE and binds
+ * our deterministic templates exactly as it binds the LLM composer, so the warmth stays and the
+ * push goes. The suppressed wording is Joe's own from that thread. Asking the shared referee (not
+ * a second `!!conv.sale` test) is what stops this drifting from the composer, and it carries the
+ * booked-appointment and hardship exceptions for free.
+ */
+export function buildComplimentOnlyReply(args?: {
+  suppression?: {
+    needsEmpathy?: boolean | null;
+    dispositionClosing?: boolean | null;
+    alreadyPurchased?: boolean | null;
+    appointment?: unknown;
+  };
+}): string {
+  const warmth = "Glad you like it!";
+  if (advanceEveryReplySuppressed(args?.suppression ?? {})) return warmth;
+  return `${warmth} I can send more photos or a walkaround video. Anything specific you want to see?`;
+}
+
 export function isCloseoutSignoffNoResponseText(textRaw: string | null | undefined): boolean {
   const text = String(textRaw ?? "")
     .toLowerCase()
