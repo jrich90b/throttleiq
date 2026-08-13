@@ -105,8 +105,22 @@ export function collectDealerContacts(args: { users?: any; dealerProfile?: any }
   return { phones, emails, emailDomains };
 }
 
+/**
+ * Is this address the DEALERSHIP'S own rather than a customer's?
+ *
+ * Exported so the identity join (`domain/leadIdentity.ts`) asks the same question this audit
+ * asks, of the same dealer records — one definition, not two that can drift. Both callers
+ * enforce the same 2026-08-04 ruling: a rep's work address sitting in a lead record does not
+ * make it that customer's contact.
+ */
+export const isDealerOwnedEmail = (email: string, dealer: DealerContacts): boolean => {
+  const text = String(email ?? "").trim().toLowerCase();
+  if (!text) return false;
+  return dealer.emails.has(text) || dealer.emailDomains.has(emailDomain(text));
+};
+
 const isDealerEmail = (email: string, dealer: DealerContacts): boolean =>
-  dealer.emails.has(email) || dealer.emailDomains.has(emailDomain(email));
+  isDealerOwnedEmail(email, dealer);
 
 const isDealerPhone = (phone: string, dealer: DealerContacts): boolean => dealer.phones.has(phone);
 

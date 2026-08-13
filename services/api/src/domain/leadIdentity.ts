@@ -22,10 +22,29 @@
  *
  * The rep-address half of this was already ruled on 2026-08-04 for the leak audit
  * (`crossLeadLeak.ts` deliberately refuses to treat a rep's work address as a customer's
- * contact) — the identity join never got the same memo. This module fixes the half that is
- * decidable WITHOUT the dealer profile: a value that is not an email address at all.
- * Excluding the dealer's own domain needs `collectDealerContacts`, which is async here, and is
- * deliberately left for its own slice rather than half-built.
+ * contact) — the identity join never got the same memo. The first cut of this module fixed only
+ * the half decidable WITHOUT the dealer profile: a value that is not an email address at all.
+ *
+ * THE OTHER HALF, 2026-08-13 — and it was the BIGGER one. Verifying that first fix on the live
+ * store listed every email shared by more than one conversation, and the placeholder group it had
+ * just fixed was not the largest: `gio@<dealer-domain>` — a rep's own work address, in the
+ * dealership's own staff roster — sat in `lead.email` on **18 unrelated customers**, fed by
+ * `Kenect - Kenect Leads` and `AutoDealers.Digital`. The join fused all 18 into one person; 16
+ * were closed and 12 carried the `cross_channel:` fingerprint of the join firing. No placeholder
+ * test can ever catch it, because it is a real, well-formed, genuinely-ours address.
+ *
+ * Joe ruled it the same day, plainly: *"those emails should not be in the customers lead"*.
+ *
+ * So the dealer check now runs here too, against the SAME `DealerContacts` the leak audit uses
+ * (`collectDealerContacts` — the dealer's own roster + profile, no hardcoded domain, so it stays
+ * portable). It is passed IN rather than fetched: the three consumers of this join are synchronous
+ * side-effect paths, and making them async to reach an async loader would ripple through
+ * `stopRelatedCadences` and every one of its callers. The caller hands over a snapshot instead.
+ *
+ * FAIL DIRECTION, stated exactly: `dealerContacts` is OPTIONAL, and when it is absent this
+ * behaves precisely as it did before — so the worst case of a cold or empty snapshot is today's
+ * behaviour, never worse. When present it can only REMOVE a join, and removing a join can only
+ * skip a cross-thread side effect, never invent one.
  *
  * Deterministic on purpose — AGENTS.md allows deterministic code for invariant guards, and
  * "n/a" is not a comprehension question. Fail direction is safe by construction: refusing a
@@ -35,6 +54,9 @@
  * phones only 3 were shared, and all 3 were genuine duplicates of the same number. There is no
  * placeholder-phone problem to fix, so this does not invent a guard for one.
  */
+
+import { isDealerOwnedEmail, type DealerContacts } from "./crossLeadLeak.js";
+import { getDealerContactsSnapshot } from "./dealerContactsSnapshot.js";
 
 /** Values a lead feed writes into an email field when it has no email. Not addresses. */
 const NON_IDENTIFYING_EMAIL_VALUES = new Set([
@@ -82,12 +104,17 @@ export type LeadIdentity = { email?: string; phone?: string };
 
 /**
  * The email/phone a conversation is identified BY. `normalizePhone` is injected so this shares
- * one definition of "a phone" with its caller instead of quietly growing a second one.
+ * one definition of "a phone" with its caller instead of quietly growing a second one, and
+ * `dealerContacts` is injected for the same reason — it is the SAME record set
+ * `findCrossLeadLeaks` judges against, built by `collectDealerContacts` from the dealer's own
+ * roster and profile. Omit it and the dealer-owned check simply does not fire: this stays exactly
+ * as safe as it was before the argument existed, never less.
  */
 export function resolveLeadIdentity(
   conv: any,
   event: { from?: string } | undefined,
-  normalizePhone: (raw: string) => string
+  normalizePhone: (raw: string) => string,
+  dealerContacts: DealerContacts = getDealerContactsSnapshot()
 ): LeadIdentity {
   const leadKey = typeof conv?.leadKey === "string" ? conv.leadKey.trim() : "";
   const eventFrom = String(event?.from ?? "").trim();
@@ -102,6 +129,9 @@ export function resolveLeadIdentity(
     const text = String(candidate ?? "").trim();
     if (!text) continue;
     if (isNonIdentifyingLeadEmail(text)) continue;
+    // A DEALER address is not a customer's, so it cannot identify one. Joe, 2026-08-13:
+    // "those emails should not be in the customers lead". See the module header for the 18.
+    if (dealerContacts && isDealerOwnedEmail(text, dealerContacts)) continue;
     email = text.toLowerCase();
     break;
   }
@@ -128,16 +158,17 @@ export function findRelatedConversations(
   conv: any,
   all: any[],
   event: { from?: string } | undefined,
-  normalizePhone: (raw: string) => string
+  normalizePhone: (raw: string) => string,
+  dealerContacts: DealerContacts = getDealerContactsSnapshot()
 ): any[] {
-  const { email, phone } = resolveLeadIdentity(conv, event, normalizePhone);
+  const { email, phone } = resolveLeadIdentity(conv, event, normalizePhone, dealerContacts);
   // Fast path only — NOT the guard. With no identity the filter below already matches nothing,
   // and the eval confirms that by deleting this line and still passing. Kept because scanning
   // every conversation to learn that is wasted work on a store this size.
   if (!email && !phone) return [];
   return (all ?? []).filter(other => {
     if (!other || other.id === conv?.id) return false;
-    const ids = resolveLeadIdentity(other, undefined, normalizePhone);
+    const ids = resolveLeadIdentity(other, undefined, normalizePhone, dealerContacts);
     const emailMatch = email && ids.email && ids.email === email;
     const phoneMatch = phone && ids.phone && ids.phone === phone;
     return !!(emailMatch || phoneMatch);
