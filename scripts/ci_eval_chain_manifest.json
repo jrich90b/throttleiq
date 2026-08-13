@@ -136,6 +136,7 @@
     "cadence_template_voice:eval",
     "cadence_invite_ab:eval",
     "model_ab:eval",
+    "judge_shadow_durable_log:eval",
     "openai_usage_pricing:eval",
     "model_authority:eval",
     "first_touch_autosend:eval",
