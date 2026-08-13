@@ -425,6 +425,7 @@
     "open_critic_watch_alert_scope:eval",
     "reported_issue:eval",
     "thumbs_down_action:eval",
+    "thumbs_down_action_disposition:eval",
     "closed_watch_pause:eval",
     "anomaly_classifier:eval",
     "tlp_autosend_coverage:eval",
