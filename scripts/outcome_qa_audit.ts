@@ -664,9 +664,33 @@ function buildFindings(cases: OutcomeCase[]): OutcomeFinding[] {
           { followUpReason: row.followUpReason, cadenceStatus: row.cadenceStatus }
         );
       }
+      // WHAT THIS CHECK ACTUALLY ASKS is in its own title: is the thread HELD for staff, so no
+      // automation keeps talking finance at the customer? `credit_app_needs_info` is one way to
+      // be in that state, not the definition of it. A thread parked in `manual_handoff` with its
+      // cadence NOT running is held by construction — drafts are quiet and the owner owns it —
+      // whatever reason string put it there.
+      //
+      // THE PHANTOM this fixes. Brent Marshall (+17169941544) recorded
+      // `financeOutcome.needs_more_info` at 2026-08-13T17:27:43Z (a manual outbound about DMV
+      // title paperwork). Twenty minutes later, at 17:47:32Z, the deal-progress route moved the
+      // whole thread into `in_process_deal` — `setFollowUpMode(conv, "manual_handoff",
+      // "in_process_deal")` plus `stopFollowUpCadence` (index.ts) — because he had bought the
+      // bike and the thread was delivery logistics. The single `conv.followUp` slot then read
+      // `in_process_deal`, the reason regex missed, and a P1 fired on a thread that is quieter
+      // and safer than the state the check was asking for. It was the release gate's
+      // `outcome QA P1 1 > 0` failure for 2026-08-13, and the readiness bar's operability P1.
+      //
+      // Deliberately NOT a blanket widening: an ACTIVE cadence still has to name a credit reason,
+      // so the failure this check exists for — automation left running on a needs-more-info
+      // finance thread, free to guess terms — fires exactly as it did before. The sibling
+      // `declined` check above is untouched: there the desired end state is an ACTIVE long-term
+      // cadence, so a manual handoff is a genuine miss of its invariant, not a stricter hold.
+      const heldForStaffReview =
+        row.followUpMode === "manual_handoff" && String(row.cadenceStatus ?? "").toLowerCase() !== "active";
       if (
         status === "needs_more_info" &&
         !supersededRouting &&
+        !heldForStaffReview &&
         !/credit_app_needs_info/.test(String(row.followUpReason ?? ""))
       ) {
         push(
