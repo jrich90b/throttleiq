@@ -123,16 +123,66 @@ async function main(): Promise<void> {
     }
   }
 
+  // Settled work must not come back every morning. This feed is generated INDEPENDENTLY of
+  // anomaly_loop_detect, and until now only detect read the disposition ledger — so a note a
+  // routine disposed weeks ago kept reappearing here as an open staff worklist item. Measured
+  // 2026-08-12: all 21 "open" items had already been actioned (1-13 staff outbounds after the 👎,
+  // ages 6-20 days) and 20 of the 21 keys were already in dispositions.json, which is exactly
+  // why NONE of them were in the digest's work orders. Same partition, same fail-direction as
+  // detect: regressions stay (tagged), any error keeps every finding.
+  let suppressedByDisposition = 0;
+  try {
+    const { parseDispositionLedgerPayload, partitionByDispositions } = await import(
+      "../services/api/src/domain/dispositionLedger.ts"
+    );
+    const dispositionsPath = path.join(reportRoot, "anomaly_loop", "dispositions.json");
+    if (fs.existsSync(dispositionsPath)) {
+      const ledger = parseDispositionLedgerPayload(JSON.parse(fs.readFileSync(dispositionsPath, "utf8")));
+      if (ledger && ledger.size) {
+        const part = partitionByDispositions(anomalies, { ledger });
+        if (part.suppressed.length || part.regressions.length) {
+          anomalies.length = 0;
+          anomalies.push(
+            ...part.kept,
+            // A disposed key that re-occurred AFTER its fix boundary is a failed fix, not settled
+            // work — it stays in the feed, marked, exactly as detect keeps it.
+            ...part.regressions.map(r => ({
+              ...(r.anomaly as any),
+              regressionOfDisposed: true,
+              dispositionReason: r.reason
+            }))
+          );
+          suppressedByDisposition = part.suppressed.length;
+          staffAction = anomalies.length;
+          for (const s of part.suppressed.slice(0, 20)) {
+            console.log(`   - suppressed ${String(s.anomaly.convId ?? "")} — ${s.reason}`);
+          }
+        }
+      }
+    }
+  } catch {
+    /* malformed ledger / any error → keep every finding (fail toward surfacing, never toward hiding) */
+  }
+
   fs.mkdirSync(outDir, { recursive: true });
   fs.writeFileSync(
     path.join(outDir, "latest.json"),
     JSON.stringify(
-      { generatedAt: new Date().toISOString(), source: storePath, summary: { scanned, staffAction }, anomalies },
+      {
+        generatedAt: new Date().toISOString(),
+        source: storePath,
+        summary: { scanned, staffAction, suppressedByDisposition },
+        anomalies
+      },
       null,
       2
     )
   );
-  console.log(`thumbs-down action sweep — ${scanned} sent 👎 note(s), ${staffAction} staff-action → ${path.join(outDir, "latest.json")}`);
+  console.log(
+    `thumbs-down action sweep — ${scanned} sent 👎 note(s), ${staffAction} staff-action` +
+      (suppressedByDisposition ? `, ${suppressedByDisposition} already disposed (suppressed)` : "") +
+      ` → ${path.join(outDir, "latest.json")}`
+  );
 }
 
 main().catch(err => {
