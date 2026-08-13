@@ -518,6 +518,32 @@ export function resolveDealerTransactionPolicyRoute(
   };
 }
 
+/**
+ * Is this the kind of lead we may offer to put on the sales schedule after answering hours?
+ * Moved out of index.ts verbatim, beside the gate that consumes its result. The department is
+ * passed in rather than derived here — the handler owns that read.
+ */
+export function isSalesLeadForBusinessHours(input: {
+  conv: any;
+  department: string | null | undefined;
+  isServiceLeadOverride?: boolean;
+}): boolean {
+  if (input.isServiceLeadOverride === true) return false;
+  const department = input.department;
+  if (department === "service" || department === "parts" || department === "apparel") return false;
+  const bucket = String(input.conv?.classification?.bucket ?? "").toLowerCase();
+  if (bucket === "service" || bucket === "parts" || bucket === "apparel" || bucket === "other") {
+    return false;
+  }
+  return (
+    !!input.conv?.lead?.vehicle?.model ||
+    !!input.conv?.lead?.vehicle?.year ||
+    !!input.conv?.lead?.tradeVehicle?.model ||
+    !!input.conv?.lead?.tradeVehicle?.description ||
+    (!!bucket && !["service", "parts", "apparel", "other"].includes(bucket))
+  );
+}
+
 export function canInviteScheduleAfterBusinessHours(input: BusinessHoursScheduleInviteInput): boolean {
   if (!input.isSalesLead) return false;
   if (input.schedulingAllowed === false) return false;
@@ -527,15 +553,24 @@ export function canInviteScheduleAfterBusinessHours(input: BusinessHoursSchedule
   return true;
 }
 
+/**
+ * `mayClaimOpenHours` is the hours invariant applied to this door's positive claim (see
+ * `mayClaimTimeIsDuringOpenHours`). The turn carrying a time SIGNAL was never enough: the signal
+ * says the customer named a clock time, not that we are open at it. When we cannot substantiate
+ * the claim we fall through to the invitation this function has always used for the no-time case —
+ * true whatever the hours are, and it still ends on the advancing question. Callers that pass
+ * nothing keep today's behaviour, which is why the flag is optional.
+ */
 export function decorateBusinessHoursReply(input: {
   baseReply: string;
   decision: InboundPreParserDecision;
   canInviteSchedule: boolean;
+  mayClaimOpenHours?: boolean;
 }): string {
   const baseReply = normalizeText(input.baseReply);
   if (!baseReply || !input.canInviteSchedule) return baseReply;
   if (/\bclosed\b/i.test(baseReply)) return baseReply;
-  if (input.decision.hasScheduleTimeSignal) {
+  if (input.decision.hasScheduleTimeSignal && input.mayClaimOpenHours !== false) {
     return `${baseReply} That time is during open hours, but I still need to check appointment availability before locking it in.`;
   }
   return `${baseReply} If you're thinking about coming in, what time works best? I can put you down on the schedule.`;

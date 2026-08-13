@@ -844,7 +844,7 @@ import { buildShortListClarifierReply as buildShortListClarifierReplyPure, build
 import { budgetFinancingDeferralHint, budgetGatedOnFinancingConfidenceMin, buildBudgetGatedOnFinancingReply, parseBudgetFinancingDeferralWithLLM } from "./domain/budgetFinancingDeferral.js";
 import { evaluateEnoughInfoHandoff, moneyPathIsKnown, parseBikeScopeWithLLM } from "./domain/salesHandoffReadiness.js";
 import { computeMidWeekFollowUpDate, parseFutureTimeframe, parseRelativeDaysOrWeeks, parseRelativeDurationCount } from "./domain/futureTimeframe.js";
-import { closingTimeMsForInstant, dayKeyLocal, formatBusinessHoursForReply, formatPreferredTimeForReply, mayStateTokenAsWorkable, preferredDateTimeNotedTail, statablePreferredTimeText, statableTimeReply, type BusinessWeekHours } from "./domain/businessHoursGuard.js";
+import { businessHoursOpenClaimTail, buildBusinessHoursQuestionReplyText, closingTimeMsForInstant, dayKeyLocal, formatBusinessHoursForReply, formatPreferredTimeForReply, mayClaimTimeIsDuringOpenHours, mayStateTokenAsWorkable, preferredDateTimeNotedTail, statablePreferredTimeText, statableTimeReply, type BusinessWeekHours } from "./domain/businessHoursGuard.js";
 import {
   resolveAcceptedVisitTimeOffer,
   shouldOfferTimesAfterAcceptance
@@ -860,6 +860,7 @@ import {
   decorateBusinessHoursReply,
   formatBusinessHoursProposalTime,
   formatTime12h,
+  isSalesLeadForBusinessHours,
   shouldParseBusinessHoursQuestion,
   resolveDealerTransactionPolicyRoute,
   resolveDealerTransactionPolicySource,
@@ -22917,51 +22918,34 @@ function resolveRequestedDayForText(text: string, timeZone: string): RequestedDa
   });
 }
 
+// Both halves of the hours answer now compose in domain/businessHoursGuard.ts, beside the
+// invariant they read; these wrappers only fetch config. The tail is a POSITIVE claim about the
+// store, so it is gated by mayClaimTimeIsDuringOpenHours rather than by the mere presence of a
+// time token, and its day comes from the SAME resolution as the base reply — a second private day
+// resolver here is exactly the divergence #627 removed from the weekday label (+17169902571).
 async function buildBusinessHoursQuestionReply(text: string): Promise<string> {
   const cfg = await getSchedulerConfigHot();
   const dealerProfile = await getDealerProfileHot();
-  const country = dealerProfile?.address?.country ?? null;
-  const requestedDay = resolveRequestedDayForText(String(text ?? ""), cfg.timezone);
-  const hoursLine = formatBusinessHoursForReply(cfg.businessHours, country);
-  if (requestedDay.day && requestedDay.dayPhrase) {
-    const dayHours = cfg.businessHours?.[requestedDay.day];
-    if (dayHours?.open && dayHours?.close) {
-      const open = formatTime12h(dayHours.open);
-      const close = formatTime12h(dayHours.close);
-      return `Our hours ${requestedDay.dayPhrase} are ${open}–${close}.`;
-    }
-    return `We’re closed ${requestedDay.dayPhrase}.`;
-  }
-  if (hoursLine) return `Our hours this week are ${hoursLine}.`;
-  return "Our hours vary by day. What day are you thinking?";
+  return buildBusinessHoursQuestionReplyText({
+    requestedDay: resolveRequestedDayForText(String(text ?? ""), cfg.timezone),
+    businessHours: cfg.businessHours,
+    country: dealerProfile?.address?.country ?? null
+  });
 }
 
-function appendBusinessHoursAppointmentContext(replyRaw: string, textRaw: string): string {
-  const reply = String(replyRaw ?? "").trim();
+async function appendBusinessHoursAppointmentContext(replyRaw: string, textRaw: string): Promise<string> {
   const text = String(textRaw ?? "");
   const timeToken = extractTimeToken(text);
-  if (!reply || !timeToken || /^we[’']?re closed\b/i.test(reply)) return reply;
-  const day = parseDayOfWeek(text)?.day;
-  const dayLabel = day ? day.replace(/^\w/, c => c.toUpperCase()) : "that day";
-  const timeLabel = formatBusinessHoursProposalTime(timeToken);
-  return `${reply} ${dayLabel} at ${timeLabel} is during open hours, but I still need to check appointment availability before locking it in.`;
-}
-
-function isSalesLeadForBusinessHours(conv: any, isServiceLeadOverride?: boolean): boolean {
-  if (isServiceLeadOverride === true) return false;
-  const department = getConversationDepartment(conv);
-  if (department === "service" || department === "parts" || department === "apparel") return false;
-  const bucket = String(conv?.classification?.bucket ?? "").toLowerCase();
-  if (bucket === "service" || bucket === "parts" || bucket === "apparel" || bucket === "other") {
-    return false;
-  }
-  return (
-    !!conv?.lead?.vehicle?.model ||
-    !!conv?.lead?.vehicle?.year ||
-    !!conv?.lead?.tradeVehicle?.model ||
-    !!conv?.lead?.tradeVehicle?.description ||
-    (!!bucket && !["service", "parts", "apparel", "other"].includes(bucket))
-  );
+  const cfg = await getSchedulerConfigHot();
+  const requestedDay = resolveRequestedDayForText(text, cfg.timezone);
+  return businessHoursOpenClaimTail({
+    reply: replyRaw,
+    dayKey: requestedDay.day,
+    dayLabel: requestedDay.label,
+    timeToken,
+    timeLabel: timeToken ? formatBusinessHoursProposalTime(timeToken) : "",
+    businessHours: cfg.businessHours
+  });
 }
 
 /**
@@ -23028,17 +23012,25 @@ async function buildBusinessHoursPipelineReply(
     });
   if (!decision) return reply;
 
-  const isSalesLead = isSalesLeadForBusinessHours(conv, opts?.isServiceLead);
+  const isSalesLead = isSalesLeadForBusinessHours({ conv, department: getConversationDepartment(conv), isServiceLeadOverride: opts?.isServiceLead });
   const canInviteSchedule = canInviteScheduleAfterBusinessHours({
     isSalesLead,
     schedulingAllowed: opts?.schedulingAllowed,
     followUpMode: conv?.followUp?.mode,
     outboundHoldNotice: opts?.outboundHoldNotice
   });
+  const hoursCfg = await getSchedulerConfigHot();
   return decorateBusinessHoursReply({
     baseReply: reply,
     decision,
-    canInviteSchedule
+    canInviteSchedule,
+    // Same invariant as the other hours door: "That time is during open hours" is a claim, and
+    // this one never named the day at all, so it could only ever be substantiated by resolving it.
+    mayClaimOpenHours: mayClaimTimeIsDuringOpenHours({
+      dayKey: resolveRequestedDayForText(rawText, hoursCfg.timezone).day,
+      timeToken: extractTimeToken(rawText),
+      businessHours: hoursCfg.businessHours
+    })
   });
 }
 
@@ -59676,7 +59668,7 @@ if (authToken && signature) {
   // parser included) so one reading of the turn governs both. Reachability is unchanged for every
   // turn the referee still claims.
   if (event.provider === "twilio" && livePreParserDecision?.kind === "business_hours_question") {
-    const reply = appendBusinessHoursAppointmentContext(
+    const reply = await appendBusinessHoursAppointmentContext(
       await buildBusinessHoursQuestionReply(event.body ?? ""),
       event.body ?? ""
     );

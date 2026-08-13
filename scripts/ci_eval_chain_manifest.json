@@ -337,6 +337,7 @@
     "day_part_only_schedule:eval",
     "off_hours_time_guard:eval",
     "business_hours_requested_day:eval",
+    "business_hours_open_claim:eval",
     "scheduler_closed_date:eval",
     "appointment_outcome_followup:eval",
     "appointment_calendar_sync:eval",

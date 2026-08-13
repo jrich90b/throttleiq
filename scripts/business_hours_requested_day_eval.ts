@@ -173,10 +173,28 @@ ok(
   indexSrc.includes("resolveRequestedDay"),
   "index.ts no longer asks the referee for the requested day"
 );
-// The hours reply must take BOTH the day and its phrase from the same resolution.
+// 2026-08-13: the hours reply COMPOSITION moved to domain/businessHoursGuard.ts, beside the
+// invariant that guards its appointment tail (index.ts was on its size ceiling). This assertion's
+// premise is untouched — one resolution feeds both the lookup and the label — so it follows the
+// code to its new home rather than being deleted. index.ts must still hand the whole resolution
+// over, which the next assertion pins; a caller passing a bare day string could reintroduce the
+// split this eval exists to prevent.
+const guardSrc = fs.readFileSync(
+  path.join(here, "../services/api/src/domain/businessHoursGuard.ts"),
+  "utf8"
+);
 ok(
-  indexSrc.includes("Our hours ${requestedDay.dayPhrase} are"),
-  "the hours line no longer prints the resolver's own phrase"
+  guardSrc.includes("Our hours ${dayPhrase} are"),
+  "the hours line no longer prints the phrase that came with the day it looked up"
+);
+ok(
+  indexSrc.includes("requestedDay: resolveRequestedDayForText"),
+  "index.ts no longer hands the whole day resolution to the reply builder"
+);
+// The old in-handler composition must not come back alongside the shared one.
+ok(
+  !indexSrc.includes("Our hours ${requestedDay.dayPhrase} are"),
+  "index.ts is composing the hours line again — one builder, or the two can drift apart"
 );
 
 console.log(`business_hours_requested_day:eval OK (${n} assertions)`);
