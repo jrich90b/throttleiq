@@ -1203,6 +1203,7 @@ import {
   listSuppressions,
   removeSuppression
 } from "./domain/suppressionStore.js";
+import { findRelatedConversations, resolveLeadIdentity } from "./domain/leadIdentity.js";
 import { buildKpiOverview } from "./domain/kpiAnalytics.js";
 import { registerCopilotRoutes } from "./routes/copilot.js";
 import { isPhoneLogConversation } from "./domain/phoneLogLead.js";
@@ -9109,43 +9110,15 @@ function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) {
   return aStart < bEnd && aEnd > bStart;
 }
 
-function firstNonBlank(...values: unknown[]): string {
-  for (const value of values) {
-    const text = String(value ?? "").trim();
-    if (text) return text;
-  }
-  return "";
-}
-
+// Identity + the cross-thread join live in domain/leadIdentity.ts: a feed placeholder
+// ("Email: n/a" on every walk-in ADF) is NOT a customer, and joining on one stopped four
+// leads' cadences with another customer's booking. See that module for the measurement.
 function getLeadIdentifiers(conv: any, event?: { from?: string }) {
-  const leadKey = typeof conv?.leadKey === "string" ? conv.leadKey.trim() : "";
-  const eventFrom = String(event?.from ?? "").trim();
-  const leadEmailRaw = firstNonBlank(
-    conv?.lead?.email,
-    leadKey.includes("@") ? leadKey : "",
-    eventFrom.includes("@") ? eventFrom : ""
-  );
-  const leadPhoneRaw = firstNonBlank(
-    conv?.lead?.phone,
-    leadKey && !leadKey.includes("@") ? leadKey : "",
-    eventFrom && !eventFrom.includes("@") ? eventFrom : ""
-  );
-
-  const email = String(leadEmailRaw ?? "").trim().toLowerCase() || undefined;
-  const phone = leadPhoneRaw ? normalizePhone(String(leadPhoneRaw)) : undefined;
-  return { email, phone };
+  return resolveLeadIdentity(conv, event, normalizePhone);
 }
 
 function getRelatedConversations(conv: any, event?: { from?: string }) {
-  const { email, phone } = getLeadIdentifiers(conv, event);
-  if (!email && !phone) return [];
-  return getAllConversations().filter(other => {
-    if (!other || other.id === conv.id) return false;
-    const ids = getLeadIdentifiers(other);
-    const emailMatch = email && ids.email && ids.email === email;
-    const phoneMatch = phone && ids.phone && ids.phone === phone;
-    return !!(emailMatch || phoneMatch);
-  });
+  return findRelatedConversations(conv, getAllConversations(), event, normalizePhone);
 }
 
 function isStickyClosedJourney(conv: Conversation | null | undefined): boolean {

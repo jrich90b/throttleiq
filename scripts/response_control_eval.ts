@@ -5,6 +5,7 @@ import {
   isResponseControlParserConfidentDecision,
   isResponseControlNoResponseAccepted
 } from "../services/api/src/domain/transitionSafety.ts";
+import { resolveLeadIdentity } from "../services/api/src/domain/leadIdentity.ts";
 
 type Case = {
   id: string;
@@ -51,12 +52,22 @@ const noResponseIntent = {
 const apiIndex = fs.readFileSync(path.join(process.cwd(), "services/api/src/index.ts"), "utf8");
 const suppressedBranchStart = apiIndex.indexOf("if (isSuppressed(event.from))");
 const suppressedBranch = suppressedBranchStart >= 0 ? apiIndex.slice(suppressedBranchStart, suppressedBranchStart + 1100) : "";
-const leadIdentifiersStart = apiIndex.indexOf("function getLeadIdentifiers");
-const leadIdentifiersEnd = apiIndex.indexOf("function getRelatedConversations", leadIdentifiersStart);
-const leadIdentifiersBranch =
-  leadIdentifiersStart >= 0 && leadIdentifiersEnd > leadIdentifiersStart
-    ? apiIndex.slice(leadIdentifiersStart, leadIdentifiersEnd)
-    : "";
+// 2026-08-13: this case used to pin the SOURCE TEXT of `getLeadIdentifiers` inside index.ts. The
+// body moved to domain/leadIdentity.ts and the pin failed on a refactor that preserved the
+// behaviour exactly — the failure mode AGENTS.md warns about. It now EXECUTES the resolver, so it
+// still fails if the Twilio-`From` fallback is dropped and no longer fails on a move. index.ts must
+// keep delegating rather than grow a second reader, which is what the source check below is for.
+const indexDelegatesLeadIdentity = apiIndex.includes(
+  "return resolveLeadIdentity(conv, event, normalizePhone);"
+);
+const normalizePhoneForIdentity = (raw: string): string => {
+  const trimmed = String(raw ?? "").trim();
+  const digits = trimmed.replace(/\D/g, "");
+  if (trimmed.startsWith("+")) return trimmed;
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length > 10) return `+${digits}`;
+  return trimmed;
+};
 const thirdPartyDecisionStart = apiIndex.indexOf("function resolveThirdPartyFinanceFacilitationDecision");
 const thirdPartyDecisionEnd = apiIndex.indexOf("function buildThirdPartyFinanceFacilitationReply", thirdPartyDecisionStart);
 const thirdPartyDecisionBranch =
@@ -121,10 +132,19 @@ const cases: Case[] = [
     id: "sms_stop_suppression_uses_twilio_from_when_lead_phone_blank",
     expected: true,
     run: () =>
-      leadIdentifiersBranch.includes("firstNonBlank(") &&
-      leadIdentifiersBranch.includes("conv?.lead?.phone") &&
-      leadIdentifiersBranch.includes("eventFrom && !eventFrom.includes(\"@\") ? eventFrom : \"\"") &&
-      !/const\s+leadPhoneRaw\s*=\s*conv\?\.lead\?\.phone\s*\?\?/.test(leadIdentifiersBranch)
+      indexDelegatesLeadIdentity &&
+      // lead.phone blank + an email leadKey: the Twilio `From` is the only phone we have.
+      resolveLeadIdentity(
+        { leadKey: "buyer@example.com", lead: { phone: "" } },
+        { from: "+17165231238" },
+        normalizePhoneForIdentity
+      ).phone === "+17165231238" &&
+      // a real lead.phone still wins over the inbound `From`.
+      resolveLeadIdentity(
+        { leadKey: "+17164656440", lead: { phone: "7169467451" } },
+        { from: "+17165231238" },
+        normalizePhoneForIdentity
+      ).phone === "+17169467451"
   },
   {
     id: "third_party_policy_requires_explicit_third_party_or_r2r_cue",
