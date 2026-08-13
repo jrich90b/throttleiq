@@ -365,7 +365,14 @@ const CEILINGS: Ceiling[] = [
     // summary + idle-days computation moved into buildStaleHandoffNudge (conversationStore, beside
     // its recogniser and the new retire decision), which funded the retire sweep index.ts gained
     // inside the same reconcile block the scheduling-leak retire already lived in.
-    max: 70_494,
+    // 70_494 -> 70_486. The hours open-hours-claim guard (+17169902571). index.ts was sitting
+    // EXACTLY on the ceiling again, so the slice funded itself twice: BOTH halves of the hours
+    // answer — the base reply and its appointment-context tail — moved into
+    // domain/businessHoursGuard.ts beside the invariant the tail now consults, and the sales-lead
+    // predicate the schedule-invite gate reads moved next to that gate in domain/inboundPipeline.ts
+    // (the handler passes the department in rather than the module deriving it). index.ts keeps
+    // only the config fetches, which is genuinely its job.
+    max: 70_486,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

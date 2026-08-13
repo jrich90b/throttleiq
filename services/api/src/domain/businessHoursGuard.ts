@@ -246,6 +246,107 @@ export function widestOpenWindow(
 
 
 /**
+ * MAY WE ASSERT THAT A CLOCK TIME FALLS INSIDE OUR OPEN HOURS?
+ *
+ * The hours-question doors don't just echo a time back as workable — they make a POSITIVE claim
+ * about the store ("Saturday at 5:00 PM is during open hours"). Neither door checked anything
+ * before saying it, and both are wrong in production:
+ *
+ *   +17169902571 (John Zimmerman, 2026-08-12; staff had to edit it out) — "what time are you guys
+ *     open Intill 5pm ?" names NO day, so the label fell back to the literal string "that day" and
+ *     the draft read "…Sat 9:00 AM–3:00 PM. that day at 5:00 PM is during open hours…" — a dangling
+ *     reference, mid-message lowercase, claiming openness for a day nobody picked. On the Saturday
+ *     named in that very sentence we shut at 3.
+ *   "are you open saturday at 5pm?" — executed against the live config, today's code emits
+ *     "Saturday at 5:00 PM is during open hours" while `mayStateTimeAsWorkable` says FALSE.
+ *   "you open sunday at 11am?" — Sunday has no entry at all, and today's code still claims it.
+ *
+ * WHY THIS IS STRICTER THAN `mayStateTimeAsWorkable`. That guard answers "could this time work?",
+ * so its documented fail direction is to STATE on anything unknown — an absent day is unknown
+ * rather than closed, and a floating time is judged against ANY open day. Both readings are right
+ * for an echo and wrong for an assertion: a claim we cannot substantiate must not be made at all.
+ * So this one refuses unless the day is RESOLVED, has a POSITIVELY KNOWN window, and the time lands
+ * inside it — delegating that last test to the invariant above so one window comparison governs
+ * both, and leaving that invariant's own fail direction untouched for its other callers.
+ *
+ * FAIL DIRECTION: false ⇒ the caller says LESS (its no-time copy, or nothing). A refusal can only
+ * ever remove a claim; it never asserts a closure, so it cannot turn the agent mute or wrong.
+ */
+export function mayClaimTimeIsDuringOpenHours(args: {
+  dayKey: string | null | undefined;
+  timeToken: string | null | undefined;
+  businessHours: BusinessWeekHours;
+}): boolean {
+  const dayKey = String(args.dayKey ?? "").trim().toLowerCase();
+  if (!dayKey) return false; // no day resolved => "that day" / "that time" refers to nothing
+  const clock = parseTimeTokenToClock(args.timeToken);
+  if (!clock) return false; // unreadable or ambiguous time => nothing to claim
+  const hours = args.businessHours;
+  if (!hours || typeof hours !== "object") return false;
+  if (!openWindow((hours as any)[dayKey])) return false; // no entry / no usable window => unknown
+  return mayStateTimeAsWorkable({ ...clock, businessHours: hours, dayKey });
+}
+
+/**
+ * THE HOURS ANSWER ITSELF. Moved out of index.ts verbatim (same branch order, same wording) to sit
+ * beside the hours it reads and the invariant that guards its tail below — reply COMPOSITION
+ * belongs next to the policy it reads, and the handler keeps only the config fetch.
+ *
+ * The caller passes the day resolution (`resolveRequestedDay`) rather than the raw text, so the
+ * day this names and the day the tail claims are one resolution, never two.
+ */
+export function buildBusinessHoursQuestionReplyText(args: {
+  requestedDay: { day?: string | null; dayPhrase?: string | null };
+  businessHours: BusinessWeekHours;
+  country?: string | null;
+}): string {
+  const day = args.requestedDay?.day;
+  const dayPhrase = args.requestedDay?.dayPhrase;
+  if (day && dayPhrase) {
+    const dayHours = (args.businessHours as any)?.[day];
+    const open = parseClockMinutes(dayHours?.open);
+    const close = parseClockMinutes(dayHours?.close);
+    if (open != null && close != null) {
+      return `Our hours ${dayPhrase} are ${formatClock(open)}–${formatClock(close)}.`;
+    }
+    return `We’re closed ${dayPhrase}.`;
+  }
+  const hoursLine = formatBusinessHoursForReply(args.businessHours as any, args.country ?? null);
+  if (hoursLine) return `Our hours this week are ${hoursLine}.`;
+  return "Our hours vary by day. What day are you thinking?";
+}
+
+/**
+ * The appointment-context tail for the hours answer, gated by the claim guard above.
+ *
+ * Unclaimable ⇒ the hours line stands alone, which is byte-for-byte what staff sent by hand on the
+ * turn that reported this (+17169902571). A closed-day reply is never decorated: the base line
+ * already said we are shut, and a tail is only ever an ADDITION to it.
+ */
+export function businessHoursOpenClaimTail(args: {
+  reply: string | null | undefined;
+  dayKey: string | null | undefined;
+  dayLabel: string | null | undefined;
+  timeToken: string | null | undefined;
+  timeLabel: string;
+  businessHours: BusinessWeekHours;
+}): string {
+  const reply = String(args.reply ?? "").trim();
+  if (!reply || /^we[’']?re closed\b/i.test(reply)) return reply;
+  if (!args.dayLabel || !args.timeLabel) return reply;
+  if (
+    !mayClaimTimeIsDuringOpenHours({
+      dayKey: args.dayKey,
+      timeToken: args.timeToken,
+      businessHours: args.businessHours
+    })
+  ) {
+    return reply;
+  }
+  return `${reply} ${args.dayLabel} at ${args.timeLabel} is during open hours, but I still need to check appointment availability before locking it in.`;
+}
+
+/**
  * Did the form leave the time OPEN? ("", "anytime", "flexible", …) — i.e. there is no concrete time
  * to state, so nothing for the hours invariant to judge. Was a hand-maintained copy in BOTH
  * index.ts and routes/sendgridInbound.ts; it belongs beside the invariant that now reads it.
