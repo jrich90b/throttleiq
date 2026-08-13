@@ -34,13 +34,22 @@ import {
   const PROBES = [
     "Can I ask what is going on with my 2026 street glide?",
     "What's the price on my 2026 street glide?",
-    "I'm asking about my 2026 street glide"
+    "I'm asking about my 2026 street glide",
+    // Carries a MID-MESSAGE sentence break, so the double-space-after-a-period rewrite has
+    // something to bite on — without it that perturbation is a silent no-op on every probe.
+    "Thanks for the help. I am still thinking about my 2026 street glide"
   ];
   const seen = new Set<string>();
   for (const p of PERTURBATIONS) {
     assert.ok(p.id && !seen.has(p.id), `perturbation ids are unique: ${p.id}`);
     seen.add(p.id);
     assert.ok(p.rationale.trim().length > 20, `${p.id} states WHY it preserves meaning`);
+    // ⚠️ Every perturbation must mirror something customers MEASURABLY do, and carry the number.
+    // The set was rebuilt on 2026-08-13 after `sloppy_whitespace` (0.0% of 1,872 real messages)
+    // manufactured a false customer-facing finding. A percentage in the rationale is the receipt.
+    if (["no_ending_punctuation", "drop_question_mark", "surrounding_whitespace", "double_space_after_sentence", "all_lowercase"].includes(p.id)) {
+      assert.match(p.rationale, /\d+(?:\.\d+)?%/, `${p.id} carries its MEASURED real-world frequency`);
+    }
     const outs = PROBES.map(t => p.apply(t));
     assert.ok(
       outs.some((out, i) => out !== PROBES[i]),
@@ -84,17 +93,36 @@ import {
   assert.equal(Math.round(v.missRate * 100), 25, "miss rate is 2 of 8");
 }
 
-// --- The maths detects FRAGILITY (the missing-question-mark shape) ---
+// --- FRAGILITY (breaks every time) vs WOBBLE-UNDER-A-VARIANT (breaks sometimes) ---
+// Running a perturbation ONCE cannot tell these apart, and the first version of the sweep did
+// exactly that — reporting a single differing run as a defect. They need different fixes: a
+// deterministic break is a rule the reader is missing; an intermittent one is instability.
 {
   const obs: StabilityObservation[] = [
     ...Array.from({ length: 4 }, () => ({ caseId: "c", variantId: "base", decision: "hiring_lead" })),
-    { caseId: "c", variantId: "drop_question_mark", decision: "sales_lead" },
-    { caseId: "c", variantId: "all_lowercase", decision: "hiring_lead" }
+    // 3 of 3 miss => deterministic fragility, reproducible in one shot.
+    ...Array.from({ length: 3 }, () => ({ caseId: "c", variantId: "drop_question_mark", decision: "sales_lead" })),
+    // 1 of 3 miss => the variant tips the reader into wobbling, not a clean break.
+    { caseId: "c", variantId: "no_ending_punctuation", decision: "sales_lead" },
+    { caseId: "c", variantId: "no_ending_punctuation", decision: "hiring_lead" },
+    { caseId: "c", variantId: "no_ending_punctuation", decision: "hiring_lead" },
+    // 0 of 3 miss => clean.
+    ...Array.from({ length: 3 }, () => ({ caseId: "c", variantId: "all_lowercase", decision: "hiring_lead" }))
   ];
   const v = summarizeCase({ caseId: "c", scope: "single_turn", expected: "hiring_lead", observations: obs });
   assert.equal(v.stable, true, "the unchanged text was perfectly stable…");
   assert.equal(v.correct, true, "…and correct…");
-  assert.deepEqual(v.fragileUnder, ["drop_question_mark"], "…yet a dropped question mark still flips the decision");
+  assert.deepEqual(
+    v.fragileUnder,
+    ["drop_question_mark"],
+    "…yet a dropped question mark breaks it EVERY time — the hiring-lead failure mode (#651)"
+  );
+  assert.deepEqual(
+    v.unstableUnder,
+    ["no_ending_punctuation"],
+    "…and a variant that misses only sometimes is reported as wobble, never as a clean break"
+  );
+  assert.ok(!v.fragileUnder.includes("all_lowercase"), "a variant that never misses is not reported at all");
 }
 
 // --- STABLE AND WRONG is still wrong (the trap temperature-0 would hide) ---
