@@ -33,6 +33,16 @@ type OutcomeCase = {
   secondaryStatus: string | null;
   note: string;
   updatedAt: string;
+  /**
+   * When a LATER outcome exists on this same conversation, its timestamp — otherwise null.
+   *
+   * `conv.followUp` is a single mutable slot: every outcome that lands rewrites the same
+   * reason/mode. So for any outcome that is not the newest one on its conversation, the
+   * follow-up state we can read today belongs to a LATER event, and asking "did THIS outcome
+   * route correctly?" has no answer left in the record. Checks that grade routing consult this
+   * before firing.
+   */
+  supersededByOutcomeAt: string | null;
   followUpMode: string | null;
   followUpReason: string | null;
   cadenceStatus: string | null;
@@ -388,6 +398,24 @@ function hasOpenTask(row: OutcomeCase, pattern: RegExp): boolean {
   return row.openTasks.some(task => pattern.test(`${task.reason ?? ""} ${task.taskClass ?? ""} ${task.summary}`));
 }
 
+/**
+ * The newest outcome recorded on this conversation AFTER `updatedMs`, or null if this outcome
+ * is the latest one. Looks at the same three sources `collectCases` reads, independent of the
+ * `--since-hours` window, so a superseding outcome outside the window still counts.
+ */
+function laterOutcomeAt(conv: AnyObj, updatedMs: number): string | null {
+  const stamps = [
+    conv?.dealerRide?.staffNotify?.outcome?.updatedAt,
+    conv?.appointment?.staffNotify?.outcome?.updatedAt,
+    conv?.financeOutcome?.updatedAt,
+    conv?.financeOutcomeNotify?.pendingAt
+  ]
+    .map(value => toIso(value))
+    .filter((iso): iso is string => !!iso && Date.parse(iso) > updatedMs)
+    .sort((a, b) => Date.parse(b) - Date.parse(a));
+  return stamps[0] ?? null;
+}
+
 function collectCases(store: LoadedStore, sinceHours: number): OutcomeCase[] {
   const nowMs = Date.now();
   const sinceMs = sinceHours > 0 ? nowMs - sinceHours * 60 * 60 * 1000 : null;
@@ -416,6 +444,7 @@ function collectCases(store: LoadedStore, sinceHours: number): OutcomeCase[] {
       secondaryStatus: normText(rawOutcome?.secondaryStatus) || null,
       note,
       updatedAt,
+      supersededByOutcomeAt: laterOutcomeAt(conv, updatedMs),
       followUpMode: normText(conv?.followUp?.mode) || null,
       followUpReason: normText(conv?.followUp?.reason) || null,
       cadenceStatus: normText(conv?.followUpCadence?.status) || null,
@@ -596,7 +625,30 @@ function buildFindings(cases: OutcomeCase[]): OutcomeFinding[] {
 
     if (row.family === "finance") {
       const status = String(row.status ?? "").toLowerCase();
-      if (status === "declined" && !(row.followUpReason === "financing_declined" && row.cadenceStatus === "active")) {
+      // BOTH finance routing checks below read `conv.followUp`, which is one mutable slot that
+      // every later outcome rewrites. Once a NEWER outcome has landed, that slot describes the
+      // newer event and the question "did THIS outcome route correctly?" is unanswerable from
+      // the record — so firing a P1 on it reports a defect that the evidence cannot support.
+      //
+      // THE PHANTOM. John Zimmerman (+17169902571) recorded `financeOutcome.needs_more_info` at
+      // 2026-08-12T13:59:38Z. He then CAME IN that afternoon, and at 21:07:24Z a rep recorded the
+      // appointment outcome — "approved. went over numbers on new and pre-owned road glides...
+      // Need to stay in touch" — which set `followUp.reason = appointment_outcome_follow_up` and
+      // armed the right cadence. Nothing went wrong; the finance state was superseded by a real
+      // customer visit seven hours later. It was the release gate's `outcome QA P1 1 > 0` failure
+      // for 2026-08-13.
+      //
+      // This is NARROWER than it looks, and deliberately does not weaken the Kody Erhard fix
+      // (phoneLogLead.ts): there a GENERIC phone-log re-notification clobbered a specific
+      // `credit_app_needs_info` handoff, and a re-notification is not an outcome record — so it
+      // never sets `supersededByOutcomeAt` and that finding still fires exactly as before. Only a
+      // genuinely newer OUTCOME silences these two.
+      const supersededRouting = !!row.supersededByOutcomeAt;
+      if (
+        status === "declined" &&
+        !supersededRouting &&
+        !(row.followUpReason === "financing_declined" && row.cadenceStatus === "active")
+      ) {
         push(
           row,
           "finance_declined_missing_long_term_cadence",
@@ -612,7 +664,11 @@ function buildFindings(cases: OutcomeCase[]): OutcomeFinding[] {
           { followUpReason: row.followUpReason, cadenceStatus: row.cadenceStatus }
         );
       }
-      if (status === "needs_more_info" && !/credit_app_needs_info/.test(String(row.followUpReason ?? ""))) {
+      if (
+        status === "needs_more_info" &&
+        !supersededRouting &&
+        !/credit_app_needs_info/.test(String(row.followUpReason ?? ""))
+      ) {
         push(
           row,
           "finance_needs_info_missing_manual_handoff",
