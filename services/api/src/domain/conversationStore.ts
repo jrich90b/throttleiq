@@ -4738,6 +4738,81 @@ export function computePostSaleDueAt(anchorAtIso: string, offsetDays: number, ti
   return due.toISOString();
 }
 
+/**
+ * WHERE a post-sale sequence RESUMES when the cadence record is re-created long after the sale.
+ *
+ * The owner sequence is anchored to `sale.soldAt`, not to "now". The two sold -> post_sale
+ * reconciles in the cadence maintenance tick rebuild the record at `stepIndex: 0` from that
+ * anchor, and `computePostSaleDueAt` never returns a past date — it rolls an elapsed offset
+ * forward day by day until it is in the future. So a day-1 touch whose date went by two months
+ * ago does not get skipped: it comes due TODAY and the tick sends it on the same pass.
+ *
+ * THE PRODUCTION SEND. Ken Hardy (+17166795683) bought a 2025 Tri Glide Ultra on 2026-06-15 and
+ * got the day-1 note on 2026-06-16. His cadence record was rebuilt on 2026-08-12 and he received
+ * the SAME TEXT, WORD FOR WORD, 57 days after the sale — "Thanks again for coming to see us for
+ * your Tri Glide Ultra." The rebuilt record still says `deliveredTouches: 1`, because the object
+ * was new and had no memory of the first send. That is the release gate's `repeats` failure for
+ * 2026-08-13.
+ *
+ * THE RULE. Resume at the first offset the customer has NOT already lived through, measured in
+ * days elapsed since the anchor — never at step 0 on an old sale. Ken: 57 days elapsed, offsets
+ * [1, 60, 365, 690], so the answer is step 1 due at day 60 (2026-08-14) — exactly the state his
+ * cadence would have held had it never been rebuilt. A sale that closed today is unchanged:
+ * 0 days elapsed, offset 1 is still ahead, step 0 due tomorrow.
+ *
+ * Returns null when the whole sequence has elapsed (a sale older than the last offset) — there is
+ * no touch left to schedule, and inventing one is the same defect a step later.
+ *
+ * FAIL DIRECTION: safe. Every outcome here is the same touch or FEWER touches than today, never
+ * an earlier one — this can only remove a send, never add one. Same rule the finance-declined
+ * heal already applies a few lines below its own re-anchor ("never PULL a touch earlier than what
+ * was already scheduled"); this is that rule for the post-sale ladder.
+ */
+export function resolvePostSaleResumeStep(
+  anchorAtIso: string,
+  nowMs: number,
+  timeZone: string
+): { stepIndex: number; nextDueAt: string } | null {
+  const anchorMs = Date.parse(String(anchorAtIso ?? ""));
+  if (!Number.isFinite(anchorMs) || !Number.isFinite(nowMs)) return null;
+  const elapsedDays = Math.floor((nowMs - anchorMs) / 86_400_000);
+  for (let i = 0; i < POST_SALE_DAY_OFFSETS.length; i += 1) {
+    if (POST_SALE_DAY_OFFSETS[i] > elapsedDays) {
+      return {
+        stepIndex: i,
+        nextDueAt: computePostSaleDueAt(anchorAtIso, POST_SALE_DAY_OFFSETS[i], timeZone)
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * The post-sale cadence record the two sold -> post_sale reconciles in the maintenance tick
+ * write. Both used to inline the same literal at `stepIndex: 0`; the position now comes from
+ * `resolvePostSaleResumeStep`, so neither can replay a touch the customer already received.
+ * Returns null when the sequence has fully elapsed — the caller decides what to do with a sold
+ * lead that has no owner touch left. `withScheduleFields` mirrors the one difference the two
+ * call sites always had (the first seeds the schedule-invite counters, the second does not).
+ */
+export function buildPostSaleReconcileCadence(
+  anchorAtIso: string,
+  nowMs: number,
+  timeZone: string,
+  withScheduleFields: boolean
+): Conversation["followUpCadence"] | null {
+  const resume = resolvePostSaleResumeStep(anchorAtIso, nowMs, timeZone);
+  if (!resume) return null;
+  return {
+    status: "active",
+    anchorAt: anchorAtIso,
+    nextDueAt: resume.nextDueAt,
+    stepIndex: resume.stepIndex,
+    kind: "post_sale",
+    ...(withScheduleFields ? { scheduleInviteCount: 0, scheduleMuted: false } : {})
+  } as Conversation["followUpCadence"];
+}
+
 export function startFollowUpCadence(
   conv: Conversation,
   anchorAtIso: string,

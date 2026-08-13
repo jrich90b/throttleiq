@@ -468,6 +468,7 @@
     "mdf_upload_outcome:eval",
     "mdf_claim_task_dedup:eval",
     "post_sale_cadence_condition:eval",
+    "post_sale_resume_step:eval",
     "post_sale_model_placeholder:eval",
     "watch_fire_miss:eval",
     "google_integration_health:eval",

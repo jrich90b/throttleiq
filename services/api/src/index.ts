@@ -506,6 +506,7 @@ import {
 import { modelHasFinishOptions } from "./domain/msrpPriceList.js";
 import {
   computeFollowUpDueAt,
+  buildPostSaleReconcileCadence,
   computePostSaleDueAt,
   buildDisengagedCadenceCloseout,
   customerEngagedWithCadence,
@@ -32429,18 +32430,18 @@ async function processDueFollowUpsUnlocked() {
       (!cadence || cadence.kind !== "post_sale" || (cadence.status === "stopped" && cadence.stopReason === "appointment_booked"))
     ) {
       const anchor = conv.sale?.soldAt ?? conv.closedAt ?? cadence?.anchorAt ?? nowIso();
-      conv.followUpCadence = {
-        status: "active",
-        anchorAt: anchor,
-        nextDueAt: computePostSaleDueAt(anchor, POST_SALE_DAY_OFFSETS[0], cfg.timezone),
-        stepIndex: 0,
-        kind: "post_sale",
-        scheduleInviteCount: 0,
-        scheduleMuted: false
-      };
-      conv.updatedAt = nowIso();
-      saveConversation(conv);
-      cadence = conv.followUpCadence;
+      // Resumes where the sale date puts this customer, never at step 0 (buildPostSaleReconcileCadence).
+      const rebuilt = buildPostSaleReconcileCadence(anchor, Date.now(), cfg.timezone, true);
+      if (rebuilt) {
+        conv.followUpCadence = rebuilt;
+        conv.updatedAt = nowIso();
+        saveConversation(conv);
+        cadence = conv.followUpCadence;
+      } else if (cadence?.status === "active") {
+        stopFollowUpCadence(conv, "post_sale_sequence_elapsed");
+        saveConversation(conv);
+        cadence = conv.followUpCadence;
+      }
     }
     if (
       cadence?.kind === "post_sale" &&
@@ -32449,16 +32450,13 @@ async function processDueFollowUpsUnlocked() {
       (conv.closedReason === "sold" || conv.sale?.soldAt)
     ) {
       const anchor = conv.sale?.soldAt ?? cadence.anchorAt ?? nowIso();
-      conv.followUpCadence = {
-        status: "active",
-        anchorAt: anchor,
-        nextDueAt: computePostSaleDueAt(anchor, POST_SALE_DAY_OFFSETS[0], cfg.timezone),
-        stepIndex: 0,
-        kind: "post_sale"
-      };
-      conv.updatedAt = nowIso();
-      saveConversation(conv);
-      cadence = conv.followUpCadence;
+      const rebuilt = buildPostSaleReconcileCadence(anchor, Date.now(), cfg.timezone, false);
+      if (rebuilt) {
+        conv.followUpCadence = rebuilt;
+        conv.updatedAt = nowIso();
+        saveConversation(conv);
+        cadence = conv.followUpCadence;
+      }
     }
     // Finance-declined heal (Joe 2026-08-01, "5 yes long term"). Same idiom as the sold ->
     // post_sale reconcile above: the cadence KIND is re-derived from recorded state before we
