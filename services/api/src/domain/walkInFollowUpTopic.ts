@@ -226,22 +226,88 @@ export function buildWalkInReturnDayCheckInLine(input: {
   return `${greeting}just making sure we're still on for today. What time works best? ${close}`;
 }
 
+/**
+ * "12:00 PM" for an already-resolved clock time — or "" when the numbers are not a clock time.
+ *
+ * The caller resolves the time (this module owns copy, not clocks, exactly as the day label
+ * above). Deliberately the same `h:mm AM/PM` shape the appointment record's own `whenText` uses,
+ * so a customer who later gets a booking confirmation sees the same time written the same way.
+ */
+export function formatWalkInReturnTimeLabel(
+  hour24: number | null | undefined,
+  minute: number | null | undefined
+): string {
+  // `Number(null)` is 0, so an ABSENT hour would format as midnight and state a time nobody
+  // named — the one failure this helper must never have. Absent means absent.
+  if (hour24 === null || hour24 === undefined) return "";
+  const h = Number(hour24);
+  const m = Number(minute ?? 0);
+  if (!Number.isInteger(h) || h < 0 || h > 23) return "";
+  if (!Number.isInteger(m) || m < 0 || m > 59) return "";
+  const meridiem = h < 12 ? "AM" : "PM";
+  const hour12 = h % 12 === 0 ? 12 : h % 12;
+  return `${hour12}:${String(m).padStart(2, "0")} ${meridiem}`;
+}
+
+/**
+ * A walk-in who named a day AND a time gets that time said back — not silence.
+ *
+ * Paul Harrigan (+17169467451, Walk In ref 11779, 2026-08-11). Scott's note read "…Wants to take
+ * it for a test ride on Saturday 8/15/2026 at 12pm (Step 4)", and the whole first text back was
+ * "Thanks for stopping in - I'll follow up about the 2020 FLTRXS Road Glide Special." The
+ * Saturday-noon test ride — the one load-bearing fact in the note — was never mentioned. Scott
+ * rewrote the draft by hand and booked the ride himself (`human_correction_material`), and the
+ * nightly replay filed it P1.
+ *
+ * The parser was NOT wrong. Executed against the verbatim live note it returns
+ * `return_visit: "committed_day_and_time"`, `return_day_text: "Saturday 8/15/2026 at 12pm"`,
+ * confidence 0.95, `test_ride_requested: true` — 4 runs out of 4, no instability. Every consumer
+ * then threw it away: this builder returned "" for anything that was not `committed_day`, on the
+ * reasoning that with both day and time settled "there is nothing to ask". There is: whether it
+ * still stands. A customer who committed to a day gets a sentence about it; the customer who
+ * committed HARDER got nothing.
+ *
+ * IT DOES NOT BOOK. The note is a salesperson's log, not a customer confirming to us, so creating
+ * a calendar event off it would be an irreversible side effect taken on one party's say-so
+ * (AGENTS.md fail-direction). It states the day and time back and asks one question — the whole
+ * point being that the customer's answer is what makes it real.
+ *
+ * FAIL DIRECTION, all the way to today's behaviour: no time label (the slot text carried no clock
+ * time, or it did not resolve) falls back to the `committed_day` sentence, which asks for the time
+ * rather than asserting one; no day label returns "", which is byte-for-byte today's tail. It
+ * promises no figure, no hold, no booking. Pinned by walkin_day_and_time_confirm:eval.
+ */
 export function buildWalkInReturnVisitTail(input: {
   ackSentence: string;
   returnVisit: string;
   confidence?: number | null;
   confidenceMin: number;
   dayLabel?: string | null;
+  timeLabel?: string | null;
   familyLabel?: string | null;
   testRide?: boolean | null;
 }): string {
-  if (input.returnVisit !== "committed_day") return "";
+  if (input.returnVisit !== "committed_day" && input.returnVisit !== "committed_day_and_time") {
+    return "";
+  }
   const confidence = typeof input.confidence === "number" ? input.confidence : 0;
   if (!(confidence >= input.confidenceMin)) return "";
   const day = String(input.dayLabel ?? "").trim();
   if (!day) return "";
   const ack = String(input.ackSentence ?? "").trim();
   const family = String(input.familyLabel ?? "").trim();
+  const time = String(input.timeLabel ?? "").trim();
+  if (time) {
+    const close =
+      family && input.testRide
+        ? `I'll have a few ${family} ready for you.`
+        : "I'll make sure we're ready for you.";
+    // Ends on the question (charter C1.7). "Just confirming" claims nothing we have not been
+    // told and nothing we have not done — there is no booking behind this sentence.
+    return [ack, `Just confirming ${day} at ${time}.`, close, "Does that still work?"]
+      .filter(Boolean)
+      .join(" ");
+  }
   // "what time works best" is the existing soft-visit invite's wording, already clean against the
   // banned-phrase and voice-charter guards — a second phrasing for the same ask would just be a
   // new surface for them to police.

@@ -175,6 +175,7 @@ import {
   buildWalkInSpecRecapClause,
   buildWalkInReturnVisitTail,
   formatWalkInReturnDayLabel,
+  formatWalkInReturnTimeLabel,
   formatWalkInReturnDayIso,
   formatWalkInFamilyLabel,
   resolveWalkInFollowUpSubject,
@@ -7971,35 +7972,62 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const walkInReturnVisit = llmWalkInOutcome?.returnVisit ?? "none";
     const walkInReturnDayText = String(llmWalkInOutcome?.returnDayText ?? "").trim();
     const walkInReturnTimeZone = (await getSchedulerConfig()).timezone || "America/New_York";
+    // `committed_day_and_time` is the SAME lane with one more fact in it (Paul Harrigan
+    // +17169467451: "Wants to take it for a test ride on Saturday 8/15/2026 at 12pm"). It was
+    // excluded here, so the day never resolved, the tail returned "" and the note's one
+    // load-bearing fact went unsaid — see buildWalkInReturnVisitTail's docblock.
+    const walkInReturnDayCommitted =
+      walkInReturnVisit === "committed_day" || walkInReturnVisit === "committed_day_and_time";
+    // The clock time comes from the SLOT text the parser returned, never the note prose (charter
+    // C1.6). parseRequestedDayTime is the same resolver the scheduling path uses, so "8/15 at
+    // 12pm", "Saturday at noon" and "Tuesday August 4th at 5:30 pm" all land on the one behaviour
+    // we already pin; a slot with no clock time in it returns null and the day-only sentence ships.
+    const walkInReturnDayTimeParts =
+      walkInReturnVisit === "committed_day_and_time" && walkInReturnDayText
+        ? parseRequestedDayTime(walkInReturnDayText, walkInReturnTimeZone)
+        : null;
     const walkInReturnDayParts =
-      walkInReturnVisit === "committed_day" && walkInReturnDayText
-        ? parseRequestedDateOnly(walkInReturnDayText, walkInReturnTimeZone)
+      walkInReturnDayCommitted && walkInReturnDayText
+        ? (walkInReturnDayTimeParts ?? parseRequestedDateOnly(walkInReturnDayText, walkInReturnTimeZone))
         : null;
     const walkInReturnDayLabel = formatWalkInReturnDayLabel(
       walkInReturnDayParts,
       walkInReturnTimeZone,
       new Date().toISOString()
     );
+    // Gated on the label so the past/too-far-out window that guards the DAY guards the time too:
+    // a day we refuse to say is a time we refuse to say.
+    const walkInReturnTimeLabel = walkInReturnDayLabel
+      ? formatWalkInReturnTimeLabel(walkInReturnDayTimeParts?.hour24, walkInReturnDayTimeParts?.minute)
+      : "";
     // Keep the committed day on the LEAD, not just in this turn's copy. The cadence fires days
     // later in another process with no parser result in hand, and that is exactly when the day
     // matters most — Ed Szulist's 8/4 touch asked about photos and payments on the morning he had
     // said he was coming in (see buildWalkInReturnDayCheckInLine). Gated on the label so the same
     // past/too-far-out window applies: a day that is not worth saying is not worth storing.
-    const walkInReturnDayIso = walkInReturnDayLabel
-      ? formatWalkInReturnDayIso(walkInReturnDayParts)
-      : "";
+    //
+    // DELIBERATELY still `committed_day` only. The day-of cadence line this feeds
+    // (buildWalkInReturnDayCheckInLine) asks "what time works best?", which is the right question
+    // for a day-only commitment and the WRONG one for a customer who already named a time — it
+    // would re-ask on the morning of his ride. Widening it needs the time persisted on the lead and
+    // a time-aware check-in line; that is its own slice with its own eval, not a free rider here.
+    const walkInReturnDayIso =
+      walkInReturnDayLabel && walkInReturnVisit === "committed_day"
+        ? formatWalkInReturnDayIso(walkInReturnDayParts)
+        : "";
     if (walkInReturnDayIso) {
       conv.lead = conv.lead ?? {};
       conv.lead.walkInReturnDayIso = walkInReturnDayIso;
     }
     const returnVisitTail =
-      walkInReturnVisit === "committed_day" && walkInReturnDayText
+      walkInReturnDayCommitted && walkInReturnDayText
         ? buildWalkInReturnVisitTail({
             ackSentence: "Thanks again for your time.",
             returnVisit: walkInReturnVisit,
             confidence: llmWalkInOutcome?.returnVisitConfidence,
             confidenceMin: Number(process.env.WALKIN_RETURN_VISIT_CONFIDENCE_MIN ?? 0.8),
             dayLabel: walkInReturnDayLabel,
+            timeLabel: walkInReturnTimeLabel,
             familyLabel: formatWalkInFamilyLabel(referencesFamilyOnlyInText(walkInCleanedComment)),
             testRide: !!llmWalkInOutcome?.testRideRequested
           })

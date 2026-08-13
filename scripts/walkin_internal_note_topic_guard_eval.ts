@@ -478,10 +478,22 @@ const base = {
 };
 assert.equal(buildWalkInReturnVisitTail({ ...base, returnVisit: "tentative" }), "", "no day named => nothing to ask");
 assert.equal(buildWalkInReturnVisitTail({ ...base, returnVisit: "none" }), "", "no return commitment => silent");
+// `committed_day_and_time` USED TO BE SILENT HERE, on the reasoning that with both facts settled
+// there is nothing to ask. Paul Harrigan (+17169467451, 2026-08-11) is what that cost: a note
+// reading "Wants to take it for a test ride on Saturday 8/15/2026 at 12pm" produced "Thanks for
+// stopping in - I'll follow up about the 2020 FLTRXS Road Glide Special" and never mentioned the
+// ride at all. The half of the old reasoning that was RIGHT is kept — we still never ask a customer
+// for a time they gave us — and it is now honoured by SAYING that time instead of saying nothing.
+// Full behaviour is pinned by walkin_day_and_time_confirm:eval.
+assert.equal(
+  buildWalkInReturnVisitTail({ ...base, returnVisit: "committed_day_and_time", timeLabel: "12:00 PM" }),
+  "Thanks again for your time. Just confirming Tuesday, Aug 4 at 12:00 PM. I'll have a few Sportsters ready for you. Does that still work?",
+  "day AND time settled => confirm both back, and ask only whether it still stands"
+);
 assert.equal(
   buildWalkInReturnVisitTail({ ...base, returnVisit: "committed_day_and_time" }),
-  "",
-  "day AND time already settled => never ask a customer for a time they gave us"
+  "Thanks again for your time. What time works best Tuesday, Aug 4? I'll have a few Sportsters ready for you.",
+  "a day-and-time note whose clock time did not resolve asks for it — recoverable, unlike the generic promise it replaces"
 );
 assert.equal(buildWalkInReturnVisitTail({ ...base, confidence: 0.7 }), "", "under the confidence floor => silent");
 assert.equal(buildWalkInReturnVisitTail({ ...base, confidence: null }), "", "no confidence => silent");
