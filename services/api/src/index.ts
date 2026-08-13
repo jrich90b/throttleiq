@@ -60367,7 +60367,7 @@ if (authToken && signature) {
         leadKey: conv.leadKey
       });
     }
-    const humanModeShortAck = isShortAckText(humanModeText) || isEmojiOnlyText(humanModeText);
+    const humanModeShortAck = isShortAckText(humanModeText) || isEmojiOnlyText(humanModeText) || humanModeDispositionShortAck;
     // Human-mode re-engagement backstop (Logan Hazel +12109976639, 2026-07-17): when a watch arm
     // below handles this turn (state-only, no return), it sets this flag so the fall-through
     // reply-needed task at the block terminus does not ALSO fire for a turn that was already
