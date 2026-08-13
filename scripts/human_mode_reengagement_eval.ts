@@ -84,9 +84,17 @@ assert.ok(
 );
 
 // 4. The short-ack exclusion uses the canonical comprehension-safe helpers, never a bespoke regex.
+//    Since 2026-08-13 (+17169400722, Joe: "why did this create a task when the customer just said
+//    awesome?") it ALSO reuses `humanModeDispositionShortAck` — the same turn already read by
+//    isBareAcknowledgementText a few hundred lines up — so a turn that is nothing but a courtesy
+//    word stops tasking the owner. Reused, not re-called: one bare-ack gate site is a rule of its
+//    own (bare_acknowledgement_disposition:eval). Content after the courtesy word is unaffected:
+//    "Awesome let's do it" is not bare and still surfaces. See bare_ack_courtesy:eval.
 assert.ok(
-  /const humanModeShortAck = isShortAckText\(humanModeText\) \|\| isEmojiOnlyText\(humanModeText\);/.test(apiIndex),
-  "the short-ack gate reuses the canonical isShortAckText/isEmojiOnlyText helpers"
+  apiIndex.includes(
+    "const humanModeShortAck = isShortAckText(humanModeText) || isEmojiOnlyText(humanModeText) || humanModeDispositionShortAck;"
+  ),
+  "the short-ack gate reuses the canonical isShortAckText/isEmojiOnlyText helpers plus the bare-ack reading"
 );
 
 console.log(

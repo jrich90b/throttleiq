@@ -37,6 +37,28 @@
 const ACK_TOKENS =
   /\b(thanks|thank you|thanks again|thx|ty|appreciate|got it|sounds good|sounds great|will do|ok|okay|k|kk|cool|perfect|great|all good|no problem|you bet|yep|yup|sure)\b/;
 
+/**
+ * Courtesy words in the SAME family as `great` / `perfect` / `cool` above, deliberately NOT added
+ * to ACK_TOKENS.
+ *
+ * Joe, 2026-08-13, on Christopher +17169400722: "Why did this create a task when the customer just
+ * said awesome?" A bare "Awesome " minted a `needs YOUR reply` task for the owner, because
+ * `awesome` is missing from the list while `great` and `perfect` are on it.
+ *
+ * The one-token fix is to drop it into ACK_TOKENS, and that is the trap. `isShortAckText` is read
+ * at eighteen decision points in index.ts, several of which decide whether we REPLY AT ALL, and it
+ * only asks "does a courtesy word appear anywhere in a short sentence?" — so a token added there
+ * also silences "Awesome I'll be there at 3". Measured on the live store: 12 short inbound turns
+ * carry `awesome` as their only courtesy word, and one of them is "Awesome let's do it".
+ *
+ * These tokens are therefore visible ONLY to `isBareAcknowledgementText`, which additionally
+ * requires that nothing be LEFT once courtesy words and filler are stripped. "Awesome" is bare;
+ * "Awesome let's do it" is not, and keeps every arm it has today. Measured, not guessed:
+ * `awesome` (7 short turns), `thank u` (4 — a spelling ACK_TOKENS' `thank you` misses),
+ * `ur welcome` (2).
+ */
+const BARE_ONLY_COURTESY_TOKENS = /\b(awesome|thank u|ur welcome)\b/;
+
 /** Connective/filler that carries no standalone content once the courtesy word is gone. */
 const FILLER_TOKENS =
   /\b(i|we|you|your|hi|hey|hello|yes|no|so|for|the|a|an|it|that|this|now|man|dude|bro|sir|maam|much|very|again|too|thank|guys|everything|help|info|update|time)\b/g;
@@ -66,11 +88,16 @@ export function isBareAcknowledgementText(text: string): boolean {
   const raw = String(text ?? "").trim();
   if (!raw) return false;
   if (isEmojiOnlyText(raw)) return true;
-  if (!isShortAckText(raw)) return false;
+  const lowered = raw.toLowerCase();
+  // Same shape guards isShortAckText applies (short, not a question), then EITHER token set.
+  if (raw.length > 60) return false;
+  if (/[?]/.test(raw)) return false;
+  if (!ACK_TOKENS.test(lowered) && !BARE_ONLY_COURTESY_TOKENS.test(lowered)) return false;
   const residual = raw
     .toLowerCase()
     .replace(/[‘’]/g, "'")
     .replace(new RegExp(ACK_TOKENS.source, "g"), " ")
+    .replace(new RegExp(BARE_ONLY_COURTESY_TOKENS.source, "g"), " ")
     .replace(FILLER_TOKENS, " ")
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
