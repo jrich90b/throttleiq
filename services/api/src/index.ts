@@ -60784,11 +60784,11 @@ if (authToken && signature) {
     // a "needs YOUR reply" follow-up task for the owner. Deterministic side-effect (AGENTS.md
     // allows deterministic side-effects/state); fail-safe by direction — a redundant task is cheap,
     // the current false-negative drops the lead. addTodo merges by (conv, open, "followup") so
-    // repeat inbounds refresh one task instead of stacking. Skip short-acks/reactions (opt-out and
+    // repeat inbounds refresh one task instead of stacking. Skip BARE acks/reactions (opt-out and
     // disposition closeouts already returned above) and turns already surfaced as a watch.
     if (
       event.provider === "twilio" &&
-      !humanModeShortAck &&
+      !humanModeDispositionShortAck &&
       !humanModeInventoryWatchHandled
     ) {
       const customerName =

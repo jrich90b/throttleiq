@@ -81,9 +81,37 @@ check(
 // bare_acknowledgement_disposition:eval forbids.
 check("one_bare_ack_gate_site", indexSrc.split("isBareAcknowledgementText(").length - 1, 1);
 check(
-  "reply_needed_task_still_gated_on_it",
-  indexSrc.includes("!humanModeShortAck &&") && indexSrc.includes("needs YOUR reply."),
+  "reply_needed_task_gated_on_the_bare_reading",
+  indexSrc.includes("!humanModeDispositionShortAck &&") && indexSrc.includes("needs YOUR reply."),
   true
 );
+
+// ---------------------------------------------------------------------------
+// 5. THE OWNER'S SIDE OF THE SAME PREDICATE (Joe ruled 2026-08-13, "build it").
+//    On a thread a rep has taken over, the `needs YOUR reply` task is now skipped
+//    for BARE turns only. These are the real turns the wide predicate used to
+//    swallow — 39 of them in 44 days on the live store — and each one is a rep
+//    being told nothing at all about a message that carried something.
+// ---------------------------------------------------------------------------
+const SURFACES = [
+  "Ok. Friday. Afternoon", // a day + a day-part: a soft commitment
+  "Found a better offer. Thanks", // a lost sale (+13105956498)
+  "Oh okay I get out at 3 joe I should be able to stop today",
+  "Joe, theirs 62,500 miles on it. Thanks", // an appraisal fact we asked for
+  "Ok. I will stop by when it arrives. Thanks.",
+  "Okay sounds good I will get that all together",
+  "Thanks Scott. Ill try and sneak in"
+];
+for (const turn of SURFACES) {
+  // Both halves matter: the wide predicate DOES swallow it (which is the bug), and the bare
+  // predicate does not (which is why the owner now hears about it).
+  check(`wide_predicate_would_have_hidden::${turn.slice(0, 28)}`, isShortAckText(turn), true);
+  check(`owner_is_told::${turn.slice(0, 28)}`, isBareAcknowledgementText(turn), false);
+}
+
+// ...and the courtesy-only turns stay silent, which is the whole point of keeping a gate at all.
+for (const turn of ["Ok thanks", "Awesome", "Thanks!", "\u{1F44D}", "sounds good", "Will do"]) {
+  check(`owner_is_not_told::${turn}`, isBareAcknowledgementText(turn), true);
+}
 
 console.log(`\nAll ${checks} bare-ack courtesy checks passed.`);
