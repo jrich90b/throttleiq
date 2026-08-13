@@ -9,7 +9,10 @@
  * instructions and keep the required email fields trivial; email/"both" keep the full set.
  */
 import { strict as assert } from "node:assert";
-import { campaignCopyOutputRequirements } from "../services/api/src/domain/campaignBuilder.js";
+import {
+  campaignCopyOutputRequirements,
+  campaignSmsVoiceRules
+} from "../services/api/src/domain/campaignBuilder.js";
 
 const HTML_MARKER = "responsive table-based email markup";
 const IMAGE_MARKER = "pair the most relevant image";
@@ -34,6 +37,57 @@ assert.ok(/Prefer 2-4 sections/.test(email), "digest-capable email prefers multi
 const smsLines = campaignCopyOutputRequirements(false, false).length;
 const emailLines = campaignCopyOutputRequirements(true, true).length;
 assert.ok(smsLines < emailLines, `SMS block (${smsLines}) must be leaner than email block (${emailLines})`);
-assert.ok(smsLines <= 6, `SMS block should be tight (got ${smsLines} lines)`);
 
-console.log(`campaign_sms_prompt_eval: OK (sms=${smsLines} lines, email=${emailLines} lines)`);
+// The <= 6 line cap that used to sit here was a proxy for "don't blow the gpt-5-mini OUTPUT
+// budget" — the 7/15 incident was caused by demanding a full responsive HTML email as OUTPUT,
+// which the HTML/IMAGE assertions above still pin directly. Voice rules are INPUT instructions
+// and cannot recreate that failure, so the cap now applies to the channel-specific extras only.
+const voiceLines = campaignSmsVoiceRules().length;
+const smsChannelSpecific = smsLines - voiceLines - 2; // minus the header + the sms_body line
+assert.ok(
+  smsChannelSpecific <= 6,
+  `SMS-only channel-specific block should stay tight (got ${smsChannelSpecific} lines)`
+);
+
+// ---------------------------------------------------------------------------
+// VOICE. Campaign copy was the one customer-facing surface that never learned the
+// Agent Voice Charter, so it restated the brief verbatim (Joe, 2026-08-13). These
+// rules must reach the model on BOTH channels, or the SMS goes back to being ad copy.
+// ---------------------------------------------------------------------------
+for (const [label, block] of [["sms", sms], ["email", email]] as const) {
+  assert.ok(
+    /The brief is an INSTRUCTION, not a draft/.test(block),
+    `${label} block forbids restating the brief`
+  );
+  assert.ok(
+    /read like a text from someone at the dealership/.test(block),
+    `${label} block sets the texting register, not ad copy`
+  );
+  assert.ok(
+    /never sign as a person/i.test(block),
+    `${label} block keeps campaigns in the DEALER voice (Joe ruled 2026-08-13)`
+  );
+  assert.ok(
+    /Do NOT write a greeting/.test(block),
+    `${label} block leaves the greeting to the send path, which alone knows the recipient`
+  );
+  assert.ok(/at most ONE dash/.test(block), `${label} block carries the em-dash diet`);
+  assert.ok(/just checking in/.test(block), `${label} block carries the banned filler list`);
+}
+
+// The charter's short-name rule, so a blast never opens with the full legal name.
+assert.ok(/SHORT everyday form of the dealer name/.test(sms), "sms block asks for the casual dealer short name");
+assert.ok(/drop Inc\/LLC/.test(sms), "sms block strips legal suffixes");
+
+// PORTABILITY (readiness bar section 2, and the AH-hardcode ratchet that caught this at 134/133):
+// these rules ship to every dealer, so they must not name dealer #1. The dealer name reaches the
+// model through the prompt's `Dealer:` context line, never through a literal in here.
+const voiceBlock = campaignSmsVoiceRules().join("\n");
+assert.ok(
+  !/american[\s-]?harley|north tonawanda/i.test(voiceBlock),
+  "the campaign voice rules must not hardcode a specific dealer"
+);
+
+console.log(
+  `campaign_sms_prompt_eval: OK (sms=${smsLines} lines, email=${emailLines} lines, voice=${voiceLines})`
+);

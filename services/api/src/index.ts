@@ -1246,6 +1246,14 @@ import {
   campaignTargetReferenceImageUrls,
   campaignUsesPrimaryStyleAnchor
 } from "./domain/campaignAssetFormats.js";
+import { personalizeCampaignSmsBody } from "./domain/campaignPersonalization.js";
+import {
+  isLeadriderHost,
+  isLikelyImageAssetUrl,
+  normalizeHttpUrl,
+  parseHttpUrl,
+  rewriteBroadcastSmsBodyForBranding
+} from "./domain/broadcastSmsUrls.js";
 import {
   clearMetaIntegrationRecord,
   getMetaIntegrationRecord,
@@ -4163,78 +4171,6 @@ async function buildNoResponseWebFallbackReply(args: {
 
 function isInventoryBrowseLinkRequest(text: string | null | undefined): boolean {
   return isInventoryBrowseLinkRequestText(text);
-}
-
-function normalizeHttpUrl(raw: string | null | undefined): string | null {
-  const value = String(raw ?? "").trim();
-  if (!value) return null;
-  try {
-    const u = new URL(value);
-    const proto = String(u.protocol ?? "").toLowerCase();
-    if (proto !== "http:" && proto !== "https:") return null;
-    u.hash = "";
-    return u.toString();
-  } catch {
-    return null;
-  }
-}
-
-const BROADCAST_URL_REGEX = /https?:\/\/[^\s<>"']+/gi;
-const URL_TRAILING_PUNCTUATION_REGEX = /[),.;!?]+$/;
-
-function splitTrailingUrlPunctuation(rawUrl: string): { core: string; trailing: string } {
-  let core = String(rawUrl ?? "").trim();
-  let trailing = "";
-  while (core && URL_TRAILING_PUNCTUATION_REGEX.test(core)) {
-    trailing = core.slice(-1) + trailing;
-    core = core.slice(0, -1);
-  }
-  return { core, trailing };
-}
-
-function isLikelyImageAssetUrl(rawUrl: string | null | undefined): boolean {
-  const parsed = parseHttpUrl(rawUrl);
-  if (!parsed) return false;
-  const pathname = String(parsed.pathname ?? "").toLowerCase();
-  if (!pathname) return false;
-  if (pathname.includes("/uploads/campaigns/")) return true;
-  if (pathname.includes("/uploads/messages/")) return true;
-  if (/\.(jpe?g|png|webp|gif|bmp|tiff?|heic|heif)$/i.test(pathname)) return true;
-  return false;
-}
-
-function rewriteBroadcastSmsBodyForBranding(args: {
-  body: string;
-  brandedFallbackUrl?: string | null;
-}): string {
-  const original = String(args.body ?? "").trim();
-  if (!original) return "";
-  const fallback = normalizeHttpUrl(args.brandedFallbackUrl ?? null);
-  const safeFallback = fallback && !isLeadriderHost(fallback) ? fallback : null;
-  let removedSensitiveUrl = false;
-
-  const rewritten = original.replace(BROADCAST_URL_REGEX, raw => {
-    const { core, trailing } = splitTrailingUrlPunctuation(raw);
-    const normalized = normalizeHttpUrl(core);
-    if (!normalized) return raw;
-    const shouldRewrite = isLeadriderHost(normalized) || isLikelyImageAssetUrl(normalized);
-    if (!shouldRewrite) return raw;
-    removedSensitiveUrl = true;
-    return trailing;
-  });
-
-  let compact = rewritten
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n[ \t]+/g, "\n")
-    .replace(/[ \t]{2,}/g, " ")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-
-  if (removedSensitiveUrl && safeFallback && !compact.includes(safeFallback)) {
-    compact = compact ? `${compact}\n\n${safeFallback}` : safeFallback;
-  }
-  if (!compact && safeFallback) return safeFallback;
-  return compact || original;
 }
 
 function inventoryListUrlsFromEnv(): string[] {
@@ -18696,25 +18632,6 @@ function buildStaffOutcomeLink(token: string): string | null {
   const base = process.env.PUBLIC_BASE_URL?.replace(/\/+$/, "");
   if (!base) return null;
   return `${base}/public/appointment/outcome?token=${encodeURIComponent(token)}`;
-}
-
-function isLeadriderHost(raw: string | undefined | null): boolean {
-  const url = parseHttpUrl(raw);
-  if (!url) return false;
-  return /(^|\.)leadrider\.ai$/i.test(String(url.hostname ?? "").toLowerCase());
-}
-
-function parseHttpUrl(raw: string | undefined | null): URL | null {
-  const text = String(raw ?? "").trim();
-  if (!text) return null;
-  try {
-    const url = new URL(text);
-    const proto = String(url.protocol ?? "").toLowerCase();
-    if (proto !== "http:" && proto !== "https:") return null;
-    return url;
-  } catch {
-    return null;
-  }
 }
 
 function deriveStaffWebBaseUrl(profile?: any): string | null {
@@ -50962,6 +50879,9 @@ app.post("/contacts/broadcast", requireManager, async (req, res) => {
         normalizeHttpUrl((profile as any)?.offersUrl ?? null) ??
         normalizeHttpUrl(profile?.website ?? null)
       : null;
+  // The dealer's own booking page survives the white-label URL strip — see `preserveUrls`.
+  const broadcastPreservedUrl =
+    channel === "sms" ? normalizeHttpUrl((profile as any)?.bookingUrl ?? null) : null;
 
   let list: any = null;
   if (!sendToAll) {
@@ -51041,10 +50961,16 @@ app.post("/contacts/broadcast", requireManager, async (req, res) => {
           skipped.push({ id: String(contact.id), reason: "suppressed" });
           continue;
         }
-        const smsBody = rewriteBroadcastSmsBodyForBranding({
-          body: campaignSmsBody,
-          brandedFallbackUrl: broadcastBrandedFallbackUrl
-        });
+        // Personalize LAST, per recipient: the body above is shared by the whole list, and this
+        // is the only point in the send where we know who is receiving it.
+        const smsBody = personalizeCampaignSmsBody(
+          rewriteBroadcastSmsBodyForBranding({
+            body: campaignSmsBody,
+            brandedFallbackUrl: broadcastBrandedFallbackUrl,
+            preserveUrls: [broadcastPreservedUrl]
+          }),
+          contact
+        );
         if (!smsBody) {
           skipped.push({ id: String(contact.id), reason: "missing_sms_body" });
           continue;
