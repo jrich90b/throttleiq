@@ -164,16 +164,18 @@ assert.equal(
 
 // 2) Both-path wiring (route parity) + warm visit-ack — source guards.
 const idx = fs.readFileSync(path.resolve("services/api/src/index.ts"), "utf8");
-// live: parser signal OR'd into the soft-visit gate.
+// UPDATED 2026-08-14: both paths now reach the parser signal through the SHARED referee
+// (resolveSoftVisitTurn -> resolveSoftVisitCommitment), not through two hand-mirrored inline
+// expressions. These two guards used to pin the inline shapes and were RIGHT to fire when it
+// changed; the INTENT is unchanged and now stated more strongly — each path must hand ITS OWN
+// appointment-timing parse to the one referee. See soft_visit_precedence:eval for the table.
 assert.ok(
-  /softVisitCommitment\b[\s\S]{0,140}isParserSoftVisitCommitment\(appointmentTimingParse\)/.test(idx),
-  "live path must OR the parser soft-visit signal into the soft-visit gate"
+  /resolveSoftVisitTurn\(\{[\s\S]{0,240}parse: appointmentTimingParse\b/.test(idx),
+  "live path must hand its appointment-timing parse to the shared soft-visit referee"
 );
-// regen: a REACHABLE soft-visit branch on the parser signal (NOT nested in the kind-gated
-// tentative block, which intent:none never enters).
 assert.ok(
-  /event\.provider === "twilio" &&\s*\(isParserSoftVisitCommitment\(regenAppointmentTimingParse\)/.test(idx),
-  "regen path must have a reachable soft-visit branch on the parser signal (parity)"
+  /resolveSoftVisitTurn\(\{[\s\S]{0,240}parse: regenAppointmentTimingParse\b/.test(idx),
+  "regen path must hand its appointment-timing parse to the SAME shared referee (parity)"
 );
 // warm visit-ack builder exists and BOTH paths build it.
 assert.ok(/function buildSoftVisitCommitmentAck\(/.test(idx), "warm visit-ack builder must exist");
@@ -189,18 +191,35 @@ assert.ok(
 // 2b) CONDITIONAL day-less commitment wiring (Michael Siejka +17169906333) — both paths.
 // live: the conditional signal is consumed, watch-guarded (a "when one comes in I'll come
 // by" turn keeps its inventory-watch routing), and OR'd into the soft-visit arm.
+// UPDATED 2026-08-14 with the referee: the watch guard is now passed IN as `conditionalAllowed`
+// and the referee is the single consumer of isParserConditionalVisitCommitment. Same intent —
+// a watch-conditioned "when one comes in I'll come by" must keep its inventory-watch routing.
 assert.ok(
-  /conditionalSoftVisitCommitment\s*=[\s\S]{0,400}semanticWatchAction !== "set_watch"[\s\S]{0,200}isParserConditionalVisitCommitment\(appointmentTimingParse\)/.test(idx),
-  "live path must consume the conditional signal behind the watch guard"
+  /resolveSoftVisitTurn\(\{[\s\S]{0,400}conditionalAllowed:[\s\S]{0,200}semanticWatchAction !== "set_watch"/.test(idx),
+  "live path must pass the watch guard to the referee as conditionalAllowed"
+);
+const softVisitSignalSrc = fs.readFileSync(path.resolve("services/api/src/domain/softVisitSignal.ts"), "utf8");
+// COUNT, do not merely match. The guarded expression appears TWICE by design — once in the
+// referee (does it arm?) and once in needsVisitCommitmentTiebreak (is a round-trip worth buying?).
+// A boolean `.test()` here was satisfied by EITHER copy, so a sabotage that gutted the referee
+// passed because the tiebreak gate still carried the string.
+const guardedConditional =
+  softVisitSignalSrc.split(/conditionalAllowed !== false && isParserConditionalVisitCommitment\(/).length - 1;
+assert.equal(
+  guardedConditional,
+  2,
+  `the conditional signal must be consumed behind the watch guard in BOTH the referee and the ` +
+    `tiebreak gate (found ${guardedConditional})`
 );
 assert.ok(
   /softVisitIntent = softVisitCommitment \|\| conditionalSoftVisitCommitment/.test(idx),
   "live soft-visit arm must include the conditional commitment"
 );
-// regen: a reachable conditional branch on the same parser signal (parity), watch-guarded.
+// regen: the SAME watch guard, handed to the SAME referee (parity). The referee's own consumption
+// of isParserConditionalVisitCommitment is asserted once, above, against softVisitSignal.ts.
 assert.ok(
-  /regenSemanticWatchAction !== "set_watch"[\s\S]{0,200}isParserConditionalVisitCommitment\(regenAppointmentTimingParse\)/.test(idx),
-  "regen path must have a watch-guarded conditional-commitment branch (parity)"
+  /resolveSoftVisitTurn\(\{[\s\S]{0,400}conditionalAllowed:[\s\S]{0,200}regenSemanticWatchAction !== "set_watch"/.test(idx),
+  "regen path must pass its watch guard to the referee as conditionalAllowed (parity)"
 );
 // BOTH hint gates must consult the parser on the conditional-commitment shape (without
 // this the parser never runs on Michael's turn and the whole signal is unreachable).

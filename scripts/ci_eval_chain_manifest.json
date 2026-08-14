@@ -180,6 +180,8 @@
     "booking_funnel:eval",
     "proactive_visit_invite:eval",
     "soft_visit_commitment:eval",
+    "soft_visit_precedence:eval",
+    "visit_commitment_parser:eval",
     "soft_visit_miss:eval",
     "soft_visit_outcome:eval",
     "cadence_quiet_window:eval",

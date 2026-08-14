@@ -1011,6 +1011,7 @@ import {
   isParserSoftVisitCommitment,
   isParserTimedVisitCommitment
 } from "./domain/softVisitSignal.js";
+import { resolveSoftVisitTurn } from "./domain/visitCommitmentParser.js";
 import { buildScheduleContextStatusUpdateReply } from "./domain/scheduleStatusReply.js";
 import { collectRecentStaffCorrections } from "./domain/feedbackSteering.js";
 
@@ -56652,21 +56653,19 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
     const regenEffectiveAction =
       regenRoutePolicyMode === "legacy" ? regenLegacyAction : regenPolicyDecision.action;
-    // Soft-visit commitment (parser-driven, appointment-timing intent:none) — route parity
-    // with live: warm visit-ack + soft-visit cadence window. Placed after all higher-priority
-    // regen intent branches have returned, so a compound turn (pricing/availability/etc.) is
-    // never dropped here — only a pure soft commitment reaches this point.
-    if (
-      event.provider === "twilio" &&
-      (isParserSoftVisitCommitment(regenAppointmentTimingParse) ||
-        // CONDITIONAL day-less commitment ("once she's back on the road i'll be in" —
-        // Michael Siejka +17169906333) — parity with the live conditional soft-visit arm.
-        // Watch-guarded like live: a watch-conditioned turn keeps its watch routing (this
-        // branch already sits after the regen watch/higher-priority arms have returned).
-        (!conv.inventoryWatchPending &&
-          regenSemanticWatchAction !== "set_watch" &&
-          isParserConditionalVisitCommitment(regenAppointmentTimingParse)))
-    ) {
+    // Soft-visit commitment — routed through the SHARED referee (domain/softVisitSignal.ts), the
+    // same call live makes. Until 2026-08-14 this branch was parser-signal-only while live also
+    // OR'd the legacy regex, so ~40 turns/90d armed a soft-visit hold on the live SMS lane that a
+    // regenerate would never arm. Placed after all higher-priority regen intent branches have
+    // returned, so a compound turn (pricing/availability/etc.) is never dropped here.
+    const softVisitTurn = await resolveSoftVisitTurn({
+      legacySignal: detectSoftVisitIntent(event.body ?? ""),
+      parse: regenAppointmentTimingParse,
+      conditionalAllowed: !conv.inventoryWatchPending && regenSemanticWatchAction !== "set_watch",
+      text: event.body ?? "",
+      history: buildHistory(conv, 6)
+    });
+    if (event.provider === "twilio" && softVisitTurn.arm) {
       const cfg = await getSchedulerConfigHot();
       const appliedWindow = await applySoftVisitCadenceWindow(
         conv,
@@ -56680,7 +56679,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       const ack = appliedWindow
         ? buildBookedSameDayAllSetReply(conv, softVisitWindowLabel(conv)) ??
           buildSoftVisitCommitmentAck(conv, normalizeDisplayCase(conv.lead?.firstName))
-        : isParserConditionalVisitCommitment(regenAppointmentTimingParse)
+        : softVisitTurn.conditional
           ? buildConditionalVisitCommitmentAck(normalizeDisplayCase(conv.lead?.firstName))
           : null;
       if (ack) {
@@ -64915,24 +64914,24 @@ if (authToken && signature) {
   if (effectiveTestRideIntent && schedulingAllowed && !isTestRideDialogState(getDialogState(conv))) {
     setDialogState(conv, "test_ride_init");
   }
-  // Soft-visit commitment is parser-driven (the appointment-timing parser already reads
-  // "I'll be there Saturday" as intent:none + a committed day) OR'd with the legacy regex —
-  // see isParserSoftVisitCommitment. Fixes weekday/event commitments the regex missed
-  // (Todd Herian Ref 11438). Over-firing only DELAYS a follow-up (fail-safe).
-  const softVisitCommitment =
-    schedulingSignalsBase.softVisit === true || isParserSoftVisitCommitment(appointmentTimingParse);
-  // CONDITIONAL (day-less) visit commitment ("once she's back on the road i'll be in" —
-  // Michael Siejka +17169906333, 2026-06-25): the appointment-timing parser comprehends the
-  // turn (intent:none, no day, commitment in normalizedText) but the day-anchored signal
-  // can't fire, so the turn used to fall through to the generic orchestrator (judged draft:
-  // photo-appreciation improvisation). Watch-guarded: a watch-conditioned "when one comes in
-  // I'll come by" belongs to the inventory-watch arm, never a patience ack that drops the watch.
-  const conditionalSoftVisitCommitment =
-    !softVisitCommitment &&
-    !watchHandledEarly &&
-    !conv.inventoryWatchPending &&
-    semanticWatchAction !== "set_watch" &&
-    isParserConditionalVisitCommitment(appointmentTimingParse);
+  // Soft-visit commitment now goes through the SHARED referee (domain/softVisitSignal.ts,
+  // resolveSoftVisitCommitment) so live and regenerate cannot drift apart again — measured
+  // 2026-08-14: live OR'd the legacy regex, regen used the parser signal alone, and the regex
+  // fires on 45 turns/90d where the parser signal agrees on 5. The referee also stops the regex
+  // overruling a parser verdict that exists (AGENTS.md Fallback-vs-Parser Precedence): the
+  // tiebreak parse below runs ONLY on a disputed turn (~1 call every other day).
+  // Watch-guarded exactly as before: a watch-conditioned "when one comes in I'll come by"
+  // belongs to the inventory-watch arm, never a patience ack that drops the watch.
+  const softVisitDecision = await resolveSoftVisitTurn({
+    legacySignal: schedulingSignalsBase.softVisit === true,
+    parse: appointmentTimingParse,
+    conditionalAllowed:
+      !watchHandledEarly && !conv.inventoryWatchPending && semanticWatchAction !== "set_watch",
+    text: event.body ?? "",
+    history: recentHistory
+  });
+  const softVisitCommitment = softVisitDecision.arm && !softVisitDecision.conditional;
+  const conditionalSoftVisitCommitment = softVisitDecision.arm && softVisitDecision.conditional;
   if (softVisitCommitment || conditionalSoftVisitCommitment) {
     schedulingSignals.explicit = false;
     schedulingSignals.hasDayTime = false;

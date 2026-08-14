@@ -382,7 +382,12 @@ const CEILINGS: Ceiling[] = [
     // main had already reached 70_411 through later merges, so shipping 70_459 would have handed
     // back 75 lines of headroom this ratchet had already won. 70_384 is the file's ACTUAL size
     // with this change applied, which is what "ceilings are set at the CURRENT size" means.
-    max: 70_384,
+    // 70_384 -> 70_383. The soft-visit arm's two hand-mirrored precedence blocks (live + regen)
+    // replaced by ONE call to resolveSoftVisitTurn (domain/visitCommitmentParser), which wraps the
+    // pure referee resolveSoftVisitCommitment (domain/softVisitSignal). A net ratchet DOWN even
+    // though the slice ADDED a parser and a referee, because both live in domain modules and the
+    // call sites shrank.
+    max: 70_383,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
