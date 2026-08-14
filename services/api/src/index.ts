@@ -628,6 +628,7 @@ import {
   selectHumanThreadNudgeThread,
   hasOpenFutureDatedTodo
 } from "./domain/humanThreadNudge.js";
+import { decideHumanModeWatchClaim, hasWatchPhraseHint } from "./domain/humanModeWatchClaim.js";
 import { referencesPastDatedEvent } from "./domain/pastEventGuard.js";
 import { stripLeadingVinCodes, stripLeadingMakeName, normalizeWatchModelsVin, modelLabelHasVinCode } from "./domain/watchModelVinCodes.js";
 import { trikeClassConflict, isFamilyOnlyModelLabel, referencesFamilyOnlyInText } from "./domain/modelFamily.js";
@@ -60575,13 +60576,10 @@ if (authToken && signature) {
     const humanModeDemoDayQuestion = isDemoDayEventQuestionText(humanModeText);
     const humanModeWatchHint =
       !humanModeDemoDayQuestion &&
-      /\b(let me know|lmk|keep me posted|keep an eye out|watch for|notify me|if you get one|if you get it|if you get another|when you get one|when you get it|when you get another|as soon as one comes in)\b/i.test(
-        humanModeTextLower
-      ) ||
-      (!humanModeDemoDayQuestion && !!conv.inventoryWatchPending) ||
-      (!humanModeDemoDayQuestion && !!conv.inventoryWatch);
+      (hasWatchPhraseHint(humanModeTextLower) || !!conv.inventoryWatchPending || !!conv.inventoryWatch);
     if (humanModeWatchParserEligible && humanModeWatchHint) {
-      humanModeInventoryWatchHandled = true;
+      // Handled flag NOT set here — the hint's "thread has a watch" leg silenced the reply-needed
+      // backstop for every watch-carrying customer (Rick +17168609581; see humanModeWatchClaim.ts).
       const humanModeSemanticSlotParse = await safeLlmParse("semantic_slot_parser_human_mode", () =>
         parseSemanticSlotsWithLLM({
           text: humanModeText,
@@ -60610,14 +60608,16 @@ if (authToken && signature) {
         ? humanModeSemanticSlotParse.watchAction
         : "none";
       const humanModeWatch = humanModeSemanticAccepted ? humanModeSemanticSlotParse.watch : null;
-      const humanModeWatchIntent =
-        !humanModeDemoDayQuestion &&
-        (humanModeWatchAction === "set_watch" ||
-          inboundParserInventoryWatchAcknowledgement ||
-          (!humanModeSemanticConfident &&
-            inboundReplyActionFallbackAllowed &&
-            isWatchConfirmationIntentText(humanModeText)));
+      const humanModeWatchIntent = decideHumanModeWatchClaim({
+        demoDayQuestion: humanModeDemoDayQuestion,
+        semanticWatchAction: humanModeWatchAction,
+        inboundParserWatchAcknowledgement: inboundParserInventoryWatchAcknowledgement,
+        semanticConfident: humanModeSemanticConfident,
+        fallbackAllowed: inboundReplyActionFallbackAllowed,
+        watchConfirmationText: isWatchConfirmationIntentText(humanModeText)
+      });
       if (humanModeWatchIntent) {
+        humanModeInventoryWatchHandled = true;
         const humanModeInventoryEntityParserEligible =
           event.provider === "twilio" &&
           process.env.LLM_ENABLED === "1" &&
