@@ -38,6 +38,7 @@ import {
   hasStaffOutboundDealProgressHintText
 } from "./domain/dealProgressHint.js";
 import { isIndefiniteFollowUpDeferralText } from "./domain/scoringExclusions.js";
+import { buildDraftJudgeHistory, buildDraftJudgeLeadRecord } from "./domain/draftJudgeInputs.js";
 import { findTlpLogCatchupCandidates, isTlpLeadNotFoundError } from "./domain/tlpLogCatchup.js";
 import {
   shouldEscalateStaleHeldDraft,
@@ -5283,7 +5284,8 @@ async function runDraftQualityJudgeShadow(
       // judging a candidate for consistency with one manufactures unfixable holds.
       history: buildDraftJudgeHistory(conv, 8),
       lead: conv.lead,
-      channel
+      channel,
+      leadIntake: buildDraftJudgeLeadRecord(conv, inbound)
     });
     if (!verdict) return;
     const decision = decideDraftQualityGate({ enabled: isDraftQualityJudgeEnabled(), verdict });
@@ -5472,13 +5474,15 @@ async function gateDraftBeforePublish(
         inbound,
         history: buildDraftJudgeHistory(conv, 8),
         lead: conv.lead,
-        channel
+        channel,
+        leadIntake: buildDraftJudgeLeadRecord(conv, inbound)
       }));
     // Confirm-on-block (8/2: 6 of 77 flips, all @0.9) — a pass stands at today's cost; a block
     // must win a vote. Rationale + fail direction: confirmDraftQualityHold (draftQualityGate.ts).
     const confirmed = await confirmDraftQualityHold({
       firstVerdict: verdict,
-      resample: () => judgeDraftQualityWithLLM({ draft: candidate, inbound, history: buildDraftJudgeHistory(conv, 8), lead: conv.lead, channel }),
+      // Confirm vote asks the IDENTICAL question (leadIntake included) or it is a different judge, not a second opinion.
+      resample: () => judgeDraftQualityWithLLM({ draft: candidate, inbound, history: buildDraftJudgeHistory(conv, 8), lead: conv.lead, channel, leadIntake: buildDraftJudgeLeadRecord(conv, inbound) }),
       samples: cadenceQualityConsensusSamples(),
       holdClassOnly: draftQualityHoldClassOnly()
     });
@@ -21419,17 +21423,6 @@ function buildHistory(conv: any, limit = 20) {
 /** History for the DRAFT, ages stamped. Why, and why not for the parsers: formatHistoryTurnAge. */
 function buildDraftHistory(conv: any, limit = 20) {
   return buildEffectiveHistory(conv, limit, { stampAges: true });
-}
-
-/**
- * Thread context for the DRAFT-QUALITY JUDGE only — received turns only. The judge asks "is this
- * draft right for this customer, given what they've heard from us"; an unsent `draft_ai` row is
- * not something they heard. See `buildCustomerReceivedHistory` for the case that motivated it.
- * Every other `buildHistory` consumer (the comprehension parsers, the draft generator) keeps the
- * full effective history on purpose.
- */
-function buildDraftJudgeHistory(conv: any, limit = 8) {
-  return buildCustomerReceivedHistory(conv, limit);
 }
 
 function getRecentMessagesText(conv: any, limit = 12): string {

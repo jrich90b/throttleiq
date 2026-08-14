@@ -14,6 +14,20 @@
  * in `judgeDraftQualityWithLLM` — this module is only the question we ask, not when we ask it.
  */
 
+/** The parsed verdict for the schema below — the two belong together. */
+export type DraftQualityJudgeParse = {
+  // Per-axis pass flags for a customer-facing draft, judged against the customer's turn.
+  intentOk: boolean; // does the draft actually ADDRESS what the customer asked?
+  toneOk: boolean; // is it ON-VOICE (warm, human, not corporate; per the voice charter)?
+  dispositionOk: boolean; // is it RIGHT FOR THE CUSTOMER'S STATE (empathy if stressed; not
+  //                          pushy if not ready; not undercutting if committed)?
+  safetyOk: boolean; // SAFE — no fabricated facts, no premature booking, no compliance issue?
+  overall: "good" | "needs_regenerate" | "hold";
+  confidence?: number;
+  reason?: string;
+  steering?: string; // hint to steer a re-draft when overall !== "good"
+};
+
 export const DRAFT_QUALITY_JUDGE_JSON_SCHEMA: { [key: string]: unknown } = {
   type: "object",
   additionalProperties: false,
@@ -53,6 +67,51 @@ export type DraftQualityUnitFacts = {
   status?: string | null;
 };
 
+/**
+ * What the LEAD RECORD says this person needs, for the turns where the "customer message" is a
+ * structured web-lead form rather than someone typing.
+ *
+ * WHY (David Ventry `+17164233848`, 2026-08-13): his HDFS COA form landed on a thread we were
+ * already mid-deal on. The agent drafted a generic "thanks for the credit application, are you
+ * looking at…"; Scott deleted it and typed "I received your credit APPROVAL for the Fat Boy — did
+ * you sell the Super Glide?". The pre-send judge passed the generic draft, and by its own rules it
+ * was right to: the prompt tells it a form's fields "are NOT requests" (added to stop it inventing
+ * an ask out of `Payment Status: Failed`), so `intent_ok` had nothing to grade and passed by
+ * construction. Correct rule, missing second half.
+ *
+ * Measured 2026-08-14 over 30 days: web-lead forms are 15% of customer turns but 33% of the
+ * wrong-intent corrections staff had to make by hand — the one inbound type where every net is
+ * weakest at once.
+ *
+ * So this block does NOT reinstate "what did they ask". It supplies what a form DOES carry — the
+ * record, and how far along the thread already is — and asks whether the reply fits it.
+ */
+export type DraftQualityLeadIntake = {
+  /** Lead source as delivered, e.g. "HDFS COA Online" / "Traffic Log Pro" / "Riding Academy - Enrolled". */
+  source?: string | null;
+  /** Year + model off the lead record, e.g. "2005 Harley-Davidson Fat Boy". */
+  vehicle?: string | null;
+  /** The form's Inquiry body — machine-generated on most sources, occasionally real customer prose. */
+  inquiry?: string | null;
+  /** Customer-facing replies already sent on this thread. 0 => genuine first touch. */
+  priorReplyCount?: number | null;
+  /** Where the thread already stands, off the route state — e.g. "credit_app", "in_process_deal". */
+  threadStage?: string | null;
+};
+
+/**
+ * Is there enough record here for the judge to test the reply against? A form we know nothing about
+ * beyond its existence gets the pre-2026-08-14 prompt, byte for byte — an empty record block would
+ * only invite the judge to reason about facts it cannot see (the trap `hasCheckableUnitFacts`
+ * already exists to avoid).
+ */
+export function hasUsableLeadIntakeRecord(rec: DraftQualityLeadIntake | null | undefined): boolean {
+  if (!rec) return false;
+  const has = (v: unknown) => String(v ?? "").trim().length > 0;
+  const engaged = typeof rec.priorReplyCount === "number" && rec.priorReplyCount > 0;
+  return has(rec.source) || has(rec.vehicle) || has(rec.inquiry) || has(rec.threadStage) || engaged;
+}
+
 /** True when we resolved enough about a specific unit for the judge to check a number against it. */
 export function hasCheckableUnitFacts(facts: DraftQualityUnitFacts | null | undefined): boolean {
   if (!facts) return false;
@@ -79,9 +138,59 @@ export function buildDraftQualityJudgePrompt(args: {
   leadSource?: string | null;
   channel?: "sms" | "email";
   unitFacts?: DraftQualityUnitFacts | null;
+  leadIntake?: DraftQualityLeadIntake | null;
 }): string {
   const history = args.historyLines ?? [];
   const facts = hasCheckableUnitFacts(args.unitFacts) ? args.unitFacts! : null;
+  const intake = hasUsableLeadIntakeRecord(args.leadIntake) ? args.leadIntake! : null;
+  const engaged = typeof intake?.priorReplyCount === "number" && intake.priorReplyCount > 0;
+  const intakeLines = intake
+    ? [
+        "",
+        "LEAD RECORD — this turn's \"customer message\" is a WEB-LEAD FORM, not this person typing.",
+        "The form's fields are still NOT requests (see the rule below). But the record and the thread",
+        "DO say what this person needs, and that is what you judge the draft against here:",
+        `  ${JSON.stringify({
+          source: intake.source ?? null,
+          vehicle: intake.vehicle ?? null,
+          inquiry: String(intake.inquiry ?? "").slice(0, 400) || null,
+          repliesAlreadySentOnThisThread: intake.priorReplyCount ?? 0,
+          threadStage: intake.threadStage ?? null
+        })}`,
+        "- On these turns intent_ok asks: does the reply FIT THIS RECORD AND THIS THREAD? Not \"did it",
+        "  answer a question\" — there is no question to answer.",
+        ...(engaged
+          ? [
+              "- This thread is ALREADY ENGAGED (we have replied before). Treating a known customer like",
+              "  a stranger is the single most common failure here. Fail intent_ok when the draft:",
+              "    (a) ASKS FOR SOMETHING THE RECORD ALREADY ANSWERS — above all, asking which bike they",
+              "        want, or offering to send options, when `vehicle` names the unit. This is the most",
+              "        common shape and it is always a miss, however warm and fluent the wording.",
+              "    (b) IGNORES `threadStage` — replying to a live credit application, in-process deal, or",
+              "        booked appointment as though it were a brand-new inquiry.",
+              "  A form arriving mid-deal is an UPDATE to a live conversation, not a fresh lead. Read",
+              "  `threadStage` and the recent thread as the CURRENT state of that deal.",
+              "  WORKED EXAMPLE — record {vehicle: \"2005 Fat Boy\", threadStage: \"credit_app\"}.",
+              "    draft: \"Thanks for getting your credit application in! Are you looking at a specific",
+              "    bike, or would you like me to send over some options?\" -> intent_ok FALSE: the record",
+              "    already names the bike, and this answers a stranger, not a customer mid-application.",
+              "    A reply that names the Fat Boy and moves the application forward -> intent_ok TRUE.",
+              "- Two things are NOT failures here, and you must not fail intent_ok for them:",
+              "    * naming a fact you cannot verify from this thread (a trade, a phone call, a promise —",
+              "      reps know things the thread never recorded). Fail only if it CONTRADICTS the record.",
+              "    * saying who you are. Re-introducing after a mass blast or a bare link is normal and",
+              "      human; persona continuity is judged elsewhere, not here."
+            ]
+          : [
+              "- This is a genuine FIRST TOUCH (no reply sent yet). An introduction is correct here.",
+              "  Judge whether the reply uses what the record gives — the source and the vehicle — rather",
+              "  than asking for something the form already told us."
+            ]),
+        "- Do NOT invent an ask out of a field. A form saying `Payment Status: Failed` is not the",
+        "  customer asking about pricing, and a draft that does not \"answer\" it is not a miss.",
+        "- Absence of a fact is never evidence the draft is wrong. Judge fit, not completeness."
+      ]
+    : [];
   const factLines = facts
     ? [
         "",
@@ -183,6 +292,7 @@ export function buildDraftQualityJudgePrompt(args: {
         ]
       : []),
     ...factLines,
+    ...intakeLines,
     "",
     `Channel: ${args.channel ?? "sms"}`,
     `Known lead: ${JSON.stringify({

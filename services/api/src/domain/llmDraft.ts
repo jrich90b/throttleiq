@@ -54,7 +54,7 @@ import {
   DRAFT_QUALITY_JUDGE_JSON_SCHEMA,
   buildDraftQualityJudgePrompt,
   coerceDraftQualityOverall,
-  type DraftQualityUnitFacts
+  type DraftQualityJudgeParse, type DraftQualityLeadIntake, type DraftQualityUnitFacts
 } from "./draftQualityJudgePrompt.js";
 import {
   WALK_IN_OUTCOME_PARSER_JSON_SCHEMA,
@@ -2805,18 +2805,8 @@ export type ConversationCloseoutParse = {
   confidence?: number;
 };
 
-export type DraftQualityJudgeParse = {
-  // Per-axis pass flags for a customer-facing draft, judged against the customer's turn.
-  intentOk: boolean; // does the draft actually ADDRESS what the customer asked?
-  toneOk: boolean; // is it ON-VOICE (warm, human, not corporate; per the voice charter)?
-  dispositionOk: boolean; // is it RIGHT FOR THE CUSTOMER'S STATE (empathy if stressed; not
-  //                          pushy if not ready; not undercutting if committed)?
-  safetyOk: boolean; // SAFE — no fabricated facts, no premature booking, no compliance issue?
-  overall: "good" | "needs_regenerate" | "hold";
-  confidence?: number;
-  reason?: string;
-  steering?: string; // hint to steer a re-draft when overall !== "good"
-};
+// The judge's parsed verdict now lives beside the schema it parses (draftQualityJudgePrompt.ts).
+export type { DraftQualityJudgeParse } from "./draftQualityJudgePrompt.js";
 
 export type ContextFidelityScoreParse = {
   // "Answering out of context" detector. Judges whether a reply is faithful to THIS turn — i.e.
@@ -10513,6 +10503,7 @@ export async function judgeDraftQualityWithLLM(args: {
   // (or without a checkable number) => the prompt is byte-identical to the pre-2026-08-04 prompt,
   // so every caller that cannot resolve a single unit keeps today's behaviour exactly.
   unitFacts?: DraftQualityUnitFacts | null;
+  leadIntake?: DraftQualityLeadIntake | null; // LEAD RECORD, web-lead-form turns only; omitted => byte-identical prompt
 }): Promise<DraftQualityJudgeParse | null> {
   const useLLM =
     process.env.LLM_ENABLED === "1" &&
@@ -10541,7 +10532,8 @@ export async function judgeDraftQualityWithLLM(args: {
     leadModel: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
     leadSource: lead?.source ?? null,
     channel: args.channel,
-    unitFacts: args.unitFacts ?? null
+    unitFacts: args.unitFacts ?? null,
+    leadIntake: args.leadIntake ?? null // null on every typed message => prompt unchanged
   });
 
   const runParse = async (model: string): Promise<any | null> =>

@@ -396,7 +396,11 @@ const CEILINGS: Ceiling[] = [
     // (applyInventoryNotifyPromiseOutcome), and the watch-condition helper family
     // (normalizeWatchCondition + two siblings) moved to conversationStore beside the watch
     // machinery that uses it — funding the new ~28-line apply call site with one line to spare.
-    max: 70_378,
+    // 70_378 -> 70_371. The pre-send judge's INPUT assembly moved out to domain/draftJudgeInputs.ts
+    // so the web-lead lane can hand the judge the lead record instead of an empty ask. Re-derived on
+    // the INTEGRATED tree (ROUTINE_CONTRACT rule 3): authored against a pre-#709 main, and #709
+    // landed -1 first, so this is taken against main's REAL 70_378, not the branch's own baseline.
+    max: 70_371,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
