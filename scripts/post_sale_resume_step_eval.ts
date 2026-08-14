@@ -58,10 +58,21 @@ assert.deepEqual(
 const ken = resolvePostSaleResumeStep(KEN_SOLD_AT, KEN_REPEAT_AT, TZ);
 assert.ok(ken, "Ken's sale still has an owner touch ahead of it");
 assert.equal(ken.stepIndex, 1, "Ken resumes at the day-60 step, not the day-1 step he already got");
-assert.equal(
-  ken.nextDueAt.slice(0, 10),
-  "2026-08-14",
-  "Ken's next owner touch is the day-60 one on 2026-08-14"
+// Ken's day-60 due is 2026-08-14 10:30 ET — but computePostSaleDueAt NEVER returns a past
+// instant: it rolls forward day-by-day off the REAL clock (deliberate: a rebuilt cadence must
+// never schedule into the past), so a literal "2026-08-14" pin turned red the moment the real
+// clock passed 14:30Z on 8/14 (the eval-red-at-midnight class — this is why the date is not
+// asserted verbatim). The invariants that survive any clock: never earlier than the day-60
+// date, and never more than one roll-forward day past the later of day-60 and the real now.
+const kenDay60Ms = Date.parse("2026-08-14T14:30:00.000Z");
+const kenDueMs = Date.parse(ken.nextDueAt);
+assert.ok(
+  kenDueMs >= kenDay60Ms,
+  `Ken's next owner touch is never earlier than his day-60 date (got ${ken.nextDueAt})`
+);
+assert.ok(
+  kenDueMs <= Math.max(kenDay60Ms, Date.now()) + 25 * 3_600_000,
+  `the roll-forward lands within a day of the later of day-60 and the real clock (got ${ken.nextDueAt})`
 );
 assert.notEqual(
   ken.stepIndex,
