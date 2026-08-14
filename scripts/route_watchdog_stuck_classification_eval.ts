@@ -31,6 +31,7 @@ import {
   type StuckConvLike,
   type StuckSuppressionReason
 } from "../services/api/src/domain/routeWatchdogClassification.ts";
+import { isLeadIntakeRenotificationOnEngagedThread } from "../services/api/src/domain/scoringExclusions.ts";
 
 // --- 1) Source guard (no logic): the watchdog must consume the classifier and
 //        emit the segmented shape so agent_manager reads an accurate count. ---
@@ -93,6 +94,40 @@ assert.ok(
   /stuckMaxAgeSec\s*\*\s*1000/.test(watchdog),
   "the outcome lookup window must be widened to the stuck ceiling, not the report window"
 );
+// Same division of labour for the lead-intake re-notification suppression: the
+// shared matcher reads the text, the watchdog derives the prior-outbound fact, and
+// the classifier only ever sees a boolean. Pin the EXACT call shape (not two loose
+// substrings) so renaming the option silently unwires it and stays green.
+assert.ok(
+  /isLeadIntakeRenotificationOnEngagedThread/.test(watchdog),
+  "the watchdog must source the lead-intake matcher from the shared scoringExclusions module"
+);
+assert.ok(
+  /lastInboundIsLeadIntakeRenotification:\s*isLeadIntakeRenotificationOnEngagedThread\(/.test(watchdog),
+  "the watchdog must pass lastInboundIsLeadIntakeRenotification: isLeadIntakeRenotificationOnEngagedThread(...)"
+);
+// The suppression's ENTIRE fail-direction guard is `hasPriorOutbound`. If the
+// watchdog stopped computing it (or passed a constant), a brand-new lead's first
+// unanswered ADF would be silenced — the exact miss this watchdog exists to catch.
+// Measured sabotage: merely asserting the words `hasPriorOutbound` appear inside the
+// call survives replacing it with the literal `hasPriorOutbound: true`, which turns
+// the guard off entirely (every intake payload suppressed, first touches included)
+// while the eval stays green. So inspect the call's own argument object and reject a
+// constant.
+const leadIntakeCall =
+  watchdog.match(/isLeadIntakeRenotificationOnEngagedThread\(\{[\s\S]{0,240}?\}\)/)?.[0] ?? "";
+assert.ok(
+  /\bhasPriorOutbound\b/.test(leadIntakeCall),
+  "the lead-intake matcher must be handed the prior-outbound fact"
+);
+assert.ok(
+  !/hasPriorOutbound\s*:\s*(?:true|false)\b/.test(leadIntakeCall),
+  "hasPriorOutbound must be the derived value, never a constant — a constant true suppresses first touches"
+);
+assert.ok(
+  /const hasPriorOutbound[\s\S]{0,400}?outAtMs\s*<\s*inboundAtMs/.test(watchdog),
+  "hasPriorOutbound must be derived from an outbound STRICTLY BEFORE the flagged inbound"
+);
 const classifier = fs.readFileSync(
   "services/api/src/domain/routeWatchdogClassification.ts",
   "utf8"
@@ -117,6 +152,7 @@ type Row = {
   lastInboundIsReactionOnly?: boolean;
   lastInboundJudgedNoResponse?: boolean;
   hasPendingEmailDraftReply?: boolean;
+  lastInboundIsLeadIntakeRenotification?: boolean;
 };
 
 const rows: Row[] = [
@@ -183,6 +219,24 @@ const rows: Row[] = [
   { id: "closed_beats_email_draft_pending", conv: { status: "closed", mode: "suggest", followUp: { mode: "active" } }, ageSec: RECENT, actionable: false, reason: "closed", hasPendingEmailDraftReply: true },
   // A recorded silence verdict is the more informative reason when both apply.
   { id: "judged_beats_email_draft_pending", conv: { status: null, mode: "suggest", followUp: { mode: "active" } }, ageSec: RECENT, actionable: false, reason: "judged_no_response", lastInboundJudgedNoResponse: true, hasPendingEmailDraftReply: true },
+  // The lead provider re-delivered an intake payload onto an already-engaged thread
+  // (Mitchell Davis +17165975331, 2026-08-13: the SAME Riding Academy enrollment ADF
+  // twice, 18 min apart — refs 11786/11787 — the second landing just outside the
+  // ingest deduper's 15-minute window and failing the release gate on its own).
+  { id: "lead_intake_renotification", conv: { status: null, mode: "suggest", followUp: { mode: "active" } }, ageSec: RECENT, actionable: false, reason: "lead_intake_renotification", lastInboundIsLeadIntakeRenotification: true },
+  // FAIL DIRECTION, the whole point: a NEW lead's first intake payload has no prior
+  // outbound, so the matcher returns false and the genuine "we never answered this
+  // lead" miss stays actionable.
+  { id: "first_intake_payload_stays_actionable", conv: { status: null, mode: "suggest", followUp: { mode: "active" } }, ageSec: RECENT, actionable: true, reason: null, lastInboundIsLeadIntakeRenotification: false },
+  // An absent flag behaves like "not a re-notification", never like one.
+  { id: "absent_lead_intake_flag_stays_actionable", conv: { status: null, mode: "suggest", followUp: { mode: "active" } }, ageSec: RECENT, actionable: true, reason: null },
+  // A terminal state still outranks it (priority order).
+  { id: "closed_beats_lead_intake_renotification", conv: { status: "closed", mode: "suggest", followUp: { mode: "active" } }, ageSec: RECENT, actionable: false, reason: "closed", lastInboundIsLeadIntakeRenotification: true },
+  // A recorded silence verdict is the more informative reason when both apply.
+  { id: "judged_beats_lead_intake_renotification", conv: { status: null, mode: "suggest", followUp: { mode: "active" } }, ageSec: RECENT, actionable: false, reason: "judged_no_response", lastInboundJudgedNoResponse: true, lastInboundIsLeadIntakeRenotification: true },
+  // ...and it outranks the bare age ceiling — "this was never a customer turn" beats
+  // "it got old" for triage.
+  { id: "lead_intake_beats_aged_out", conv: { status: null, mode: "suggest", followUp: { mode: "active" } }, ageSec: OLD, actionable: false, reason: "lead_intake_renotification", lastInboundIsLeadIntakeRenotification: true },
   // Missing followUp / mode are tolerated → recent unsuppressed stays actionable.
   { id: "actionable_sparse_conv", conv: { status: null, mode: "suggest", followUp: null }, ageSec: RECENT, actionable: true, reason: null },
   // A custom (smaller) ceiling still suppresses a turn beyond it.
@@ -196,13 +250,54 @@ for (const r of rows) {
     hasOpenCallTask: r.hasOpenCallTask,
     lastInboundIsReactionOnly: r.lastInboundIsReactionOnly,
     lastInboundJudgedNoResponse: r.lastInboundJudgedNoResponse,
-    hasPendingEmailDraftReply: r.hasPendingEmailDraftReply
+    hasPendingEmailDraftReply: r.hasPendingEmailDraftReply,
+    lastInboundIsLeadIntakeRenotification: r.lastInboundIsLeadIntakeRenotification
   });
   assert.equal(got.actionable, r.actionable, `classify[${r.id}] actionable expected ${r.actionable}, got ${got.actionable}`);
   assert.equal(
     got.suppressionReason,
     r.reason,
     `classify[${r.id}] reason expected ${r.reason}, got ${got.suppressionReason}`
+  );
+}
+
+// --- 2a-bis) The lead-intake matcher, on the REAL body that failed the gate. The
+//         decision table above proves the classifier honours the boolean; this
+//         proves the boolean is produced for production's actual payload and, more
+//         importantly, is NOT produced for the first copy of it. ---
+const MITCHELL_ADF_11787 = [
+  "WEB LEAD (ADF)",
+  "Source: Riding Academy - Enrolled",
+  "Ref: 11787",
+  "Name: Mitchell Davis",
+  "Email: thecarcrew7799@gmail.com",
+  "Phone: 7165975331",
+  "Year: 2026",
+  "Vehicle: Harley-Davidson Full Line",
+  "",
+  "Inquiry:",
+  "Enrollment Status: Enrolled-Course: New Rider Course - eCourse + Range-Class Start Date: 8/22/2026-Gender: Male-Motivation: Obtain a license-Motorcycle Riding History: I have operated an on-road motorcycle within the last 12 months-Training Experience: No-Payment Status: Failed-Future Motorcycle Purchase Expectation: Not sure-Future Motorcycle Purchase Brand: Harley-Davidson-Accepted Terms and Conditions: true"
+].join("\n");
+
+assert.equal(
+  isLeadIntakeRenotificationOnEngagedThread({ body: MITCHELL_ADF_11787, hasPriorOutbound: true }),
+  true,
+  "the re-delivered Riding Academy ADF on an engaged thread must be recognised as a lead-intake re-notification"
+);
+// The SAME body on a thread we have never replied to is the first submission —
+// ref 11786, which the agent did answer in 6 seconds. Had it not, that silence is a
+// real miss and must keep failing the gate.
+assert.equal(
+  isLeadIntakeRenotificationOnEngagedThread({ body: MITCHELL_ADF_11787, hasPriorOutbound: false }),
+  false,
+  "a first intake payload (no prior outbound) must never be suppressed"
+);
+// A human typing on an engaged thread is never an intake payload, however brief.
+for (const humanBody of ["Ok. Friday. Afternoon", "whats the ref on my lead source?", "Thanks!"]) {
+  assert.equal(
+    isLeadIntakeRenotificationOnEngagedThread({ body: humanBody, hasPriorOutbound: true }),
+    false,
+    `a customer-authored turn must never be suppressed as intake (${humanBody})`
   );
 }
 

@@ -5,6 +5,7 @@ import {
   hasPendingFirstTouchEmailDraft,
   isAutomatedSenderInbound,
   isBareReactionOnlyInbound,
+  isLeadIntakeRenotificationOnEngagedThread,
   isNonSalesConversation,
   isShadowReplayMessage
 } from "../services/api/src/domain/scoringExclusions.ts";
@@ -195,6 +196,17 @@ function collectStuckTurns(
       const ageSec = Math.floor((nowMs - inboundAtMs) / 1000);
       if (ageSec < olderThanSec) return null;
 
+      // Was this thread already engaged BEFORE the flagged inbound landed? Strictly
+      // before: `hasOutboundAfter` above has already ruled out anything at or after
+      // it. Feeds the `lead_intake_renotification` suppression, whose whole safety
+      // rests on this — a new lead's first intake payload has no prior outbound and
+      // therefore stays actionable.
+      const hasPriorOutbound = messages.some((m: any) => {
+        if (m?.direction !== "out") return false;
+        const outAtMs = toMs(String(m?.at ?? ""));
+        return Number.isFinite(outAtMs) && outAtMs < inboundAtMs;
+      });
+
       const classification = classifyStuckTurn(conv, {
         ageSec,
         maxAgeSec,
@@ -205,7 +217,11 @@ function collectStuckTurns(
           leadKey: String(conv?.leadKey ?? ""),
           inboundAtMs
         }),
-        hasPendingEmailDraftReply: hasPendingFirstTouchEmailDraft(conv)
+        hasPendingEmailDraftReply: hasPendingFirstTouchEmailDraft(conv),
+        lastInboundIsLeadIntakeRenotification: isLeadIntakeRenotificationOnEngagedThread({
+          body: lastInbound?.body,
+          hasPriorOutbound
+        })
       });
 
       return {

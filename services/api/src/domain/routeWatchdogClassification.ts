@@ -30,6 +30,7 @@ export type StuckSuppressionReason =
   | "reaction_only"
   | "judged_no_response"
   | "email_draft_pending"
+  | "lead_intake_renotification"
   | "aged_out";
 
 export type StuckClassification = {
@@ -120,6 +121,7 @@ export function classifyStuckTurn(
     lastInboundIsReactionOnly?: boolean;
     lastInboundJudgedNoResponse?: boolean;
     hasPendingEmailDraftReply?: boolean;
+    lastInboundIsLeadIntakeRenotification?: boolean;
   }
 ): StuckClassification {
   // A closed conversation can never be a live routing stall (sold / opt-out /
@@ -208,6 +210,33 @@ export function classifyStuckTurn(
   // no draft, or a second customer email that got dropped, stays ACTIONABLE.
   if (opts.hasPendingEmailDraftReply === true) {
     return { actionable: false, suppressionReason: "email_draft_pending" };
+  }
+
+  // The "customer message" is a LEAD-INTAKE PAYLOAD re-delivered by the lead
+  // provider onto a thread we are already engaged on — a second `WEB LEAD (ADF)`
+  // / `PHONE LOG (ADF)` / `WEB TEXT WIDGET` envelope, not a human typing again.
+  // Nobody is waiting on a reply to it, so the agent's silence is correct and the
+  // row is a phantom stall.
+  //
+  // Mitchell Davis +17165975331, 2026-08-13: he submitted the SAME Riding Academy
+  // enrollment form twice, 18 minutes apart (refs 11786 then 11787, byte-identical
+  // Inquiry block). The first was answered in 6 seconds; the second landed just
+  // outside the ingest deduper's 15-minute window (`isDuplicateInboundEvent`), so
+  // it was stored as a fresh inbound and became the day's ONLY actionable stuck
+  // turn — failing the release gate on a duplicate form submission.
+  //
+  // Same exclusion the tone scorer already applies to this exact shape
+  // (`isLeadIntakeRenotificationOnEngagedThread`, Kody Erhard +17163975098) — the
+  // watchdog simply never consulted it. Division of labour matches `reaction_only`
+  // and `email_draft_pending`: the shape test lives in the shared, eval-pinned
+  // scoringExclusions module and reaches this pure decision as a boolean, so no
+  // message text is read here.
+  //
+  // FAIL DIRECTION: the predicate REQUIRES a prior outbound, so a brand-new lead's
+  // FIRST intake payload with no reply at all — the genuine "we never answered this
+  // lead" miss — stays ACTIONABLE and keeps failing the gate.
+  if (opts.lastInboundIsLeadIntakeRenotification === true) {
+    return { actionable: false, suppressionReason: "lead_intake_renotification" };
   }
 
   const maxAgeSec = Number.isFinite(opts.maxAgeSec) ? (opts.maxAgeSec as number) : STUCK_MAX_AGE_SEC_DEFAULT;
