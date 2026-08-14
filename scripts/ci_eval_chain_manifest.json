@@ -181,6 +181,7 @@
     "proactive_visit_invite:eval",
     "soft_visit_commitment:eval",
     "soft_visit_precedence:eval",
+    "callback_request_not_a_reminder_pause:eval",
     "visit_commitment_parser:eval",
     "soft_visit_miss:eval",
     "soft_visit_outcome:eval",
