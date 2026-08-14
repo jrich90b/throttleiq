@@ -20,7 +20,9 @@
  */
 import { strict as assert } from "node:assert";
 import fs from "node:fs";
-const { resolveAppointmentTag } = await import("../apps/web/src/app/lib/appointmentTag.ts");
+const { resolveAppointmentTag, isTaskCoveredByAppointmentTag } = await import(
+  "../apps/web/src/app/lib/appointmentTag.ts"
+);
 
 let n = 0;
 const T = (cond: boolean, msg: string) => {
@@ -93,11 +95,84 @@ T(noText !== null && noText.title === "Appointment booked", "missing whenText: p
 // "booked" is accepted alongside "confirmed" so a future writer spelling it that way is not silently dropped.
 T(resolveAppointmentTag(bookedConv({}, { status: "booked" }), now, rel) !== null, 'status "booked" also shows');
 
+// --- The pill and the task chip must not both describe the same visit (Joe, 2026-08-14:
+//     "why does Brent Marshall have two tags in it for appointments in the inbox"). Booking writes
+//     an appointment record AND an open `taskClass: "appointment"` todo, so adding the pill made
+//     every booked row say the same visit twice — 4 of 4 on the live store that morning.
+//
+//     FAIL DIRECTION under test: hiding real work is far worse than a duplicate tag. The predicate
+//     suppresses ONLY a task provably about the appointment on show. ---
+
+/** Brent Marshall +17169941544, exactly as stored: task due == appointment whenIso, to the ms. */
+const BRENT_APPT_ISO = "2026-08-15T13:30:00.000Z";
+const brentConv = (over: Record<string, any> = {}) => ({
+  id: "+17169941544",
+  status: "open",
+  appointment: { status: "confirmed", whenIso: BRENT_APPT_ISO, whenText: "Sat, Aug 15, 9:30 AM", ...over }
+});
+const apptTask = (over: Record<string, any> = {}) => ({
+  taskClass: "appointment",
+  reason: "other",
+  dueAt: BRENT_APPT_ISO,
+  summary: "Appointment scheduled for Sat, Aug 15, 9:30 AM.",
+  ...over
+});
+
+T(
+  isTaskCoveredByAppointmentTag(apptTask(), brentConv(), true) === true,
+  "the live Brent shape: the pill already says this — chip drops it"
+);
+// THE fail direction. No pill ⇒ the chip is the only surface that can carry the appointment.
+T(
+  isTaskCoveredByAppointmentTag(apptTask(), brentConv(), false) === false,
+  "no pill on the row: the task is NEVER hidden"
+);
+// Only appointment-class tasks. Brent's other open task is the one the duplicate was hiding.
+T(
+  isTaskCoveredByAppointmentTag(
+    { taskClass: "followup", dueAt: BRENT_APPT_ISO, summary: "Deal in process — needs your answer." },
+    brentConv(),
+    true
+  ) === false,
+  "a follow-up task due at the same moment is different work and stays"
+);
+T(
+  isTaskCoveredByAppointmentTag({ taskClass: "todo", dueAt: BRENT_APPT_ISO }, brentConv(), true) === false,
+  "a dealer-ride outcome todo (taskClass 'todo') can never be swallowed"
+);
+// Exact-match, deliberately. A task and an appointment an hour apart describe DIFFERENT times, and
+// that disagreement is a defect we have shipped before — showing both is how staff can see it.
+T(
+  isTaskCoveredByAppointmentTag(apptTask({ dueAt: "2026-08-15T14:30:00.000Z" }), brentConv(), true) === false,
+  "a task an hour off the booked slot is a real disagreement — show both, do not hide it"
+);
+T(
+  isTaskCoveredByAppointmentTag(apptTask({ dueAt: "2026-08-15T13:30:01.000Z" }), brentConv(), true) === false,
+  "one second off is still off — the match is exact, never fuzzy"
+);
+// Degenerate input must fail toward SHOWING the task.
+T(isTaskCoveredByAppointmentTag(apptTask({ dueAt: null }), brentConv(), true) === false, "task with no due date: shown");
+T(isTaskCoveredByAppointmentTag(apptTask({ dueAt: "nope" }), brentConv(), true) === false, "unparseable due: shown");
+T(isTaskCoveredByAppointmentTag(apptTask(), brentConv({ whenIso: "" }), true) === false, "appointment with no time: shown");
+T(isTaskCoveredByAppointmentTag(apptTask(), { id: "x" }, true) === false, "no appointment object: shown");
+T(isTaskCoveredByAppointmentTag(null, brentConv(), true) === false, "no task: false");
+T(isTaskCoveredByAppointmentTag(apptTask(), null, true) === false, "no conversation: false");
+// `appointmentWhenIso` is row CONTEXT stamped on EVERY task of a booked lead — keying on it would
+// suppress unrelated work. The predicate must read the task's OWN dueAt.
+T(
+  isTaskCoveredByAppointmentTag(
+    { taskClass: "followup", dueAt: null, appointmentWhenIso: BRENT_APPT_ISO, summary: "Call them back" },
+    brentConv(),
+    true
+  ) === false,
+  "appointmentWhenIso is context, not the task's date — an unrelated task is never hidden by it"
+);
+
 // --- Wiring: a pure predicate nobody calls is not a fix. ---
 const inbox = fs.readFileSync("apps/web/src/app/components/InboxSection.tsx", "utf8");
 assert.match(
   inbox,
-  /import \{ resolveAppointmentTag \} from "\.\.\/lib\/appointmentTag"/,
+  /import \{[^}]*\bresolveAppointmentTag\b[^}]*\} from "\.\.\/lib\/appointmentTag"/,
   "InboxSection imports the predicate"
 );
 assert.match(
@@ -110,6 +185,39 @@ assert.ok(
   inbox.includes("{appointmentTag ? (") && inbox.includes("{appointmentTag.label}"),
   "the pill renders only when the predicate returned a tag, and prints the predicate's own label"
 );
-n += 3;
+assert.match(
+  inbox,
+  /import \{ isTaskCoveredByAppointmentTag, resolveAppointmentTag \} from "\.\.\/lib\/appointmentTag"/,
+  "InboxSection imports the coverage predicate too"
+);
+// The filter must sit BEFORE chip selection, or the row still picks the duplicate as its chip.
+assert.match(
+  inbox,
+  /const openTasks = allOpenTasks\.filter\([\s\S]{0,160}?isTaskCoveredByAppointmentTag\(t, c, !!appointmentTag\)/,
+  "the row filters the covered task out of openTasks, keyed on THIS row's pill"
+);
+assert.ok(
+  inbox.indexOf("const openTasks = allOpenTasks.filter(") < inbox.indexOf("const chipTask = (() => {"),
+  "the filter must run before the chip is chosen"
+);
+// MEASURED SABOTAGE: filtering into `openTasks` and then letting the chip loop keep reading
+// `allOpenTasks` restores the duplicate exactly, and every assertion above stays green. So the
+// unfiltered list must be referenced NOWHERE except its own declaration and the filter that
+// consumes it — any third use is the row reaching around the fix.
+{
+  const uses = inbox.match(/\ballOpenTasks\b/g) ?? [];
+  assert.equal(
+    uses.length,
+    2,
+    `allOpenTasks may appear only twice (declaration + the filter); found ${uses.length} — the row is reading the unfiltered list somewhere`
+  );
+}
+// And the count beside the chip must count what is SHOWN, not the pre-filter list — otherwise the
+// row reads "+1" for work it is deliberately not naming.
+assert.ok(
+  !/openTasks\.length[\s\S]{0,40}allOpenTasks/.test(inbox) && inbox.includes("{openTasks.length > 1 ? ("),
+  "the +N overflow count is derived from the filtered list"
+);
+n += 8;
 
 console.log(`PASS inbox appointment pill eval (${n} assertions)`);

@@ -4,7 +4,7 @@ import { SideNavIcon } from "./UiIcon";
 import { dueBucketFor, relativeDueLabel, taskEffectiveDueMs } from "../lib/taskTriage";
 import { salesCriticalKind, SALES_REASON_META } from "../lib/taskReason";
 import { isCampaignSentTagFresh } from "../lib/campaignTag";
-import { resolveAppointmentTag } from "../lib/appointmentTag";
+import { isTaskCoveredByAppointmentTag, resolveAppointmentTag } from "../lib/appointmentTag";
 
 // Turn a stored close reason ("not_interested", "wrong_number", free text) into
 // a short human label for the Closed badge, so "Closed" always says WHY.
@@ -449,7 +449,20 @@ export function InboxSection(props: any) {
                     // lib/appointmentTag.ts for the fail direction (show nothing rather than a
                     // visit that was cancelled or has already happened).
                     const appointmentTag = resolveAppointmentTag(c, nowMs, relativeDueLabel);
-                    const openTasks = openTasksByConv?.get(c.id) ?? [];
+                    const allOpenTasks = openTasksByConv?.get(c.id) ?? [];
+                    // The task line shows work the APPOINTMENT PILL does not already describe.
+                    // Booking writes both an appointment record and an "Appointment scheduled for…"
+                    // task, so before this the row said the same visit twice — pill and chip, same
+                    // relative time, side by side (Joe, 8/14, Brent Marshall +17169941544; 4 of 4
+                    // booked rows were doubled). Dropping the covered task also frees the chip for
+                    // the lead's REAL outstanding work, which the duplicate was hiding: on Brent
+                    // that is a deal-in-process item waiting on an answer.
+                    // Fail direction lives in isTaskCoveredByAppointmentTag — it suppresses only a
+                    // task provably about the appointment on show, so no pill means nothing is ever
+                    // hidden.
+                    const openTasks = allOpenTasks.filter(
+                      (t: any) => !isTaskCoveredByAppointmentTag(t, c, !!appointmentTag)
+                    );
                     const primaryOpenTask = openTasks[0] ?? null;
                     const openTaskTitle = primaryOpenTask
                       ? (todoTaskTitle?.(primaryOpenTask) ?? "Open task")

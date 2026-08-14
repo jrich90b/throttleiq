@@ -66,3 +66,46 @@ export function resolveAppointmentTag(
     title: whenText ? `Appointment: ${whenText}` : "Appointment booked"
   };
 }
+
+/**
+ * Does the appointment PILL already say what this task says?
+ *
+ * WHY (Joe, 2026-08-14, on Brent Marshall `+17169941544`: "why does Brent Marshall have two tags
+ * in it for appointments in the inbox"). Booking a lead writes an `appointment` record AND an open
+ * `taskClass: "appointment"` todo. The row's task chip has always shown the most urgent open task,
+ * so that todo rendered as "Appointment task · tomorrow". Adding the pill the same morning made
+ * the row say the same visit twice, side by side, both stamped with the same relative time. On the
+ * live store every single booked row was doubled (4 of 4).
+ *
+ * This module's own header already warns that "two pills competing to describe the same
+ * appointment is how a row stops being readable" — it guarded the Outcome pill and missed the task
+ * chip. This closes that.
+ *
+ * FAIL DIRECTION: hiding real work is far worse than a duplicate tag, so this suppresses ONLY when
+ * the task is provably about the appointment the pill is already showing:
+ *   - the pill is actually rendering (no pill ⇒ the chip is the only surface, never suppress), AND
+ *   - the task is appointment-class, AND
+ *   - the task's OWN due time equals the appointment's time, to the millisecond.
+ *
+ * That last clause is deliberately exact rather than fuzzy. If the two disagree, they are
+ * describing DIFFERENT times, and staff need to see both — that disagreement is a real defect we
+ * have hit before (an appointment whose `whenText` and booked slot differ), and a tolerant match
+ * would hide it. Read the task's own `dueAt`: `appointmentWhenIso` is stamped onto every task on a
+ * booked conversation as row CONTEXT, so keying on it would suppress unrelated tasks.
+ */
+export function isTaskCoveredByAppointmentTag(
+  task: any,
+  conversation: any,
+  hasAppointmentTag: boolean
+): boolean {
+  if (!hasAppointmentTag) return false;
+  if (String(task?.taskClass ?? "").trim().toLowerCase() !== "appointment") return false;
+
+  const apptMs = new Date(String(conversation?.appointment?.whenIso ?? "").trim()).getTime();
+  if (!Number.isFinite(apptMs)) return false;
+
+  const dueMs = new Date(String(task?.dueAt ?? "").trim()).getTime();
+  if (!Number.isFinite(dueMs)) return false;
+
+  return dueMs === apptMs;
+}
