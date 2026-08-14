@@ -49,11 +49,6 @@ const MIRRORED_LOCALS_BASELINE = 252;
 // best-effort classification — re-verify (and either wire into both paths or re-justify)
 // whenever the symbol's call site changes.
 const SINGLE_PATH_BASELINE: Record<string, { path: "live" | "regen"; reason: string }> = {
-  resolveInventoryNotifyPromisePlan: {
-    path: "live",
-    reason:
-      "runs inside the manual-outbound promise arm (a STAFF SEND side effect, sibling of decideManualOutboundPromise): a rep's 'we'll keep an eye out' mints a watch or a dated task. Regenerate is a staff member asking for a draft — no send happened, so there is no promise to follow through (kunwarsahilnaseem@gmail.com)"
-  },
   decideHumanModeWatchClaim: {
     path: "live",
     reason:
