@@ -383,6 +383,7 @@
     "draft_prompt_fingerprint:eval",
     "fewshot_exemplar_gate:eval",
     "task_date_render:eval",
+    "task_due_inheritance:eval",
     "sold_outcome_unit_picker:eval",
     "model_display_name:eval",
     "non_motorcycle_trade:eval",

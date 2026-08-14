@@ -86,6 +86,21 @@ export function parseSaneTaskDateMs(value: unknown, nowMs = Date.now()): number 
 
 // The single timestamp a task is sorted/triaged by. An appointment is anchored
 // to its event time; everything else to its due time, then its reminder time.
+//
+// ⚠️ `appointmentWhenIso` is NOT the task's own date. The todos endpoint stamps it onto EVERY
+// task on a conversation that has an appointment (it is row CONTEXT — "this lead is booked Tue
+// 9:30"), so an unrelated `todo`/`followup`/`reminder` carrying no due date of its own used to
+// inherit the LEAD's appointment as its due time. Operator-reported twice on +17169400722
+// ("There was a task created and immediately was set to yesterday", 8/12; "Last message created
+// a overdue task 2 days old", 2026-08-13 22:46Z): a "needs YOUR reply" task minted at 22:31
+// rendered Overdue by 2 days because that lead's appointment had been Aug 11, 9:30 AM.
+// Measured on the live store 2026-08-14: 133 tasks minted into that bucket in 30d — 51 born
+// overdue against an appointment that had ALREADY happened, and the other 82 dated to a FUTURE
+// appointment, which pushes fresh work DOWN the inbox instead. Both directions are wrong.
+// Only an appointment-class task is appointment-anchored; everything else with no date of its
+// own is `no_date`, which is the truth. That also makes the console agree with the API's own
+// overdue count (domain/copilotInsights.ts), which has always read `dueAt` alone.
+// Display/sort only — nothing closes. Pinned by task_due_inheritance:eval.
 export function taskEffectiveDueMs(todo: TaskLike | null | undefined): number | null {
   if (!todo) return null;
   const cls = String(todo.taskClass ?? "").toLowerCase();
@@ -95,7 +110,6 @@ export function taskEffectiveDueMs(todo: TaskLike | null | undefined): number | 
   if (cls === "appointment" && appt != null) return appt;
   if (due != null) return due;
   if (reminder != null) return reminder;
-  if (appt != null) return appt;
   return null;
 }
 
