@@ -54,6 +54,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 
+import { decideHumanModeWatchClaim } from "../services/api/src/domain/humanModeWatchClaim.ts";
+
 const apiIndex = fs.readFileSync(path.join(process.cwd(), "services/api/src/index.ts"), "utf8");
 
 // --- Locate the human-mode re-engagement backstop terminus block ---
@@ -104,18 +106,112 @@ assert.ok(
   "the human-mode backstop creates a task only — it never composes/sends a customer-facing reply"
 );
 
-// 3. The watch-handled flag is declared once and set inside the watch arm (prevents double-tasking).
+// 3. The watch-handled flag is set on the PARSER-LED CLAIM, never on the eligibility hint.
+//
+// Until 2026-08-14 this pin asserted the flag was set in the arm HEAD — which pinned the bug:
+// the hint's "thread has a watch at all" leg meant every message from a watch-carrying customer
+// was marked "already surfaced as a watch", and the reply-needed backstop below never fired
+// (Rick Williamson +17168609581: a pure finance question mid-negotiation, 16h of silence; 24
+// human-mode threads carried a watch; the reply-needed outcome fired for NOBODY 7/25→8/14).
+// The claim decision is decideHumanModeWatchClaim (domain/humanModeWatchClaim.ts), executed
+// below as a decision table; these source pins hold the WIRING to it.
 assert.ok(
   /let humanModeInventoryWatchHandled = false;/.test(apiIndex),
   "humanModeInventoryWatchHandled is declared (default false) in the human-mode block"
 );
 const watchArmStart = apiIndex.indexOf("if (humanModeWatchParserEligible && humanModeWatchHint) {");
 assert.ok(watchArmStart >= 0, "the human-mode inventory-watch arm exists");
-const watchArmHead = apiIndex.slice(watchArmStart, watchArmStart + 200);
+const watchArmHead = apiIndex.slice(watchArmStart, watchArmStart + 600);
 assert.ok(
-  watchArmHead.includes("humanModeInventoryWatchHandled = true;"),
-  "the watch arm marks the turn handled so the terminus does not also task it"
+  !watchArmHead.includes("humanModeInventoryWatchHandled = true;"),
+  "the watch arm must NOT mark the turn handled at hint time — that silences the reply-needed backstop for every watch-carrying thread"
 );
+const watchClaimIdx = apiIndex.indexOf("const humanModeWatchIntent = decideHumanModeWatchClaim({");
+assert.ok(watchClaimIdx >= 0, "the watch arm asks decideHumanModeWatchClaim for the claim verdict");
+const watchClaimBlock = apiIndex.slice(watchClaimIdx, watchClaimIdx + 700);
+assert.ok(
+  /if \(humanModeWatchIntent\) \{\s*\n\s*humanModeInventoryWatchHandled = true;/.test(watchClaimBlock),
+  "the handled flag is set exactly when the claim verdict is true — the branch that actually writes watch state"
+);
+
+// 3b. The claim decision itself, EXECUTED (Rick's shape must not be claimed).
+{
+  // Rick +17168609581: finance question, no bike named — semantic parse reads no watch action.
+  assert.equal(
+    decideHumanModeWatchClaim({
+      demoDayQuestion: false,
+      semanticWatchAction: "none",
+      inboundParserWatchAcknowledgement: false,
+      semanticConfident: true,
+      fallbackAllowed: true,
+      watchConfirmationText: false
+    }),
+    false,
+    "a turn the parser read as NO watch action is not claimed — the reply-needed backstop must fire (Rick +17168609581)"
+  );
+  // The mere existence of a watch on the thread is NOT an input to the claim at all — the
+  // interface has no such field, which is the point. A watch-set turn IS claimed:
+  assert.equal(
+    decideHumanModeWatchClaim({
+      demoDayQuestion: false,
+      semanticWatchAction: "set_watch",
+      inboundParserWatchAcknowledgement: false,
+      semanticConfident: true,
+      fallbackAllowed: false,
+      watchConfirmationText: false
+    }),
+    true,
+    "a parser-read set_watch turn is claimed (no double task)"
+  );
+  assert.equal(
+    decideHumanModeWatchClaim({
+      demoDayQuestion: false,
+      semanticWatchAction: "none",
+      inboundParserWatchAcknowledgement: true,
+      semanticConfident: false,
+      fallbackAllowed: false,
+      watchConfirmationText: false
+    }),
+    true,
+    "an inbound-reply-action watch acknowledgement is claimed"
+  );
+  assert.equal(
+    decideHumanModeWatchClaim({
+      demoDayQuestion: false,
+      semanticWatchAction: "none",
+      inboundParserWatchAcknowledgement: false,
+      semanticConfident: false,
+      fallbackAllowed: true,
+      watchConfirmationText: true
+    }),
+    true,
+    "the audited low-confidence fallback confirmation lane still claims"
+  );
+  assert.equal(
+    decideHumanModeWatchClaim({
+      demoDayQuestion: false,
+      semanticWatchAction: "none",
+      inboundParserWatchAcknowledgement: false,
+      semanticConfident: true,
+      fallbackAllowed: true,
+      watchConfirmationText: true
+    }),
+    false,
+    "a CONFIDENT no-watch parse outranks the deterministic confirmation text (comprehend, never regex)"
+  );
+  assert.equal(
+    decideHumanModeWatchClaim({
+      demoDayQuestion: true,
+      semanticWatchAction: "set_watch",
+      inboundParserWatchAcknowledgement: true,
+      semanticConfident: true,
+      fallbackAllowed: true,
+      watchConfirmationText: true
+    }),
+    false,
+    "demo-day questions are never the watch arm's turn"
+  );
+}
 
 // 4. The ack exclusions use the canonical comprehension-safe helpers, never a bespoke regex, and
 //    the two families stay SEPARATE: the wide predicate is a cost gate for the parsers, the bare
