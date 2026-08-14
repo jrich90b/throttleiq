@@ -546,3 +546,71 @@ export function hasWalkInPricingFollowUpPhrase(text?: string | null): boolean {
     )
   );
 }
+
+/**
+ * The walk-in FIRST-TOUCH closing ask — does this reply get one?
+ *
+ * ── WHY THIS EXISTS ───────────────────────────────────────────────────────────────────────────
+ * The ladder-health sweep has alarmed on `Traffic Log Pro` for five consecutive runs: **15
+ * agent-owned first touches, 0 asked anything.** Reading the sent bodies says why — every branch of
+ * the walk-in tail ends with a PROMISE FROM US and never a question to them:
+ *   "Thanks for stopping in - I'll follow up about pre-owned trikes."
+ *   "Thanks for stopping in - I'll check back in soon like we discussed."
+ *   "Thanks for stopping in. If you want, I can send a quick recap on the Road King."
+ * These are the warmest leads the store has — they were physically in the building — and we close
+ * the first text by telling them to wait for us.
+ *
+ * #655 already built the ask Joe asked for and wired it at ONE call site
+ * (`buildDealerLeadAppPostRideReply`); #673 wired it to the pricing tail. The sibling lane carrying
+ * the volume never got it. **This adds no new copy class:** the sentence is Joe's own wording from
+ * 2026-08-11, produced by `buildWalkInSoftTimingAsk` (visitFraming.ts) and passed IN by the caller,
+ * so this file stays a dependency-free leaf.
+ *
+ * ── THE POLICY, and the measured reason for each guard ────────────────────────────────────────
+ * FIRST-TOUCH BAND ONLY (`step <= 4`). Steps 5-8 are already deep in a deal — the customer sat
+ * down, numbers are being worked, finance is running — and those tails legitimately promise "I'll
+ * follow up with final numbers". Bolting "want to stop back in?" onto a live worksheet is noise,
+ * not a ladder. Step 9 is post-sale.
+ * NEVER TWO QUESTIONS. If the reply already asks something it keeps its own question; the
+ * advancing-question rule is ONE question and a stacked pair reads as a bot.
+ * NOT WHEN A RETURN VISIT IS ALREADY COMMITTED. Ed Szulist and Paul Harrigan told us in the intake
+ * note exactly when they are coming back (#681). Asking "want to set up a time?" of someone who
+ * named a day is the re-ask failure the whole ladder work exists to stop.
+ * NOT ON AN INVENTORY WATCH. When the tail is "I'll keep an eye out for a Road King and let you
+ * know if one comes in", there is nothing here to come and see — inviting them in contradicts the
+ * sentence immediately before it. Measured: 3 of the 15 alarmed first touches are this shape
+ * (Tom Jeffree, Craig Tamborski, Scott Mateyunas), and they are the ones that must stay as they are.
+ * NOT ON FINANCE / DEAL-PROGRESS / HOLD / COMPLETED-RIDE turns, where the true next step is
+ * someone calling them and the tail already says so.
+ *
+ * ── FAIL DIRECTION ────────────────────────────────────────────────────────────────────────────
+ * Safe. A miss is exactly today's behaviour (the reply ships unchanged, asking nothing). An
+ * over-fire adds one soft, day-less invitation to a customer who has already been in the store —
+ * the sentence Joe specified for this lane. It books nothing, claims nothing, states no figure.
+ * Pure, so `walkin_first_touch_ask:eval` EXECUTES it instead of asserting on route source text —
+ * the same reason `shouldWalkInAvailabilityTailSpeak` was lifted out of the route.
+ */
+export function appendWalkInFirstTouchAsk(input: {
+  /** The fully assembled reply (greeting + tail + addendum). The ask always lands LAST. */
+  reply: string | null | undefined;
+  /** Walk-in ladder step (1-9). A non-Traffic-Log-Pro turn passes 0 and never asks. */
+  step: number;
+  /** `buildWalkInSoftTimingAsk(alreadyVisited, inStock)` from the caller — never built here. */
+  softAsk?: string | null;
+  /**
+   * Any state where the invitation would be wrong or redundant: a committed return visit, an
+   * inventory watch, finance/deal progress, a hold, a completed test ride. The caller already has
+   * these signals in scope; this module does not re-derive them.
+   */
+  suppressed?: boolean;
+}): string {
+  const reply = String(input.reply ?? "");
+  if (!reply.trim()) return reply;
+  const step = Math.trunc(Number(input.step));
+  if (!Number.isFinite(step) || step < 1 || step > 4) return reply; // first-touch band only
+  if (input.suppressed) return reply;
+  if (reply.includes("?")) return reply; // it already asks — never stack a second question
+  const ask = String(input.softAsk ?? "").trim();
+  if (!ask) return reply;
+  return `${reply.trimEnd()} ${ask}`;
+}
