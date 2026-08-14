@@ -112,12 +112,16 @@ async function main() {
   // ran it every 60s, so the cutover would have quietly made someone who asked to see a bike wait
   // up to 5 minutes instead of 1 — grouped by subject ("photos of a bike") rather than by urgency.
   // A task the API runs every minute must be on an every-minute worker queue.
-  const everyMinuteBlock = indexSource.slice(
-    indexSource.indexOf("isWorkerDrivenTicks()"),
-    indexSource.indexOf("app.get(\"/health\"")
-  );
-  const apiEveryMinuteTasks = [...everyMinuteBlock.matchAll(/runBackgroundTask\("([\w-]+)"/g)].map(m => m[1]);
+  // 2026-08-14: the API's minute lane became data (WORKER_MINUTE_LANE_TASKS, one definition for
+  // both tick modes) instead of eight hand-written runBackgroundTask lines — so EXECUTE the list
+  // and pin that index.ts actually iterates it, rather than scraping call sites that no longer exist.
+  const { WORKER_MINUTE_LANE_TASKS } = await import("../services/api/src/domain/workerTasks.ts");
+  const apiEveryMinuteTasks = [...WORKER_MINUTE_LANE_TASKS];
   assert.ok(apiEveryMinuteTasks.length > 0, "could not read the API's every-minute tick group");
+  assert.ok(
+    /for \(const name of WORKER_MINUTE_LANE_TASKS\) \{\s*\n\s*runBackgroundTask\(name, \(\) => WORKER_TICK_DISPATCH\[name\]\(\)\);/.test(indexSource),
+    "index.ts must iterate WORKER_MINUTE_LANE_TASKS in its every-minute interval — a lane list nothing iterates is decoration"
+  );
   const minuteQueueTasks = new Set(
     WORKER_SCHEDULES.filter(s => s.cron.trim() === "* * * * *").flatMap(s => s.tasks)
   );

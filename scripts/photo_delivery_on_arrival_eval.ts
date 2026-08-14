@@ -48,7 +48,12 @@ assert.match(api, /conv\.pendingPhotoDelivery = \{ units: watchUnits, requestedA
 assert.match(api, /requestedImageHash: imageSetHash\(u\.images\)/, "captures the image fingerprint at request time");
 // The pass is dispatched + interval-scheduled.
 assert.match(api, /"photo-delivery": \(\) => processPendingPhotoDeliveries\(\)/, "the pass is in the worker dispatch map");
-assert.match(api, /runBackgroundTask\("photo-delivery", processPendingPhotoDeliveries\)/, "the pass runs on the in-process interval too");
+// 2026-08-14: the minute lane is data (WORKER_MINUTE_LANE_TASKS) iterated in one loop —
+// in-process registration is lane membership, executed here.
+assert.ok(
+  ((await import("../services/api/src/domain/workerTasks.ts")).WORKER_MINUTE_LANE_TASKS as readonly string[]).includes("photo-delivery"),
+  "photo-delivery is on the in-process minute lane"
+);
 // The pass itself: flag-gated, fires only on a genuine update that is now a real gallery, DRAFT-only,
 // closes the task, clears the record, and skips closed/opted-out/human-owned.
 assert.match(api, /async function processPendingPhotoDeliveries\(\)/, "the background pass exists");

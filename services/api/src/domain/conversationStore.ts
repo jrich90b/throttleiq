@@ -5640,6 +5640,84 @@ export function applyInventoryWatchDefaults(
   return decision;
 }
 
+/**
+ * PER-MESSAGE TRIPWIRE PASS (Joe's ruling 2026-08-14 evening — see domain/turnResponseTripwire.ts
+ * for the decision and its taxonomy). Runs on the minute tick beside the other background passes.
+ * For every open thread whose NEWEST row is an aged, unanswered SMS customer message with zero
+ * response artifacts, mints ONE merged owner task and stamps a per-message receipt so a message
+ * can never fire twice. Heal only — never a send, never a close; the loop's daily sweeps read the
+ * route outcome the caller records to find the CLASS behind repeated fires.
+ */
+export async function processTurnResponseTripwire(deps: {
+  isSuppressed: (phone: string) => boolean;
+  recordOutcome: (detail: { convId: string; leadKey?: string | null; messageId: string; ageMinutes: number; taskCreated: boolean }) => void;
+  nowMs?: number;
+  minAgeMs?: number;
+  maxAgeMs?: number;
+}): Promise<{ scanned: number; fired: number }> {
+  const { decideTurnResponseTripwire, hasResponseArtifactSince } = await import("./turnResponseTripwire.js");
+  const nowMs = deps.nowMs ?? Date.now();
+  let fired = 0;
+  let dirty = false;
+  const all = getAllConversations();
+  for (const conv of all) {
+    const msgs = Array.isArray(conv?.messages) ? conv.messages : [];
+    const last = msgs.length ? msgs[msgs.length - 1] : null;
+    if (!last || last.direction !== "in") continue;
+    const inboundAtMs = Date.parse(String(last.at ?? ""));
+    const phone = String(conv.leadKey ?? conv.lead?.phone ?? "");
+    const watchesArr = Array.isArray(conv.inventoryWatches)
+      ? conv.inventoryWatches
+      : conv.inventoryWatch
+        ? [conv.inventoryWatch]
+        : [];
+    const decision = decideTurnResponseTripwire({
+      nowMs,
+      conversationStatus: conv.status ?? null,
+      mode: conv.mode ?? null,
+      suppressed: !!phone && deps.isSuppressed(phone),
+      lastMessage: last as any,
+      hasResponseArtifact: Number.isFinite(inboundAtMs)
+        ? hasResponseArtifactSince({
+            inboundAtMs,
+            // The inbound is the NEWEST message row, so any out-row artifact would already have
+            // made it not-last; drafts and sends land as rows AFTER the inbound when they exist.
+            messagesAfter: [],
+            todos: todos.filter(t => t.convId === conv.id) as any[],
+            watches: watchesArr as any[]
+          })
+        : true,
+      alreadyFiredForMessageId: (conv as any).turnTripwire?.messageId ?? null,
+      minAgeMs: deps.minAgeMs,
+      maxAgeMs: deps.maxAgeMs
+    });
+    if (!decision.fire) continue;
+    const customerName = String(conv.lead?.firstName ?? conv.lead?.name ?? "the customer").trim() || "the customer";
+    const task = addTodo(
+      conv,
+      "call",
+      `Nothing responded to ${customerName}'s message ${decision.ageMinutes} min ago: "${decision.excerpt}" — needs a reply (tripwire).`,
+      decision.messageId,
+      conv.leadOwner,
+      undefined,
+      "followup"
+    );
+    (conv as any).turnTripwire = { messageId: decision.messageId, firedAt: new Date(nowMs).toISOString() };
+    deps.recordOutcome({
+      convId: conv.id,
+      leadKey: conv.leadKey ?? null,
+      messageId: decision.messageId,
+      ageMinutes: decision.ageMinutes,
+      taskCreated: !!task
+    });
+    saveConversation(conv);
+    fired += 1;
+    dirty = true;
+  }
+  if (dirty) await flushConversationStore();
+  return { scanned: all.length, fired };
+}
+
 export function applyStaleBookingReplacement(
   appt: any,
   input: StaleBookingReplacementInput

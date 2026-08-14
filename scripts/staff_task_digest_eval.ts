@@ -161,8 +161,12 @@ const T = (over: any = {}) => ({
   assert.ok(minuteLane.includes('"staff-task-digests"'), "on the minute lane beside task-escalations");
   const api = fs.readFileSync("services/api/src/index.ts", "utf8");
   assert.match(api, /"staff-task-digests": \(\) => processStaffTaskDigests\(\)/, "wired into the dispatch map");
-  assert.match(api, /runBackgroundTask\("staff-task-digests", processStaffTaskDigests\)/,
-    "also runs on the in-process interval when WORKER_DRIVEN_TICKS is off");
+  // 2026-08-14: the minute lane is data (WORKER_MINUTE_LANE_TASKS) iterated in one loop —
+// in-process registration is lane membership, executed here.
+assert.ok(
+  ((await import("../services/api/src/domain/workerTasks.ts")).WORKER_MINUTE_LANE_TASKS as readonly string[]).includes("staff-task-digests"),
+  "staff-task-digests is on the in-process minute lane"
+);
   n += 5;
 
   // The rep half is deliberately NOT built — the console morning window already owns it, and a

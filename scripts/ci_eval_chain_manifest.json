@@ -464,6 +464,7 @@
     "unsent_first_touch:eval",
     "task_fulfillment_autoclose:eval",
     "task_fulfillment_parser:eval",
+    "turn_response_tripwire:eval",
     "task_autoclose_inbound_trigger:eval",
     "task_autoclose_visibility:eval",
     "task_inbox_context:eval",
