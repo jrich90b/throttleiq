@@ -262,12 +262,15 @@ for (const nonAnswer of ["unknown", "any"]) {
     (serving.match(new RegExp(`(?<![\\w.])${name}\\s*\\(`, "g")) ?? []).length;
 
   // The counts are the point. `applyInventoryWatchDefaults` replaced FOUR hand-written ladders; if
-  // that drops to three, one lane has gone back to deciding for itself and the drift restarts.
+  // the count drops, one lane has gone back to deciding for itself and the drift restarts.
+  // 4 -> 5 on 2026-08-14: applyInventoryNotifyPromiseOutcome (the "we'll keep an eye out" staff
+  // promise lane, kunwarsahilnaseem@gmail.com) is a FIFTH legitimate asker — a new lane routing
+  // through the referee, exactly what this guard wants new lanes to do.
   for (const [name, expected] of [
     ["applyStaleBookingReplacement", 1],
     ["decideHealthRecoveryPause", 1],
     ["decideStaffReopenResidue", 1],
-    ["applyInventoryWatchDefaults", 4],
+    ["applyInventoryWatchDefaults", 5],
     ["resolveInventoryWatchDefaults", 1]
   ] as const) {
     eq(callsTo(name), expected, `${name} is asked at exactly its ${expected} write site(s) in the serving path`);
