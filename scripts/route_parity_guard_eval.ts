@@ -49,6 +49,11 @@ const MIRRORED_LOCALS_BASELINE = 252;
 // best-effort classification — re-verify (and either wire into both paths or re-justify)
 // whenever the symbol's call site changes.
 const SINGLE_PATH_BASELINE: Record<string, { path: "live" | "regen"; reason: string }> = {
+  decideHumanModeWatchClaim: {
+    path: "live",
+    reason:
+      "gates a LIVE-INBOUND side effect only: whether the human-mode watch arm claims the turn, which suppresses the terminus 'needs YOUR reply' owner task. Regenerate is a staff member asking for a draft — it never mints the reply-needed task, so there is no claim to decide (+17168609581)"
+  },
   decideShortAckTurnEnd: {
     path: "live",
     reason:
