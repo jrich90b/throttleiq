@@ -83,7 +83,57 @@ export type EmailLaneJudgeShadowRecord = {
   inbound: string;
   ms: number;
   status: number;
+  /**
+   * The API's own words when the call failed; null on success.
+   *
+   * WHY (measured 2026-08-14): every call from 2026-08-10 on came back `400` and the record kept
+   * only the number — 1,569 failures over five days that read, field for field, exactly like a
+   * quiet week. The reason was one sentence the API had been saying all along ("Your credit
+   * balance is too low…"), and nothing wrote it down. A `verdict: null` says the judge produced
+   * nothing; only this field says WHY, which is the difference between a five-minute fix and a
+   * five-day outage. Same lesson as the open critic's LOUD-on-failure line: a silent instrument
+   * reports fine while measuring nothing.
+   */
+  error: string | null;
 };
+
+/** Truncated so one pathological error body can never bloat the JSONL. */
+const MAX_ERROR_CHARS = 240;
+
+/**
+ * Build one shadow record. PURE, and exported so the eval pins it by EXECUTION rather than by
+ * reading the source — the failure path is the half that was never exercised in production.
+ */
+export function buildEmailLaneJudgeShadowRecord(args: {
+  at: string;
+  convId: string;
+  model: string;
+  /** The judge's tool input, or null when the call failed / returned nothing usable. */
+  parsed: any | null;
+  draft: string;
+  inbound: string;
+  ms: number;
+  status: number;
+  /** Raw error body from the API response, if any. */
+  errorMessage?: string | null;
+}): EmailLaneJudgeShadowRecord {
+  const p = args.parsed;
+  const errorText = String(args.errorMessage ?? "").trim();
+  return {
+    at: args.at,
+    convId: args.convId,
+    model: args.model,
+    verdict: p ? coerceDraftQualityOverall(p.overall) : null,
+    confidence: p && typeof p.confidence === "number" ? Math.max(0, Math.min(1, p.confidence)) : null,
+    reason: p && typeof p.reason === "string" ? p.reason.slice(0, 240) : null,
+    draft: args.draft.slice(0, 300),
+    inbound: args.inbound.slice(0, 200),
+    ms: args.ms,
+    status: args.status,
+    // A successful call has nothing to explain; a failed one must never be able to hide.
+    error: p ? null : errorText ? errorText.slice(0, MAX_ERROR_CHARS) : `no verdict (status ${args.status})`
+  };
+}
 
 /** Append one record as JSONL. Wrapped so it can NEVER throw into the inbound path. */
 function appendShadowRecord(record: EmailLaneJudgeShadowRecord): void {
@@ -148,19 +198,29 @@ export function runEmailLaneJudgeShadow(conv: any, draft: string): void {
     })
       .then(result => {
         const p = result.ok ? extractAnthropicToolInput(result.data, "draft_quality_judge") : null;
-        const record: EmailLaneJudgeShadowRecord = {
+        const record = buildEmailLaneJudgeShadowRecord({
           at: new Date().toISOString(),
           convId: String(conv.id),
           model,
-          verdict: p ? coerceDraftQualityOverall(p.overall) : null,
-          confidence: p && typeof p.confidence === "number" ? Math.max(0, Math.min(1, p.confidence)) : null,
-          reason: p && typeof p.reason === "string" ? p.reason.slice(0, 240) : null,
-          draft: draftText.slice(0, 300),
-          inbound: inbound.slice(0, 200),
+          parsed: p,
+          draft: draftText,
+          inbound,
           ms: result.elapsedMs,
-          status: result.status
-        };
+          status: result.status,
+          errorMessage: result.data?.error?.message ?? null
+        });
         appendShadowRecord(record);
+        if (!p) {
+          // LOUD on failure, exactly like the open critic's Claude arm: the quiet log line below
+          // is indistinguishable from a healthy no-op, which is how five days of 400s went unseen.
+          console.warn("[email_lane_judge shadow] judge call FAILED — no verdict", {
+            convId: record.convId,
+            model,
+            status: record.status,
+            error: record.error
+          });
+          return;
+        }
         console.log("[email_lane_judge shadow]", {
           convId: record.convId,
           verdict: record.verdict,
