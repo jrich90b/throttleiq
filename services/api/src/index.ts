@@ -902,6 +902,7 @@ import {
   classifyPurchaseDeliveryOperationalRequestText,
   extractRequestedVehicleFactFieldsFromText,
   extractReminderFollowUpLabel,
+  followUpReminderPauseClaimsTurn,
   formatServiceScheduleTimeLabel,
   buildAcknowledgedInventoryWatchReply,
   buildHumanModeSchedulingDraft,
@@ -23200,11 +23201,6 @@ function draftHasSchedulingPrompt(text: string): boolean {
   return /(what day|what time|when.*available|schedule|appointment|come in|stop by|stop in|book|reserve|test ride|demo ride|which works best)/i.test(
     text
   );
-}
-
-function wantsReminder(text: string): boolean {
-  const t = String(text ?? "").toLowerCase();
-  return /\b(remind|reminder|follow up|follow-up|check back|reach out|touch base)\b/i.test(t);
 }
 
 function isSlotOfferMessage(text: string): boolean {
@@ -66182,7 +66178,7 @@ if (authToken && signature) {
     return publishLiveTwilioReply(reply);
   }
 
-  if (event.provider === "twilio" && wantsReminder(event.body) && !preParserLocationQuestion) {
+  if (event.provider === "twilio" && followUpReminderPauseClaimsTurn(event.body, callbackPrimaryIntent, preParserLocationQuestion)) {
     const pauseUntil = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
     pauseFollowUpCadence(conv, pauseUntil, "customer_reminder");
     const dealerProfile = await getDealerProfileHot();

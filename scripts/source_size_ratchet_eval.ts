@@ -387,7 +387,11 @@ const CEILINGS: Ceiling[] = [
     // pure referee resolveSoftVisitCommitment (domain/softVisitSignal). A net ratchet DOWN even
     // though the slice ADDED a parser and a referee, because both live in domain modules and the
     // call sites shrank.
-    max: 70_383,
+    // 70_383 -> 70_379. The reminder/pause arm's direction-blind `wantsReminder` regex left
+    // index.ts entirely: the gate is now followUpReminderPauseClaimsTurn (workflowRegressionGuards),
+    // which asks the turn's centralized callback route decision before claiming the turn. The
+    // local four-line regex helper had no other caller, so the slice funds its own import line.
+    max: 70_379,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

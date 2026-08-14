@@ -62,6 +62,34 @@ export function isFollowUpReminderOnlyText(textRaw: string | null | undefined): 
   return true;
 }
 
+/**
+ * Does the live reminder/pause arm own this turn?
+ *
+ * "Reach out" carries no direction. A customer asking US to make contact ("can you reach out
+ * when you get the chance") and a customer asking to be LEFT ALONE until later ("I'll reach out
+ * when I'm looking again") use the same words, and the live arm read only the words: Adam
+ * (+17164312108, 2026-08-08) asked Scott to call him and was answered "I'm here when you're
+ * ready. Just reach out when the time is right." — with follow-up paused 90 days. That is the
+ * exact inversion of what he asked for, and the hedge/deflect charter C1.5 forbids.
+ *
+ * Direction is comprehension, so the PARSER owns it (AGENTS.md "comprehend, never regex"). When
+ * the turn's centralized route decision says this is an explicit callback request, the
+ * reminder/pause arm must not claim the turn — the callback arm already mints the staff call
+ * task and the composer writes the reply. Measured on the live store: of 38 inbound turns whose
+ * words match the reminder gate, exactly ONE is a request for us to make contact.
+ *
+ * FAIL DIRECTION, both ways safe: a MISSED callback parse leaves today's behaviour untouched,
+ * and a FALSE callback parse means we reply and do NOT pause — never a silent 90-day park.
+ */
+export function followUpReminderPauseClaimsTurn(
+  textRaw: string | null | undefined,
+  callbackRequested: boolean,
+  locationQuestion: boolean
+): boolean {
+  if (callbackRequested || locationQuestion) return false;
+  return wantsReminder(textRaw);
+}
+
 export function buildFollowUpReminderOnlyReply(textRaw: string | null | undefined): string {
   const label = extractReminderFollowUpLabel(textRaw);
   return label ? `Sounds good — I’ll touch base ${label}.` : "Sounds good — I’ll touch base with you.";
