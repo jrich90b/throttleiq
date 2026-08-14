@@ -113,7 +113,14 @@ export interface ManualOutboundPromiseInput {
 
 export type ManualOutboundPromiseDecision =
   | { kind: "none"; reason: string }
-  | Extract<VoiceNextStepDecision, { kind: "staff_task" }>
+  /**
+   * Same shape as the voice referee's staff_task, except the cadence hold may be NULL: on a
+   * held-mode thread (manual_handoff / paused_indefinite) the automated cadence is already
+   * standing down, so there is nothing to hold — the dated task is the whole outcome.
+   */
+  | (Omit<Extract<VoiceNextStepDecision, { kind: "staff_task" }>, "holdUntilIso"> & {
+      holdUntilIso: string | null;
+    })
   /**
    * The AGENT promised it, and the agent cannot do it (Joe, 2026-08-07).
    *
@@ -135,12 +142,30 @@ export function decideManualOutboundPromise(input: ManualOutboundPromiseInput): 
   const parse = input.parse;
   if (!parse || !parse.promisePresent) return { kind: "none", reason: "no_promise" };
   if (!isActionablePromiseKind(parse.kind)) return { kind: "none", reason: `kind_${parse.kind || "none"}` };
+  // A HELD-MODE thread is not a reason to drop the promise — it is the main population.
+  //
+  // The voice referee bails on manual_handoff / paused_indefinite ("held_mode_*") because ITS
+  // outcomes are cadence holds, and a held thread has no cadence to hold. This referee
+  // delegated to it wholesale, so a staff promise typed into a human-owned thread died on that
+  // gate: Beverly Hennig +17169839279 (operator report 2026-08-11) was told "I'll have one of
+  // the guys check the numbers out tomorrow", the parser read it at 0.90-0.93 (4/4), and the
+  // held_mode bail dropped it — zero todos on her thread, nobody ever checked the numbers.
+  // Measured 2026-08-14: 75 staff promise-shaped texts on held-mode threads since 6/1, and not
+  // ONE minted a task. Staff type into human-owned threads BY DESIGN — that is what a manual
+  // handoff is — so the suppression excluded exactly the population this arm was built for
+  // (the same declared-reason trap as the ladder sweep's walk-in lanes, PR #663).
+  //
+  // So: on a held-mode thread the referee still decides the TASK, and only the cadence hold is
+  // dropped (there is no cadence to hold). Closed conversations still bail inside the voice
+  // referee. Fail direction unchanged: this only ever ADDS a dismissible staff task.
+  const mode = String(input.followUpMode ?? "").trim().toLowerCase();
+  const heldMode = mode === "manual_handoff" || mode === "paused_indefinite";
   const decision = decideVoiceNextStep({
     isVoicemail: false,
     nowMs: input.nowMs,
     timeZone: input.timeZone,
     cadenceKind: input.cadenceKind ?? null,
-    followUpMode: input.followUpMode ?? null,
+    followUpMode: heldMode ? null : input.followUpMode ?? null,
     conversationStatus: input.conversationStatus ?? null,
     nextStepOwner: "staff",
     nextStepAction: parse.action,
@@ -151,7 +176,7 @@ export function decideManualOutboundPromise(input: ManualOutboundPromiseInput): 
     summaryLeadIn: "Promised over text:"
   });
   if (decision.kind === "staff_task") {
-    if (input.humanAuthored) return decision;
+    if (input.humanAuthored) return heldMode ? { ...decision, holdUntilIso: null } : decision;
     // Same promise, different author: a person committed to nothing here, so there is no dated
     // plan to hold cadence against — but somebody still has to do the thing we said we would do.
     const promised = String(parse.action ?? "").trim();
