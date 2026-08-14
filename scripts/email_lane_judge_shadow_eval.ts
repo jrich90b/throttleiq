@@ -13,12 +13,17 @@
  *  2. NEVER AWAITED: an awaited shadow would put ~4s of judge latency into the inbound path.
  *  3. Fire-and-forget void + capped: it cannot throw, block, or run up a bill.
  *  4. A failed judge call records verdict:null — never a verdict, never "agreement".
+ *  5. A failed judge call also records WHY, in the API's own words. Measured 2026-08-14: every
+ *     call from 8/10 on returned 400 ("Your credit balance is too low…") and the record kept only
+ *     the status number, so five days and 1,569 failures looked exactly like a quiet week. A
+ *     verdict:null says the judge produced nothing; only `error` says why.
  *
  * Run: npx tsx scripts/email_lane_judge_shadow_eval.ts
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
+  buildEmailLaneJudgeShadowRecord,
   claimEmailLaneJudgeSlot,
   emailLaneJudgeDailyCap,
   emailLaneJudgeModel,
@@ -81,6 +86,75 @@ assert.equal(runEmailLaneJudgeShadow(null, "a draft"), undefined, "null conv => 
 delete process.env.EMAIL_LANE_JUDGE_DAILY_CAP;
 if (savedKey === undefined) delete process.env.ANTHROPIC_API_KEY;
 else process.env.ANTHROPIC_API_KEY = savedKey;
+
+// --- A FAILED CALL NAMES ITSELF (the 8/10-8/14 blind spot), pinned by EXECUTION -----------------
+// The real 400 body, verbatim from the box on 2026-08-14.
+const CREDIT_400 = "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.";
+const failed = buildEmailLaneJudgeShadowRecord({
+  at: "2026-08-14T20:00:00.000Z",
+  convId: "+15852503838",
+  model: "claude-sonnet-5",
+  parsed: null,
+  draft: "Hey Scott, thanks for signing up for the Riding Academy.",
+  inbound: "what is the phone number to the dealership?",
+  ms: 206,
+  status: 400,
+  errorMessage: CREDIT_400
+});
+assert.equal(failed.verdict, null, "a failed call is NEVER a verdict");
+assert.equal(failed.confidence, null, "a failed call carries no confidence");
+assert.ok(
+  String(failed.error).includes("credit balance is too low"),
+  `a failed call records the API's own reason, not just a status number — got ${String(failed.error)}`
+);
+
+// No body at all (network-shaped failure): still says something, never null.
+const failedNoBody = buildEmailLaneJudgeShadowRecord({
+  at: "2026-08-14T20:00:00.000Z",
+  convId: "c9",
+  model: "claude-sonnet-5",
+  parsed: null,
+  draft: "d",
+  inbound: "i",
+  ms: 12,
+  status: 0,
+  errorMessage: null
+});
+assert.equal(failedNoBody.verdict, null, "no body is still no verdict");
+assert.ok(
+  String(failedNoBody.error).length > 0 && failedNoBody.error !== null,
+  "a failure with no error body still records a non-empty reason — silence is the bug being fixed"
+);
+
+// A pathological error body cannot bloat the JSONL.
+const failedHuge = buildEmailLaneJudgeShadowRecord({
+  at: "2026-08-14T20:00:00.000Z",
+  convId: "c10",
+  model: "claude-sonnet-5",
+  parsed: null,
+  draft: "d",
+  inbound: "i",
+  ms: 12,
+  status: 500,
+  errorMessage: "x".repeat(5000)
+});
+assert.ok(String(failedHuge.error).length <= 240, "error text is truncated");
+
+// A SUCCESSFUL call has nothing to explain — and an error field on a good verdict would make every
+// healthy row look like a failure to whatever reads this file next.
+const good = buildEmailLaneJudgeShadowRecord({
+  at: "2026-08-14T20:00:00.000Z",
+  convId: "c11",
+  model: "claude-sonnet-5",
+  parsed: { overall: "good", confidence: 0.9, reason: "answers the ask" },
+  draft: "d",
+  inbound: "i",
+  ms: 2200,
+  status: 200,
+  errorMessage: null
+});
+assert.equal(good.verdict, "good", "a successful call keeps its verdict");
+assert.equal(good.error, null, "a successful call records no error");
 
 // --- WIRING: coverage parity + never awaited ----------------------------------------------------
 const sendgrid = fs.readFileSync("services/api/src/routes/sendgridInbound.ts", "utf8");
