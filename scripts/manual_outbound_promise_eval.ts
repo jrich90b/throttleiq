@@ -107,8 +107,78 @@ function check(id: string, ok: boolean, detail?: string) {
   check("closed_conversation_none", d.kind === "none" && d.reason === "conversation_closed", JSON.stringify(d));
 }
 {
-  const d = decideManualOutboundPromise(base({ followUpMode: "manual_handoff" }));
-  check("manual_handoff_none", d.kind === "none", JSON.stringify(d));
+  // A HELD-MODE thread still gets the dated task — with NO cadence hold (there is no cadence
+  // to hold). This row used to pin `manual_handoff → none`, which was the defect: staff type
+  // into human-owned threads BY DESIGN, so the held_mode bail suppressed the arm's main
+  // population. Beverly Hennig +17169839279 (operator report 2026-08-11): "I'll have one of
+  // the guys check the numbers out tomorrow" — parser 0.90-0.93 (4/4), zero todos minted.
+  // Measured 2026-08-14: 75 promise-shaped staff texts on held-mode threads since 6/1, none
+  // minted a task.
+  const d = decideManualOutboundPromise(
+    base({
+      followUpMode: "manual_handoff",
+      parse: parse({
+        kind: "check_and_get_back",
+        action: "have sales check the numbers and see what they can come up with",
+        dueText: "tomorrow"
+      }),
+      // "tomorrow" from the fixed Wed 7/15 clock.
+      dueDate: { year: 2026, month: 7, day: 16 }
+    })
+  );
+  check(
+    "manual_handoff_promise_still_tasks_no_hold",
+    d.kind === "staff_task" &&
+      d.taskDueIso === "2026-07-16T14:30:00.000Z" &&
+      d.holdUntilIso === null &&
+      d.taskSummary ===
+        "Promised over text: have sales check the numbers and see what they can come up with — by Thu, Jul 16",
+    JSON.stringify(d)
+  );
+  // And the apply plan carries the task with no hold — the shape index.ts executes.
+  const plan = resolveManualPromiseApplyPlan(d);
+  check(
+    "manual_handoff_plan_task_no_hold",
+    !!plan && plan.taskDueIso === "2026-07-16T14:30:00.000Z" && plan.holdUntilIso === null &&
+      plan.outcomeKey === "manual_outbound_promise_task",
+    JSON.stringify(plan)
+  );
+}
+{
+  // paused_indefinite is the same held-mode class (Rick's parked thread is this shape).
+  const d = decideManualOutboundPromise(base({ followUpMode: "paused_indefinite" }));
+  check(
+    "paused_indefinite_promise_still_tasks_no_hold",
+    d.kind === "staff_task" && d.holdUntilIso === null,
+    JSON.stringify(d)
+  );
+}
+{
+  // An ACTIVE-mode promise keeps its cadence hold exactly as before — the held-mode change
+  // must not leak into the population that was already working.
+  const d = decideManualOutboundPromise(
+    base({ parse: parse({ dueText: "Monday" }), dueDate: { year: 2026, month: 7, day: 20 } })
+  );
+  check(
+    "active_mode_keeps_cadence_hold",
+    d.kind === "staff_task" && d.holdUntilIso === "2026-07-21T14:30:00.000Z",
+    JSON.stringify(d)
+  );
+}
+{
+  // Closed conversations still bail even in held mode — held-mode is not a bypass of the
+  // closed gate.
+  const d = decideManualOutboundPromise(
+    base({ followUpMode: "manual_handoff", conversationStatus: "closed" })
+  );
+  check("held_mode_closed_still_none", d.kind === "none" && d.reason === "conversation_closed", JSON.stringify(d));
+}
+{
+  // Low confidence still bails in held mode (breather_only maps to none as before).
+  const d = decideManualOutboundPromise(
+    base({ followUpMode: "manual_handoff", parse: parse({ confidence: 0.4 }) })
+  );
+  check("held_mode_low_confidence_none", d.kind === "none", JSON.stringify(d));
 }
 {
   const d = decideManualOutboundPromise(base({ cadenceKind: "post_sale" }));
