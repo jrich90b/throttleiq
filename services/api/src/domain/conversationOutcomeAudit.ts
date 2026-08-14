@@ -734,6 +734,34 @@ export function selectOpenCriticAgentReply<T extends OutboundAuthorshipMsg>(
   return lastRealOut;
 }
 
+/**
+ * The CONTEXT thread the critic's judge is shown — only messages the customer actually exchanged.
+ *
+ * The graded reply was already selected through `realOutProviders`, but the context thread was
+ * built with a bare direction filter, so undelivered `draft_ai` rows and voice artifacts went to
+ * the judge dressed as sent messages. Igor Yuzbashev (+17164442120, flagged 2026-08-09):
+ * "out_of_order_duplicate_intro_messages" — the "duplicate" was a `draftStatus: "stale"` Jumpstart
+ * draft the customer NEVER received, sitting next to the real wait-list intro. The customer saw
+ * exactly one intro; the judge saw two. The grader-phantom class ("a 'previous outgoing' that is
+ * really a draft_ai row") is the single most repeated judge-input bug in the roster.
+ *
+ * Inbound rows pass untouched; outbound rows must be on a provider the customer can actually
+ * receive. FAIL DIRECTION: dropping a row the judge should have seen can only make the critic
+ * MISS a finding (quiet), never invent one — the same direction every other critic gate fails.
+ */
+export function selectOpenCriticThread<T extends OutboundAuthorshipMsg>(
+  messages: T[],
+  realOutProviders: ReadonlySet<string>
+): T[] {
+  const list = Array.isArray(messages) ? messages : [];
+  return list.filter(m => {
+    if (!String(m?.body ?? "").trim()) return false;
+    if (m?.direction === "in") return true;
+    if (m?.direction !== "out") return false;
+    return realOutProviders.has(String(m?.provider ?? ""));
+  });
+}
+
 /** Is the reply recent enough for the critic's "did this reply mishandle the lead?" question to mean
  *  anything? No `freshness` => unbounded (today's behaviour, for callers that grade a fixed fixture).
  *  Undatable reply => true (see above: degrade, never silently disable). */
