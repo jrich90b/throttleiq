@@ -1,4 +1,5 @@
 import type { AppointmentTimingParse } from "./llmDraft.js";
+import { visitCommitmentConfidenceMin, type VisitCommitmentParse } from "./visitCommitmentParser.js";
 
 /**
  * Parser-driven soft-visit commitment signal (Todd Herian +15673079691, Ref 11438,
@@ -135,4 +136,99 @@ export function isParserConditionalVisitCommitment(
   const nt = String(parse.normalizedText ?? "").toLowerCase();
   if (!VISIT_COMMITMENT_VERBS.test(nt)) return false;
   return /\b(?:once|when|whenever|as soon as|after)\b/.test(nt);
+}
+
+/**
+ * ── THE SOFT-VISIT REFEREE ────────────────────────────────────────────────────────────────────
+ * The ONE place that decides whether a turn arms the soft-visit cadence window, shared by
+ * `/webhooks/twilio` and `/conversations/:id/regenerate`. Pure: every reading is passed in.
+ *
+ * It exists for two measured reasons (both 2026-08-14, live store, 1,910 inbound turns / 90d):
+ *
+ * 1. THE TWO PATHS DISAGREED. Live OR'd the legacy keyword rule with the parser signal; regen
+ *    used the parser signal ALONE. The keyword rule fires on 45 turns/90d and the parser signal
+ *    agrees on 5, so ~40 turns/90d armed a cadence hold on the live SMS lane that a regenerate
+ *    would never arm — a two-path parity break against the CLAUDE.md non-negotiable. One referee,
+ *    both paths, fixes that by construction.
+ *
+ * 2. A KEYWORD RULE WAS OVERRULING A PARSER VERDICT THAT EXISTED — what AGENTS.md
+ *    "Fallback-vs-Parser Precedence" (Joe, 2026-08-06) forbids. Michelle Hyjek `+17163164854`
+ *    told us she was out of town at a wedding and back Monday; the rule saw `come` + `monday`
+ *    and produced a staff task claiming she had said she'd come in. See visitCommitmentParser.ts.
+ *
+ * THE TABLE, in order:
+ *   - The parser signal fires (day-anchored or conditional)  → ARM, source `parser`.
+ *   - The parser read an ACTIONABLE scheduling intent (`intent !== "none"`) → DO NOT arm, source
+ *     `parser_actionable_intent`: that turn belongs to the booking/offer/arrival arms, and the
+ *     keyword rule must not drag it sideways into a soft hold.
+ *   - The keyword rule fires and a confident visit-commitment `no` came back → DO NOT arm,
+ *     source `visit_parser_veto`. This is the ONLY suppression the new parser can cause.
+ *   - The keyword rule fires and nothing contradicts it → ARM, source `legacy_regex`. This is the
+ *     gap-fill the fallback policy allows, and it is what preserves the ~40 real commitments the
+ *     day-anchored verb list misses ("I'll come this weekend", "going to stop up there tomorrow").
+ *   - Nothing fires → DO NOT arm.
+ *
+ * FAIL DIRECTION: the veto is the only new way to LOSE a hold, and it needs an explicit `no`
+ * above `visitCommitmentConfidenceMin()`. A disabled LLM, a missing key, an error, `unclear`, or
+ * a hedged `no` all leave today's behaviour untouched. Nothing here can create a new send.
+ * Pinned by `soft_visit_precedence:eval`.
+ */
+export type SoftVisitSource =
+  | "parser"
+  | "parser_actionable_intent"
+  | "visit_parser_veto"
+  | "legacy_regex"
+  | "none";
+
+export type SoftVisitDecision = {
+  /** Arm the soft-visit cadence window (quiet window + dialog state + outcome todo). */
+  arm: boolean;
+  /** True only for the day-less "once she's back on the road I'll be in" shape. */
+  conditional: boolean;
+  source: SoftVisitSource;
+};
+
+export function resolveSoftVisitCommitment(input: {
+  /** `detectSoftVisitIntent(inboundText)` — the legacy keyword rule. */
+  legacySignal: boolean;
+  /** The appointment-timing reading for this turn (null when the parser did not run). */
+  parse: AppointmentTimingParse | null | undefined;
+  /** Callers that must not take the conditional arm (a pending inventory watch owns the turn). */
+  conditionalAllowed?: boolean;
+  /** The tiebreaker reading — only ever consulted on a disputed turn (see resolver order). */
+  visitCommitment?: VisitCommitmentParse | null;
+}): SoftVisitDecision {
+  if (isParserSoftVisitCommitment(input.parse)) {
+    return { arm: true, conditional: false, source: "parser" };
+  }
+  if (input.conditionalAllowed !== false && isParserConditionalVisitCommitment(input.parse)) {
+    return { arm: true, conditional: true, source: "parser" };
+  }
+  if (!input.legacySignal) return { arm: false, conditional: false, source: "none" };
+  // A reading EXISTS and it is an actionable scheduling intent — its own arm owns this turn.
+  if (input.parse && input.parse.intent !== "none") {
+    return { arm: false, conditional: false, source: "parser_actionable_intent" };
+  }
+  const vc = input.visitCommitment;
+  if (vc && vc.visit_commitment === "no" && vc.confidence >= visitCommitmentConfidenceMin()) {
+    return { arm: false, conditional: false, source: "visit_parser_veto" };
+  }
+  return { arm: true, conditional: false, source: "legacy_regex" };
+}
+
+/**
+ * Does this turn need the tiebreaker parse at all? Only when the keyword rule is about to decide
+ * ALONE — the parser signal declined and there is no actionable intent to defer to. Keeps the
+ * extra round-trip on ~40 turns/90d (about one every other day) instead of every turn.
+ */
+export function needsVisitCommitmentTiebreak(input: {
+  legacySignal: boolean;
+  parse: AppointmentTimingParse | null | undefined;
+  conditionalAllowed?: boolean;
+}): boolean {
+  if (!input.legacySignal) return false;
+  if (isParserSoftVisitCommitment(input.parse)) return false;
+  if (input.conditionalAllowed !== false && isParserConditionalVisitCommitment(input.parse)) return false;
+  if (input.parse && input.parse.intent !== "none") return false;
+  return true;
 }
