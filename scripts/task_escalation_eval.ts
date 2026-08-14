@@ -110,11 +110,20 @@ assert.equal(isClockWithinBusinessHours(closedClock), false);
 // Wiring pins: tick registration in both runners + worker schedule + dispatch.
 const apiSource = await fs.readFile(path.resolve("services/api/src/index.ts"), "utf8");
 assert.match(apiSource, /"task-escalations": \(\) => processTaskEscalations\(\)/, "worker dispatch entry");
-assert.match(
-  apiSource,
-  /runBackgroundTask\("task-escalations", processTaskEscalations\)/,
-  "in-process tick registration"
-);
+// 2026-08-14: the minute lane became data — index.ts iterates WORKER_MINUTE_LANE_TASKS in one
+// loop, so in-process registration is lane MEMBERSHIP (executed) + the iterating loop (pinned).
+{
+  const { WORKER_MINUTE_LANE_TASKS } = await import("../services/api/src/domain/workerTasks.ts");
+  assert.ok(
+    (WORKER_MINUTE_LANE_TASKS as readonly string[]).includes("task-escalations"),
+    "task-escalations is on the in-process minute lane"
+  );
+  assert.match(
+    apiSource,
+    /for \(const name of WORKER_MINUTE_LANE_TASKS\)/,
+    "the API's minute interval iterates the shared lane list"
+  );
+}
 assert.match(apiSource, /markTodoEscalated\(todo\.id\)/, "escalated todos are marked so they never repeat");
 assert.match(apiSource, /TASK_ESCALATION_ENABLED/, "kill switch exists");
 const workerTasks = await fs.readFile(path.resolve("services/api/src/domain/workerTasks.ts"), "utf8");
