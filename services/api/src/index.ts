@@ -67377,7 +67377,7 @@ if (authToken && signature) {
     provider: event.provider,
     shortAck,
     schedulingBlocked,
-    ackOnlyCloseTurn: isAckOnlyCloseTurn(event.body, lastOutboundText),
+    ackOnlyCloseTurn: isAckOnlyCloseTurn(event.body, lastOutboundText), ackText: String(event.body ?? ""),
     lastOutboundAskedQuestion,
     hasPendingWatch: !!conv.inventoryWatchPending,
     hasPendingSlot: !!conv.scheduler?.pendingSlot,
@@ -67385,8 +67385,8 @@ if (authToken && signature) {
     acceptedPendingOffer: parserAcceptanceDeclinesAutoSilence({ accepted: customerAckActionAccepted, action: customerAckActionParse?.action, confidence: customerAckActionParse?.confidence })
   });
   if (shortAckTurnEnd.end) {
-    logRouteOutcome("short_ack_turn_end", { reason: shortAckTurnEnd.reason });
-    return res.status(200).type("text/xml").send(emptyTwilioWebhookResponse());
+    logRouteOutcome("short_ack_turn_end", { reason: shortAckTurnEnd.reason, closer: !!shortAckTurnEnd.closerText });
+    return shortAckTurnEnd.closerText ? publishLiveTwilioReply(shortAckTurnEnd.closerText, { shortAckIntent: true }) : res.status(200).type("text/xml").send(emptyTwilioWebhookResponse());
   }
 
   if (

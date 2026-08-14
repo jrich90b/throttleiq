@@ -10,6 +10,11 @@
 // about vendors, nothing else did. The cadence referee owns the set now, so "don't chase them" and
 // "don't grade them" cannot drift apart again.
 import { NON_SALES_CADENCE_REASONS as NON_SALES_FOLLOWUP_REASONS } from "./routeStateReducer.js";
+// Same principle one class over: a courtesy closer ends in a statement ON PURPOSE, so any scorer
+// grading "did this reply advance anything?" must exempt it rather than manufacture a finding on
+// every single one. One owner for that answer, so "never ask here" and "never grade the missing
+// ask" cannot drift apart. The corpus behind the class is in domain/courtesyCloser.ts.
+export { isCourtesyCloserText } from "./courtesyCloser.js";
 
 const SHADOW_PROVIDER_MESSAGE_ID_RE = /^(SMshadow|MMshadow|adf_shadow_)/i;
 const SHADOW_SENDER_RE = /shadow-replay@/i;

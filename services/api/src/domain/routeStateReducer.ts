@@ -8739,6 +8739,11 @@ export type ShortAckTurnEndInput = {
   hasReschedulePending: boolean;
   /** The customer-ack parser read this as accepting something WE left pending. */
   acceptedPendingOffer: boolean;
+  /**
+   * The customer's own words this turn. Read for ONE surface fact — did they say thank you — and
+   * only after every rule above has already decided we are going quiet. See domain/courtesyCloser.
+   */
+  ackText?: string | null;
 };
 
 export type ShortAckTurnEndDecision = {
@@ -8750,7 +8755,31 @@ export type ShortAckTurnEndDecision = {
     | "ack_only_close_turn"
     | "short_ack_no_pending_question"
     | "turn_continues";
+  /**
+   * Set ONLY on an end-the-turn decision that would otherwise have been silence, and only when the
+   * customer thanked us: the one line to send instead of nothing. Never carries a question.
+   */
+  closerText?: string;
 };
+
+/**
+ * Present tense: does this turn SAY thank you? A SURFACE fact about their sentence, never a reading
+ * of what they meant — whether a reply is owed is decided above this line, by the typed ack parser
+ * and by real state. Deliberately narrow, and deliberately not widened when a case is missed: a
+ * miss costs one unsent pleasantry. Declared here rather than imported because this module is
+ * dependency-free by design; the evidence behind it lives in domain/courtesyCloser.ts.
+ */
+const EXPLICIT_THANKS = /\b(thanks|thank you|thank u|thanx|thx|ty|appreciate (it|that|you)|much appreciated)\b/i;
+
+export function isExplicitThanksText(text: string): boolean {
+  const t = String(text ?? "").trim();
+  if (!t) return false;
+  if (/[?]/.test(t)) return false; // a question is never a sign-off, whatever else it carries
+  return EXPLICIT_THANKS.test(t);
+}
+
+/** The whole reply. One fixed line, never a question — see domain/courtesyCloser.ts for why. */
+export const COURTESY_CLOSER_TEXT = "You're welcome!";
 
 export function decideShortAckTurnEnd(input: ShortAckTurnEndInput): ShortAckTurnEndDecision {
   if (input.provider !== "twilio") return { end: false, reason: "not_twilio" };
@@ -8764,8 +8793,13 @@ export function decideShortAckTurnEnd(input: ShortAckTurnEndInput): ShortAckTurn
   if (somethingPending || input.lastOutboundAskedQuestion) {
     return { end: false, reason: "turn_continues" };
   }
-  if (input.ackOnlyCloseTurn) return { end: true, reason: "ack_only_close_turn" };
-  if (input.shortAck) return { end: true, reason: "short_ack_no_pending_question" };
+  // Past this point the referee has already concluded we owe them NOTHING: the parser did not read
+  // an acceptance, no watch/slot/reschedule is pending, and our own last message asked no question.
+  // The only remaining choice is HOW to be quiet — say nothing, or say you're welcome and stop.
+  // The closer therefore cannot displace a substantive reply: there was never going to be one.
+  const closerText = isExplicitThanksText(input.ackText ?? "") ? COURTESY_CLOSER_TEXT : undefined;
+  if (input.ackOnlyCloseTurn) return { end: true, reason: "ack_only_close_turn", closerText };
+  if (input.shortAck) return { end: true, reason: "short_ack_no_pending_question", closerText };
   return { end: false, reason: "turn_continues" };
 }
 
