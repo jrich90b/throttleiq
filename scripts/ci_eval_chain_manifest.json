@@ -227,6 +227,7 @@
     "adf_policy:eval",
     "walkin_internal_note_topic_guard:eval",
     "walkin_pricing_ask_tail:eval",
+    "walkin_first_touch_ask:eval",
     "walkin_day_and_time_confirm:eval",
     "undelivered_outbound_provenance:eval",
     "failed_manual_send_provenance:eval",

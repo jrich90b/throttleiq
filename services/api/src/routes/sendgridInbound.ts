@@ -181,7 +181,8 @@ import {
   resolveWalkInFollowUpSubject,
   buildWalkInPricingFollowUpTail,
   shouldWalkInAvailabilityTailSpeak,
-  hasWalkInPricingFollowUpPhrase
+  hasWalkInPricingFollowUpPhrase,
+  appendWalkInFirstTouchAsk
 } from "../domain/walkInFollowUpTopic.js";
 // SHADOW judge on this lane's drafts (Joe Step 2, 2026-08-02) — fire-and-forget, never awaited.
 import { runEmailLaneJudgeShadow } from "../domain/emailLaneJudgeShadow.js";
@@ -7933,7 +7934,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       !walkInReminderRequest
     ) {
       const tlpStepTail = buildTrafficLogProWalkInTail({
-        step: trafficLogProStep,
+        step: trafficLogProStep ?? 0,
         comment: walkInCleanedComment,
         modelLabel,
         // The follow-up subject wants the year the note actually stated. `yearRangeLabel` only
@@ -8258,11 +8259,30 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
     const addendum = buildWalkInAddendum();
     const includeDefaultWalkInThanks = !walkInTailHasOwnAcknowledgement(tail);
-    const ack =
-      `Hi ${greetingFirstName(firstName, salespersonName)} — this is ${salespersonName} at ${dealerName}. ` +
-      (includeDefaultWalkInThanks ? "Thanks for stopping in, it was nice chatting with you. " : "") +
-      tail +
-      (addendum ? ` ${addendum}` : "");
+    // The walk-in first touch closes by ASKING them back in, not by promising to call
+    // (ladder-health alarm on this lane: 15 agent-owned first touches, 0 asked). Applied here, at
+    // the ONE place the reply is finally assembled, so the question lands after the spec recap and
+    // the addendum rather than mid-sentence. Everyone on this lane has already been in the
+    // building, so it is the "stop BACK in" wording (Joe ruling 31). Policy + suppressions live in
+    // appendWalkInFirstTouchAsk (domain leaf) so an eval can execute them.
+    const ack = appendWalkInFirstTouchAsk({
+      reply:
+        `Hi ${greetingFirstName(firstName, salespersonName)} — this is ${salespersonName} at ${dealerName}. ` +
+        (includeDefaultWalkInThanks ? "Thanks for stopping in, it was nice chatting with you. " : "") +
+        tail +
+        (addendum ? ` ${addendum}` : ""),
+      // A non-Traffic-Log-Pro walk-in carries no ladder step; 0 falls outside the band and never asks.
+      step: trafficLogProStep ?? 0,
+      softAsk: buildWalkInSoftTimingAsk(true, false),
+      suppressed:
+        !!returnVisitTail ||
+        walkInWatchSet ||
+        hasWatchIntent ||
+        suppressWalkInAutoAck ||
+        hasCreditCosignerSignal ||
+        walkInSpokenForHandoff ||
+        !!walkInReminderRequest
+    });
     const trafficLogOperationalDealProgressNote =
       !!trafficLogProStep &&
       hasDealProgressSignal &&
