@@ -632,6 +632,7 @@ import {
 } from "./domain/humanThreadNudge.js";
 import { decideHumanModeWatchClaim, hasWatchPhraseHint } from "./domain/humanModeWatchClaim.js";
 import { processClaudeDraftReview } from "./domain/claudeDraftReview.js";
+import { hasManualOutboundWatchCue, resolveInventoryNotifyPromisePlan } from "./domain/inventoryNotifyPromise.js";
 import { referencesPastDatedEvent } from "./domain/pastEventGuard.js";
 import { stripLeadingVinCodes, stripLeadingMakeName, normalizeWatchModelsVin, modelLabelHasVinCode } from "./domain/watchModelVinCodes.js";
 import { trikeClassConflict, isFamilyOnlyModelLabel, referencesFamilyOnlyInText } from "./domain/modelFamily.js";
@@ -1069,6 +1070,10 @@ import {
   setMessageFeedback,
   addTodo,
   processTurnResponseTripwire,
+  applyInventoryNotifyPromiseOutcome,
+  inferInventoryItemCondition,
+  inventoryItemMatchesRequestedCondition,
+  normalizeWatchCondition,
   addCallTodoIfMissing,
   upsertPendingIncomingInventoryNotifyTodo,
   healStaleHeldFlag,
@@ -5946,33 +5951,6 @@ async function saveInventorySnapshot(items: any[]): Promise<boolean> {
     console.warn("[inventory-watch] snapshot save failed:", e?.message ?? e);
     return false;
   }
-}
-
-function normalizeWatchCondition(raw?: string | null): "new" | "used" | undefined {
-  const t = String(raw ?? "").toLowerCase().trim();
-  if (!t) return undefined;
-  if (/(pre|used|pre-owned|preowned|owned)/.test(t)) return "used";
-  if (/new/.test(t)) return "new";
-  return undefined;
-}
-
-function inferInventoryItemCondition(item: any): "new" | "used" | undefined {
-  const explicit = normalizeWatchCondition(item?.condition);
-  if (explicit) return explicit;
-  const yearNum = Number(String(item?.year ?? ""));
-  if (Number.isFinite(yearNum) && yearNum > 0) {
-    const currentYear = new Date().getFullYear();
-    return yearNum <= currentYear - 2 ? "used" : "new";
-  }
-  return undefined;
-}
-
-function inventoryItemMatchesRequestedCondition(
-  item: any,
-  requestedCondition?: "new" | "used"
-): boolean {
-  if (!requestedCondition) return true;
-  return inferInventoryItemCondition(item) === requestedCondition;
 }
 
 function formatRequestedConditionLabel(condition?: "new" | "used"): string {
@@ -51945,6 +51923,36 @@ app.post("/conversations/:id/send", async (req, res) => {
             ),
             humanAuthored: promiseHumanAuthored
           });
+          // A staff watch-promise mints the WATCH (or a dated task when no bike resolves) —
+          // never silence (kunwarsahilnaseem@gmail.com, Joe 8/12; domain/inventoryNotifyPromise.ts).
+          if (promiseDecision.kind === "inventory_notify_promise") {
+            const notifySlots = await safeLlmParse("manual_outbound_watch_promise_parser", () =>
+              parseUnifiedSemanticSlotsWithLLM({
+                text, history: buildHistory(conv, 8), lead: conv.lead,
+                inventoryWatch: conv.inventoryWatch, inventoryWatchPending: conv.inventoryWatchPending,
+                tradePayoff: conv.tradePayoff, dialogState: getDialogState(conv)
+              })
+            );
+            const applied = applyInventoryNotifyPromiseOutcome(
+              conv,
+              resolveInventoryNotifyPromisePlan({
+                slots: notifySlots, nowIso: new Date().toISOString(),
+                taskDueIso: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+              }),
+              { sourceMessageId: promiseSourceMessageId, semanticCondition: notifySlots?.watch?.condition ?? null,
+                conditionText: text.toLowerCase(), mergeWatches: mergeInventoryWatches, setDialogState }
+            );
+            if (applied.outcome !== "none") {
+              recordRouteOutcome("manual", applied.outcome === "watch_set"
+                ? "manual_outbound_watch_promise_set" : "manual_outbound_watch_promise_task", {
+                convId: conv.id, leadKey: conv.leadKey, channel: promiseChannel,
+                model: applied.model ?? null, added: applied.added ?? null,
+                taskCreated: applied.taskCreated ?? null, taskDueAt: applied.taskDueAt ?? null
+              });
+              saveConversation(conv);
+            }
+            return;
+          }
           // ONE apply block for both authors; the referee owns the whole difference between them
           // (dated task + cadence hold for a person, a bare owner task for the agent).
           const promisePlan = resolveManualPromiseApplyPlan(promiseDecision);
@@ -51984,17 +51992,8 @@ app.post("/conversations/:id/send", async (req, res) => {
     }
 
     const lower = text.toLowerCase();
-    const explicitWatchVerb =
-      /\b(keep (?:an|any) eye out|watch for|let you know (?:if|when)|text you (?:if|when|as soon as)|notify you (?:if|when))\b/i.test(
-        lower
-      ) ||
-      (/\b(i(?:'|’)ll|i will|we(?:'|’)ll|we will)\b/i.test(lower) &&
-        /\b(let you know|text you|notify you)\b/i.test(lower));
-    const inventoryAvailabilityCue =
-      /\b(comes in|lands|in stock|available|availability|pre[- ]?owned|used|new|bike|model|road glide|street glide|road king|sportster|softail|breakout|touring|trike|pan america|nightster|xg500|xg750|xg750a|street 500|street 750|street rod)\b/i.test(
-        lower
-      );
-    const outboundWatchCue = explicitWatchVerb && inventoryAvailabilityCue;
+    const outboundWatchCues = hasManualOutboundWatchCue(lower);
+    const outboundWatchCue = outboundWatchCues.verb && outboundWatchCues.noun;
     const watchParserEligible =
       process.env.LLM_ENABLED === "1" &&
       process.env.LLM_UNIFIED_SLOT_PARSER_ENABLED === "1" &&

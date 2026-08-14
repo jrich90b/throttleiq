@@ -31,6 +31,15 @@ import { decideVoiceNextStep, type VoiceNextStepDecision } from "./voiceNextStep
 export function hasManualPromiseHint(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
+  // Watch-promise phrasing is a promise with no deliverable VERB from the list below —
+  // "ok we will keep an eye out. thanks for your inquiry" (kunwarsahilnaseem@gmail.com,
+  // Joe's report 2026-08-12) never reached the parser because "keep an eye out" matches
+  // nothing in it. The parser owns the verdict; this hint only decides whether to pay for it.
+  const watchPromise =
+    /\b(keep (?:an|any) eye out|watch for|let you know (?:if|when)|text you (?:if|when|as soon as)|notify you (?:if|when))\b/.test(
+      t
+    );
+  if (watchPromise) return true;
   const firstPersonFuture =
     /\b(i(?:'|’)?ll|i will|we(?:'|’)?ll|we will|let me|i(?:'|’)?m going to|gonna|i can get|i(?:'|’)?ll have)\b/.test(t);
   const deliverableVerb =
@@ -136,11 +145,33 @@ export type ManualOutboundPromiseDecision =
    * pressure and NO cadence hold — the agent's promise is not evidence about when a human will
    * get to it, and cadence timing is not this referee's business.
    */
-  | { kind: "agent_promise_owner_task"; reason: string; taskSummary: string };
+  | { kind: "agent_promise_owner_task"; reason: string; taskSummary: string }
+  /**
+   * The rep promised to WATCH for a bike ("we'll keep an eye out"). The follow-through is the
+   * inventory-watch machinery, not addTodo — resolveInventoryNotifyPromisePlan (domain/
+   * inventoryNotifyPromise.ts) decides watch-vs-task from the slot parser's spec.
+   */
+  | { kind: "inventory_notify_promise"; reason: string };
 
 export function decideManualOutboundPromise(input: ManualOutboundPromiseInput): ManualOutboundPromiseDecision {
   const parse = input.parse;
   if (!parse || !parse.promisePresent) return { kind: "none", reason: "no_promise" };
+  // "We'll keep an eye out" (kind inventory_notify) was EXCLUDED here on the premise that the
+  // watch arm handles it — and the watch arm's semantic parse reads CUSTOMER intent, so it
+  // returns watchAction "none" for a rep's promise (measured 3/3) and handed it right back.
+  // Nothing minted anything since April on Kunwar's Forty-Eight (Joe's report 2026-08-12).
+  // The promise parser IS the authority on this shape (3/3 at 0.80-0.86); route it to the
+  // inventory-notify plan (a watch when the thread names the bike, a dated task when not) —
+  // the caller owns the side effects via resolveInventoryNotifyPromisePlan. Closed threads
+  // still bail; low confidence still bails (fail direction: silence only when uncertain).
+  if (parse.kind === "inventory_notify") {
+    const status = String(input.conversationStatus ?? "").trim().toLowerCase();
+    if (status === "closed") return { kind: "none", reason: "conversation_closed" };
+    const confidence = Number(parse.confidence ?? 0);
+    const confidenceMin = input.confidenceMin ?? 0.7;
+    if (!(confidence >= confidenceMin)) return { kind: "none", reason: "inventory_notify_low_confidence" };
+    return { kind: "inventory_notify_promise", reason: "staff_watch_promise" };
+  }
   if (!isActionablePromiseKind(parse.kind)) return { kind: "none", reason: `kind_${parse.kind || "none"}` };
   // A HELD-MODE thread is not a reason to drop the promise — it is the main population.
   //

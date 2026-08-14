@@ -5718,6 +5718,86 @@ export async function processTurnResponseTripwire(deps: {
   return { scanned: all.length, fired };
 }
 
+/** Watch condition normalizer (moved from index.ts 2026-08-14 — the notify-promise applier below
+ *  needs it here, and index re-imports it). Deterministic structured extraction, not comprehension. */
+export function normalizeWatchCondition(raw?: string | null): "new" | "used" | undefined {
+  const t = String(raw ?? "").toLowerCase().trim();
+  if (!t) return undefined;
+  if (/(pre|used|pre-owned|preowned|owned)/.test(t)) return "used";
+  if (/new/.test(t)) return "new";
+  return undefined;
+}
+
+/** Condition family siblings of normalizeWatchCondition (moved with it from index.ts 2026-08-14). */
+export function inferInventoryItemCondition(item: any): "new" | "used" | undefined {
+  const explicit = normalizeWatchCondition(item?.condition);
+  if (explicit) return explicit;
+  const yearNum = Number(String(item?.year ?? ""));
+  if (Number.isFinite(yearNum) && yearNum > 0) {
+    const currentYear = new Date().getFullYear();
+    return yearNum <= currentYear - 2 ? "used" : "new";
+  }
+  return undefined;
+}
+
+export function inventoryItemMatchesRequestedCondition(
+  item: any,
+  requestedCondition?: "new" | "used"
+): boolean {
+  if (!requestedCondition) return true;
+  return inferInventoryItemCondition(item) === requestedCondition;
+}
+
+/**
+ * Side-effect applier for a staff "we'll keep an eye out" promise (Joe's report 2026-08-12,
+ * kunwarsahilnaseem@gmail.com — see domain/inventoryNotifyPromise.ts for the three stacked gates
+ * that dropped it). The PLAN is decided by the pure resolveInventoryNotifyPromisePlan; this
+ * function only executes it through the same referees every other watch lane uses
+ * (applyInventoryWatchDefaults blank-filling, the caller's merge, applyInventoryWatchArm) or
+ * mints the fallback dated task via addTodo. Returns what happened so the caller can record the
+ * route outcome — it never logs or saves itself.
+ */
+export function applyInventoryNotifyPromiseOutcome(
+  conv: Conversation,
+  plan: import("./inventoryNotifyPromise.js").InventoryNotifyPromisePlan,
+  args: {
+    sourceMessageId?: string;
+    semanticCondition?: string | null;
+    /** The rep's outbound, lowercased — condition words referee input, not comprehension. */
+    conditionText: string;
+    mergeWatches: (
+      existing: InventoryWatch[],
+      incoming: InventoryWatch[]
+    ) => { merged: InventoryWatch[]; added: InventoryWatch[] };
+    setDialogState: (conv: any, name: any) => void;
+  }
+): { outcome: "watch_set" | "task" | "none"; model?: string | null; added?: number; taskCreated?: boolean; taskDueAt?: string | null } {
+  if (plan.kind === "watch") {
+    const watchSpec = plan.watch as unknown as InventoryWatch;
+    applyInventoryWatchDefaults(watchSpec, {
+      leadMake: conv.lead?.vehicle?.make ?? null,
+      leadTrim: conv.lead?.vehicle?.trim ?? null,
+      conditionFromText: normalizeWatchCondition(args.conditionText) ?? null,
+      semanticCondition: (args.semanticCondition ?? null) as any,
+      conditionFromLead: normalizeWatchCondition(conv.lead?.vehicle?.condition ?? null) ?? null
+    });
+    const existing = Array.isArray(conv.inventoryWatches)
+      ? (conv.inventoryWatches as InventoryWatch[])
+      : conv.inventoryWatch
+        ? [conv.inventoryWatch as InventoryWatch]
+        : [];
+    const { merged, added } = args.mergeWatches(existing, [watchSpec]);
+    if (added.length) {
+      applyInventoryWatchArm(conv, { lane: "manual_outbound", watches: merged, setDialogState: args.setDialogState });
+      return { outcome: "watch_set", model: watchSpec.model ?? null, added: added.length };
+    }
+    // Already covered by an existing watch — the promise IS tracked; nothing more to do.
+    return { outcome: "none" };
+  }
+  const task = addTodo(conv, "other", plan.summary, args.sourceMessageId, undefined, { dueAt: plan.dueAtIso }, "reminder");
+  return { outcome: "task", taskCreated: !!task, taskDueAt: plan.dueAtIso };
+}
+
 export function applyStaleBookingReplacement(
   appt: any,
   input: StaleBookingReplacementInput
