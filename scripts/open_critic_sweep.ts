@@ -73,6 +73,7 @@ const {
   decideOpenCriticAnomaly,
   summarizeTurnActions,
   selectOpenCriticAgentReply,
+  selectOpenCriticThread,
   resolveOpenCriticWatchAlertContext
 } = await import("../services/api/src/domain/conversationOutcomeAudit.ts");
 
@@ -102,8 +103,11 @@ let judged = 0;
 let flagged = 0;
 for (const c of candidates) {
   const msgs = Array.isArray(c?.messages) ? c.messages : [];
-  const thread = msgs
-    .filter((m: any) => (m?.direction === "in" || m?.direction === "out") && String(m?.body ?? "").trim())
+  // Judge context = DELIVERED thread only. A bare direction filter here fed stale draft_ai rows to
+  // the judge as sent messages (Igor +17164442120: a never-delivered draft read as a duplicate
+  // intro) — selectOpenCriticThread keeps inbound + real-provider outbound, same set the graded
+  // reply is selected from.
+  const thread = selectOpenCriticThread(msgs, REAL_OUT)
     .slice(-12)
     .map((m: any) => ({ direction: m.direction as "in" | "out", body: String(m.body) }));
   const lastReply = selectOpenCriticAgentReply(msgs, REAL_OUT, c?.campaignThread, freshness);

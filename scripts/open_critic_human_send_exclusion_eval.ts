@@ -20,7 +20,8 @@ import {
   OPEN_CRITIC_MAX_REPLY_AGE_MS_DEFAULT,
   isHumanAuthoredOutbound,
   isOpenCriticReplyFreshEnough,
-  selectOpenCriticAgentReply
+  selectOpenCriticAgentReply,
+  selectOpenCriticThread
 } from "../services/api/src/domain/conversationOutcomeAudit.ts";
 
 // The sweep's notion of a "real" (sent) outbound — mirror it here so the fixture matches production.
@@ -236,5 +237,53 @@ for (const at of [undefined, null, "", "not-a-date"]) {
 }
 assert.equal(isOpenCriticReplyFreshEnough(null, { nowMs: NOW, maxAgeMs: TWO_DAYS }), false, "no reply is not fresh");
 assert.ok(OPEN_CRITIC_MAX_REPLY_AGE_MS_DEFAULT > 0, "the default reply-age ceiling is a real positive bound");
+
+// --- selectOpenCriticThread: the judge's CONTEXT is the DELIVERED thread ---------------------
+// Igor Yuzbashev +17164442120 (flagged 2026-08-09 "out_of_order_duplicate_intro_messages"): a
+// draftStatus:"stale" Jumpstart intro the customer NEVER received sat beside the real wait-list
+// intro, and the judge — whose context was built with a bare direction filter — read two intros.
+// The customer saw one. The thread the judge sees must be the same delivered set the graded reply
+// is selected from.
+{
+  const igorThread = selectOpenCriticThread(
+    [
+      { direction: "in", provider: "sendgrid_adf", body: "WEB LEAD (ADF) Source: Riding Academy - Wait List Ref: 11743 Name: igor" },
+      // The never-delivered stale draft — the phantom "duplicate intro":
+      { direction: "out", provider: "draft_ai", body: "Hey igor, it's Alexandra over at American Harley-Davidson. Thanks — I saw you want to do the Jumpstart experience" },
+      { direction: "out", provider: "twilio", body: "Hey igor, it's Alexandra over at American Harley-Davidson. Thanks for signing up for the Riding Academy - you're on the wait list" },
+      { direction: "out", provider: "voice_transcript", body: "Agent: Thank you for calling American Harley Davidson." },
+      { direction: "out", provider: "twilio", body: "Hey Igor, I may have a spot that will open up for this weekends class. Are you still interested?" },
+      { direction: "in", provider: "twilio", body: "Yes I am!" }
+    ] as any[],
+    REAL_OUT
+  );
+  assert.equal(igorThread.length, 4, "the judge sees inbound + delivered outbound only (stale draft and voice artifact dropped)");
+  const intros = igorThread.filter(m => /it's Alexandra over at American Harley-Davidson/.test(String((m as any).body)));
+  assert.equal(intros.length, 1, "the customer saw ONE intro, so the judge sees ONE intro — the phantom duplicate is out");
+  assert.ok(
+    !igorThread.some(m => String((m as any).provider) === "draft_ai"),
+    "an undelivered draft_ai row never reaches the judge as a sent message"
+  );
+  assert.ok(
+    igorThread.some(m => (m as any).direction === "in" && /Yes I am/.test(String((m as any).body))),
+    "inbound rows pass untouched"
+  );
+  // Fail direction: an out row with an unknown provider is DROPPED (quiet), never presented as sent.
+  const unknownOut = selectOpenCriticThread(
+    [{ direction: "out", provider: "mystery_channel", body: "who sent this?" }] as any[],
+    REAL_OUT
+  );
+  assert.equal(unknownOut.length, 0, "an unrecognized outbound provider fails toward the judge seeing less, never more");
+}
+
+// The sweep must actually BUILD its judge context through the selector (wiring pin — the selector
+// existing while the sweep keeps its bare direction filter is exactly how this regresses).
+{
+  const sweepSrc = fs.readFileSync(path.join(process.cwd(), "scripts/open_critic_sweep.ts"), "utf8");
+  assert.ok(
+    /const thread = selectOpenCriticThread\(msgs, REAL_OUT\)/.test(sweepSrc),
+    "open_critic_sweep builds the judge's thread via selectOpenCriticThread(msgs, REAL_OUT)"
+  );
+}
 
 console.log("PASS open-critic human-send exclusion eval (authorship predicate + agent-reply selection + campaign-broadcast exclusion + reply freshness + sweep wiring)");
