@@ -70,6 +70,27 @@ export function isAutomatedSenderInbound(args: {
 const LEAD_INTAKE_MARKER_RE = /(PHONE LOG \(ADF\)|WEB LEAD \(ADF\)|WEB TEXT WIDGET|\(ADF\))/i;
 const LEAD_INTAKE_FIELD_RE = /\b(Source|Ref|Inquiry|Vehicle|Department|PreQual|Lead|Page|URL)\s*:/i;
 
+/**
+ * SHAPE ONLY: is this inbound a structured lead-intake payload rather than a human
+ * typing? Same two-signal test the re-notification exclusion has always used (a
+ * marker AND a structured field), lifted out so consumers that care about the SHAPE
+ * — not about whether the thread is engaged — can ask the same question once.
+ *
+ * The judgement consumers build on top of this is the important half. A form is not
+ * the customer speaking, so "did the draft answer what they asked?" has NOTHING to
+ * grade on these turns; the pre-send judge was told exactly that (correctly, to stop
+ * it inventing an ask out of `Payment Status: Failed`) and has passed them by
+ * construction ever since. The replacement question — does the reply fit what the
+ * lead RECORD and the thread already establish? — needs this predicate to know when
+ * to ask it. See buildDraftQualityJudgePrompt's LEAD RECORD block.
+ */
+export function isLeadIntakeFormInbound(body?: string | null): boolean {
+  const text = String(body ?? "").replace(/\s+/g, " ").trim();
+  if (!text) return false;
+  if (!LEAD_INTAKE_MARKER_RE.test(text)) return false;
+  return LEAD_INTAKE_FIELD_RE.test(text);
+}
+
 export function isLeadIntakeRenotificationOnEngagedThread(args: {
   body?: string | null;
   hasPriorOutbound?: boolean | null;
