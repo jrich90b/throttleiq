@@ -41,7 +41,12 @@ export const WORKER_SCHEDULES: WorkerSchedule[] = [
       // to when the store's first message of the day lands.
       "staff-task-digests",
       "gate-blocker-digest",
-      "photo-delivery"
+      "photo-delivery",
+      // Joe's per-message tripwire (2026-08-14): the window opens at 10 min, so the minute lane
+      // keeps detection ~1 min after eligibility. Mirrored in WORKER_MINUTE_LANE_TASKS
+      // (api domain/workerTasks.ts, the API's in-process interval) — worker_dispatch:eval guards
+      // the mirror; this package stays import-free on purpose.
+      "turn-tripwire"
     ],
     requestTimeoutMs: 5 * 60_000
   },

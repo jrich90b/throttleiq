@@ -1065,6 +1065,7 @@ import {
   saveOperatorDraft,
   setMessageFeedback,
   addTodo,
+  processTurnResponseTripwire,
   addCallTodoIfMissing,
   upsertPendingIncomingInventoryNotifyTodo,
   healStaleHeldFlag,
@@ -1167,7 +1168,7 @@ import { buildCustomerReceivedHistory, buildEffectiveHistory } from "./domain/ef
 import { buildOpenTurnInquiry, getLastInboundBody, getLastInboundMessage, hasMultiMessageOpenTurn } from "./domain/openCustomerTurn.js";
 import { decideRepCallQuietWindow } from "./domain/repCallQuietWindow.js";
 import { resolveReportDir } from "./domain/reportPaths.js";
-import { isWorkerDrivenTicks, isWorkerTickTask, type WorkerTickTask } from "./domain/workerTasks.js";
+import { WORKER_MINUTE_LANE_TASKS, isWorkerDrivenTicks, isWorkerTickTask, type WorkerTickTask } from "./domain/workerTasks.js";
 import {
   buildEscalationDigest,
   DEFAULT_ESCALATION_CONFIG,
@@ -7853,7 +7854,9 @@ const WORKER_TICK_DISPATCH: Record<WorkerTickTask, () => Promise<unknown> | unkn
   "task-escalations": () => processTaskEscalations(),
   "staff-task-digests": () => processStaffTaskDigests(),
   "gate-blocker-digest": () => processGateBlockerDigest(),
-  "photo-delivery": () => processPendingPhotoDeliveries()
+  "photo-delivery": () => processPendingPhotoDeliveries(),
+  "turn-tripwire": () =>
+    processTurnResponseTripwire({ isSuppressed, recordOutcome: d => recordRouteOutcome("live", "turn_response_tripwire_task", d) })
 };
 
 function canUseWorkerInternal(req: any) {
@@ -7896,14 +7899,11 @@ if (isWorkerDrivenTicks()) {
   console.log("⏱️ WORKER_DRIVEN_TICKS=1: in-process background ticks disabled (worker dispatch active)");
 } else {
   setInterval(() => {
-    runBackgroundTask("follow-ups", processDueFollowUps);
-    runBackgroundTask("appt-confirm", processAppointmentConfirmations);
-    runBackgroundTask("staff-appt-notify", processStaffAppointmentNotifications);
-    runBackgroundTask("appt-questions", processAppointmentQuestions);
-    runBackgroundTask("task-escalations", processTaskEscalations);
-    runBackgroundTask("staff-task-digests", processStaffTaskDigests);
-    runBackgroundTask("gate-blocker-digest", processGateBlockerDigest);
-    runBackgroundTask("photo-delivery", processPendingPhotoDeliveries);
+    // ONE definition of the minute lane (domain/workerTasks.ts) for this in-process path and the
+    // worker's schedule alike — replaces the hand-mirrored list the cutover doc flagged as drift risk.
+    for (const name of WORKER_MINUTE_LANE_TASKS) {
+      runBackgroundTask(name, () => WORKER_TICK_DISPATCH[name]());
+    }
   }, 60_000);
 
   setTimeout(() => {

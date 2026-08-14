@@ -7,6 +7,7 @@
     "store_reload_hydration:eval",
     "worker_dispatch:eval",
     "worker_deploy_parity:eval",
+    "turn_response_tripwire:eval",
     "dealer_provision:eval",
     "reply_path:audit",
     "next_move_resolver:eval",
