@@ -404,7 +404,11 @@ const CEILINGS: Ceiling[] = [
     // follow-up-hold flag) moved behind resolveConversationDetailDisplay (conversationStore),
     // which is where the email draft is written and where the LIST endpoint already computed the
     // same followUpHold expression. Taken against main's REAL 70_371.
-    max: 70_365,
+    // 70_365 -> 70_351. The human-mode visit-commitment slice ADDED 25 lines to the handler and
+    // still ratcheted down: resolveUpcomingDateFromDayLabel (39 lines of pure day-label date math,
+    // both callers already visit-related) moved VERBATIM to domain/softVisitSignal.ts. A date
+    // helper was never inbound-handler code. Taken against main's REAL 70_365.
+    max: 70_351,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

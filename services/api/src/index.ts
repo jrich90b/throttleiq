@@ -1016,9 +1016,13 @@ import {
   hasConditionalVisitCommitmentHintText,
   isParserConditionalVisitCommitment,
   isParserSoftVisitCommitment,
-  isParserTimedVisitCommitment
+  isParserTimedVisitCommitment,
+  resolveUpcomingDateFromDayLabel
 } from "./domain/softVisitSignal.js";
-import { resolveSoftVisitTurn } from "./domain/visitCommitmentParser.js";
+import {
+  resolveHumanModeVisitCommitmentTask,
+  resolveSoftVisitTurn
+} from "./domain/visitCommitmentParser.js";
 import { buildScheduleContextStatusUpdateReply } from "./domain/scheduleStatusReply.js";
 import { collectRecentStaffCorrections } from "./domain/feedbackSteering.js";
 
@@ -23190,46 +23194,6 @@ function hasScheduleOfferContext(lastOutboundText: string, dialogState: DialogSt
       text
     )
   );
-}
-
-function resolveUpcomingDateFromDayLabel(label: string, now: Date = new Date()): Date | null {
-  const t = String(label ?? "").trim().toLowerCase();
-  if (!t) return null;
-  const monthIdx: Record<string, number> = {
-    january: 0, february: 1, march: 2, april: 3, may: 4, june: 5,
-    july: 6, august: 7, september: 8, october: 9, november: 10, december: 11
-  };
-  const monthDate = t.match(/^([a-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?$/);
-  if (monthDate && monthIdx[monthDate[1]] != null) {
-    const candidate = new Date(now.getFullYear(), monthIdx[monthDate[1]], Number(monthDate[2]), 12, 0, 0);
-    if (candidate.getTime() < now.getTime() - 24 * 60 * 60 * 1000) {
-      candidate.setFullYear(candidate.getFullYear() + 1);
-    }
-    return candidate;
-  }
-  const slash = t.match(/^(\d{1,2})\/(\d{1,2})$/);
-  if (slash) {
-    const candidate = new Date(now.getFullYear(), Number(slash[1]) - 1, Number(slash[2]), 12, 0, 0);
-    if (candidate.getTime() < now.getTime() - 24 * 60 * 60 * 1000) {
-      candidate.setFullYear(candidate.getFullYear() + 1);
-    }
-    return candidate;
-  }
-  const weekdays = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
-  const wd = weekdays.indexOf(t);
-  if (wd >= 0) {
-    const candidate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0);
-    const delta = (wd - candidate.getDay() + 7) % 7 || 7;
-    candidate.setDate(candidate.getDate() + delta);
-    return candidate;
-  }
-  if (t === "today") return new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0);
-  if (t === "tomorrow") {
-    const c = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0);
-    c.setDate(c.getDate() + 1);
-    return c;
-  }
-  return null;
 }
 
 /**
@@ -60165,6 +60129,28 @@ if (authToken && signature) {
       event.providerMessageId,
       "live"
     );
+    // The customer named a day to come in on a thread a rep owns — mint the SAME dated soft
+    // appointment task the agent lane mints, and nothing else (no reply, no cadence, no draft).
+    // See resolveHumanModeVisitCommitmentTask for the measurement and the fail direction.
+    if (event.provider === "twilio") {
+      const humanModeVisit = await resolveHumanModeVisitCommitmentTask({
+        humanMode: true,
+        threadClosed: conv.status === "closed" || !!conv.closedAt,
+        alreadyTasked: listOpenTodos().some(
+          t => t.convId === conv.id && /soft appointment/i.test(String(t.summary ?? ""))
+        ),
+        text: event.body ?? "",
+        history: buildHistory(conv, 6)
+      });
+      if (humanModeVisit.task && humanModeVisit.dayLabel) {
+        addSoftVisitStaffTask(conv, humanModeVisit.dayLabel, event.providerMessageId);
+        recordRouteOutcome("live", "human_mode_visit_commitment_task", {
+          convId: conv.id,
+          leadKey: conv.leadKey,
+          day: humanModeVisit.dayLabel
+        });
+      }
+    }
     const humanModePurchaseDeliveryLogisticsParse =
       event.provider === "twilio" &&
       hasPurchaseDeliveryLogisticsParserHint(
