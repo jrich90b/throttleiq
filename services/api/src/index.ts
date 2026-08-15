@@ -19,7 +19,7 @@ import { resolveAdfFirstTouchAckKind, buildAdfFirstTouchAck, resolveEnrollmentAc
 import { readFirstTimeRiderPolicy, hasRiderCoursePublicInfo, readEnrollmentRidingHistory, isThreadParkedOnUpcomingClass, applyRiderExperienceState } from "./domain/firstTimeRiderPolicy.js";
 import { buildFirstTimeRiderGuidanceReply, buildInitialAdfFirstTimeRiderGuidanceReply, hasExplicitRiderCourseInfoText, hasAmbiguousRiderCourseInfoText, asksRiderCourseLogistics, RIDER_COURSE_LOGISTICS_TODO } from "./domain/firstTimeRiderReply.js";
 import { readRidingAcademyRecordFields } from "./domain/ridingAcademy.js";
-import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildRidingAcademyEnrollmentAck, buildJumpstartOneOnOneInvite, buildFirstTimeRiderBeginnerReply, buildAcquiredVehicleAck, buildWatchAvailableReply, buildCholoWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, resolveIntroducedOwnerFirstName, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, hasCustomerReceivedOutbound, hasRecentDeliveredHumanOutbound } from "./domain/agentVoice.js";
+import { buildAgentIntro, normalizeNonAdfReplySpacing, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildRidingAcademyEnrollmentAck, buildJumpstartOneOnOneInvite, buildFirstTimeRiderBeginnerReply, buildAcquiredVehicleAck, buildWatchAvailableReply, buildCholoWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, resolveIntroducedOwnerFirstName, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, hasCustomerReceivedOutbound, hasRecentDeliveredHumanOutbound } from "./domain/agentVoice.js";
 import {
   postSaleVehicleIsNew,
   postSaleAccessoryOrEnjoyMessage,
@@ -28934,18 +28934,6 @@ function applyCallbackPolicy(conv: any, reply: string, lastOutboundText: string)
   if (normalizeOutboundText(out) === normalizeOutboundText(lastOutboundText)) {
     out = "Thanks — we’ll give you a call soon.";
   }
-  return out;
-}
-
-function stripNonAdfThanks(reply: string, provider?: string): string {
-  if (provider === "sendgrid_adf") return reply;
-  let out = reply;
-  out = out.replace(
-    /^(\\s*(hi|hey)\\s+[^—\\n]+—\\s*)(thanks for[^.]+\\.\\s*)/i,
-    "$1"
-  );
-  out = out.replace(/^(\\s*)thanks for[^.]+\\.\\s*/i, "$1");
-  out = out.replace(/\s{2,}/g, " ").replace(/—\s+/g, "— ").trim();
   return out;
 }
 
@@ -58478,10 +58466,10 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   reply = applySoftSchedulePolicy(conv, reply, String(event.body ?? ""));
   reply = stripYearPreferenceIfAnyYearSpecified(reply, String(event.body ?? ""));
   reply = stripSchedulingLanguageIfNotAsked(reply, String(event.body ?? ""));
-  reply = stripNonAdfThanks(reply, event.provider);
+  reply = normalizeNonAdfReplySpacing(reply, event.provider);
   reply = stripCallTimingQuestions(reply);
-  reply = stripNonAdfThanks(reply, provider);
-  reply = stripNonAdfThanks(reply, event.provider);
+  reply = normalizeNonAdfReplySpacing(reply, provider);
+  reply = normalizeNonAdfReplySpacing(reply, event.provider);
   reply = stripCallTimingQuestions(reply);
   reply = stripAgentCallFollowupWhenCustomerWillCall(reply, String(event.body ?? ""));
   reply = normalizeInventoryWatchReplyGrammar(reply);

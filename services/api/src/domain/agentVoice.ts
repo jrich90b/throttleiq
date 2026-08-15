@@ -906,6 +906,46 @@ export function stripLeadingAgentGreeting(body: string): string {
 }
 
 /**
+ * Voice charter spacing pass for NON-ADF replies: collapse runs of whitespace and normalise the
+ * gap after an em-dash. ADF replies are exempt (their template owns its own line breaks).
+ *
+ * ⚠️ DO NOT "FIX" THIS BACK INTO A THANKS-STRIPPER. Until 2026-08-15 this lived in index.ts as
+ * `stripNonAdfThanks` and carried two more rules ahead of the spacing pass, meant to delete a
+ * leading "Thanks for ….' sentence:
+ *
+ *     out = out.replace(/^(\\s*(hi|hey)\\s+[^—\\n]+—\\s*)(thanks for[^.]+\\.\\s*)/i, "$1");
+ *     out = out.replace(/^(\\s*)thanks for[^.]+\\.\\s*<slash>i, "$1");   // <slash> = the literal regex
+ *                                                                       // terminator, spelled out here
+ *                                                                       // because it would close this comment
+ *
+ * Those are DOUBLE-escaped in a regex literal, so `\\s` matches a literal backslash followed by
+ * "s" — they can only fire on a body containing a backslash, and no customer reply ever does.
+ * MEASURED against the whole americanharley store (2026-08-15): **0 matches in 5,329
+ * agent-authored outbound bodies, all-time.** They had never once fired.
+ *
+ * Repairing the escaping is NOT the fix — it is the landmine. The same measurement run with the
+ * single-escaped regexes matches **121** of those 5,329 bodies, and because `[^.]+\.` eats the
+ * whole first sentence it empties or guts most of them:
+ *   "Thanks for the message — I'm checking that now and will follow up shortly." → ""
+ *   "Hi Michael — thanks for reaching out! Just to point you to the right person: are you looking
+ *    for info on the 2026 street glide … or Service …" → "Hi Michael — Reply STOP to opt out."
+ * Eight of the first fifteen collapse to an EMPTY message. The fail direction is a customer
+ * receiving nothing, or a bare opt-out footer, in place of the answer they asked for.
+ *
+ * So the dead rules are DELETED rather than repaired, and `non_adf_thanks_strip:eval` executes
+ * this function against those verbatim store bodies to keep them that way. If a "Thanks for …"
+ * opener is genuinely unwanted, that is a voice/copy decision for the draft prompt (Tier 2), not
+ * a post-hoc sentence guillotine.
+ */
+export function normalizeNonAdfReplySpacing(reply: string, provider?: string): string {
+  if (provider === "sendgrid_adf") return reply;
+  return String(reply ?? "")
+    .replace(/\s{2,}/g, " ")
+    .replace(/—\s+/g, "— ")
+    .trim();
+}
+
+/**
  * Strip an "it's {someone} over at {dealerName}." clause (the softened
  * `buildAgentIntroPhrase` shape) wherever it names THIS dealer. Twin of
  * `applyInitialAdfPrefix`'s "this is X at Y" strips (sendgridInbound): deterministic
