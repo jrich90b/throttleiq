@@ -528,6 +528,7 @@ import {
   POST_SALE_DAY_OFFSETS,
   inferDisplayWalkIn,
   inferWalkIn,
+  resolveConversationDetailDisplay,
   startPostSaleCadence,
   releaseHeldDraft,
   applyAppointmentTeardown,
@@ -991,7 +992,6 @@ import {
 } from "./domain/cadenceAvailabilityDisclosure.js";
 import {
   decideCadenceHoldTtlResume,
-  isFollowUpCadenceHeld,
   resolveCadenceHoldInventoryTtlDays
 } from "./domain/cadenceHoldTtl.js";
 import {
@@ -39640,7 +39640,7 @@ app.get("/conversations/:id", async (req, res) => {
   if (!canUserAccessConversation(user, conv)) {
     return res.status(403).json({ ok: false, error: "forbidden" });
   }
-  const emailDraft = conv.emailDraft ?? null;
+  const { emailDraft, emailDraftSuppressedReason, followUpHold } = resolveConversationDetailDisplay(conv);
   const leadSource = conv.lead?.source ?? null;
   const walkIn = inferDisplayWalkIn(conv) ? true : null;
   const phoneLog = isPhoneLogConversation(conv) ? true : null;
@@ -39648,16 +39648,10 @@ app.get("/conversations/:id", async (req, res) => {
     phoneLog && conv.lead?.email
       ? { ...conv, lead: { ...conv.lead, email: undefined } }
       : conv;
-  // Display honesty: a held follow-up mode freezes the cadence's nextDueAt (the tick skips the
-  // conv), so the console must render "on hold" instead of an overdue date. Post-sale cadences
-  // keep running through a hold, so they stay honest without the flag.
-  const followUpHold = isFollowUpCadenceHeld(conv.followUp?.mode, conv.followUpCadence?.kind)
-    ? true
-    : null;
   res.json({
     ok: true,
     systemMode: getSystemMode(),
-    conversation: { ...conversationForResponse, emailDraft, leadSource, walkIn, phoneLog, followUpHold }
+    conversation: { ...conversationForResponse, emailDraft, emailDraftSuppressedReason, leadSource, walkIn, phoneLog, followUpHold }
   });
 });
 
