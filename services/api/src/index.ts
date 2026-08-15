@@ -39704,7 +39704,7 @@ async function maybeRedraftOnNegativeFeedback(args: {
       const drYear = String(drVehicle?.year ?? "").trim();
       const drModel = String(drVehicle?.model ?? drVehicle?.description ?? "").trim();
       const drBikeLabel = [drYear, drModel].filter(Boolean).join(" ").trim() || null;
-      const invite = buildDemoRideEventSoftInvite(drFirstName, drAgentName, drDealerName, drBikeLabel);
+      const invite = buildDemoRideEventSoftInvite(drFirstName, drAgentName, drDealerName, drBikeLabel, { leadSource: (lead as any)?.source, alreadyTexted: hasCustomerReceivedOutbound(conv.messages) });
       saveOperatorDraft(conv, {
         body: invite,
         channel: "sms",

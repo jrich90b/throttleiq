@@ -8,6 +8,7 @@
  * single biggest charter-violation class (em-dash overuse + long brand repeat in the
  * opener). Keep all intro wording here so future tweaks are one edit, never scattered.
  */
+import { demoRideAlreadyHappened } from "./leadSourceRules.js";
 
 /**
  * Neutral agent stand-in for fail paths where the dealer profile has no agentName.
@@ -402,17 +403,56 @@ export function buildMarketingOptInAck(
  * don't happen at the dealership... this should be a soft invite and there should be no
  * follow-up cadence after the initial response"). One warm soft invite, then silence (the
  * event_promo bucket already closes `event_promo_no_cadence`). Deliberately contains NO
- * appointment offer/times, NO availability claim, and NO fabricated completed-ride frame
- * ("thanks for your recent demo ride") — the source alone doesn't prove the ride happened.
+ * appointment offer/times and NO availability claim.
+ *
+ * The completed-ride frame is now LANE-DEPENDENT (Joe ruling 2026-08-15, "2 yes"). By default it
+ * stays forbidden — the source alone does not prove the ride happened (7/02). On the DAT lane
+ * ONLY (`rideAlreadyHappened`, decided by `demoRideAlreadyHappened` in leadSourceRules), Joe ran
+ * the event and saw those customers, so the copy may say so and must STOP offering to show them a
+ * bike they have already sat on. Everything else about 7/02 is unchanged on both variants.
  * Pinned by `event_promo_ack:eval`.
  */
 export function buildDemoRideEventSoftInvite(
   firstName: string | null | undefined,
   agentName: string,
   dealerName: string,
-  bikeLabel?: string | null
+  bikeLabel?: string | null,
+  /**
+   * The lane decisions are made HERE, from the one config list, rather than at each call site —
+   * the live ADF arrival and the thumbs-down redraft then cannot drift apart, which is the
+   * two-path parity rule and is why neither caller needs a new import.
+   *
+   * `alreadyTexted` = this customer has ALREADY received a message from us on this thread, so a
+   * second demo-ride lead must not re-introduce the agent (Joe ruling 2026-08-15, option "b":
+   * reply, but drop the opener and speak only to the new bike). Callers pass
+   * `hasCustomerReceivedOutbound(messages)`, which counts only outbounds the customer really
+   * received — an unsent draft must NOT suppress a genuine first introduction.
+   */
+  opts?: { leadSource?: string | null; alreadyTexted?: boolean }
 ): string {
   const bike = (bikeLabel ?? "").trim();
+  const leadSource = opts?.leadSource;
+  // A REPEAT demo-ride lead: same customer, new bike, days later. Today this opens with the full
+  // "Hey there, it's Alexandra over at American Harley-Davidson…" to someone we texted yesterday
+  // (Boyd Dusharm +17169401820 8/11→8/12, Mark Jagodzinski +17169071289 8/14→8/15 — the two leads
+  // Joe reported). Speak to the new bike, no re-introduction. Still no times, no availability
+  // claim, no cadence. With no bike to speak to there is nothing new to say, so fall through to
+  // the normal invite rather than inventing a contentless follow-on.
+  if (opts?.alreadyTexted && bike) {
+    return demoRideAlreadyHappened(leadSource)
+      ? `Hope you enjoyed the ${bike} too — happy to answer anything about that one, no pressure at all.`
+      : `Saw you're looking at the ${bike} as well — happy to answer anything about that one, no pressure at all.`;
+  }
+  if (demoRideAlreadyHappened(leadSource)) {
+    // No "see one in person" — they already rode it. No times, no availability claim, no cadence.
+    const rodeLine = bike
+      ? `Hope you enjoyed riding the ${bike} at the H-D demo ride. `
+      : "Hope you enjoyed the H-D demo ride. ";
+    const offerLine = bike
+      ? `If you have any questions about the ${bike}, I'm happy to help — no pressure at all.`
+      : "If you have any questions, I'm happy to help — no pressure at all.";
+    return `${buildAgentIntro(firstName, agentName, dealerName)}${rodeLine}${offerLine}`;
+  }
   const interestLine = bike
     ? `Saw your interest in the ${bike} through the H-D demo ride program. `
     : "Saw your interest through the H-D demo ride program. ";

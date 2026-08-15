@@ -2689,9 +2689,19 @@ export async function orchestrateInbound(
     const yearLabel = ctx?.lead?.vehicle?.year ? `${ctx.lead.vehicle.year} ` : "";
     const modelLabel = normalizeModelLabel(ctx?.lead?.vehicle?.model ?? ctx?.lead?.vehicle?.description);
     const bikeLabel = `${yearLabel}${modelLabel}`.trim() || null;
-    // Corporate demo-ride program lead: one SOFT INVITE, no scheduling push, no fabricated
-    // "recent ride" frame, and no follow-up cadence (operator-reported, Joe 2026-07-02).
-    const draft = buildDemoRideEventSoftInvite(leadFirst, agentName, dealerName, bikeLabel);
+    // Corporate demo-ride program lead: one SOFT INVITE, no scheduling push, no follow-up cadence
+    // (operator-reported, Joe 2026-07-02). The completed-ride frame is lane-dependent since Joe's
+    // 2026-08-15 ruling — the builder decides both lane questions from its inputs so this path and
+    // the redraft path cannot drift.
+    //
+    // `customerReceivedOutbound` is the SAME already-plumbed signal the pricing branches use for
+    // Joe's 2026-07-23 no-re-introduction ruling (+17166021492: Brian got a fresh self-intro on
+    // turn 25). This branch simply never asked for it, which is why a second demo-ride lead
+    // re-introduced the agent to someone we texted yesterday.
+    const draft = buildDemoRideEventSoftInvite(leadFirst, agentName, dealerName, bikeLabel, {
+      leadSource: ctx?.lead?.source,
+      alreadyTexted: !!ctx?.customerReceivedOutbound
+    });
     return finalize({
       intent: "GENERAL",
       stage: "ENGAGED",
