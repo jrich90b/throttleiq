@@ -520,6 +520,8 @@
     "answer_to_own_question:eval",
     "hiring_lead_not_a_sales_lead:eval",
     "email_draft_display_validity:eval",
-    "non_adf_thanks_strip:eval"
+    "non_adf_thanks_strip:eval",
+    "past_purchase_complaint:eval",
+    "past_purchase_complaint_parser:eval"
   ]
 }
