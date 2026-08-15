@@ -629,6 +629,7 @@ import {
   hasOpenFutureDatedTodo
 } from "./domain/humanThreadNudge.js";
 import { decideHumanModeWatchClaim, hasWatchPhraseHint } from "./domain/humanModeWatchClaim.js";
+import { processClaudeDraftReview } from "./domain/claudeDraftReview.js";
 import { referencesPastDatedEvent } from "./domain/pastEventGuard.js";
 import { stripLeadingVinCodes, stripLeadingMakeName, normalizeWatchModelsVin, modelLabelHasVinCode } from "./domain/watchModelVinCodes.js";
 import { trikeClassConflict, isFamilyOnlyModelLabel, referencesFamilyOnlyInText } from "./domain/modelFamily.js";
@@ -7855,8 +7856,8 @@ const WORKER_TICK_DISPATCH: Record<WorkerTickTask, () => Promise<unknown> | unkn
   "staff-task-digests": () => processStaffTaskDigests(),
   "gate-blocker-digest": () => processGateBlockerDigest(),
   "photo-delivery": () => processPendingPhotoDeliveries(),
-  "turn-tripwire": () =>
-    processTurnResponseTripwire({ isSuppressed, recordOutcome: d => recordRouteOutcome("live", "turn_response_tripwire_task", d) })
+  "turn-tripwire": () => processTurnResponseTripwire({ isSuppressed, recordOutcome: d => recordRouteOutcome("live", "turn_response_tripwire_task", d) }),
+  "claude-draft-review": () => processClaudeDraftReview({ recordOutcome: (o, d) => recordRouteOutcome("live", o, d) })
 };
 
 function canUseWorkerInternal(req: any) {
@@ -7899,8 +7900,7 @@ if (isWorkerDrivenTicks()) {
   console.log("⏱️ WORKER_DRIVEN_TICKS=1: in-process background ticks disabled (worker dispatch active)");
 } else {
   setInterval(() => {
-    // ONE definition of the minute lane (domain/workerTasks.ts) for this in-process path and the
-    // worker's schedule alike — replaces the hand-mirrored list the cutover doc flagged as drift risk.
+    // ONE minute-lane definition (domain/workerTasks.ts) for this path and the worker schedule alike.
     for (const name of WORKER_MINUTE_LANE_TASKS) {
       runBackgroundTask(name, () => WORKER_TICK_DISPATCH[name]());
     }

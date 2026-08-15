@@ -465,6 +465,7 @@
     "task_fulfillment_autoclose:eval",
     "task_fulfillment_parser:eval",
     "turn_response_tripwire:eval",
+    "claude_draft_review:eval",
     "task_autoclose_inbound_trigger:eval",
     "task_autoclose_visibility:eval",
     "task_inbox_context:eval",
