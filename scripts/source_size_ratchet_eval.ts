@@ -391,7 +391,12 @@ const CEILINGS: Ceiling[] = [
     // index.ts entirely: the gate is now followUpReminderPauseClaimsTurn (workflowRegressionGuards),
     // which asks the turn's centralized callback route decision before claiming the turn. The
     // local four-line regex helper had no other caller, so the slice funds its own import line.
-    max: 70_379,
+    // 70_379 -> 70_378. The "keep an eye out" promise slice: the manual-outbound watch cue pair
+    // moved to domain/inventoryNotifyPromise.ts, the notify apply lives in conversationStore
+    // (applyInventoryNotifyPromiseOutcome), and the watch-condition helper family
+    // (normalizeWatchCondition + two siblings) moved to conversationStore beside the watch
+    // machinery that uses it — funding the new ~28-line apply call site with one line to spare.
+    max: 70_378,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

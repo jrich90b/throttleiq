@@ -13,6 +13,7 @@ import {
   resolveManualPromiseApplyPlan,
   type ManualOutboundPromiseInput
 } from "../services/api/src/domain/manualOutboundPromise.ts";
+import { resolveInventoryNotifyPromisePlan } from "../services/api/src/domain/inventoryNotifyPromise.ts";
 import type { ManualOutboundPromiseParse } from "../services/api/src/domain/llmDraft.ts";
 
 const TZ = "America/New_York";
@@ -65,9 +66,58 @@ function check(id: string, ok: boolean, detail?: string) {
   check("no_promise_none", d.kind === "none");
 }
 {
-  const d = decideManualOutboundPromise(base({ parse: parse({ kind: "inventory_notify", action: "text when a Street Bob arrives" }) }));
-  check("inventory_notify_excluded", d.kind === "none" && d.reason === "kind_inventory_notify", JSON.stringify(d));
+  // FLIPPED 2026-08-14 (was `inventory_notify_excluded`): the exclusion's premise — "the watch
+  // arm handles it" — was measured false: the watch arm's semantic parse reads CUSTOMER intent
+  // and returns watchAction "none" for a rep's promise (3/3), so "we'll keep an eye out" minted
+  // NOTHING since April on kunwarsahilnaseem@gmail.com (Joe's report 8/12). The promise parser
+  // is the authority on this shape (kind inventory_notify 3/3 @ 0.80-0.86) and routes to the
+  // inventory-notify plan: a watch when the thread names the bike, a dated task when not.
+  const d = decideManualOutboundPromise(base({ parse: parse({ kind: "inventory_notify", action: "text when a Street Bob arrives", confidence: 0.85 }) }));
+  check("inventory_notify_routes_to_watch_plan", d.kind === "inventory_notify_promise", JSON.stringify(d));
+  // Low confidence still bails toward silence, and a closed conversation never chases a watch.
+  const low = decideManualOutboundPromise(base({ parse: parse({ kind: "inventory_notify", confidence: 0.4 }) }));
+  check("inventory_notify_low_confidence_none", low.kind === "none" && low.reason === "inventory_notify_low_confidence", JSON.stringify(low));
+  const closed = decideManualOutboundPromise(base({ parse: parse({ kind: "inventory_notify", confidence: 0.9 }), conversationStatus: "closed" }));
+  check("inventory_notify_closed_none", closed.kind === "none" && closed.reason === "conversation_closed", JSON.stringify(closed));
+  // The apply plan for the generic task path stays null for this kind — the notify plan owns it.
+  check("inventory_notify_not_a_generic_task", resolveManualPromiseApplyPlan(d) === null, "generic apply plan must not double-handle the notify kind");
 }
+// --- The notify PLAN itself (Kunwar's real parses, executed) --------------------------------
+{
+  // Slot parse measured 3/3 on the live thread: model "Forty Eight", color "corona yellow",
+  // year "2016-2018" — with watchAction "none" (it reads customer intent; the promise parser
+  // read the rep). The plan uses the SPEC regardless of the action.
+  const kunwar = resolveInventoryNotifyPromisePlan({
+    slots: { watchAction: "none", watch: { model: "Forty Eight", year: "2016-2018", color: "corona yellow", condition: "used" } } as any,
+    nowIso: "2026-08-14T17:00:00.000Z",
+    taskDueIso: "2026-08-15T17:00:00.000Z"
+  });
+  check(
+    "kunwar_gets_the_watch",
+    kunwar.kind === "watch" && kunwar.watch.model === "Forty Eight" && kunwar.watch.yearMin === 2016 &&
+      kunwar.watch.yearMax === 2018 && kunwar.watch.color === "corona yellow" && kunwar.watch.status === "active",
+    JSON.stringify(kunwar)
+  );
+  // A placeholder model ("Full Line" — Kunwar's ADF vehicle field) must NEVER become a watch.
+  const placeholder = resolveInventoryNotifyPromisePlan({
+    slots: { watchAction: "none", watch: { model: "Harley-Davidson Full Line" } } as any,
+    nowIso: "2026-08-14T17:00:00.000Z", taskDueIso: "2026-08-15T17:00:00.000Z"
+  });
+  check("placeholder_model_falls_to_task", placeholder.kind === "task" && placeholder.dueAtIso === "2026-08-15T17:00:00.000Z", JSON.stringify(placeholder));
+  // No parse at all (parser down/disabled): the promise still cannot vanish — dated task.
+  const noparse = resolveInventoryNotifyPromisePlan({ slots: null, nowIso: "2026-08-14T17:00:00.000Z", taskDueIso: "2026-08-15T17:00:00.000Z" });
+  check("no_parse_falls_to_task", noparse.kind === "task", JSON.stringify(noparse));
+  // A single-year spec pins `year`, not the range fields.
+  const single = resolveInventoryNotifyPromisePlan({
+    slots: { watchAction: "none", watch: { model: "Low Rider S", year: "2023" } } as any,
+    nowIso: "2026-08-14T17:00:00.000Z", taskDueIso: "2026-08-15T17:00:00.000Z"
+  });
+  check("single_year_pins_year", single.kind === "watch" && single.watch.year === 2023 && single.watch.yearMin === undefined, JSON.stringify(single));
+}
+// --- The COST hint now hears watch phrasing ---------------------------------------------------
+check("hint_hears_keep_an_eye_out", hasManualPromiseHint("ok we will keep an eye out. thanks for your inquiry"));
+check("hint_hears_watch_for", hasManualPromiseHint("we'll watch for one and let you know when it lands"));
+check("hint_still_quiet_on_plain_ack", !hasManualPromiseHint("sounds good, see you then"));
 {
   const d = decideManualOutboundPromise(base({ parse: parse({ kind: "appointment" }) }));
   check("appointment_excluded", d.kind === "none" && d.reason === "kind_appointment", JSON.stringify(d));
@@ -431,13 +481,24 @@ for (const t of HINT_NO) check(`hint_no:${t.slice(0, 34)}`, !hasManualPromiseHin
   // EVERY OTHER GATE STILL APPLIES TO THE AGENT BRANCH — it loosens the AUTHOR, nothing else.
   for (const [id, over] of [
     ["agent_low_confidence_still_nothing", { parse: parse({ confidence: 0.4 }) }],
-    ["agent_inventory_notify_still_nothing", { parse: parse({ kind: "inventory_notify", action: "text when a Street Bob arrives" }) }],
     ["agent_appointment_still_nothing", { parse: parse({ kind: "appointment" }) }],
     ["agent_no_promise_still_nothing", { parse: parse({ promisePresent: false, kind: "none" }) }],
     ["agent_closed_lead_still_nothing", { conversationStatus: "closed" }]
   ] as const) {
     const d = decideManualOutboundPromise(base({ ...(over as any), humanAuthored: false }));
     check(id, d.kind === "none", `expected none, got ${JSON.stringify(d)}`);
+  }
+  // FLIPPED 2026-08-14: `agent_inventory_notify_still_nothing` used to sit in this list. The
+  // author split exists because a PERSON's promise is a dated plan and the AGENT's is not — but
+  // for kind inventory_notify the follow-through is the WATCH, which is the system's own job and
+  // has no author. An unedited agent draft telling a customer "we'll keep an eye out" that mints
+  // nothing is the same silent hole Joe reported on kunwarsahilnaseem@gmail.com, just
+  // agent-typed. Both authors route to the notify plan.
+  {
+    const d = decideManualOutboundPromise(
+      base({ parse: parse({ kind: "inventory_notify", action: "text when a Street Bob arrives", confidence: 0.85 }), humanAuthored: false })
+    );
+    check("agent_inventory_notify_also_routes_to_watch_plan", d.kind === "inventory_notify_promise", JSON.stringify(d));
   }
 
   // ------------------------------------------------------------------------------------------
