@@ -104,6 +104,66 @@ assert.equal(
 );
 n += 7;
 
+// --- CREDIT-DECLINED LEADS ARE NOT MIS-DEFERRALS (2026-08-15). ---
+// A declined applicant's long_term ladder is Joe's 2026-08-01 "5 yes long term" ruling, re-applied
+// every cadence tick by the finance-declined heal. This heal used to rewrite it to "standard" and the
+// finance heal put it straight back, ~every 60 seconds, forever: 16,004 "[state-reconcile] re-aligned
+// 7 mis-deferred long_term cadence(s)" lines on the live box, the same 7 leads every pass, not one of
+// them ever actually healed. Worse, one of the 7 (Nicole Branch +17167152873) had her nextDueAt
+// rewritten to now+24h every minute, so her next touch receded a minute every minute and could never
+// come due. All three finance-declined signals the referee reads must stop this heal.
+const declinedByReason = mk("+15550000010", {
+  conv: { followUp: { mode: "active", reason: "financing_declined" } },
+  lead: { purchaseTimeframe: null, purchaseTimeframeMonthsStart: null }
+});
+const beforeDeclined = JSON.stringify(declinedByReason.followUpCadence);
+assert.equal(realignMisdeferredLongTermCadence(declinedByReason, TZ, NOW), false, "financing_declined follow-up reason => left on the long_term ladder");
+assert.equal(JSON.stringify(declinedByReason.followUpCadence), beforeDeclined, "declined lead's cadence record is not touched at all");
+assert.equal(
+  realignMisdeferredLongTermCadence(
+    mk("+15550000011", { conv: { financeOutcome: { status: "declined" } }, lead: { purchaseTimeframe: null, purchaseTimeframeMonthsStart: null } }),
+    TZ,
+    NOW
+  ),
+  false,
+  "financeOutcome.status declined => left on the long_term ladder"
+);
+assert.equal(
+  realignMisdeferredLongTermCadence(
+    mk("+15550000012", {
+      conv: { appointment: { staffNotify: { outcome: { status: "showed", secondaryStatus: "finance_not_approved" } } } },
+      lead: { purchaseTimeframe: null, purchaseTimeframeMonthsStart: null }
+    }),
+    TZ,
+    NOW
+  ),
+  false,
+  "appointment outcome finance_not_approved => left on the long_term ladder"
+);
+n += 4;
+
+// --- CONVERGENCE: a reconcile heal that fires on the same record twice is a bug, not a heal. ---
+// The generalizable assertion behind the 16,004 log lines. Two shapes:
+//   (a) self-convergence — re-running this heal on a record it just healed must be a no-op;
+//   (b) cross-referee convergence — after this heal runs, the finance-declined referee must not
+//       want the record back. If both can want a record, they will trade it forever.
+const converge = mk("+15550000013");
+assert.equal(realignMisdeferredLongTermCadence(converge, TZ, NOW), true, "convergence fixture heals on the first pass");
+assert.equal(realignMisdeferredLongTermCadence(converge, TZ, NOW), false, "and never heals the same record again (idempotent)");
+const { decideFinanceDeclinedCadence } = await import("../services/api/src/domain/routeStateReducer.ts");
+for (const conv of [converge, declinedByReason, richard, contactedRichard]) {
+  const verdict = decideFinanceDeclinedCadence({
+    followUpReason: conv.followUp?.reason,
+    financeOutcomeStatus: conv.financeOutcome?.status,
+    appointmentOutcomeStatus: conv.appointment?.staffNotify?.outcome?.status,
+    appointmentOutcomeSecondaryStatus: conv.appointment?.staffNotify?.outcome?.secondaryStatus,
+    cadenceKind: conv.followUpCadence?.kind,
+    cadenceStatus: conv.followUpCadence?.status
+  });
+  assert.equal(verdict.needsLongTermHeal, false, `no tug-of-war: the finance heal does not want ${conv.leadKey} back after the realign pass`);
+}
+n += 6;
+
 // --- Source guard: the cron reconcile runs the heal. ---
 // 2026-08-02: this heal's inline loop moved OUT of index.ts into domain/cadenceRealignSweep.ts,
 // which now walks the conversations once for BOTH realign heals (this one + the burned-ladder

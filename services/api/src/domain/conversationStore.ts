@@ -88,7 +88,8 @@ import {
   type ManualCadenceRestartContext,
   type ManualCadenceRestartDecision,
   type SoldCloseoutDecision,
-  decidePrequalTurn
+  decidePrequalTurn,
+  decideFinanceDeclinedCadence
 } from "./routeStateReducer.js";
 import { buildPrequalStageLine, readPrequalSubmissionResult, buildPrequalStageGoal } from "./workflowRegressionGuards.js";
 import { advanceEveryReplySuppressed } from "./draftChannelRules.js";
@@ -4970,6 +4971,27 @@ export function realignMisdeferredLongTermCadence(
   const mode = String(conv.followUp?.mode ?? "");
   if (mode === "manual_handoff" || mode === "paused_indefinite" || mode === "holding_inventory") return false;
   if (conv.followUp?.reason === "inventory_watch" || conv.inventoryWatch) return false;
+  // A credit-DECLINED lead's long_term ladder is not a mis-deferral — it is Joe's 2026-08-01 "5 yes
+  // long term" ruling, applied every cadence tick by the finance-declined heal (index.ts, via
+  // decideFinanceDeclinedCadence). Without this the two heals fought each other forever: this one
+  // rewrote kind long_term -> standard, the finance heal put it straight back, ~every 60s. MEASURED
+  // 2026-08-15: 16,004 "[state-reconcile] re-aligned 7 mis-deferred long_term cadence(s)" lines, the
+  // same 7 leads, all 7 finance-declined, none of them ever actually healed — plus a receding horizon
+  // on Nicole Branch +17167152873, whose nextDueAt was rewritten to now+24h every minute so her next
+  // touch could never come due. Ask the referee that owns this ladder rather than re-deriving it
+  // (AGENTS.md: contended fields get one referee, not another inline writer).
+  if (
+    decideFinanceDeclinedCadence({
+      followUpReason: conv.followUp?.reason,
+      financeOutcomeStatus: (conv as any).financeOutcome?.status,
+      appointmentOutcomeStatus: conv.appointment?.staffNotify?.outcome?.status,
+      appointmentOutcomeSecondaryStatus: conv.appointment?.staffNotify?.outcome?.secondaryStatus,
+      cadenceKind: cad.kind,
+      cadenceStatus: cad.status
+    }).isFinanceDeclined
+  ) {
+    return false;
+  }
   const plan = resolveInitialAdfCadencePlan({
     purchaseTimeframe: conv.lead?.purchaseTimeframe,
     purchaseTimeframeMonthsStart: conv.lead?.purchaseTimeframeMonthsStart,
