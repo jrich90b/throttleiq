@@ -408,7 +408,14 @@ const CEILINGS: Ceiling[] = [
     // still ratcheted down: resolveUpcomingDateFromDayLabel (39 lines of pure day-label date math,
     // both callers already visit-related) moved VERBATIM to domain/softVisitSignal.ts. A date
     // helper was never inbound-handler code. Taken against main's REAL 70_365.
-    max: 70_351,
+    // 70_351 -> 70_339. `stripNonAdfThanks` moved to domain/agentVoice.ts as
+    // `normalizeNonAdfReplySpacing`, MINUS the two dead "Thanks for …" strip rules it carried.
+    // Those rules were double-escaped inside a regex literal (`\\s` matches a literal backslash),
+    // so they had never fired once — 0 matches in 5,329 agent-authored outbound bodies, all-time.
+    // Repairing the escaping is the landmine, not the fix: single-escaped they match 121 of those
+    // bodies and empty or gut most of them. Deleted instead, and pinned by
+    // non_adf_thanks_strip:eval, which executes the shipped function on verbatim store bodies.
+    max: 70_339,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
