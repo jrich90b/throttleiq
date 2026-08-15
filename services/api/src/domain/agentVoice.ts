@@ -418,13 +418,31 @@ export function buildDemoRideEventSoftInvite(
   dealerName: string,
   bikeLabel?: string | null,
   /**
-   * The lead's feed source. The lane decision is made HERE, from the one config list, rather than
-   * at each call site — the live ADF arrival and the thumbs-down redraft then cannot drift apart,
-   * which is the two-path parity rule and is why neither caller needs a new import.
+   * The lane decisions are made HERE, from the one config list, rather than at each call site —
+   * the live ADF arrival and the thumbs-down redraft then cannot drift apart, which is the
+   * two-path parity rule and is why neither caller needs a new import.
+   *
+   * `alreadyTexted` = this customer has ALREADY received a message from us on this thread, so a
+   * second demo-ride lead must not re-introduce the agent (Joe ruling 2026-08-15, option "b":
+   * reply, but drop the opener and speak only to the new bike). Callers pass
+   * `hasCustomerReceivedOutbound(messages)`, which counts only outbounds the customer really
+   * received — an unsent draft must NOT suppress a genuine first introduction.
    */
-  leadSource?: string | null
+  opts?: { leadSource?: string | null; alreadyTexted?: boolean }
 ): string {
   const bike = (bikeLabel ?? "").trim();
+  const leadSource = opts?.leadSource;
+  // A REPEAT demo-ride lead: same customer, new bike, days later. Today this opens with the full
+  // "Hey there, it's Alexandra over at American Harley-Davidson…" to someone we texted yesterday
+  // (Boyd Dusharm +17169401820 8/11→8/12, Mark Jagodzinski +17169071289 8/14→8/15 — the two leads
+  // Joe reported). Speak to the new bike, no re-introduction. Still no times, no availability
+  // claim, no cadence. With no bike to speak to there is nothing new to say, so fall through to
+  // the normal invite rather than inventing a contentless follow-on.
+  if (opts?.alreadyTexted && bike) {
+    return demoRideAlreadyHappened(leadSource)
+      ? `Hope you enjoyed the ${bike} too — happy to answer anything about that one, no pressure at all.`
+      : `Saw you're looking at the ${bike} as well — happy to answer anything about that one, no pressure at all.`;
+  }
   if (demoRideAlreadyHappened(leadSource)) {
     // No "see one in person" — they already rode it. No times, no availability claim, no cadence.
     const rodeLine = bike

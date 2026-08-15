@@ -159,7 +159,7 @@ for (const b of SOFT_INVITE_BANNED) {
 // Jagodzinski +17169071289 on 8/14 — both leads carry exactly this source, verified in the store).
 // This knowingly supersedes the "no completed-ride frame" half of the 7/02 ruling FOR THIS LANE.
 const datInvite = buildDemoRideEventSoftInvite(
-  "Boyd", "Alexandra", "American Harley-Davidson", "2026 Pan America 1250 Limited", "GLA - Demo Ride - DAT"
+  "Boyd", "Alexandra", "American Harley-Davidson", "2026 Pan America 1250 Limited", { leadSource: "GLA - Demo Ride - DAT" }
 );
 assert.ok(!/in person/i.test(datInvite), `DAT lane must not offer to show a bike they already rode: "${datInvite}"`);
 assert.ok(!/stop by the shop/i.test(datInvite), `DAT lane must not push a shop visit: "${datInvite}"`);
@@ -174,14 +174,14 @@ for (const b of SOFT_INVITE_BANNED) {
   if (b.label === "fabricated completed-ride frame") continue;
   assert.ok(!b.re.test(datInvite), `DAT demo-ride invite must not contain a ${b.label}: "${datInvite}"`);
 }
-const datInviteBare = buildDemoRideEventSoftInvite(null, "Alexandra", "American Harley-Davidson", null, "GLA - Demo Ride - DAT");
+const datInviteBare = buildDemoRideEventSoftInvite(null, "Alexandra", "American Harley-Davidson", null, { leadSource: "GLA - Demo Ride - DAT" });
 assert.ok(!/undefined|null/.test(datInviteBare), "DAT lane must handle missing name/bike cleanly");
 assert.ok(!/in person/i.test(datInviteBare), "bare DAT invite must not offer an in-person look either");
 
 // SCOPE GUARD — the ruling was for the DAT lane ONLY. Every other GLA/demo-ride source keeps the
 // 7/02 copy, so a future edit cannot quietly widen Joe's narrow ruling across the whole program.
-for (const other of ["GLA - Demo Ride", "GLA - DEMO RIDE", "GLA - Road to Your Ride Event Dealer Demo Ride", "Dealer Lead App - Demo Ride Passenger"]) {
-  const invite = buildDemoRideEventSoftInvite("Sam", "Alexandra", "American Harley-Davidson", "2026 Heritage Classic", other);
+for (const other of ["GLA - Demo Ride", "GLA - DEMO RIDE", "GLA - Road to Your Ride Event Dealer Demo Ride", "Dealer Lead App - Passenger"]) {
+  const invite = buildDemoRideEventSoftInvite("Sam", "Alexandra", "American Harley-Davidson", "2026 Heritage Classic", { leadSource: other });
   assert.ok(
     invite.includes("in person"),
     `"${other}" is OUTSIDE Joe's DAT ruling and must keep the 7/02 ride-neutral copy: "${invite}"`
@@ -193,7 +193,7 @@ for (const other of ["GLA - Demo Ride", "GLA - DEMO RIDE", "GLA - Road to Your R
 // An unknown/missing source falls back to the ride-neutral copy (fail direction: never assert a
 // ride we cannot prove).
 assert.ok(
-  buildDemoRideEventSoftInvite("Sam", "Alexandra", "American Harley-Davidson", "2026 Heritage Classic", null).includes("in person"),
+  buildDemoRideEventSoftInvite("Sam", "Alexandra", "American Harley-Davidson", "2026 Heritage Classic").includes("in person"),
   "an unknown source must fall back to the ride-neutral 7/02 copy"
 );
 
@@ -203,13 +203,48 @@ assert.ok(
 // — eval_source_pin_ratchet counts assertions containing an escaped paren.
 const orchestratorSrc = fs.readFileSync("services/api/src/domain/orchestrator.ts", "utf8");
 assert.ok(
-  orchestratorSrc.includes("buildDemoRideEventSoftInvite(leadFirst, agentName, dealerName, bikeLabel, ctx?.lead?.source)"),
-  "the live ADF arrival path must pass the lead source to the soft-invite builder"
+  orchestratorSrc.includes("leadSource: ctx?.lead?.source") && orchestratorSrc.includes("alreadyTexted: !!ctx?.customerReceivedOutbound"),
+  "the live ADF arrival path must pass BOTH the lead source and the already-texted signal"
 );
+// --- 1f) A REPEAT demo-ride lead must NOT re-introduce the agent (Joe ruling 2026-08-15, "b"). ---
+// A second demo-ride ADF lead days after the first opened with the full "Hey there, it's Alexandra
+// over at American Harley-Davidson..." to someone we had texted the day before: Boyd Dusharm
+// +17169401820 (8/11 Pan America -> 8/12 CVO Street Glide ST) and Mark Jagodzinski +17169071289
+// (8/14 Heritage Classic -> 8/15 Low Rider ST). Joe chose (b): reply, but drop the opener and
+// speak to the new bike. This is the SAME rule his 2026-07-23 no-re-introduction ruling already
+// set for the pricing branches (+17166021492, Brian got a fresh self-intro on turn 25) — the
+// demo-ride branch simply never asked for the signal.
+for (const src of ["GLA - Demo Ride - DAT", "GLA - Demo Ride"]) {
+  const repeat = buildDemoRideEventSoftInvite(
+    "Boyd", "Alexandra", "American Harley-Davidson", "2026 CVO Street Glide ST",
+    { leadSource: src, alreadyTexted: true }
+  );
+  assert.ok(!repeat.includes("Alexandra"), `repeat ${src} lead must not re-introduce the agent: "${repeat}"`);
+  assert.ok(!repeat.includes("American Harley-Davidson"), `repeat ${src} lead must not re-introduce the dealer: "${repeat}"`);
+  assert.ok(repeat.includes("2026 CVO Street Glide ST"), `repeat ${src} lead must speak to the NEW bike: "${repeat}"`);
+  assert.ok(!repeat.includes("in person"), `repeat ${src} lead must not push a visit: "${repeat}"`);
+  for (const b of SOFT_INVITE_BANNED) {
+    if (b.label === "fabricated completed-ride frame") continue;
+    assert.ok(!b.re.test(repeat), `repeat ${src} lead must not contain a ${b.label}: "${repeat}"`);
+  }
+}
+// FIRST touch is unchanged — an unsent draft must never suppress a genuine introduction, which is
+// exactly why the callers pass hasCustomerReceivedOutbound (delivered outbounds only) and not a
+// bare message count.
+const firstTouch = buildDemoRideEventSoftInvite(
+  "Boyd", "Alexandra", "American Harley-Davidson", "2026 Pan America 1250 Limited",
+  { leadSource: "GLA - Demo Ride - DAT", alreadyTexted: false }
+);
+assert.ok(firstTouch.includes("Alexandra") && firstTouch.includes("American Harley-Davidson"), "a true first touch still introduces the agent + dealer");
+// A repeat lead with NO bike has nothing new to say, so it falls back to the normal invite rather
+// than inventing a contentless follow-on (fail direction: never a new empty-ish message).
+const repeatNoBike = buildDemoRideEventSoftInvite("Boyd", "Alexandra", "American Harley-Davidson", null, { leadSource: "GLA - Demo Ride - DAT", alreadyTexted: true });
+assert.ok(repeatNoBike.includes("Alexandra"), "a repeat lead with no bike falls back to the normal invite");
+
 const indexSrc = fs.readFileSync("services/api/src/index.ts", "utf8");
 assert.ok(
-  indexSrc.includes("buildDemoRideEventSoftInvite(drFirstName, drAgentName, drDealerName, drBikeLabel, (lead as any)?.source)"),
-  "the thumbs-down redraft path must pass the lead source to the soft-invite builder"
+  indexSrc.includes("{ leadSource: (lead as any)?.source, alreadyTexted: hasCustomerReceivedOutbound(conv.messages) }"),
+  "the thumbs-down redraft path must pass BOTH the lead source and the already-texted signal"
 );
 
 // --- 2) Ack safety (pure). ---
