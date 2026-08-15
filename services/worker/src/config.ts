@@ -46,7 +46,8 @@ export const WORKER_SCHEDULES: WorkerSchedule[] = [
       // keeps detection ~1 min after eligibility. Mirrored in WORKER_MINUTE_LANE_TASKS
       // (api domain/workerTasks.ts, the API's in-process interval) — worker_dispatch:eval guards
       // the mirror; this package stays import-free on purpose.
-      "turn-tripwire"
+      "turn-tripwire",
+      "claude-draft-review"
     ],
     requestTimeoutMs: 5 * 60_000
   },

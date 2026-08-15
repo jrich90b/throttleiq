@@ -20,7 +20,8 @@ export const WORKER_TICK_TASKS = [
   "staff-task-digests",
   "gate-blocker-digest",
   "photo-delivery",
-  "turn-tripwire"
+  "turn-tripwire",
+  "claude-draft-review"
 ] as const;
 
 export type WorkerTickTask = (typeof WORKER_TICK_TASKS)[number];
@@ -41,7 +42,11 @@ export const WORKER_MINUTE_LANE_TASKS: readonly WorkerTickTask[] = [
   "staff-task-digests",
   "gate-blocker-digest",
   "photo-delivery",
-  "turn-tripwire"
+  "turn-tripwire",
+  // Joe's instant second opinion (2026-08-14 late): Claude reviews each new pending draft within
+  // ~60s and supersedes clearly-wrong ones in the approval box. Minute lane so "fix a draft"
+  // never waits half an hour.
+  "claude-draft-review"
 ];
 
 export function isWorkerTickTask(value: unknown): value is WorkerTickTask {
