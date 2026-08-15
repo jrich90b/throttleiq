@@ -63,6 +63,9 @@ export function selectDraftsForClaudeReview(args: {
   for (const conv of args.conversations) {
     if (out.length >= maxPerTick) break;
     if (String(conv?.mode ?? "").toLowerCase() === "human") continue;
+    // Never review our own superseding rewrite — a rewrite is a new unstamped pending draft, and
+    // without this the next tick examines it (in theory forever, one call per minute).
+    // (actorUserName is stamped by saveOperatorDraft.)
     if (String(conv?.status ?? "").toLowerCase() === "closed") continue;
     const draft = getLatestPendingDraft(conv);
     if (!draft) continue;
@@ -75,6 +78,7 @@ export function selectDraftsForClaudeReview(args: {
     const age = args.nowMs - atMs;
     if (age < 0 || age > maxAgeMs) continue;
     if (!String(draft.body ?? "").trim()) continue;
+    if (String((draft as any).actorUserName ?? "") === "Claude review") continue;
     out.push({ conv, draft });
   }
   return out;
@@ -157,6 +161,10 @@ export async function reviewDraftWithClaude(args: {
       timeoutMs: 30_000
     });
     const parsed = result.ok ? extractAnthropicToolInput(result.data, "draft_review") : null;
+    // A failed call or unparseable reply is NOT a verdict — it must never masquerade as "ok"
+    // (the 2026-08-15 fire drill caught exactly this: an empty-credit API key stamped obvious
+    // nonsense "reviewed-ok" and the dead net looked alive).
+    if (!parsed) return keep;
     const verdict = String(parsed?.verdict ?? "").trim();
     if (verdict !== "rewrite") return { verdict: "ok", reason: String(parsed?.reason ?? "ok"), fixedDraft: "" };
     const fixed = String(parsed?.fixed_draft ?? "").trim();
@@ -174,7 +182,7 @@ export async function reviewDraftWithClaude(args: {
  * everywhere: keep the pipeline's draft.
  */
 export async function processClaudeDraftReview(deps: {
-  recordOutcome: (outcome: "claude_draft_review_ok" | "claude_draft_review_rewrite", detail: Record<string, unknown>) => void;
+  recordOutcome: (outcome: "claude_draft_review_ok" | "claude_draft_review_rewrite" | "claude_draft_review_unavailable", detail: Record<string, unknown>) => void;
   nowMs?: number;
 }): Promise<{ reviewed: number; rewritten: number }> {
   if (!claudeDraftReviewEnabled()) return { reviewed: 0, rewritten: 0 };
@@ -195,6 +203,15 @@ export async function processClaudeDraftReview(deps: {
       .filter(m => m.id !== draft.id && String((m as any).draftStatus ?? "") !== "stale")
       .map(m => ({ direction: String(m.direction), body: String(m.body ?? "") }));
     const verdict = await reviewDraftWithClaude({ draftBody: String(draft.body ?? ""), thread, leadLine });
+    // Review UNAVAILABLE (API failure, no credits, malformed reply) ⇒ no stamp — the draft stays
+    // eligible and is retried when the service recovers — and a DISTINCT outcome so a dead net is
+    // loudly visible in the route audit instead of dressed up as a stream of "ok"s.
+    if (verdict.reason === "review_unavailable") {
+      deps.recordOutcome("claude_draft_review_unavailable", {
+        convId: conv.id, leadKey: conv.leadKey ?? null, draftId: draft.id
+      });
+      continue;
+    }
     if (verdict.verdict === "rewrite") {
       saveOperatorDraft(conv, {
         body: verdict.fixedDraft,
