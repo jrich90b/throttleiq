@@ -85,6 +85,11 @@ for (const fn of [
   // table is pinned instead by no_subject_web_lead_handoff:eval, which executes it against the
   // parser's measured verdicts.
   "decideNoSubjectWebLeadHandoff",
+  // Reads THIS turn's conversation-state parse (departmentIntent + explicitRequest) plus the
+  // catalog-lexicon match on the turn's own words; none of it is persisted, so a stored
+  // conversation cannot reproduce the inputs. Its decision table is pinned instead by
+  // accessory_parts_route:eval, which executes the referee AND the lexicon on the real wording.
+  "decideDepartmentRequestTurn",
   "decideFinanceProcessQuestionTurn",
   // Reads THIS turn's bike-scope parse plus live classification/lead state; the parse is never
   // persisted, so a stored conversation cannot reproduce the inputs. Pinned by
