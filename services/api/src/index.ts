@@ -724,6 +724,7 @@ import {
   clearInventorySold,
   normalizeInventorySoldKey
 } from "./domain/inventorySolds.js";
+import { resolvePastPurchaseComplaintDraft, buildComplaintEmpathyFallbackReply, buildDataQualityComplaintReply, isPendingComplaint } from "./domain/pastPurchaseComplaint.js";
 import {
   appendLeadUnitAvailabilityDisclosure,
   isUnitRecordOwnedByConversation
@@ -4004,10 +4005,6 @@ function buildSmallTalkDeterministicFallbackReply(args: {
   return args.allowBikePivot
     ? "Sounds good — when you want to jump back into bikes, I’ve got you."
     : "Sounds good.";
-}
-
-function buildComplaintEmpathyFallbackReply(): string {
-  return "Yeah, I hear you — that’s frustrating. A few riders have said the same thing too.";
 }
 
 async function detectSmallTalkSignalWithFallback(args: {
@@ -9286,12 +9283,6 @@ async function applyWrongNumberSuppression(conv: any, event: { from?: string } |
   stopFollowUpCadence(conv, "wrong_number");
   closeConversation(conv, "wrong_number");
   stopRelatedCadences(conv, "wrong_number", { close: true });
-}
-
-function buildDataQualityComplaintReply(conv: any): string {
-  const firstName = normalizeDisplayCase(conv?.lead?.firstName);
-  const prefix = firstName ? `Sorry about that, ${firstName}` : "Sorry about that";
-  return `${prefix} — you’re right to call that out. I’ll have the team review the details and follow up with the correct information.`;
 }
 
 function stopRelatedCadences(
@@ -18311,13 +18302,6 @@ function isWatchSearchPauseIntent(text: string): boolean {
 function isNotInterested(text: string): boolean {
   const t = text.trim().toLowerCase();
   return /not interested|no longer interested|no thanks|no thank you|already bought|already purchased|bought elsewhere|purchased elsewhere|found one|got one|no longer shopping|not looking/.test(
-    t
-  );
-}
-
-function isPendingComplaint(text: string): boolean {
-  const t = text.trim().toLowerCase();
-  return /sale pending|still pending|been pending|pending for|pending too long|what is going on/.test(
     t
   );
 }
@@ -57330,8 +57314,15 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     : null);
   const regenResponseControlAccepted = isResponseControlParserAccepted(regenResponseControlParse);
   const regenResponseControlConfident = isResponseControlParserConfidentDecision(regenResponseControlParse);
+  // PAST-PURCHASE COMPLAINT — regenerate half (route-parity). Task already filed by the live turn.
+  const regenPastPurchaseComplaint = await resolvePastPurchaseComplaintDraft(conv, String(event.body ?? ""), history, { eligible: !regenShortAck, fileTask: false });
+  if (regenPastPurchaseComplaint) {
+    recordRouteOutcome("regen", "past_purchase_complaint_draft_created", { convId: conv.id, leadKey: conv.leadKey, arm: regenPastPurchaseComplaint.arm });
+    if (channel === "email") return respondWithEmailRegeneratedDraft(regenPastPurchaseComplaint.reply);
+    return respondWithSmsRegeneratedDraft(regenPastPurchaseComplaint.reply, undefined, { turnAvailabilityIntent: false, turnFinanceIntent: false, turnSchedulingIntent: false });
+  }
   if (regenResponseControlAccepted && regenResponseControlParse?.intent === "data_quality_complaint") {
-    const regenReply = buildDataQualityComplaintReply(conv);
+    const regenReply = buildDataQualityComplaintReply(normalizeDisplayCase(conv?.lead?.firstName));
     recordRouteOutcome("regen", "data_quality_complaint_draft_created", {
       convId: conv.id,
       leadKey: conv.leadKey,
@@ -59740,7 +59731,7 @@ if (authToken && signature) {
   if (event.provider === "twilio" && llmDataQualityComplaint && conv.mode !== "human") {
     discardPendingDrafts(conv, "data_quality_complaint");
     delete conv.emailDraft;
-    const reply = buildDataQualityComplaintReply(conv);
+    const reply = buildDataQualityComplaintReply(normalizeDisplayCase(conv?.lead?.firstName));
     setFollowUpMode(conv, "manual_handoff", "data_quality_complaint");
     setDialogState(conv, "callback_handoff");
     addTodo(conv, "other", "Customer says the prior information was incorrect. Review lead details and follow up.", event.providerMessageId, conv.leadOwner);
@@ -65123,6 +65114,15 @@ if (authToken && signature) {
       fallback: !inboundParserScheduleStatusUpdate
     });
     return publishLiveTwilioReply(reply, { turnSchedulingIntent: true });
+  }
+  // PAST-PURCHASE COMPLAINT — why + rules in domain/pastPurchaseComplaint.ts (Joe, 2026-08-15).
+  const pastPurchaseComplaint = await resolvePastPurchaseComplaintDraft(conv, String(event.body ?? ""), buildHistory(conv, 8), {
+    eligible: event.provider === "twilio" && String(conv.mode ?? "") !== "human" && !shortAck,
+    sourceMessageId: event.providerMessageId
+  });
+  if (pastPurchaseComplaint) {
+    logRouteOutcome("past_purchase_complaint_ack", { arm: pastPurchaseComplaint.arm, ask: pastPurchaseComplaint.askPurchaseVerification });
+    return publishLiveTwilioReply(pastPurchaseComplaint.reply);
   }
   const frustrationAffectSignal =
     !!acceptedAffect?.needsEmpathy ||

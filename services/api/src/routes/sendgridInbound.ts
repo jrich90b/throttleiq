@@ -151,6 +151,12 @@ import {
   localPartsToUtcDate
 } from "../domain/schedulerEngine.js";
 import { getDealerProfile } from "../domain/dealerProfile.js";
+import {
+  buildPastPurchaseComplaintReply,
+  resolvePastPurchaseComplaintTurn,
+  NO_PAST_PURCHASE_COMPLAINT
+} from "../domain/pastPurchaseComplaint.js";
+import { hasPurchaseOnRecord } from "../domain/inventorySolds.js";
 import { getDealerWeatherStatus } from "../domain/weather.js";
 import { getInventoryNote } from "../domain/inventoryNotes.js";
 import { getInventoryFeed, hasInventoryForModelYear, findInventoryMatches, findInventoryPrice, unitColorCarriesStated } from "../domain/inventoryFeed.js";
@@ -5385,6 +5391,29 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       });
     }
   }
+  // PLACEMENT NOTE: computed here, with the other parser-derived signals, rather than next to the
+  // bucket chain it feeds. `dealer_ride_initial_draft:eval` reads a fixed 2000-char source window
+  // starting at the FIRST mention of the dealer-lead-app no-demo flag and ending at its own bucket
+  // branch; code inserted between the two pushes that branch out of the window and reds the build.
+  // Keep new signals above that flag — and do not name it in a comment, or the comment becomes the
+  // window's start (this note cost one red build to learn).
+  // PAST-PURCHASE COMPLAINT — runs BEFORE the department override on purpose (Joe, 2026-08-15).
+  // Tom Leo (+12162171070) is why: his complaint about a used Road King contained the word
+  // "tires", the parts lexicon claimed the lead, and a customer-experience problem was answered as
+  // a parts request and filed to the parts counter. A complaint arm placed anywhere BELOW that
+  // override would never have run — the lexical gate decides first, so the parser must outrank it
+  // (memory: parser-fix-inert-until-the-lexical-gate-lets-it-through).
+  const pastPurchaseComplaintDecision = isInitialAdf
+    ? await resolvePastPurchaseComplaintTurn({
+        text: String(effectiveInquiry ?? ""),
+        purchaseOnRecord: await hasPurchaseOnRecord({
+          leadKey,
+          convId: String(conv?.id ?? ""),
+          soldOnThread: !!conv?.sale?.soldAt || conv?.closedReason === "sold"
+        })
+      })
+    : NO_PAST_PURCHASE_COMPLAINT;
+  const isPastPurchaseComplaintLead = pastPurchaseComplaintDecision.arm !== "none";
   const jumpStartExperienceLead =
     isJumpStartExperienceText(effectiveInquiry) ||
     isJumpStartExperienceText(lead.comment ?? null) ||
@@ -5418,9 +5447,15 @@ export async function handleSendgridInbound(req: Request, res: Response) {
             ? { bucket: "general_inquiry", cta: "contact_us" }
             : null;
 
+
   let inferredBucket = rule.bucket;
   let inferredCta = rule.cta;
-  if (initialAdfRiderCourseDecision || adfDepartmentRoute.kind === "riding_academy") {
+  if (isPastPurchaseComplaintLead) {
+    // Not a sale and not a department errand — a person telling us something went wrong. Keep it
+    // out of parts/apparel/service so it lands with a human instead of a counter queue.
+    inferredBucket = "general_inquiry";
+    inferredCta = "contact_us";
+  } else if (initialAdfRiderCourseDecision || adfDepartmentRoute.kind === "riding_academy") {
     // Rider-education (Riding Academy / rider course / "get my license") is NOT a bike sale — keep it out
     // of inventory_interest/test_ride so the lead isn't given a bike-sale task or pushed to test-ride
     // before they're licensed. The deterministic detector handles explicit phrasings; the ADF department
@@ -7030,6 +7065,74 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       note: dealerOffersProgram
         ? "rider_to_rider_financing_handoff"
         : "rider_to_rider_financing_not_offered"
+    });
+  }
+
+  if (isPastPurchaseComplaintLead) {
+    // The customer already owns the bike and something went wrong. Two rules, both customer-facing:
+    // we do NOT concede fault before a human has pulled the deal, and unless we can SEE the sale on
+    // our own books we ASK whose it is. The wording is a template precisely because the failure this
+    // replaces was a GENERATED reply that apologised for a sale nobody had verified was ours.
+    const profile = await getDealerProfile();
+    let ack = buildPastPurchaseComplaintReply({
+      arm: pastPurchaseComplaintDecision.arm,
+      firstName: conv.lead?.firstName ?? lead.firstName ?? null,
+      agentName: String(profile?.agentName ?? "").trim() || "our team",
+      dealerCity: String(profile?.address?.city ?? "").trim() || null
+    });
+    ack = await applyInitialAdfPrefix(ack);
+    const users = await listUsers();
+    const ownerId = String(conv.leadOwner?.id ?? "").trim();
+    const leadOwner = users.find(u => String(u?.id ?? "").trim() === ownerId) ?? null;
+    // A manager, never a department counter — this is a service-recovery call with a decision in it
+    // (what, if anything, we offer), and that decision is not the bot's and not the parts desk's.
+    const managerOwner = pickUserForRole(users, "manager", vendorContactName) ?? leadOwner;
+    const complaintTodoOwner = managerOwner
+      ? {
+          id: String(managerOwner.id ?? "").trim(),
+          name:
+            String(managerOwner.name ?? "").trim() ||
+            String(managerOwner.firstName ?? "").trim() ||
+            "Manager"
+        }
+      : { id: "", name: "Manager" };
+    conv.dialogState = { name: "past_purchase_complaint", updatedAt: new Date().toISOString() };
+    addTodo(
+      conv,
+      "manager",
+      [
+        pastPurchaseComplaintDecision.askPurchaseVerification
+          ? "Customer complaint about a bike they already own — PURCHASE NOT VERIFIED as ours. Pull the deal jacket before responding; the draft asks them when they bought it and for the stock number."
+          : "Customer complaint about a bike they bought from us. Pull the deal jacket before responding.",
+        "No fault has been conceded and nothing has been promised in writing.",
+        event.body ?? ""
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+      event.providerMessageId,
+      complaintTodoOwner
+    );
+    setFollowUpMode(conv, "manual_handoff", "past_purchase_complaint");
+    stopFollowUpCadence(conv, "manual_handoff");
+    queueInitialDraftForPreferredContact(ack, initialMediaUrls);
+    console.log("[sendgrid inbound] past-purchase complaint", {
+      leadKey,
+      arm: pastPurchaseComplaintDecision.arm,
+      askPurchaseVerification: pastPurchaseComplaintDecision.askPurchaseVerification
+    });
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      bucket: inferredBucket,
+      cta: inferredCta,
+      channel,
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      draft: ack,
+      note: pastPurchaseComplaintDecision.arm
     });
   }
 

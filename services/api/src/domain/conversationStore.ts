@@ -547,6 +547,10 @@ export type InternalQuestion = {
 
 export type DialogStateName =
   | "none"
+  // A customer telling us something went wrong with a bike they ALREADY OWN. Its own state because
+  // it is neither a sale nor a department errand, and because the reply rules differ: concede no
+  // fault, and verify whose sale it was before promising anything (Joe, 2026-08-15).
+  | "past_purchase_complaint"
   | "walk_in_active"
   | "specs_single_request"
   | "specs_single_answered"

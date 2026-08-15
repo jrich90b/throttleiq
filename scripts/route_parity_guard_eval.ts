@@ -42,7 +42,15 @@ import path from "node:path";
 // CLAUDE.md's both-paths parity law still requires one regen call-site local (regenFinanceHardshipReply)
 // to branch on email/sms. A brand-new shared handoff is the ONLY sanctioned reason to raise this;
 // it does NOT license hand-mirroring inline decision logic. Resume ratcheting DOWN from 252.
-const MIRRORED_LOCALS_BASELINE = 252;
+// 253 (2026-08-15): +1 for a NEW both-path customer route on the SAME sanctioned pattern — the
+// past-purchase complaint handoff (Joe, 2026-08-15, Tom Leo +12162171070). The DECISION is
+// centralized (decidePastPurchaseComplaintTurn) and BOTH paths call one shared resolver
+// (resolvePastPurchaseComplaintDraft), which also composes the reply — so there is no mirrored
+// decision logic at all. The single regen local (regenPastPurchaseComplaint) exists only to branch
+// the response on email vs sms, exactly as regenFinanceHardshipReply does. First draft of this PR
+// added TWO locals and was collapsed to one to fit the sanctioned shape rather than raising by 2.
+// Resume ratcheting DOWN from 253.
+const MIRRORED_LOCALS_BASELINE = 253;
 
 // ── Single-path decisions, each with a reason. New single-path symbols FAIL. ──
 // Entries baselined 2026-07-13 at guard introduction. "verify on touch": the reason is a
