@@ -368,6 +368,29 @@ export function buildPastPurchaseComplaintTodoSummary(args: {
  * Lives here rather than inline in `index.ts` so the live and regenerate call sites are a call
  * apiece and cannot drift — and so the source-size ratchet stays honest about where new code goes.
  */
+export async function resolvePastPurchaseComplaintDraft(
+  conv: any,
+  text: string,
+  history: { direction: "in" | "out"; body: string }[] | undefined,
+  args: {
+    eligible?: boolean;
+    /** Live inbound files the manager task; regenerate does not — the live turn already did. */
+    fileTask?: boolean;
+    sourceMessageId?: string | null;
+  }
+): Promise<(PastPurchaseComplaintDecision & { reply: string }) | null> {
+  const decision = await resolveConversationPastPurchaseComplaint(conv, text, history, {
+    eligible: args.eligible
+  });
+  if (decision.arm === "none") return null;
+  const reply = await applyPastPurchaseComplaintHandoff(conv, decision, {
+    customerText: text,
+    sourceMessageId: args.sourceMessageId,
+    fileTask: args.fileTask
+  });
+  return { ...decision, reply };
+}
+
 export async function applyPastPurchaseComplaintHandoff(
   conv: any,
   decision: PastPurchaseComplaintDecision,

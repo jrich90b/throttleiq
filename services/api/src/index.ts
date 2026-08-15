@@ -724,7 +724,7 @@ import {
   clearInventorySold,
   normalizeInventorySoldKey
 } from "./domain/inventorySolds.js";
-import { resolveConversationPastPurchaseComplaint, applyPastPurchaseComplaintHandoff, buildComplaintEmpathyFallbackReply, buildDataQualityComplaintReply, isPendingComplaint } from "./domain/pastPurchaseComplaint.js";
+import { resolvePastPurchaseComplaintDraft, buildComplaintEmpathyFallbackReply, buildDataQualityComplaintReply, isPendingComplaint } from "./domain/pastPurchaseComplaint.js";
 import {
   appendLeadUnitAvailabilityDisclosure,
   isUnitRecordOwnedByConversation
@@ -57315,12 +57315,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const regenResponseControlAccepted = isResponseControlParserAccepted(regenResponseControlParse);
   const regenResponseControlConfident = isResponseControlParserConfidentDecision(regenResponseControlParse);
   // PAST-PURCHASE COMPLAINT — regenerate half (route-parity). Task already filed by the live turn.
-  const regenPpc = await resolveConversationPastPurchaseComplaint(conv, String(event.body ?? ""), history, { eligible: !regenShortAck });
-  if (regenPpc.arm !== "none") {
-    const regenPpcReply = await applyPastPurchaseComplaintHandoff(conv, regenPpc, { fileTask: false });
-    recordRouteOutcome("regen", "past_purchase_complaint_draft_created", { convId: conv.id, leadKey: conv.leadKey, arm: regenPpc.arm });
-    if (channel === "email") return respondWithEmailRegeneratedDraft(regenPpcReply);
-    return respondWithSmsRegeneratedDraft(regenPpcReply, undefined, { turnAvailabilityIntent: false, turnFinanceIntent: false, turnSchedulingIntent: false });
+  const regenPastPurchaseComplaint = await resolvePastPurchaseComplaintDraft(conv, String(event.body ?? ""), history, { eligible: !regenShortAck, fileTask: false });
+  if (regenPastPurchaseComplaint) {
+    recordRouteOutcome("regen", "past_purchase_complaint_draft_created", { convId: conv.id, leadKey: conv.leadKey, arm: regenPastPurchaseComplaint.arm });
+    if (channel === "email") return respondWithEmailRegeneratedDraft(regenPastPurchaseComplaint.reply);
+    return respondWithSmsRegeneratedDraft(regenPastPurchaseComplaint.reply, undefined, { turnAvailabilityIntent: false, turnFinanceIntent: false, turnSchedulingIntent: false });
   }
   if (regenResponseControlAccepted && regenResponseControlParse?.intent === "data_quality_complaint") {
     const regenReply = buildDataQualityComplaintReply(normalizeDisplayCase(conv?.lead?.firstName));
@@ -65117,12 +65116,13 @@ if (authToken && signature) {
     return publishLiveTwilioReply(reply, { turnSchedulingIntent: true });
   }
   // PAST-PURCHASE COMPLAINT — why + rules in domain/pastPurchaseComplaint.ts (Joe, 2026-08-15).
-  const ppcEligible = event.provider === "twilio" && String(conv.mode ?? "") !== "human" && !shortAck;
-  const pastPurchaseComplaint = await resolveConversationPastPurchaseComplaint(conv, String(event.body ?? ""), buildHistory(conv, 8), { eligible: ppcEligible });
-  if (pastPurchaseComplaint.arm !== "none") {
-    const complaintReply = await applyPastPurchaseComplaintHandoff(conv, pastPurchaseComplaint, { customerText: String(event.body ?? ""), sourceMessageId: event.providerMessageId });
+  const pastPurchaseComplaint = await resolvePastPurchaseComplaintDraft(conv, String(event.body ?? ""), buildHistory(conv, 8), {
+    eligible: event.provider === "twilio" && String(conv.mode ?? "") !== "human" && !shortAck,
+    sourceMessageId: event.providerMessageId
+  });
+  if (pastPurchaseComplaint) {
     logRouteOutcome("past_purchase_complaint_ack", { arm: pastPurchaseComplaint.arm, ask: pastPurchaseComplaint.askPurchaseVerification });
-    return publishLiveTwilioReply(complaintReply);
+    return publishLiveTwilioReply(pastPurchaseComplaint.reply);
   }
   const frustrationAffectSignal =
     !!acceptedAffect?.needsEmpathy ||

@@ -195,7 +195,7 @@ assert.ok(schemaJson.includes("purchase_attribution"), "the schema must carry th
 const index = fs.readFileSync("services/api/src/index.ts", "utf8");
 const adf = fs.readFileSync("services/api/src/routes/sendgridInbound.ts", "utf8");
 assert.equal(
-  index.split("resolveConversationPastPurchaseComplaint(").length - 1,
+  index.split("resolvePastPurchaseComplaintDraft(").length - 1,
   2,
   "live inbound and regenerate must each call the shared resolver exactly once"
 );
@@ -206,10 +206,9 @@ assert.equal(
 );
 // Neither SMS lane may compose the reply itself — both go through the one applier, or the two
 // paths drift and regenerate becomes the hole an apology comes back through.
-assert.equal(
-  index.split("applyPastPurchaseComplaintHandoff(").length - 1,
-  2,
-  "live and regenerate must each build the reply through the shared applier"
+assert.ok(
+  !index.includes("applyPastPurchaseComplaintHandoff("),
+  "the reply must be composed inside the shared resolver, not assembled at either call site"
 );
 assert.ok(
   !index.includes("buildPastPurchaseComplaintReply("),
