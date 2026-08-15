@@ -47,6 +47,7 @@ const FRESH_DRAFT = { direction: "out", provider: "draft_ai", body: "Great quest
   assert.equal(String(picks[0].draft.id), "m_draft");
 }
 const NO_REVIEW: Array<[string, any]> = [
+  ["the reviewer's own rewrite (loop guard — actor \"Claude review\")", conv({}, [CUSTOMER, { ...FRESH_DRAFT, actorUserName: "Claude review" }])],
   ["human-mode thread (the human owns the words)", conv({ mode: "human" }, [CUSTOMER, FRESH_DRAFT])],
   ["closed conversation", conv({ status: "closed" }, [CUSTOMER, FRESH_DRAFT])],
   ["already stamped for this draft", conv({ claudeDraftReview: { messageId: "m_draft", verdict: "ok", at: "2026-08-15T11:00:00Z" } }, [CUSTOMER, FRESH_DRAFT])],
@@ -99,6 +100,16 @@ for (const [label, c] of NO_REVIEW) {
   const schema = CLAUDE_DRAFT_REVIEW_TOOL_SCHEMA as any;
   assert.deepEqual(schema.properties.verdict.enum, ["ok", "rewrite"], "binary verdict — no third state to drift into");
   assert.deepEqual(schema.required, ["verdict", "reason", "fixed_draft"], "reason is mandatory (it feeds the work order)");
+}
+
+// --- Unavailable is NOT ok: no stamp, distinct outcome (the 2026-08-15 fire-drill lesson —
+// an empty-credit API key stamped obvious nonsense "reviewed-ok" and the dead net looked alive) --
+{
+  const src0 = fs.readFileSync(path.resolve("services/api/src/domain/claudeDraftReview.ts"), "utf8");
+  assert.ok(src0.includes('"claude_draft_review_unavailable"'), "API failure records its own outcome — a dead net must be loudly visible");
+  const unavailBlock = src0.slice(src0.indexOf('verdict.reason === "review_unavailable"'), src0.indexOf('verdict.verdict === "rewrite"'));
+  assert.ok(unavailBlock.includes("continue;"), "an unavailable review NEVER stamps the draft — it stays eligible for retry when the service recovers");
+  assert.ok(src0.includes("if (!parsed) return keep;"), "an unparseable reply is not a verdict — it must never read as ok");
 }
 
 // --- The continuous-improvement wiring: every rewrite files a work order ---------------------
