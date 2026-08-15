@@ -1054,6 +1054,8 @@ type ConversationDetail = {
   followUp?: { mode?: string; reason?: string; updatedAt?: string };
   // API-computed: the follow-up mode holds the cadence (frozen nextDueAt must not read as overdue).
   followUpHold?: boolean | null;
+  // API-computed: this lead opted out, and what told us so (suppression list vs the stopped cadence).
+  optOut?: { optedOut: true; source: "suppression_list" | "cadence_stop" } | null;
   contact?: {
     attempts?: number;
     reachedAt?: string | null;
@@ -21726,6 +21728,18 @@ export default function Home() {
               </div>
             </div>
             {modeError ? <div className="text-xs text-red-600 mt-1">{modeError}</div> : null}
+            {selectedConv.optOut?.optedOut ? (
+              // Joe, 2026-08-15 (+15307211080): the STOP was honoured in 5ms and the conversation
+              // said nothing about it, so from the console it looked like it had been missed. The
+              // suppression list is its own section, fetched once at page load — a tab open all day
+              // shows a stale list. This states the fact on the lead, where the question gets asked.
+              <div className="mt-2 rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-sm text-[var(--status-danger-text)]">
+                <span className="font-medium">Opted out — do not text this lead.</span>{" "}
+                {selectedConv.optOut.source === "suppression_list"
+                  ? "They replied STOP and the number is on the suppression list, so nothing further can send."
+                  : "Their follow-ups were stopped for an opt-out. The number is not on the suppression list — check it before any manual send."}
+              </div>
+            ) : null}
             {pingNoteOpen ? (
               <div className="mt-2 border rounded p-2 bg-gray-50">
                 <label className="block text-xs font-medium text-gray-700" htmlFor="ping-note">

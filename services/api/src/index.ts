@@ -39576,7 +39576,7 @@ app.get("/conversations/:id", async (req, res) => {
   if (!canUserAccessConversation(user, conv)) {
     return res.status(403).json({ ok: false, error: "forbidden" });
   }
-  const { emailDraft, emailDraftSuppressedReason, followUpHold } = resolveConversationDetailDisplay(conv);
+  const { emailDraft, emailDraftSuppressedReason, followUpHold, optOut } = resolveConversationDetailDisplay(conv, { suppressed: isSuppressed(conv.leadKey) });
   const leadSource = conv.lead?.source ?? null;
   const walkIn = inferDisplayWalkIn(conv) ? true : null;
   const phoneLog = isPhoneLogConversation(conv) ? true : null;
@@ -39587,7 +39587,7 @@ app.get("/conversations/:id", async (req, res) => {
   res.json({
     ok: true,
     systemMode: getSystemMode(),
-    conversation: { ...conversationForResponse, emailDraft, emailDraftSuppressedReason, leadSource, walkIn, phoneLog, followUpHold }
+    conversation: { ...conversationForResponse, emailDraft, emailDraftSuppressedReason, leadSource, walkIn, phoneLog, followUpHold, optOut }
   });
 });
 
