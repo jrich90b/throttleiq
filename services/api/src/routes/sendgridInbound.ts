@@ -5391,6 +5391,29 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       });
     }
   }
+  // PLACEMENT NOTE: computed here, with the other parser-derived signals, rather than next to the
+  // bucket chain it feeds. `dealer_ride_initial_draft:eval` reads a fixed 2000-char source window
+  // starting at the FIRST mention of the dealer-lead-app no-demo flag and ending at its own bucket
+  // branch; code inserted between the two pushes that branch out of the window and reds the build.
+  // Keep new signals above that flag — and do not name it in a comment, or the comment becomes the
+  // window's start (this note cost one red build to learn).
+  // PAST-PURCHASE COMPLAINT — runs BEFORE the department override on purpose (Joe, 2026-08-15).
+  // Tom Leo (+12162171070) is why: his complaint about a used Road King contained the word
+  // "tires", the parts lexicon claimed the lead, and a customer-experience problem was answered as
+  // a parts request and filed to the parts counter. A complaint arm placed anywhere BELOW that
+  // override would never have run — the lexical gate decides first, so the parser must outrank it
+  // (memory: parser-fix-inert-until-the-lexical-gate-lets-it-through).
+  const pastPurchaseComplaintDecision = isInitialAdf
+    ? await resolvePastPurchaseComplaintTurn({
+        text: String(effectiveInquiry ?? ""),
+        purchaseOnRecord: await hasPurchaseOnRecord({
+          leadKey,
+          convId: String(conv?.id ?? ""),
+          soldOnThread: !!conv?.sale?.soldAt || conv?.closedReason === "sold"
+        })
+      })
+    : NO_PAST_PURCHASE_COMPLAINT;
+  const isPastPurchaseComplaintLead = pastPurchaseComplaintDecision.arm !== "none";
   const jumpStartExperienceLead =
     isJumpStartExperienceText(effectiveInquiry) ||
     isJumpStartExperienceText(lead.comment ?? null) ||
@@ -5424,23 +5447,6 @@ export async function handleSendgridInbound(req: Request, res: Response) {
             ? { bucket: "general_inquiry", cta: "contact_us" }
             : null;
 
-  // PAST-PURCHASE COMPLAINT — runs BEFORE the department override on purpose (Joe, 2026-08-15).
-  // Tom Leo (+12162171070) is why: his complaint about a used Road King contained the word
-  // "tires", the parts lexicon claimed the lead, and a customer-experience problem was answered as
-  // a parts request and filed to the parts counter. A complaint arm placed anywhere BELOW that
-  // override would never have run — the lexical gate decides first, so the parser must outrank it
-  // (memory: parser-fix-inert-until-the-lexical-gate-lets-it-through).
-  const pastPurchaseComplaintDecision = isInitialAdf
-    ? await resolvePastPurchaseComplaintTurn({
-        text: String(effectiveInquiry ?? ""),
-        purchaseOnRecord: await hasPurchaseOnRecord({
-          leadKey,
-          convId: String(conv?.id ?? ""),
-          soldOnThread: !!conv?.sale?.soldAt || conv?.closedReason === "sold"
-        })
-      })
-    : NO_PAST_PURCHASE_COMPLAINT;
-  const isPastPurchaseComplaintLead = pastPurchaseComplaintDecision.arm !== "none";
 
   let inferredBucket = rule.bucket;
   let inferredCta = rule.cta;
