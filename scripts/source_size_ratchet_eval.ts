@@ -400,7 +400,11 @@ const CEILINGS: Ceiling[] = [
     // so the web-lead lane can hand the judge the lead record instead of an empty ask. Re-derived on
     // the INTEGRATED tree (ROUTINE_CONTRACT rule 3): authored against a pre-#709 main, and #709
     // landed -1 first, so this is taken against main's REAL 70_378, not the branch's own baseline.
-    max: 70_371,
+    // 70_371 -> 70_365. `/conversations/:id`'s display shaping (the email draft and the
+    // follow-up-hold flag) moved behind resolveConversationDetailDisplay (conversationStore),
+    // which is where the email draft is written and where the LIST endpoint already computed the
+    // same followUpHold expression. Taken against main's REAL 70_371.
+    max: 70_365,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

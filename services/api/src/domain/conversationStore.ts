@@ -9158,3 +9158,89 @@ export function recordFinanceCustomerUnreachable(
   );
   saveConversation(conv);
 }
+
+/**
+ * Email-tab display honesty (2026-08-15, operator report +15852503838 "Email does not respond
+ * correctly like the sms").
+ *
+ * `conv.emailDraft` is a LIVE, SENDABLE draft — the console's Email tab renders it and staff send it
+ * verbatim. But it is generated once, as a static template keyed to `classification.bucket` / `cta`,
+ * and then NEVER re-read against what has since happened in the thread. Measured on the live store
+ * 2026-08-15: 223 conversations carried a live `emailDraft` and **134 of them had moved past it** —
+ * 131 on closed/sold threads, plus open threads whose credit application had already been decided.
+ *
+ * This does NOT rewrite or delete anything (the stored field is left exactly as it is, so the change
+ * is reversible and no customer data is touched). It only decides whether the draft is still honest
+ * enough to be OFFERED as sendable. Fail direction is the safe one: suppressing means the Email tab
+ * opens empty and a human writes the reply themselves — never a wrong send.
+ *
+ * Two rules, both pure state checks on records we wrote ourselves — no reading of customer intent:
+ *
+ *  1. THREAD CLOSED / SOLD. A finished thread has no honest use for a first-touch template. This is
+ *     the bulk of it (131 records), including `customer_stepping_back` and `manual_archive` — the
+ *     exact states where re-offering "happy to help with pricing, options, and availability" is
+ *     worst.
+ *  2. A CREDIT DECISION HAS LANDED and the draft still promises the callback that decision replaced.
+ *     Deliberately content-conditioned rather than "any finance outcome": measured against the real
+ *     store, a blanket rule would have wrongly suppressed Owen (+15857462112, declined, whose draft
+ *     already reflects the decline) and Jim (+17163275913, approved, "Sounds good."), while the
+ *     record that actually needed it — Jessica (+15853564919, approved 8/12, still promising "our
+ *     finance team will reach out shortly") — sits on an OPEN thread that rule 1 never reaches.
+ *     The phrase match is an invariant guard on OUR OWN generated copy, not comprehension of a
+ *     customer message.
+ *
+ * Related: the declined-side twin is `resolveFinanceOutcomeNotify`'s territory; draft GENERATION
+ * reading `conv.financeOutcome` in either polarity is the upstream fix and is still open.
+ */
+export type EmailDraftSuppressionReason = "thread_closed" | "finance_outcome_landed";
+
+const EMAIL_DRAFT_PENDING_FINANCE_CALLBACK =
+  /\b(finance|business)\s+(team|manager|department)\b[^.!?]{0,80}\b(will|to)\s+(reach out|contact|call|be in touch|follow up)/i;
+
+/** True iff the stored email draft still promises the finance callback a decision has replaced. */
+export function emailDraftPromisesPendingFinanceCallback(draft: string): boolean {
+  return EMAIL_DRAFT_PENDING_FINANCE_CALLBACK.test(String(draft ?? ""));
+}
+
+/**
+ * The referee. Returns the draft to render, plus why it was withheld when it was.
+ * Both `/conversations/:id` and any other surface that offers the draft to staff must ask this
+ * rather than reading `conv.emailDraft` directly.
+ */
+export function resolveEmailDraftForDisplay(conv: Conversation | null | undefined): {
+  emailDraft: string | null;
+  suppressedReason: EmailDraftSuppressionReason | null;
+} {
+  const draft = String(conv?.emailDraft ?? "").trim();
+  if (!conv || !draft) return { emailDraft: conv?.emailDraft ?? null, suppressedReason: null };
+  if (conv.closedAt || conv.closedReason || conv.status === "closed" || conv.sale?.soldAt) {
+    return { emailDraft: null, suppressedReason: "thread_closed" };
+  }
+  if (conv.financeOutcome?.status && emailDraftPromisesPendingFinanceCallback(draft)) {
+    return { emailDraft: null, suppressedReason: "finance_outcome_landed" };
+  }
+  return { emailDraft: conv.emailDraft ?? null, suppressedReason: null };
+}
+
+/**
+ * Everything `/conversations/:id` has to decide about DISPLAY honesty, in one place.
+ *
+ * `followUpHold`: a held follow-up mode freezes the cadence's `nextDueAt` (the tick skips the conv),
+ * so the console must render "on hold" instead of an overdue date. Post-sale cadences keep running
+ * through a hold, so they stay honest without the flag. (Same expression the list endpoint uses.)
+ *
+ * `emailDraft` / `emailDraftSuppressedReason`: see `resolveEmailDraftForDisplay`. The reason is
+ * returned, not swallowed — a surface that hides something must be able to say why.
+ */
+export function resolveConversationDetailDisplay(conv: Conversation): {
+  emailDraft: string | null;
+  emailDraftSuppressedReason: EmailDraftSuppressionReason | null;
+  followUpHold: true | null;
+} {
+  const { emailDraft, suppressedReason } = resolveEmailDraftForDisplay(conv);
+  return {
+    emailDraft,
+    emailDraftSuppressedReason: suppressedReason,
+    followUpHold: isFollowUpCadenceHeld(conv.followUp?.mode, conv.followUpCadence?.kind) ? true : null
+  };
+}
