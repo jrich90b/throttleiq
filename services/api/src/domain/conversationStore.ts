@@ -9249,6 +9249,41 @@ export function resolveEmailDraftForDisplay(conv: Conversation | null | undefine
 }
 
 /**
+ * Does this thread show an opt-out, and what told us so? (Joe, 2026-08-15, +15307211080.)
+ *
+ * Rick McDuffie replied STOP at 12:20:56Z. The send path did everything right: the cadence stopped
+ * with `stopReason: "opt_out"` and the phone landed on the suppression list 5ms later, at
+ * 12:21:01.690Z. Joe was looking at the CONVERSATION three minutes after that and reported "customer
+ * said stop but I don't see the lead going to the suppressed list" — because the conversation view
+ * had nothing to show him. The suppression list is a separate section fetched once at page load, so
+ * a console tab that had been open all day still listed 27 numbers, not 28.
+ *
+ * Nothing about what we SEND changes here. This only lets the surface state the compliance fact it
+ * already holds. A manager who cannot see an opt-out honoured has to assume it was not.
+ *
+ * Two independent sources, deliberately, because they cover different leads:
+ *  - `suppression_list` — the phone is on the STOP list. This is the send-blocking record.
+ *  - `cadence_stop` — the cadence carries `stopReason: "opt_out"` (or the thread was closed for it)
+ *    while the list has no row. Real case: the list is keyed by PHONE, so an email-only lead that
+ *    opts out is stopped without ever appearing on it.
+ *
+ * FAIL DIRECTION: toward SHOWING the badge. An opt-out we display but did not act on is a question a
+ * human asks; an opt-out we acted on but never display is the silence Joe just reported.
+ */
+export type OptOutDisplaySource = "suppression_list" | "cadence_stop";
+
+export function resolveOptOutForDisplay(
+  conv: Conversation | null | undefined,
+  opts?: { suppressed?: boolean | null }
+): { optedOut: true; source: OptOutDisplaySource } | null {
+  if (opts?.suppressed === true) return { optedOut: true, source: "suppression_list" };
+  if (!conv) return null;
+  if (conv.followUpCadence?.stopReason === "opt_out") return { optedOut: true, source: "cadence_stop" };
+  if (conv.closedReason === "opt_out") return { optedOut: true, source: "cadence_stop" };
+  return null;
+}
+
+/**
  * Everything `/conversations/:id` has to decide about DISPLAY honesty, in one place.
  *
  * `followUpHold`: a held follow-up mode freezes the cadence's `nextDueAt` (the tick skips the conv),
@@ -9257,16 +9292,24 @@ export function resolveEmailDraftForDisplay(conv: Conversation | null | undefine
  *
  * `emailDraft` / `emailDraftSuppressedReason`: see `resolveEmailDraftForDisplay`. The reason is
  * returned, not swallowed — a surface that hides something must be able to say why.
+ *
+ * `optOut`: see `resolveOptOutForDisplay`. The caller supplies the suppression-list answer because
+ * that list lives outside the conversation record; everything else is read off the thread itself.
  */
-export function resolveConversationDetailDisplay(conv: Conversation): {
+export function resolveConversationDetailDisplay(
+  conv: Conversation,
+  opts?: { suppressed?: boolean | null }
+): {
   emailDraft: string | null;
   emailDraftSuppressedReason: EmailDraftSuppressionReason | null;
   followUpHold: true | null;
+  optOut: { optedOut: true; source: OptOutDisplaySource } | null;
 } {
   const { emailDraft, suppressedReason } = resolveEmailDraftForDisplay(conv);
   return {
     emailDraft,
     emailDraftSuppressedReason: suppressedReason,
-    followUpHold: isFollowUpCadenceHeld(conv.followUp?.mode, conv.followUpCadence?.kind) ? true : null
+    followUpHold: isFollowUpCadenceHeld(conv.followUp?.mode, conv.followUpCadence?.kind) ? true : null,
+    optOut: resolveOptOutForDisplay(conv, opts)
   };
 }
