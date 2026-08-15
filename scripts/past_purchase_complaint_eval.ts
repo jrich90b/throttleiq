@@ -32,6 +32,7 @@ import fs from "node:fs";
 const {
   decidePastPurchaseComplaintTurn,
   buildPastPurchaseComplaintReply,
+  buildPastPurchaseComplaintTodoSummary,
   pastPurchaseComplaintJsonSchema,
   pastPurchaseComplaintConfidenceMin,
   isLongEnoughForPastPurchaseComplaint
@@ -81,6 +82,24 @@ assert.equal(
   "a customer pointing at another dealer is asked, never assumed into our own deal"
 );
 
+// ── 3b) …but never ask a question the customer already ANSWERED (Joe, 2026-08-15 review) ─────
+// "or they are reaching out to the wrong dealer" was Joe's own framing of this case. When they say
+// plainly it was another store's sale and our books hold nothing against that, asking "was that
+// with us?" reads as not having read them — the same family of miss this whole arm exists to fix.
+const elsewhere = decide({ purchase_attribution: "another_dealer" }, false);
+assert.equal(elsewhere.arm, "service_recovery_other_dealer", "they told us whose sale it was; believe them");
+assert.equal(
+  elsewhere.askPurchaseVerification,
+  false,
+  "a customer who opened with 'I bought it downstate' must not be asked whether they bought it here"
+);
+assert.equal(elsewhere.handoffToHuman, true, "a misdirected complaint still reaches a person");
+assert.equal(
+  elsewhere.suppressFaultConcession,
+  true,
+  "conceding nothing matters MORE on another store's deal, not less"
+);
+
 // ── 4) Fail direction: DETECTION fails toward today's behaviour ──────────────────────────────
 assert.equal(
   decidePastPurchaseComplaintTurn({ parse: null, confidenceMin: MIN, purchaseOnRecord: false }).arm,
@@ -123,7 +142,13 @@ const FAULT_PHRASES = [
   /see what we can do/i,
   /refund|reimburse|compensat/i
 ];
-for (const reply of [askReply, knownReply]) {
+const otherDealerReply = buildPastPurchaseComplaintReply({
+  arm: "service_recovery_other_dealer",
+  firstName: "Tom",
+  agentName: "Alexandra",
+  dealerCity: "North Tonawanda"
+});
+for (const reply of [askReply, knownReply, otherDealerReply]) {
   for (const phrase of FAULT_PHRASES) {
     assert.ok(!phrase.test(reply), `a complaint reply must concede no fault and promise no remedy (${phrase})`);
   }
@@ -142,10 +167,62 @@ assert.ok(
   !/when you bought it/i.test(knownReply) && !/stock number/i.test(knownReply),
   "a verified customer is NOT asked to prove the purchase"
 );
+// The other-dealer reply answers the case Joe named on review: they already said whose sale it was.
+assert.ok(
+  !/when you bought it/i.test(otherDealerReply) &&
+    !/stock number/i.test(otherDealerReply) &&
+    !/was that (?:purchase )?with us/i.test(otherDealerReply),
+  "a customer who already told us it was another store's sale is not asked to settle it again"
+);
+assert.ok(
+  !/North Tonawanda/.test(otherDealerReply),
+  "naming our city here would re-open the question they already closed"
+);
+assert.ok(
+  /service/i.test(otherDealerReply),
+  "a misdirected complaint gets the one honest offer we can make, not a dead end"
+);
+assert.ok(
+  /can't speak to|cannot speak to/i.test(otherDealerReply),
+  "we must not characterise how another store prepped a bike we never touched"
+);
+
 // One advancing question per reply (voice charter C1.7) — and exactly one.
-for (const [label, reply] of [["ask", askReply], ["known", knownReply]] as const) {
+for (const [label, reply] of [
+  ["ask", askReply],
+  ["known", knownReply],
+  ["other_dealer", otherDealerReply]
+] as const) {
   assert.equal((reply.match(/\?/g) ?? []).length, 1, `${label} reply must end with exactly one question`);
 }
+// ── 5b) The MANAGER's half must not hand them the wrong starting assumption ─────────────────
+// The summary used to branch on `askPurchaseVerification`, which the other-dealer arm also leaves
+// false — so a wrong-dealer complaint would have reached a manager described as "a bike they
+// bought from us". That is worse than saying nothing: it is a false fact in the work queue.
+const otherSummary = buildPastPurchaseComplaintTodoSummary({
+  decision: elsewhere,
+  customerText: "I bought a bike at a dealer downstate and nothing was serviced."
+});
+assert.ok(
+  /ANOTHER dealer/i.test(otherSummary),
+  "the manager must be told up front that the customer attributes the sale elsewhere"
+);
+assert.ok(
+  !/bought from us|they bought from us/i.test(otherSummary),
+  "a wrong-dealer complaint must never be summarised as our own sale"
+);
+for (const [label, decision] of [
+  ["unverified", tom],
+  ["verified", known],
+  ["other_dealer", elsewhere]
+] as const) {
+  const summary = buildPastPurchaseComplaintTodoSummary({ decision, customerText: "…" });
+  assert.ok(
+    /No fault has been conceded/i.test(summary),
+    `${label}: the queue must record that the bot admitted nothing`
+  );
+}
+
 // Portability: the source ratchet counts dealer literals in services/api/src, so the city and the
 // agent name must arrive as arguments, never be baked into the builder.
 const domainSrc = fs.readFileSync("services/api/src/domain/pastPurchaseComplaint.ts", "utf8");

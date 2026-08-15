@@ -113,7 +113,12 @@ export type PastPurchaseComplaintArm =
   | "none"
   /** The sale is ours on both accounts — empathise, hand to a human, ask nothing to prove it. */
   | "service_recovery_verified"
-  /** We cannot see the sale, or they point elsewhere — acknowledge, ask the ONE question, concede nothing. */
+  /**
+   * They TOLD us the sale was somebody else's and our books do not contradict them — acknowledge,
+   * offer the one thing we can honestly offer (a look at it), and ask nothing they already answered.
+   */
+  | "service_recovery_other_dealer"
+  /** We cannot see the sale and they have not said whose it is — acknowledge, ASK, concede nothing. */
   | "service_recovery_unverified";
 
 export type PastPurchaseComplaintInput = {
@@ -163,10 +168,28 @@ export function decidePastPurchaseComplaintTurn(
   // "Only if it looks suspicious" — both opinions must point at us before we skip the ask.
   const verified = parse.purchase_attribution === "this_dealer" && input.purchaseOnRecord;
 
+  // ASKING A QUESTION THEY ALREADY ANSWERED IS ITS OWN MISS (Joe, 2026-08-15, on review of this
+  // PR: "or they are reaching out to the wrong dealer"). When the customer states plainly that the
+  // sale was somebody else's AND our own books hold nothing that contradicts them, taking their
+  // word costs nothing we care about — the arm still concedes no fault and still reaches a human,
+  // it just stops asking "was that with us?" of someone who opened with "I bought it downstate".
+  //
+  // The contradiction case is deliberately NOT here: they say another dealer but our books DO show
+  // a sale to this lead, so the two opinions disagree and the fail-safe applies — fall through and
+  // ask. Every remaining shape (`unclear`, or either side alone) also falls through to the ask, so
+  // this branch narrows nothing except the case the customer has already settled.
+  const otherDealer = parse.purchase_attribution === "another_dealer" && !input.purchaseOnRecord;
+
+  const arm: PastPurchaseComplaintArm = verified
+    ? "service_recovery_verified"
+    : otherDealer
+      ? "service_recovery_other_dealer"
+      : "service_recovery_unverified";
+
   return {
-    arm: verified ? "service_recovery_verified" : "service_recovery_unverified",
+    arm,
     handoffToHuman: true,
-    askPurchaseVerification: !verified,
+    askPurchaseVerification: arm === "service_recovery_unverified",
     suppressFaultConcession: true
   };
 }
@@ -193,6 +216,18 @@ export function buildPastPurchaseComplaintReply(args: {
       `${greeting}. I'm sorry to hear the bike gave you trouble after you took it home, and I ` +
       `appreciate you telling us instead of just walking away. I'm getting this in front of the ` +
       `right person here — can you tell me the best time to reach you?`
+    );
+  }
+  if (args.arm === "service_recovery_other_dealer") {
+    // They already told us it was another store's sale. So: no apology for work we did not do, no
+    // question they have answered, and no comment on how it was prepped — we genuinely do not know.
+    // What is left is the one honest offer we can make, which also keeps a misdirected complaint
+    // from dead-ending: our service department can look at it.
+    return (
+      `${greeting}. I'm sorry to hear the bike's given you that much trouble since you got it ` +
+      `home. It sounds like that sale was with another store, so I can't speak to how it was ` +
+      `prepped — but our service department can take a look and tell you where it stands. Want ` +
+      `me to have them reach out?`
     );
   }
   const where = String(args.dealerCity ?? "").trim();
@@ -352,10 +387,17 @@ export function buildPastPurchaseComplaintTodoSummary(args: {
   decision: PastPurchaseComplaintDecision;
   customerText?: string | null;
 }): string {
+  // Branch on the ARM, not on `askPurchaseVerification` — the other-dealer arm also asks nothing,
+  // and telling a manager "a bike they bought from us" about a sale the customer just attributed
+  // to another store would hand them the exact wrong starting assumption.
+  const headline =
+    args.decision.arm === "service_recovery_other_dealer"
+      ? "Customer complaint about a bike they say they bought from ANOTHER dealer — not our sale on their account, and nothing on our books contradicts them. The draft offers a service look only; it concedes nothing and asks nothing about the purchase."
+      : args.decision.askPurchaseVerification
+        ? "Customer complaint about a bike they already own — PURCHASE NOT VERIFIED as ours. Pull the deal jacket before responding; the draft asks them when they bought it and for the stock number."
+        : "Customer complaint about a bike they bought from us. Pull the deal jacket before responding.";
   return [
-    args.decision.askPurchaseVerification
-      ? "Customer complaint about a bike they already own — PURCHASE NOT VERIFIED as ours. Pull the deal jacket before responding; the draft asks them when they bought it and for the stock number."
-      : "Customer complaint about a bike they bought from us. Pull the deal jacket before responding.",
+    headline,
     "No fault has been conceded and nothing has been promised in writing.",
     String(args.customerText ?? "").trim()
   ]
