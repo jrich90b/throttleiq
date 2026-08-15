@@ -483,9 +483,11 @@ import {
 import type { DailyForecast } from "./domain/weather.js";
 import {
   decideScheduleInviteBudget,
+  decideDepartmentRequestTurn,
   type AppointmentOutcomeSource,
   type ManualCadenceRestartContext
 } from "./domain/routeStateReducer.js";
+import { matchPartsCatalogLexicon } from "./domain/partsCatalogLexicon.js";
 import { resolveTownNearestDealer, formatTownLabel } from "./domain/geo.js";
 import { dataPath, getDataDir } from "./domain/dataDir.js";
 import { isJumpStartExperienceRequestText } from "./domain/ridingAcademy.js";
@@ -21592,14 +21594,13 @@ function applyConversationStateReducer(
   const corporateMisrouteTopic = getCorporateMisrouteTopic(state);
   const normalizedText = String(text ?? "");
   const parserDepartmentIntent = state.departmentIntent !== "none" ? state.departmentIntent : null;
-  const parserDepartmentExplicitRequest =
-    !!parserDepartmentIntent && hasExplicitDepartmentRequestFromText(normalizedText, parserDepartmentIntent);
-  const departmentIntentAccepted =
-    !!state.explicitRequest &&
-    !!parserDepartmentIntent &&
-    parserDepartmentExplicitRequest
-      ? parserDepartmentIntent
-      : null;
+  const departmentIntentAccepted = decideDepartmentRequestTurn({
+    parserDepartmentIntent,
+    parserExplicitRequest: !!state.explicitRequest,
+    keywordDepartmentRequest:
+      !!parserDepartmentIntent && hasExplicitDepartmentRequestFromText(normalizedText, parserDepartmentIntent),
+    catalogPartsTerm: matchPartsCatalogLexicon(normalizedText).departmentIntent === "parts"
+  }).department;
   const departmentManualHandoffReason = (() => {
     const reason = String(state.manualHandoffReason ?? "").toLowerCase();
     if (reason === "service_request") return "service" as DepartmentRole;
@@ -21607,11 +21608,10 @@ function applyConversationStateReducer(
     if (reason === "apparel_request") return "apparel" as DepartmentRole;
     return null;
   })();
+  // The referee above already required explicitRequest + corroboration for the accepted role, so
+  // matching it is the whole test — the old repeat of both conditions could only ever agree.
   const allowDepartmentManualHandoff =
-    !!state.explicitRequest &&
-    !!departmentManualHandoffReason &&
-    hasExplicitDepartmentRequestFromText(normalizedText, departmentManualHandoffReason) &&
-    departmentManualHandoffReason === departmentIntentAccepted;
+    !!departmentManualHandoffReason && departmentManualHandoffReason === departmentIntentAccepted;
   const hiringManagerIntentAccepted =
     state.stateIntent === "hiring_manager" &&
     state.explicitRequest &&

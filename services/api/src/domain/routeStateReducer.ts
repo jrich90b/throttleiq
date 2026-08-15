@@ -8908,3 +8908,79 @@ export function decidePrequalTurn(input: PrequalTurnInput): PrequalTurnDecision 
   }
   return { stage: "offer_visit", reason: "qualified_ask_them_in" };
 }
+
+// --- Department request acceptance: the parts/accessory arm (2026-08-15) ---------------------
+//
+// THE MISS. A customer asks about a SEAT, a backrest, saddlebags, a brake lever switch — even a
+// literal part number ("mustache engine guard #49000140") — and gets answered with a line about
+// the motorcycles on the floor ("I'm not seeing new 2026 Full Line in stock right now"), because
+// the sales lane reads those same nouns as a BIKE FEATURE FILTER. Two instances on +17169400722
+// (saddlebag 8/10, seat 8/13) surfaced as replay-judge fails; measured 2026-08-14 at 17
+// parts-intent turns across 10 conversations in 30 days.
+//
+// THE MECHANISM — the documented anti-pattern, third confirmed instance. `conversation_state_parser`
+// already returns `departmentIntent: "parts"` / `stateIntent: "parts_request"` correctly. The live
+// path then re-validated that verdict through a keyword rule (`PARTS_DEPARTMENT_RE`, index.ts)
+// which matches only the literal word "part" — no accessory noun appears in it at all. So the
+// keyword rule VETOED the parser on every real accessory question and the turn fell through to
+// inventory. Same shape #701 fixed for soft-visit: a keyword scan overruling a parser verdict.
+//
+// THE RULE, per AGENTS.md. The parser decides; the keyword rule may CORROBORATE, never veto. What
+// stays deterministic is an invariant guard: we do not hand a thread to a person unless the turn
+// actually contains a parts/accessory noun (the P&A catalog lexicon) or the legacy "part" wording.
+// Acceptance here sets `manual_handoff` + stops the cadence, so a wrongful accept costs a live
+// sales conversation — the guard is what keeps a parser hallucination from doing that.
+//
+// MEASURED, not assumed (2026-08-15, `parseConversationStateWithLLM` executed on the real turns):
+// backrest / part number / brake lever switch / "did u order that seat yet?" / saddlebags all read
+// `parts` + explicitRequest, while the two BIKE-SHOPPING lookalikes that motivated the earlier
+// "this needs deal context" worry — "And that has stock exhaust and bars?" and "the black one with
+// the speakers" — both read `departmentIntent: none`. The catalog lexicon matches "exhaust", "bars"
+// and "speakers", so a lexicon-first rule WOULD have mis-routed them; the parser-first rule does
+// not. That is why the parser is the authority and the lexicon only corroborates.
+//
+// FAIL DIRECTION: unsure => `none` => exactly today's behaviour (the sales/inventory path runs). No
+// parser verdict, a non-parts department, `explicitRequest: false`, or a turn with neither a
+// catalog noun nor the legacy "part" wording all keep the current path. Service and apparel are
+// deliberately unchanged — their keyword rules carry real vocabulary and are not the reported miss.
+// ---------------------------------------------------------------------------------------------
+export type DepartmentRequestRole = "service" | "parts" | "apparel";
+
+export type DepartmentRequestTurnInput = {
+  /** `conversation_state_parser` verdict for this turn ("none"/null = no department). */
+  parserDepartmentIntent: DepartmentRequestRole | "none" | null;
+  /** The parser's own "the customer explicitly asked for this" flag. */
+  parserExplicitRequest: boolean;
+  /** Legacy keyword gate for the SAME role. Corroborates; for `parts` it may no longer veto. */
+  keywordDepartmentRequest: boolean;
+  /** `matchPartsCatalogLexicon(text).departmentIntent === "parts"` — a real P&A noun this turn. */
+  catalogPartsTerm: boolean;
+};
+
+export type DepartmentRequestTurnDecision = {
+  /** The department that owns this turn, or null to leave it on the normal path. */
+  department: DepartmentRequestRole | null;
+  /** What carried the decision — for the decision table and the debug trace. */
+  reason:
+    | "no_parser_verdict"
+    | "not_explicit_request"
+    | "keyword_corroborated"
+    | "catalog_corroborated"
+    | "no_accessory_noun";
+};
+
+export function decideDepartmentRequestTurn(
+  input: DepartmentRequestTurnInput
+): DepartmentRequestTurnDecision {
+  const role =
+    input.parserDepartmentIntent && input.parserDepartmentIntent !== "none"
+      ? input.parserDepartmentIntent
+      : null;
+  if (!role) return { department: null, reason: "no_parser_verdict" };
+  if (!input.parserExplicitRequest) return { department: null, reason: "not_explicit_request" };
+  if (input.keywordDepartmentRequest) return { department: role, reason: "keyword_corroborated" };
+  // Only the parts arm moves. Service/apparel keep the keyword rule as a hard gate.
+  if (role !== "parts") return { department: null, reason: "no_accessory_noun" };
+  if (input.catalogPartsTerm) return { department: "parts", reason: "catalog_corroborated" };
+  return { department: null, reason: "no_accessory_noun" };
+}
