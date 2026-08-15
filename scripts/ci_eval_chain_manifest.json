@@ -286,6 +286,7 @@
     "draft_price_fact_check:eval",
     "draft_judge_contact_preference:eval",
     "draft_judge_received_history:eval",
+    "draft_judge_lead_record:eval",
     "agent_identity_prior_intro:eval",
     "no_response_judge:eval",
     "cadence_quality_judge:eval",
