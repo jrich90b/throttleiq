@@ -8,6 +8,7 @@
  * single biggest charter-violation class (em-dash overuse + long brand repeat in the
  * opener). Keep all intro wording here so future tweaks are one edit, never scattered.
  */
+import { demoRideAlreadyHappened } from "./leadSourceRules.js";
 
 /**
  * Neutral agent stand-in for fail paths where the dealer profile has no agentName.
@@ -402,17 +403,38 @@ export function buildMarketingOptInAck(
  * don't happen at the dealership... this should be a soft invite and there should be no
  * follow-up cadence after the initial response"). One warm soft invite, then silence (the
  * event_promo bucket already closes `event_promo_no_cadence`). Deliberately contains NO
- * appointment offer/times, NO availability claim, and NO fabricated completed-ride frame
- * ("thanks for your recent demo ride") — the source alone doesn't prove the ride happened.
+ * appointment offer/times and NO availability claim.
+ *
+ * The completed-ride frame is now LANE-DEPENDENT (Joe ruling 2026-08-15, "2 yes"). By default it
+ * stays forbidden — the source alone does not prove the ride happened (7/02). On the DAT lane
+ * ONLY (`rideAlreadyHappened`, decided by `demoRideAlreadyHappened` in leadSourceRules), Joe ran
+ * the event and saw those customers, so the copy may say so and must STOP offering to show them a
+ * bike they have already sat on. Everything else about 7/02 is unchanged on both variants.
  * Pinned by `event_promo_ack:eval`.
  */
 export function buildDemoRideEventSoftInvite(
   firstName: string | null | undefined,
   agentName: string,
   dealerName: string,
-  bikeLabel?: string | null
+  bikeLabel?: string | null,
+  /**
+   * The lead's feed source. The lane decision is made HERE, from the one config list, rather than
+   * at each call site — the live ADF arrival and the thumbs-down redraft then cannot drift apart,
+   * which is the two-path parity rule and is why neither caller needs a new import.
+   */
+  leadSource?: string | null
 ): string {
   const bike = (bikeLabel ?? "").trim();
+  if (demoRideAlreadyHappened(leadSource)) {
+    // No "see one in person" — they already rode it. No times, no availability claim, no cadence.
+    const rodeLine = bike
+      ? `Hope you enjoyed riding the ${bike} at the H-D demo ride. `
+      : "Hope you enjoyed the H-D demo ride. ";
+    const offerLine = bike
+      ? `If you have any questions about the ${bike}, I'm happy to help — no pressure at all.`
+      : "If you have any questions, I'm happy to help — no pressure at all.";
+    return `${buildAgentIntro(firstName, agentName, dealerName)}${rodeLine}${offerLine}`;
+  }
   const interestLine = bike
     ? `Saw your interest in the ${bike} through the H-D demo ride program. `
     : "Saw your interest through the H-D demo ride program. ";

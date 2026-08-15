@@ -505,6 +505,30 @@ function findRule(leadSource?: string, sourceId?: number | null): LeadRule | nul
   return null;
 }
 
+/**
+ * The DAT demo-ride sources whose lead ALONE proves the customer rode the bike (Joe ruling
+ * 2026-08-15, answering his own decision queue: "2 yes"). This KNOWINGLY reverses the half of his
+ * 2026-07-02 ruling that said the source never proves the ride happened — for this lane only,
+ * because Joe ran the DAT event himself and saw those customers. He reported the same
+ * "if you'd ever like to see one in person" sentence three times before ruling (Boyd Dusharm
+ * +17169401820 ×2 on 8/12, Mark Jagodzinski +17169071289 on 8/14); both leads carry exactly this
+ * source string, verified in the live store.
+ *
+ * SCOPE IS DELIBERATELY ONE STRING. The `gla_demo_ride` rule above also matches "GLA - Demo Ride",
+ * "GLA - DEMO RIDE" and "GLA - Road to Your Ride Event Dealer Demo Ride"; Joe named the DAT lane and
+ * only the DAT lane, so the others keep the 7/02 rule. The rest of 7/02 is untouched everywhere: no
+ * appointment offer, no availability claim, no follow-up cadence.
+ *
+ * This reads a FEED-SUPPLIED source label (routing config over a structured field), never customer
+ * text — the comprehend-never-regex rule is about customer intent and does not apply here.
+ * Fail direction: an unrecognized source returns false and keeps today's ride-neutral copy.
+ */
+const DEMO_RIDE_SOURCES_WHERE_THE_RIDE_HAPPENED = new Set(["gla - demo ride - dat"]);
+
+export function demoRideAlreadyHappened(leadSource?: string | null): boolean {
+  return DEMO_RIDE_SOURCES_WHERE_THE_RIDE_HAPPENED.has(String(leadSource ?? "").trim().toLowerCase());
+}
+
 export function resolveLeadRule(leadSource?: string, sourceId?: number | null): {
   bucket: LeadBucket;
   cta: LeadCTA;

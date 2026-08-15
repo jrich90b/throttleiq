@@ -152,6 +152,66 @@ for (const b of SOFT_INVITE_BANNED) {
   assert.ok(!b.re.test(softInviteBare), `bare demo-ride soft invite must not contain a ${b.label}: "${softInviteBare}"`);
 }
 
+// --- 1e) THE DAT LANE ASSUMES THE RIDE (Joe ruling 2026-08-15, "2 yes"). ---
+// Joe ran the DAT demo event and saw those customers, so on `GLA - Demo Ride - DAT` ONLY the copy
+// may say the ride happened and must STOP offering to show them a bike they already sat on. He
+// reported the offending sentence three times first (Boyd Dusharm +17169401820 ×2 on 8/12, Mark
+// Jagodzinski +17169071289 on 8/14 — both leads carry exactly this source, verified in the store).
+// This knowingly supersedes the "no completed-ride frame" half of the 7/02 ruling FOR THIS LANE.
+const datInvite = buildDemoRideEventSoftInvite(
+  "Boyd", "Alexandra", "American Harley-Davidson", "2026 Pan America 1250 Limited", "GLA - Demo Ride - DAT"
+);
+assert.ok(!/in person/i.test(datInvite), `DAT lane must not offer to show a bike they already rode: "${datInvite}"`);
+assert.ok(!/stop by the shop/i.test(datInvite), `DAT lane must not push a shop visit: "${datInvite}"`);
+assert.ok(/demo ride/i.test(datInvite), "DAT lane still names the demo ride the lead came from");
+assert.ok(/2026 Pan America 1250 Limited/.test(datInvite), "DAT lane still references the bike when known");
+assert.ok(
+  /Boyd/.test(datInvite) && /Alexandra/.test(datInvite) && /American Harley-Davidson/.test(datInvite),
+  "DAT lane still identifies lead + agent + dealer"
+);
+// The rest of 7/02 is UNCHANGED on this lane — only the completed-ride frame was reversed.
+for (const b of SOFT_INVITE_BANNED) {
+  if (b.label === "fabricated completed-ride frame") continue;
+  assert.ok(!b.re.test(datInvite), `DAT demo-ride invite must not contain a ${b.label}: "${datInvite}"`);
+}
+const datInviteBare = buildDemoRideEventSoftInvite(null, "Alexandra", "American Harley-Davidson", null, "GLA - Demo Ride - DAT");
+assert.ok(!/undefined|null/.test(datInviteBare), "DAT lane must handle missing name/bike cleanly");
+assert.ok(!/in person/i.test(datInviteBare), "bare DAT invite must not offer an in-person look either");
+
+// SCOPE GUARD — the ruling was for the DAT lane ONLY. Every other GLA/demo-ride source keeps the
+// 7/02 copy, so a future edit cannot quietly widen Joe's narrow ruling across the whole program.
+for (const other of ["GLA - Demo Ride", "GLA - DEMO RIDE", "GLA - Road to Your Ride Event Dealer Demo Ride", "Dealer Lead App - Demo Ride Passenger"]) {
+  const invite = buildDemoRideEventSoftInvite("Sam", "Alexandra", "American Harley-Davidson", "2026 Heritage Classic", other);
+  assert.ok(
+    invite.includes("in person"),
+    `"${other}" is OUTSIDE Joe's DAT ruling and must keep the 7/02 ride-neutral copy: "${invite}"`
+  );
+  for (const b of SOFT_INVITE_BANNED) {
+    assert.ok(!b.re.test(invite), `"${other}" must not contain a ${b.label}: "${invite}"`);
+  }
+}
+// An unknown/missing source falls back to the ride-neutral copy (fail direction: never assert a
+// ride we cannot prove).
+assert.ok(
+  buildDemoRideEventSoftInvite("Sam", "Alexandra", "American Harley-Davidson", "2026 Heritage Classic", null).includes("in person"),
+  "an unknown source must fall back to the ride-neutral 7/02 copy"
+);
+
+// WIRING — a builder that reads the source proves nothing if a caller never passes it, and the
+// ratchet cannot see that (the "ratchet cannot prove wiring" trap). BOTH paths must hand it over:
+// the live ADF arrival (orchestrator) and the thumbs-down redraft (index). `.includes()` on purpose
+// — eval_source_pin_ratchet counts assertions containing an escaped paren.
+const orchestratorSrc = fs.readFileSync("services/api/src/domain/orchestrator.ts", "utf8");
+assert.ok(
+  orchestratorSrc.includes("buildDemoRideEventSoftInvite(leadFirst, agentName, dealerName, bikeLabel, ctx?.lead?.source)"),
+  "the live ADF arrival path must pass the lead source to the soft-invite builder"
+);
+const indexSrc = fs.readFileSync("services/api/src/index.ts", "utf8");
+assert.ok(
+  indexSrc.includes("buildDemoRideEventSoftInvite(drFirstName, drAgentName, drDealerName, drBikeLabel, (lead as any)?.source)"),
+  "the thumbs-down redraft path must pass the lead source to the soft-invite builder"
+);
+
 // --- 2) Ack safety (pure). ---
 const ack = buildEventPromoAck("Matthew", "Alexandra", "American Harley-Davidson");
 assert.ok(/Matthew/.test(ack) && /Alexandra/.test(ack) && /American Harley-Davidson/.test(ack), "ack must identify lead + agent + dealer");

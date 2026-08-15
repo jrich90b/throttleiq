@@ -2689,9 +2689,11 @@ export async function orchestrateInbound(
     const yearLabel = ctx?.lead?.vehicle?.year ? `${ctx.lead.vehicle.year} ` : "";
     const modelLabel = normalizeModelLabel(ctx?.lead?.vehicle?.model ?? ctx?.lead?.vehicle?.description);
     const bikeLabel = `${yearLabel}${modelLabel}`.trim() || null;
-    // Corporate demo-ride program lead: one SOFT INVITE, no scheduling push, no fabricated
-    // "recent ride" frame, and no follow-up cadence (operator-reported, Joe 2026-07-02).
-    const draft = buildDemoRideEventSoftInvite(leadFirst, agentName, dealerName, bikeLabel);
+    // Corporate demo-ride program lead: one SOFT INVITE, no scheduling push, no follow-up cadence
+    // (operator-reported, Joe 2026-07-02). The completed-ride frame is lane-dependent since Joe's
+    // 2026-08-15 ruling — the builder decides it from the source so this path and the redraft path
+    // cannot drift.
+    const draft = buildDemoRideEventSoftInvite(leadFirst, agentName, dealerName, bikeLabel, ctx?.lead?.source);
     return finalize({
       intent: "GENERAL",
       stage: "ENGAGED",
