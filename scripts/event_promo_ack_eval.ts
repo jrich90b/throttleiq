@@ -206,6 +206,14 @@ assert.ok(
   orchestratorSrc.includes("leadSource: ctx?.lead?.source") && orchestratorSrc.includes("alreadyTexted: !!ctx?.customerReceivedOutbound"),
   "the live ADF arrival path must pass BOTH the lead source and the already-texted signal"
 );
+// Every self-introduction shape this codebase actually emits (see buildAgentIntro /
+// buildPersonaSelfIntroPattern in agentVoice): the greeting opener, and the "it's/this is/I'm
+// {name} at {dealer}" clause. A mid-thread follow-on must carry none of them.
+const SELF_INTRO_SHAPES: { label: string; re: RegExp }[] = [
+  { label: "greeting opener", re: /^\s*(hey|hi|hello)\b/i },
+  { label: "self-introduction clause", re: /\b(it'?s|this is|i'?m)\s+\S+\s+(over\s+)?at\b/i }
+];
+
 // --- 1f) A REPEAT demo-ride lead must NOT re-introduce the agent (Joe ruling 2026-08-15, "b"). ---
 // A second demo-ride ADF lead days after the first opened with the full "Hey there, it's Alexandra
 // over at American Harley-Davidson..." to someone we had texted the day before: Boyd Dusharm
@@ -221,6 +229,12 @@ for (const src of ["GLA - Demo Ride - DAT", "GLA - Demo Ride"]) {
   );
   assert.ok(!repeat.includes("Alexandra"), `repeat ${src} lead must not re-introduce the agent: "${repeat}"`);
   assert.ok(!repeat.includes("American Harley-Davidson"), `repeat ${src} lead must not re-introduce the dealer: "${repeat}"`);
+  // Assert the SHAPE, not just these two names. A sabotage that re-introduced under a different
+  // name ("Hey there, it's x.") slipped past the name checks, which is exactly the hole a
+  // name-literal assertion leaves: the next edit does not have to reuse today's agent name.
+  for (const shape of SELF_INTRO_SHAPES) {
+    assert.ok(!shape.re.test(repeat), `repeat ${src} lead must not contain a ${shape.label}: "${repeat}"`);
+  }
   assert.ok(repeat.includes("2026 CVO Street Glide ST"), `repeat ${src} lead must speak to the NEW bike: "${repeat}"`);
   assert.ok(!repeat.includes("in person"), `repeat ${src} lead must not push a visit: "${repeat}"`);
   for (const b of SOFT_INVITE_BANNED) {
