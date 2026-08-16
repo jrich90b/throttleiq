@@ -47,10 +47,47 @@ export function claudeDraftReviewEnabled(): boolean {
 export type ClaudeDraftReviewReceipt = { messageId: string; verdict: "ok" | "rewrite"; at: string };
 
 /**
- * Which conversations carry a draft this pass should review RIGHT NOW? Pure and executable:
- * agent-mode SMS threads whose CURRENT pending draft (the only row that is really pending —
- * `getLatestPendingDraft` semantics, never the ~99 position-hidden ghost rows) is unstamped and
- * younger than the age ceiling. Human-owned threads are NEVER reviewed — the human owns the words.
+ * Actors that are US, not a person. A draft carrying one of these names was machine-written, so
+ * reviewing it takes nothing away from anybody. "Claude review" is machine-written too but is
+ * handled separately below — reviewing our own rewrite is the self-review loop, not a safety rule.
+ */
+export const MACHINE_DRAFT_ACTORS = new Set(["Auto-redraft (thumbs-down)"]);
+
+/**
+ * Did a PERSON write this draft? The gate that matters is authorship, not thread ownership.
+ *
+ * MEASURED 2026-08-16 on the americanharley store, and the numbers are why this predicate exists:
+ * of 46 draft rows on human-mode threads since 8/1, **40 carried no actor at all (machine-written)
+ * and 3 more were "Auto-redraft (thumbs-down)" — but 3 were typed by Joe Hartrich.** All 46 share
+ * `provider: "draft_ai"`, so keying on the provider (the obvious fix) would have handed a human's
+ * own words to an automatic rewriter. Key on the ACTOR instead.
+ *
+ * FAIL DIRECTION: an unrecognised actor name reads as a PERSON, so we leave it alone. A missed
+ * review costs what today costs; rewriting words a human typed is the thing this must never do.
+ */
+export function draftIsMachineAuthored(draft: { actorUserName?: string | null } | null | undefined): boolean {
+  const actor = String(draft?.actorUserName ?? "").trim();
+  return !actor || MACHINE_DRAFT_ACTORS.has(actor);
+}
+
+/**
+ * Which conversations carry a draft this pass should review RIGHT NOW? Pure and executable: SMS
+ * threads whose CURRENT pending draft (the only row that is really pending —
+ * `getLatestPendingDraft` semantics, never the ~99 position-hidden ghost rows) is unstamped,
+ * younger than the age ceiling, and MACHINE-WRITTEN.
+ *
+ * This used to skip every `mode: "human"` thread, on the reasoning that "the human owns the words".
+ * That reasoning is right about a draft a human TYPED and wrong about the rows actually there:
+ * `conv.mode` says who owns the THREAD, not who wrote the DRAFT. MEASURED 2026-08-16: since 8/1,
+ * **52 machine-written drafts landed on human-mode threads against 55 everywhere else — about half
+ * of all machine-drafted volume — and human-mode threads carried 0 reviewer receipts against 9.**
+ * Three consecutive backstop ticks caught real defects there that went note-only, including a draft
+ * telling Igor `+17164442120` "I saw you want to do the Jumpstart experience" on a thread where he
+ * has never sent a single message. Those drafts sit in the staff approval box read by nobody, while
+ * the identical draft on a suggest thread is read within ~60s.
+ *
+ * The skip now keys on authorship, so a human's typed draft stays untouched on ANY thread — which is
+ * the protection the old rule was reaching for, applied to the right thing.
  */
 export function selectDraftsForClaudeReview(args: {
   conversations: Conversation[];
@@ -63,10 +100,6 @@ export function selectDraftsForClaudeReview(args: {
   const out: Array<{ conv: Conversation; draft: Message }> = [];
   for (const conv of args.conversations) {
     if (out.length >= maxPerTick) break;
-    if (String(conv?.mode ?? "").toLowerCase() === "human") continue;
-    // Never review our own superseding rewrite — a rewrite is a new unstamped pending draft, and
-    // without this the next tick examines it (in theory forever, one call per minute).
-    // (actorUserName is stamped by saveOperatorDraft.)
     if (String(conv?.status ?? "").toLowerCase() === "closed") continue;
     const draft = getLatestPendingDraft(conv);
     if (!draft) continue;
@@ -79,7 +112,14 @@ export function selectDraftsForClaudeReview(args: {
     const age = args.nowMs - atMs;
     if (age < 0 || age > maxAgeMs) continue;
     if (!String(draft.body ?? "").trim()) continue;
+    // Never review our own superseding rewrite — a rewrite is a new unstamped pending draft, and
+    // without this the next tick examines it (in theory forever, one call per minute).
+    // (actorUserName is stamped by saveOperatorDraft.)
     if (String((draft as any).actorUserName ?? "") === "Claude review") continue;
+    // A draft a PERSON typed is theirs, on any thread. This replaced the old `conv.mode === "human"`
+    // skip, which read thread ownership as draft authorship and left ~half of all machine-written
+    // drafts reviewed by nobody. See draftIsMachineAuthored for the measurement.
+    if (!draftIsMachineAuthored(draft as any)) continue;
     out.push({ conv, draft });
   }
   return out;
