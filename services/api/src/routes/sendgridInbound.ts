@@ -13,6 +13,7 @@ import {
   modelDiscontinuationReplyEnabled
 } from "../domain/modelDiscontinuation.js";
 import { decideWatchYearPin, decideWatchConditionPin } from "../domain/watchYearPin.js";
+import { isVehicleFactKeywordFallbackAllowed } from "../domain/vehicleFactQuestionRoute.js";
 import {
   buildWalkInSoftTimingAsk,
   customerVisitConfirmed,
@@ -116,7 +117,6 @@ import {
   parseVehicleInfoRequestWithLLM,
   parseVehicleFactQuestionWithLLM,
   parseAffectWithLLM,
-  isVehicleFactQuestionParserConfidentNone,
   parseFirstTimeRiderGuidanceWithLLM,
   parseWalkInOutcomeWithLLM,
   parseAdfDepartmentInterestWithLLM,
@@ -3208,27 +3208,16 @@ function resolveAdfVehicleFactDecision(
     };
   }
 
-  // Parser-first (mirror of resolveVehicleFactQuestionDecision, adf_ref_11422 replay miss):
-  // a confident parser "none" suppresses the keyword fallback below so a parts NEED like
-  // "I need a front tire" never gets the service-RECORDS canned reply. Null/low-confidence
-  // parse (parser outage) skips this guard — the keyword fallback stays as the outage fail-safe.
-  if (
-    isVehicleFactQuestionParserConfidentNone(
-      parsed,
-      Number(process.env.LLM_VEHICLE_FACT_CONFIDENCE_MIN ?? 0.74)
-    )
-  ) {
-    return null;
-  }
-
+  // Parser-first: same referee as the SMS door (index.ts resolveVehicleFactQuestionDecision), so
+  // the two lanes cannot drift — isVehicleFactKeywordFallbackAllowed
+  // (domain/vehicleFactQuestionRoute) carries both the adf_ref_11422 confident-"none" rule and
+  // the explicitRequest:false rule.
   const lower = String(text ?? "").toLowerCase().trim();
   if (!lower) return null;
-  const fallback = (questionType: AdfVehicleFactDecision["questionType"], requestedFields: string[]) => ({
-    questionType,
-    requestedFields,
-    confidence: 0,
-    source: "fallback" as const
-  });
+  const fallback = (questionType: AdfVehicleFactDecision["questionType"], requestedFields: string[]) =>
+    isVehicleFactKeywordFallbackAllowed({ parsed, candidateQuestionType: questionType })
+      ? { questionType, requestedFields, confidence: 0, source: "fallback" as const }
+      : null;
   if (
     /\b(?:qualif(?:y|ies)|eligible|eligibility)\b[\s\S]{0,80}\b(?:apr|interest|rate|finance|financing|program|special)\b/.test(lower) ||
     /\b(?:apr|interest|rate|finance|financing|program|special)\b[\s\S]{0,80}\b(?:qualif(?:y|ies)|eligible|eligibility)\b/.test(lower)

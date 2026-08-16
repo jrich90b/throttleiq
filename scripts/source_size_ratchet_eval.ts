@@ -434,7 +434,12 @@ const CEILINGS: Ceiling[] = [
     // two more dealerIntakeMail.ts handlers + one-line routes, funded by requireManagerAccess:
     // 5 of the 44(!) hand-copied "manager or canViewAllTasks" blocks in the dealer-setups family
     // collapsed into the shared middleware. 39 copies remain as future funding.
-    max: 70_310,
+    // 70_310 -> 70_296. The vehicle-fact parser-vs-keyword tie-break (+14805441825) moved into
+    // domain/vehicleFactQuestionRoute.ts. index.ts pays one line for the import and folds its
+    // 8-line inline confident-none block into the fallback factory it already had, so the slice
+    // funds itself — and the ADF door (routes/sendgridInbound.ts) drops its duplicate copy of the
+    // same guard at the same time. Two doors, one referee.
+    max: 70_296,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
