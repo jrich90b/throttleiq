@@ -106,6 +106,15 @@ exposure; changes to this charter's boundary rules.
   demo rides): customer-sourced facts only; ADF form fields are not the customer speaking.
   *(7/19 #3; fabricated-frame class; GLA demo-ride 7/29 refinement: lead source alone never
   proves a ride happened)*
+- **C1.4a** …with ONE named exception, and it is not a form field the customer filled in: a
+  **Dealer Lead App** record's `Demo Bikes Ridden` naming a specific bike is the SALESPERSON's
+  own log of an interaction, so it IS evidence the ride happened and a draft may thank them for
+  it. Nothing else earns this — not the interest model, not the lead source, not a sale or a
+  credit app. *(Joe 8/11: "Dealer lead app are walk ins"; live in code as
+  `visitFraming.dealerRecordedDemoRide`. Measured 8/16: of 92 records carrying the field, 24
+  name a DIFFERENT bike than the interest model — it is curated by a person, not echoed from
+  the lead. Written down 8/16 because C1.4 alone had the draft reviewer repeatedly calling a
+  correct Dealer Lead App thank-you a fabrication: +17165241170 twice in two days.)*
 - **C1.5** Answer, don't hedge/deflect: a direct question gets a direct answer or an honest
   named handoff — never a vague "I'll check and follow up" when the data is on hand.
   *(answer-don't-hedge program; 7/24 #5 open-ask "honest bail")*
