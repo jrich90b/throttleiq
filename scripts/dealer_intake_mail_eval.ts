@@ -55,6 +55,10 @@ function answers(overrides: Partial<DealerIntakeAnswers> = {}): DealerIntakeAnsw
     emailHostProvider: "",
     googleBusinessProfile: "",
     socialMedia: [],
+    consoleUsers: [],
+    outboundEmailIdentity: "",
+    calendarGoogleAccount: "",
+    privacyPolicyUrl: "",
     tonePreferences: "",
     neverSay: [],
     unansweredQuestions: [],
@@ -246,6 +250,30 @@ ok("provider email counts as owed when blank; DNS/GBP/social do not", () => {
   assert.ok(!a.unansweredQuestions.some(q => /domain \/ DNS/i.test(q)));
   assert.ok(!a.unansweredQuestions.some(q => /Google Business Profile/i.test(q)));
   assert.ok(!a.unansweredQuestions.some(q => /social media/i.test(q)));
+});
+
+// --- Launch-completeness fields (Joe 8/16: console logins, outbound email, calendar, privacy) ---
+ok("form collects console users, outbound email, calendar account, privacy policy", () => {
+  const html = renderIntakeFormHtml({ dealerName: "Demo Dealer" });
+  for (const f of ["consoleUsers", "outboundEmailIdentity", "calendarGoogleAccount", "privacyPolicyUrl"]) {
+    assert.ok(html.includes(`name="${f}"`), `form must collect ${f}`);
+  }
+  assert.match(html, /never the password/i);
+});
+ok("launch-completeness answers land in notes; privacy policy blank does not nag", () => {
+  const block = buildIntakeNotesBlock(
+    answers({
+      consoleUsers: ["Sam Rider - sam@demo.example", "Earl Rider - earl@demo.example"],
+      outboundEmailIdentity: "sales@demo.example",
+      calendarGoogleAccount: "calendar@demo.example (Sam clicks Allow)"
+    })
+  );
+  assert.match(block, /^Console users: Sam Rider - sam@demo\.example; Earl Rider - earl@demo\.example$/m);
+  assert.match(block, /^Outbound email: sales@demo\.example$/m);
+  assert.match(block, /^Calendar Google account: calendar@demo\.example \(Sam clicks Allow\)$/m);
+  const a = parseIntakeFormSubmission({ legalName: "X LLC" });
+  assert.ok(a.unansweredQuestions.some(q => /console login/i.test(q)), "console users blank must be owed");
+  assert.ok(!a.unansweredQuestions.some(q => /privacy policy/i.test(q)), "privacy policy blank is normal, not owed");
 });
 
 console.log(`dealer_intake_mail:eval PASS (${passed} checks)`);

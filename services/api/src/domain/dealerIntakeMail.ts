@@ -115,6 +115,7 @@ export const INTAKE_QUESTIONS: Array<{ section: string; items: string[] }> = [
       "Primary contact for this setup (name, role, cell, email)",
       "Owner / General Manager (name, email)",
       "Salespeople whose names appear as the text-message sender (each: name + cell)",
+      "Everyone who needs a LeadRider console login (one per line: name + email)",
       "Who approves outgoing messages before they send?",
       "Who should be contacted after hours if something urgent comes up?"
     ]
@@ -144,13 +145,16 @@ export const INTAKE_QUESTIONS: Array<{ section: string; items: string[] }> = [
       "Who runs your website? (the company or person — your website provider)",
       "Best contact EMAIL for your website provider — we'll email them directly, with you CC'd, to add the technical records LeadRider needs (DNS) and the SMS consent wording on your web lead forms (the carriers require it before they approve your texting number).",
       "Who manages your domain / DNS, if different from the website provider?",
-      "Who hosts your business email? (e.g. Rackspace, Google Workspace, GoDaddy)"
+      "Who hosts your business email? (e.g. Rackspace, Google Workspace, GoDaddy)",
+      "What email address should messages to your customers come from (and reply to)? Note any logo or email signature you want used.",
+      "Link to the privacy policy page on your website, if you have one — carriers require one covering SMS consent; if you don't have it, your website provider will add it (we'll include it in our email to them)."
     ]
   },
   {
     section: "Google and social",
     items: [
       "Link to your Google Business Profile (your dealership's listing on Google Maps), and which Google account manages it — so we can eventually help you respond to reviews. Never send the password.",
+      "Which Google account runs the calendar where appointments should book (address only — never the password), and who at the store can click Allow when we connect it?",
       "Your social media accounts (one per line: platform + page name or URL) — for future integrations."
     ]
   },
@@ -266,6 +270,10 @@ export const DEALER_INTAKE_ANSWERS_JSON_SCHEMA = {
     emailHostProvider: { type: "string", description: "Who hosts the dealer's business email (e.g. Rackspace, Google Workspace)." },
     googleBusinessProfile: { type: "string", description: "Google Business Profile link and/or which Google account manages it. NEVER a password." },
     socialMedia: { type: "array", items: { type: "string" }, description: "Social accounts, one item per platform/page." },
+    consoleUsers: { type: "array", items: { type: "string" }, description: "Staff who need a LeadRider console login, one item per person (name + email as written)." },
+    outboundEmailIdentity: { type: "string", description: "The from/reply-to address for customer emails, plus any logo/signature notes." },
+    calendarGoogleAccount: { type: "string", description: "Google account that runs the booking calendar + who can click Allow. NEVER a password." },
+    privacyPolicyUrl: { type: "string", description: "Privacy policy page URL if one exists; empty if none." },
     tonePreferences: { type: "string" },
     neverSay: { type: "array", items: { type: "string" } },
     unansweredQuestions: { type: "array", items: { type: "string" }, description: "Questions the dealer left blank or clearly skipped." },
@@ -281,6 +289,7 @@ export const DEALER_INTAKE_ANSWERS_JSON_SCHEMA = {
     "closures", "crmProvider", "monthlyLeadVolume", "leadSources", "leadNotificationDestination",
     "inventoryFeedUrl", "inventoryFeedOwner", "websiteProvider", "websiteProviderEmail",
     "dnsManager", "emailHostProvider", "googleBusinessProfile", "socialMedia",
+    "consoleUsers", "outboundEmailIdentity", "calendarGoogleAccount", "privacyPolicyUrl",
     "tonePreferences", "neverSay", "unansweredQuestions", "extraNotes", "sensitiveDataWarning"
   ]
 } as const;
@@ -311,6 +320,10 @@ export type DealerIntakeAnswers = {
   emailHostProvider: string;
   googleBusinessProfile: string;
   socialMedia: string[];
+  consoleUsers: string[];
+  outboundEmailIdentity: string;
+  calendarGoogleAccount: string;
+  privacyPolicyUrl: string;
   tonePreferences: string;
   neverSay: string[];
   unansweredQuestions: string[];
@@ -430,6 +443,10 @@ export function buildIntakeNotesBlock(a: DealerIntakeAnswers): string {
   add("Email host", a.emailHostProvider);
   add("Google Business Profile", a.googleBusinessProfile);
   if (Array.isArray(a.socialMedia) && a.socialMedia.length) lines.push(`Social: ${a.socialMedia.join("; ")}`);
+  if (Array.isArray(a.consoleUsers) && a.consoleUsers.length) lines.push(`Console users: ${a.consoleUsers.join("; ")}`);
+  add("Outbound email", a.outboundEmailIdentity);
+  add("Calendar Google account", a.calendarGoogleAccount);
+  add("Privacy policy", a.privacyPolicyUrl);
   add("Tone", a.tonePreferences);
   if (Array.isArray(a.neverSay) && a.neverSay.length) lines.push(`Rules: ${a.neverSay.join("; ")}`);
   add("Intake extra", a.extraNotes);
@@ -584,6 +601,7 @@ const FORM_FIELDS: Array<{
   { name: "primaryContact", label: "Primary contact for this setup", hint: "Name, role, cell, email.", section: "People" },
   { name: "ownerGm", label: "Owner / General Manager", hint: "Name and email." },
   { name: "salespeople", label: "Salespeople who appear as the text-message sender", hint: "One per line: Name - cell number.", multiline: true, perLine: true },
+  { name: "consoleUsers", label: "Everyone who needs a LeadRider console login", hint: "One per line: Name - email address.", multiline: true, perLine: true },
   { name: "messageApprover", label: "Who approves outgoing messages before they send?" },
   { name: "afterHoursEscalation", label: "Who should be contacted after hours if something urgent comes up?" },
   { name: "salesHours", label: "Sales department hours", hint: "In your own words — \"9-6 weekdays, Sat till 3, closed Sunday\" is perfect.", multiline: true, section: "Hours" },
@@ -599,7 +617,10 @@ const FORM_FIELDS: Array<{
   { name: "websiteProviderEmail", label: "Best contact email for your website provider", hint: "We'll email them directly, with you CC'd, to add the technical records LeadRider needs (DNS) and the SMS consent wording on your web lead forms — the carriers require it before approving your texting number." },
   { name: "dnsManager", label: "Who manages your domain / DNS, if different?" },
   { name: "emailHostProvider", label: "Who hosts your business email?", hint: "E.g. Rackspace, Google Workspace, GoDaddy." },
+  { name: "outboundEmailIdentity", label: "What email address should messages to your customers come from?", hint: "The from/reply-to address customers see. Note any logo or email signature you want used." },
+  { name: "privacyPolicyUrl", label: "Privacy policy page on your website, if you have one", hint: "Carriers require one covering SMS consent. No page yet? Leave blank — your website provider will add it and we'll include it in our email to them." },
   { name: "googleBusinessProfile", label: "Your Google Business Profile", hint: "Link to your dealership's Google listing and/or which Google account manages it — so we can eventually help respond to reviews. Never the password.", section: "Google & social" },
+  { name: "calendarGoogleAccount", label: "Which Google account runs your appointment calendar?", hint: "Address only — never the password — plus who at the store can click Allow when we connect it." },
   { name: "socialMedia", label: "Social media accounts", hint: "One per line: platform + page name or URL — for future integrations.", multiline: true, perLine: true },
   { name: "tonePreferences", label: "How should messages to your customers sound?", hint: "Friendly, formal, short…", multiline: true, section: "Voice" },
   { name: "neverSay", label: "Anything we should NEVER say or promise in a message?", hint: "One per line.", multiline: true, perLine: true },
@@ -646,7 +667,9 @@ ${fields}
 
 // A blank in these fields is normal, not something the dealer "owes" — everything else
 // blank goes into the still-owed list the console task and intake step report.
-const OPTIONAL_FORM_FIELDS = new Set<string>(["extraNotes", "dbaName", "dnsManager", "googleBusinessProfile", "socialMedia"]);
+const OPTIONAL_FORM_FIELDS = new Set<string>([
+  "extraNotes", "dbaName", "dnsManager", "googleBusinessProfile", "socialMedia", "privacyPolicyUrl"
+]);
 
 // Deterministic mapping of the LABELED form fields — no LLM needed: the form itself
 // disambiguates which answer is which. Free-text values stay verbatim.
@@ -687,6 +710,10 @@ export function parseIntakeFormSubmission(body: Record<string, unknown>): Dealer
     emailHostProvider: text("emailHostProvider"),
     googleBusinessProfile: text("googleBusinessProfile"),
     socialMedia: lines("socialMedia"),
+    consoleUsers: lines("consoleUsers"),
+    outboundEmailIdentity: text("outboundEmailIdentity"),
+    calendarGoogleAccount: text("calendarGoogleAccount"),
+    privacyPolicyUrl: text("privacyPolicyUrl"),
     tonePreferences: text("tonePreferences"),
     neverSay: lines("neverSay"),
     unansweredQuestions: FORM_FIELDS.filter(f => !OPTIONAL_FORM_FIELDS.has(f.name) && !text(f.name)).map(f => f.label),
