@@ -49,6 +49,8 @@ async function main(): Promise<void> {
     messageAsksSomething,
     laneHasNoLadderByDesign,
     laneIsRelayByDesign,
+    laneFixBoundary,
+    LADDER_FIX_BOUNDARIES,
     LADDER_MIN_RECENT_LEADS
   } = await import("../services/api/src/domain/ladderHealth.ts");
 
@@ -401,6 +403,96 @@ async function main(): Promise<void> {
     conversations: Array.from({ length: 12 }, (_, i) => lead("Lane Feed", 3 + i, { unreachable: true }))
   , now: NOW }).lanes.find(l => l.source === "Lane Feed")!;
   assert.equal(unreachableLane.alarm, "uncontactable", "a feed defect keeps its diagnosis — it is checked first for a reason");
+
+  // --- (7) A LANE WHOSE LADDER ALREADY SHIPPED --------------------------------------------------
+  // `never_asks` reads "may have no ladder — write the copy". Once a fix ships, the 30-day window
+  // still holds mostly PRE-FIX turns, so the lane keeps alarming with a diagnosis that has become
+  // false. MEASURED on Traffic Log Pro: three consecutive agent-loop ticks (2026-08-16 00:15Z,
+  // 04:15Z, 08:15Z) each re-derived by hand that the alarm was built entirely on pre-fix turns.
+  //
+  // This is NOT a suppression, and these assertions are what hold that line: the lane still alarms,
+  // and the moment there IS post-fix evidence the alarm goes BACK to never_asks with INERT wording.
+
+  // (7a) INVARIANT ON THE DECLARED LIST ITSELF. A typo'd date silently disables the boundary and the
+  //      lane would quietly go back to the wrong diagnosis — the failure would be invisible.
+  for (const b of LADDER_FIX_BOUNDARIES) {
+    assert.ok(
+      Number.isFinite(Date.parse(b.shippedAt)),
+      `every LADDER_FIX_BOUNDARIES entry needs a parseable shippedAt (${b.what})`
+    );
+    assert.ok(b.what.trim().length > 0, "every boundary must state WHICH fix shipped");
+  }
+  assert.equal(laneFixBoundary("Some Undeclared Lane"), null, "an undeclared lane has no boundary");
+
+  // (7b) The fixtures below are dated relative to a REAL declared boundary, so they stay clock-safe
+  //      and cannot go red at midnight. This couples the eval to Traffic Log Pro being declared —
+  //      deliberately: removing that boundary should fail here and make someone repoint the test.
+  const tlpBoundary = laneFixBoundary("Traffic Log Pro");
+  assert.ok(tlpBoundary, "Traffic Log Pro must carry a fix boundary — the fixtures below are dated off it");
+  const FIX_AT = Date.parse(tlpBoundary!.shippedAt);
+  const DAY = 24 * 60 * 60 * 1000;
+  const SHIPPED_NOW = FIX_AT + 10 * DAY; // inside the 30d recent window, comfortably after the fix
+  const leadAt = (source: string, atMs: number, opts: { asks?: boolean } = {}) => ({
+    id: `c_${source}_${atMs}_${Math.random()}`,
+    createdAt: new Date(atMs).toISOString(),
+    lead: { source, phone: "+17165550101" },
+    messages: [
+      {
+        direction: "out",
+        at: new Date(atMs).toISOString(),
+        body: opts.asks ? "Thanks — want to stop back in this week?" : "Thanks for stopping in, I'll follow up."
+      }
+    ]
+  });
+
+  // (7c) ZERO post-fix touches ⇒ the new class. Still an alarm; it just stops saying "write the copy".
+  const preFixOnly = Array.from({ length: 10 }, (_, i) => leadAt("Traffic Log Pro", FIX_AT - (5 + i) * 0.1 * DAY));
+  const unexercised = assessLadderHealth({ conversations: preFixOnly, now: SHIPPED_NOW })
+    .lanes.find(l => l.source === "Traffic Log Pro")!;
+  assert.equal(unexercised.alarm, "ladder_shipped_unexercised", "a shipped-but-unexercised ladder gets its own class");
+  assert.equal(unexercised.recent.agentFirstTouchesSinceFix, 0, "…on zero post-fix evidence");
+  assert.ok(unexercised.why.includes("already shipped"), "…and the row says the copy already exists");
+  assert.ok(
+    unexercised.why.includes("Do not write new copy"),
+    "…and tells the next run not to rebuild it — the whole point of the class"
+  );
+  assert.ok(
+    !unexercised.why.includes("may have no ladder"),
+    "…and must NOT still carry the build-a-ladder diagnosis"
+  );
+
+  // (7d) THE LOUD CASE, and the reason this is a split rather than a suppression. Once post-fix
+  //      touches exist and STILL nothing asks, the shipped fix looks inert — the #721 failure mode.
+  const exercisedSilent = [...preFixOnly, ...Array.from({ length: 3 }, (_, i) => leadAt("Traffic Log Pro", FIX_AT + (1 + i) * DAY))];
+  const inert = assessLadderHealth({ conversations: exercisedSilent, now: SHIPPED_NOW })
+    .lanes.find(l => l.source === "Traffic Log Pro")!;
+  assert.equal(inert.alarm, "never_asks", "post-fix silence is a REAL finding again, not the quiet class");
+  assert.equal(inert.recent.agentFirstTouchesSinceFix, 3, "…and the post-fix denominator is counted");
+  assert.ok(inert.why.includes("INERT"), "…and the row names the shipped-but-inert failure mode");
+
+  // (7e) Post-fix touches that DO ask ⇒ the ladder works. No alarm at all.
+  const working = [...preFixOnly, ...Array.from({ length: 3 }, (_, i) => leadAt("Traffic Log Pro", FIX_AT + (1 + i) * DAY, { asks: true }))];
+  const ladderWorks = assessLadderHealth({ conversations: working, now: SHIPPED_NOW })
+    .lanes.find(l => l.source === "Traffic Log Pro")!;
+  assert.equal(ladderWorks.alarm, null, "a ladder that asks after its fix is silent");
+
+  // (7e2) A REPORT DATED BEFORE THE FIX reads exactly as it read at the time. Caught by this eval
+  //       while it was being written: without this guard, re-running the sweep over an older window
+  //       retroactively relabelled a lane whose copy genuinely did not exist yet — rewriting history
+  //       to say the opposite of the truth.
+  const beforeFix = assessLadderHealth({ conversations: preFixOnly, now: FIX_AT - DAY })
+    .lanes.find(l => l.source === "Traffic Log Pro")!;
+  assert.equal(beforeFix.alarm, "never_asks", "a report generated before the fix shipped is untouched");
+  assert.ok(beforeFix.why.includes("may have no ladder"), "…with the wording it had at the time");
+
+  // (7f) FAIL DIRECTION: an UNDECLARED lane is completely unchanged by any of this.
+  const undeclared = assessLadderHealth({
+    conversations: Array.from({ length: 10 }, (_, i) => leadAt("Lane Undeclared", FIX_AT - (5 + i) * 0.1 * DAY)),
+    now: SHIPPED_NOW
+  }).lanes.find(l => l.source === "Lane Undeclared")!;
+  assert.equal(undeclared.alarm, "never_asks", "no boundary declared ⇒ exactly today's behaviour");
+  assert.ok(undeclared.why.includes("may have no ladder"), "…with exactly today's wording");
+  assert.equal(undeclared.recent.agentFirstTouchesSinceFix, 0, "…and the new counter stays 0 and unread");
 
   // --- a lead with no source still gets counted, never dropped ----------------------------------
   const noSource = assessLadderHealth({ conversations: [{ createdAt: daysAgo(2), messages: [] }], now: NOW });
