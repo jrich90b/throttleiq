@@ -439,7 +439,7 @@ const CEILINGS: Ceiling[] = [
     // 8-line inline confident-none block into the fallback factory it already had, so the slice
     // funds itself — and the ADF door (routes/sendgridInbound.ts) drops its duplicate copy of the
     // same guard at the same time. Two doors, one referee.
-    // 70_296 -> __RATCHET__. The sold sale-record referee (+17166970787). The ceiling caught this
+    // 70_296 -> 70_276. The sold sale-record referee (+17166970787). The ceiling caught this
     // slice at +3 and paid for the better shape: the console-header outcome branch and the
     // todo-outcome branch each carried a byte-identical five-line construction of the
     // appointment-outcome sale record, so BOTH copies moved into `applyAppointmentOutcomeSoldSale`
@@ -448,7 +448,7 @@ const CEILINGS: Ceiling[] = [
     // THIRD time on this branch): authored at 70_336 -> 70_316, re-derived to 70_297 after the
     // intake-email slice, and now measured again on top of the vehicle-fact slice. Taking any
     // earlier number would have handed a previous reduction back.
-    max: __RATCHET__,
+    max: 70_276,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
