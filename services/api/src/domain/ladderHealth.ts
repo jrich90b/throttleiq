@@ -106,6 +106,12 @@ export type LadderWindowCounts = {
    */
   staffFirstTouches: number;
   /**
+   * Agent-owned first touches delivered at or after this lane's declared fix boundary — i.e. the
+   * only turns that can say anything about whether the shipped ladder works. Left at 0 on every
+   * lane with no boundary declared, where it is never read. See `LADDER_FIX_BOUNDARIES`.
+   */
+  agentFirstTouchesSinceFix: number;
+  /**
    * Leads that never received a customer-facing message at all. NOT a ladder failure: a rung that was
    * never sent cannot ask anything, and the fix is upstream of the wording.
    */
@@ -125,6 +131,7 @@ export type LadderLaneHealth = {
   alarm:
     | "ask_rate_collapsed"
     | "never_asks"
+    | "ladder_shipped_unexercised"
     | "uncontactable"
     | "staff_owned_first_touch"
     | "relay_task_missing"
@@ -200,6 +207,60 @@ export const NO_LADDER_LANES: { pattern: RegExp; why: string }[] = [
 
 export function laneHasNoLadderByDesign(source: string): string | null {
   return NO_LADDER_LANES.find(l => l.pattern.test(source))?.why ?? null;
+}
+
+/**
+ * LANES WHOSE LADDER HAS ALREADY SHIPPED — the boundary their evidence must be read against.
+ *
+ * ── THE PROBLEM THIS SOLVES ───────────────────────────────────────────────────────────────────
+ * `never_asks` means "this lane may have no ladder — a BUILD candidate, write the copy". That is
+ * the right reading only while no copy exists. Once a fix ships, the 30-day window still holds
+ * mostly PRE-FIX turns, so the lane keeps alarming with a diagnosis that has become false, and the
+ * alarm still says "write the copy" — for copy that is already written and deployed.
+ *
+ * MEASURED on `Traffic Log Pro`: PR #702 (`579b8078`, deployed 2026-08-14T02:15Z) wired
+ * `appendWalkInFirstTouchAsk` into the walk-in first touch. Three consecutive agent-loop ticks
+ * (2026-08-16 00:15Z, 04:15Z, 08:15Z) each re-derived from scratch that the alarm was built
+ * entirely on pre-fix turns, and each spent real effort doing it. Since that deploy the lane has
+ * had exactly ONE inbound — step 9 (SOLD BIKE), correctly outside the 1-4 first-touch band, and
+ * staff-typed besides. Zero graded evidence either way.
+ *
+ * ── THIS IS NOT A SUPPRESSION, AND THE DIFFERENCE IS THE WHOLE POINT ──────────────────────────
+ * `NO_LADDER_LANES` silences a lane forever. This silences nothing. It splits one alarm into two,
+ * on a fact the instrument can check for itself:
+ *   - ZERO agent-owned first touches since the fix shipped ⇒ `ladder_shipped_unexercised`. Still an
+ *     alarm, still printed; it just stops saying "write the copy" about copy that already exists.
+ *   - SOME agent-owned first touches since the fix, and still nothing asked ⇒ it stays `never_asks`,
+ *     and the text now says the shipped fix looks INERT. That is the loud case, and today it is
+ *     indistinguishable from the quiet one.
+ * That second half is the reason to build this rather than declare the lane silent: an inert fix is
+ * the failure mode that bit #721 (shipped, then overwritten by a later writer) and nearly bit #725.
+ * This turns a permanently-noisy alarm into a detector for exactly that.
+ *
+ * ── FAIL DIRECTION ────────────────────────────────────────────────────────────────────────────
+ * Safe in every direction. No boundary declared, an unparseable date, or a date old enough that
+ * post-fix touches exist ⇒ the lane alarms exactly as it does today. A boundary can only ever
+ * reclassify a lane with LITERALLY ZERO graded evidence since its fix — a window in which no claim
+ * about the copy is possible anyway. It cannot silence a lane that has been exercised.
+ *
+ * ⚠️ Same discipline as `NO_LADDER_LANES`: an entry here is a claim that a fix SHIPPED, so it
+ * carries the PR and the deploy timestamp. Verify the fix is live before adding one — a boundary
+ * dated to a fix that was later reverted would read post-fix silence as "not exercised yet" forever.
+ */
+export const LADDER_FIX_BOUNDARIES: { pattern: RegExp; shippedAt: string; what: string }[] = [
+  {
+    pattern: /^traffic log pro/i,
+    shippedAt: "2026-08-14T02:15:00Z",
+    what: "PR #702 (579b8078) wired appendWalkInFirstTouchAsk into the walk-in first touch"
+  }
+];
+
+export function laneFixBoundary(source: string): { shippedAt: string; what: string } | null {
+  const hit = LADDER_FIX_BOUNDARIES.find(l => l.pattern.test(source));
+  if (!hit) return null;
+  // An unparseable date must not create a boundary — that would silently reclassify a lane on a
+  // typo. No usable timestamp ⇒ behave exactly as if nothing had been declared.
+  return Number.isFinite(Date.parse(hit.shippedAt)) ? { shippedAt: hit.shippedAt, what: hit.what } : null;
 }
 
 /**
@@ -308,6 +369,7 @@ function emptyCounts(): LadderWindowCounts {
     relayHandedToStaff: 0,
     agentFirstTouches: 0,
     staffFirstTouches: 0,
+    agentFirstTouchesSinceFix: 0,
     neverTexted: 0
   };
 }
@@ -386,6 +448,15 @@ export function assessLadderHealth(input: {
       // (`originalDraftBody` present, which is what keeps an edited draft on our side of the line).
       counts.agentFirstTouches += 1;
       if (messageAsksSomething(firstOut.body)) counts.asked += 1;
+      // Only turns delivered at or after this lane's declared fix can say anything about whether the
+      // shipped ladder works. An undeclared lane has no boundary and this stays 0, unread.
+      const boundary = laneFixBoundary(source);
+      if (boundary) {
+        const deliveredAt = Date.parse(String(firstOut?.at ?? ""));
+        if (Number.isFinite(deliveredAt) && deliveredAt >= Date.parse(boundary.shippedAt)) {
+          counts.agentFirstTouchesSinceFix += 1;
+        }
+      }
     }
 
     const firstOutAt = Date.parse(String(firstOut?.at ?? ""));
@@ -407,6 +478,12 @@ export function assessLadderHealth(input: {
 
     const byDesign = laneHasNoLadderByDesign(source);
     const relayWhy = laneIsRelayByDesign(source);
+    const declaredFix = laneFixBoundary(source);
+    // A boundary only applies to a report generated AFTER the fix shipped. Re-running the sweep over
+    // an older window (or replaying a past date) must read exactly as it read at the time — at that
+    // moment the copy genuinely did not exist yet, so `never_asks` was the correct diagnosis and
+    // reclassifying it retroactively would rewrite history to say the opposite.
+    const fixBoundary = declaredFix && nowMs >= Date.parse(declaredFix.shippedAt) ? declaredFix : null;
     if (byDesign) {
       why = `no ladder by design: ${byDesign}`;
     } else if (relayWhy) {
@@ -475,15 +552,39 @@ export function assessLadderHealth(input: {
       } else if (
         w.recent.leads >= LADDER_MIN_NEVER_ASKS_LEADS &&
         w.recent.asked === 0 &&
+        w.baseline.asked === 0 &&
+        fixBoundary &&
+        w.recent.agentFirstTouchesSinceFix === 0
+      ) {
+        // The ladder EXISTS and shipped; the window simply predates it. Checked BEFORE never_asks for
+        // the same reason `uncontactable` and `staff_owned_first_touch` are: this lane obviously never
+        // asked in a window that ended before the copy existed, and whichever test runs first owns the
+        // diagnosis. Still an alarm — an unexercised lane is worth a line — but it must not send the
+        // next run to write copy that is already deployed. See LADDER_FIX_BOUNDARIES.
+        alarm = "ladder_shipped_unexercised";
+        why =
+          `the ladder for this lane already shipped — ${fixBoundary.what}, live ${fixBoundary.shippedAt} — and NOT ONE ` +
+          `agent-owned first touch has landed since. Every one of the ${w.recent.agentFirstTouches} graded touches in ` +
+          `this window predates the fix, so this number cannot say whether it works. Do not write new copy; wait for traffic`;
+      } else if (
+        w.recent.leads >= LADDER_MIN_NEVER_ASKS_LEADS &&
+        w.recent.asked === 0 &&
         w.baseline.asked === 0
       ) {
         // Not a break — a lane that never had a ladder at all.
         alarm = "never_asks";
-        why =
-          `${w.recent.agentFirstTouches} agent-owned first touches and not one asked anything — this lane may have no ladder` +
-          (w.recent.staffFirstTouches || w.recent.neverTexted
-            ? ` (of ${w.recent.leads} leads, ${w.recent.staffFirstTouches} were staff-typed and ${w.recent.neverTexted} never texted — neither is graded)`
-            : "");
+        why = fixBoundary
+          ? // A fix shipped, the lane HAS been exercised since, and still nothing asked. This is the
+            // loud case: the deployed ladder looks INERT (the #721 failure mode — shipped, wired, and
+            // silently overridden downstream). Reproduce by executing the fix's own path before
+            // writing anything new.
+            `${w.recent.agentFirstTouchesSinceFix} agent-owned first touches have landed since ${fixBoundary.what} ` +
+            `went live ${fixBoundary.shippedAt}, and not one asked anything — the shipped ladder looks INERT. ` +
+            `Execute its path against a real lead before writing new copy`
+          : `${w.recent.agentFirstTouches} agent-owned first touches and not one asked anything — this lane may have no ladder` +
+            (w.recent.staffFirstTouches || w.recent.neverTexted
+              ? ` (of ${w.recent.leads} leads, ${w.recent.staffFirstTouches} were staff-typed and ${w.recent.neverTexted} never texted — neither is graded)`
+              : "");
       }
     }
     out.push({ source, noLadderByDesign: byDesign, relayByDesign: relayWhy, recent: w.recent, baseline: w.baseline, askRateRecent, askRateBaseline, alarm, why });
