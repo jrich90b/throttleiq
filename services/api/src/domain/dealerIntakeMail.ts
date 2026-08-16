@@ -139,6 +139,22 @@ export const INTAKE_QUESTIONS: Array<{ section: string; items: string[] }> = [
     ]
   },
   {
+    section: "Your website and email providers",
+    items: [
+      "Who runs your website? (the company or person — your website provider)",
+      "Best contact EMAIL for your website provider — we'll email them directly, with you CC'd, to add the technical records LeadRider needs (DNS) and the SMS consent wording on your web lead forms (the carriers require it before they approve your texting number).",
+      "Who manages your domain / DNS, if different from the website provider?",
+      "Who hosts your business email? (e.g. Rackspace, Google Workspace, GoDaddy)"
+    ]
+  },
+  {
+    section: "Google and social",
+    items: [
+      "Link to your Google Business Profile (your dealership's listing on Google Maps), and which Google account manages it — so we can eventually help you respond to reviews. Never send the password.",
+      "Your social media accounts (one per line: platform + page name or URL) — for future integrations."
+    ]
+  },
+  {
     section: "Voice",
     items: [
       "How should messages to your customers sound? (friendly, formal, short, …)",
@@ -244,6 +260,12 @@ export const DEALER_INTAKE_ANSWERS_JSON_SCHEMA = {
     leadNotificationDestination: { type: "string" },
     inventoryFeedUrl: { type: "string" },
     inventoryFeedOwner: { type: "string" },
+    websiteProvider: { type: "string", description: "Company/person who runs the dealer's website." },
+    websiteProviderEmail: { type: "string", description: "Contact email for the website provider (used to request DNS records + SMS consent wording, dealer CC'd)." },
+    dnsManager: { type: "string", description: "Who manages the domain/DNS if different from the website provider." },
+    emailHostProvider: { type: "string", description: "Who hosts the dealer's business email (e.g. Rackspace, Google Workspace)." },
+    googleBusinessProfile: { type: "string", description: "Google Business Profile link and/or which Google account manages it. NEVER a password." },
+    socialMedia: { type: "array", items: { type: "string" }, description: "Social accounts, one item per platform/page." },
     tonePreferences: { type: "string" },
     neverSay: { type: "array", items: { type: "string" } },
     unansweredQuestions: { type: "array", items: { type: "string" }, description: "Questions the dealer left blank or clearly skipped." },
@@ -257,8 +279,9 @@ export const DEALER_INTAKE_ANSWERS_JSON_SCHEMA = {
     "legalName", "dbaName", "address", "website", "mainPhone", "primaryContact", "ownerGm",
     "salespeople", "messageApprover", "afterHoursEscalation", "salesHours", "serviceHours",
     "closures", "crmProvider", "monthlyLeadVolume", "leadSources", "leadNotificationDestination",
-    "inventoryFeedUrl", "inventoryFeedOwner", "tonePreferences", "neverSay",
-    "unansweredQuestions", "extraNotes", "sensitiveDataWarning"
+    "inventoryFeedUrl", "inventoryFeedOwner", "websiteProvider", "websiteProviderEmail",
+    "dnsManager", "emailHostProvider", "googleBusinessProfile", "socialMedia",
+    "tonePreferences", "neverSay", "unansweredQuestions", "extraNotes", "sensitiveDataWarning"
   ]
 } as const;
 
@@ -282,6 +305,12 @@ export type DealerIntakeAnswers = {
   leadNotificationDestination: string;
   inventoryFeedUrl: string;
   inventoryFeedOwner: string;
+  websiteProvider: string;
+  websiteProviderEmail: string;
+  dnsManager: string;
+  emailHostProvider: string;
+  googleBusinessProfile: string;
+  socialMedia: string[];
   tonePreferences: string;
   neverSay: string[];
   unansweredQuestions: string[];
@@ -395,6 +424,12 @@ export function buildIntakeNotesBlock(a: DealerIntakeAnswers): string {
   // "Inventory/export URL:", "Tone:" and "Rules:" lines out of notes.
   add("Inventory/export URL", a.inventoryFeedUrl);
   add("Inventory feed owner", a.inventoryFeedOwner);
+  add("Website provider", a.websiteProvider);
+  add("Website provider email", a.websiteProviderEmail);
+  add("DNS manager", a.dnsManager);
+  add("Email host", a.emailHostProvider);
+  add("Google Business Profile", a.googleBusinessProfile);
+  if (Array.isArray(a.socialMedia) && a.socialMedia.length) lines.push(`Social: ${a.socialMedia.join("; ")}`);
   add("Tone", a.tonePreferences);
   if (Array.isArray(a.neverSay) && a.neverSay.length) lines.push(`Rules: ${a.neverSay.join("; ")}`);
   add("Intake extra", a.extraNotes);
@@ -560,6 +595,12 @@ const FORM_FIELDS: Array<{
   { name: "leadNotificationDestination", label: "Where do lead notifications arrive today?", hint: "An inbox, the CRM, a phone…" },
   { name: "inventoryFeedUrl", label: "Inventory feed or export URL", hint: "The link your website/inventory provider gives you." },
   { name: "inventoryFeedOwner", label: "Who keeps that inventory feed up to date?" },
+  { name: "websiteProvider", label: "Who runs your website?", hint: "The company or person — your website provider.", section: "Your website & email providers" },
+  { name: "websiteProviderEmail", label: "Best contact email for your website provider", hint: "We'll email them directly, with you CC'd, to add the technical records LeadRider needs (DNS) and the SMS consent wording on your web lead forms — the carriers require it before approving your texting number." },
+  { name: "dnsManager", label: "Who manages your domain / DNS, if different?" },
+  { name: "emailHostProvider", label: "Who hosts your business email?", hint: "E.g. Rackspace, Google Workspace, GoDaddy." },
+  { name: "googleBusinessProfile", label: "Your Google Business Profile", hint: "Link to your dealership's Google listing and/or which Google account manages it — so we can eventually help respond to reviews. Never the password.", section: "Google & social" },
+  { name: "socialMedia", label: "Social media accounts", hint: "One per line: platform + page name or URL — for future integrations.", multiline: true, perLine: true },
   { name: "tonePreferences", label: "How should messages to your customers sound?", hint: "Friendly, formal, short…", multiline: true, section: "Voice" },
   { name: "neverSay", label: "Anything we should NEVER say or promise in a message?", hint: "One per line.", multiline: true, perLine: true },
   { name: "extraNotes", label: "Anything else we should know?", multiline: true }
@@ -603,6 +644,10 @@ ${fields}
 </div></body></html>`;
 }
 
+// A blank in these fields is normal, not something the dealer "owes" — everything else
+// blank goes into the still-owed list the console task and intake step report.
+const OPTIONAL_FORM_FIELDS = new Set<string>(["extraNotes", "dbaName", "dnsManager", "googleBusinessProfile", "socialMedia"]);
+
 // Deterministic mapping of the LABELED form fields — no LLM needed: the form itself
 // disambiguates which answer is which. Free-text values stay verbatim.
 export function parseIntakeFormSubmission(body: Record<string, unknown>): DealerIntakeAnswers {
@@ -636,9 +681,15 @@ export function parseIntakeFormSubmission(body: Record<string, unknown>): Dealer
     leadNotificationDestination: text("leadNotificationDestination"),
     inventoryFeedUrl: text("inventoryFeedUrl"),
     inventoryFeedOwner: text("inventoryFeedOwner"),
+    websiteProvider: text("websiteProvider"),
+    websiteProviderEmail: text("websiteProviderEmail"),
+    dnsManager: text("dnsManager"),
+    emailHostProvider: text("emailHostProvider"),
+    googleBusinessProfile: text("googleBusinessProfile"),
+    socialMedia: lines("socialMedia"),
     tonePreferences: text("tonePreferences"),
     neverSay: lines("neverSay"),
-    unansweredQuestions: FORM_FIELDS.filter(f => f.name !== "extraNotes" && f.name !== "dbaName" && !text(f.name)).map(f => f.label),
+    unansweredQuestions: FORM_FIELDS.filter(f => !OPTIONAL_FORM_FIELDS.has(f.name) && !text(f.name)).map(f => f.label),
     extraNotes: text("extraNotes"),
     sensitiveDataWarning: ""
   };

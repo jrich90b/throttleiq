@@ -49,6 +49,12 @@ function answers(overrides: Partial<DealerIntakeAnswers> = {}): DealerIntakeAnsw
     leadNotificationDestination: "",
     inventoryFeedUrl: "",
     inventoryFeedOwner: "",
+    websiteProvider: "",
+    websiteProviderEmail: "",
+    dnsManager: "",
+    emailHostProvider: "",
+    googleBusinessProfile: "",
+    socialMedia: [],
     tonePreferences: "",
     neverSay: [],
     unansweredQuestions: [],
@@ -206,6 +212,40 @@ ok("form submission keeps a normal phone number intact", () => {
   const a = parseIntakeFormSubmission({ mainPhone: "716-692-7200" });
   assert.equal(a.mainPhone, "716-692-7200");
   assert.equal(a.sensitiveDataWarning, "");
+});
+
+// --- Provider / Google / social intake (Joe 8/16: the Room 58 + Rackspace lesson) ---
+ok("form collects the website provider email with the CC'd-provider explanation", () => {
+  const html = renderIntakeFormHtml({ dealerName: "Demo Dealer" });
+  assert.ok(html.includes('name="websiteProviderEmail"'));
+  assert.match(html, /with you CC(?:&#039;|')d/i);
+  assert.match(html, /SMS consent wording/i);
+  assert.ok(html.includes('name="googleBusinessProfile"'));
+  assert.ok(html.includes('name="socialMedia"'));
+  assert.ok(html.includes('name="emailHostProvider"'));
+});
+ok("provider answers land in notes with their labels", () => {
+  const block = buildIntakeNotesBlock(
+    answers({
+      websiteProvider: "Room 58",
+      websiteProviderEmail: "support@room58.example",
+      emailHostProvider: "Rackspace",
+      googleBusinessProfile: "maps.google.com/demo-dealer",
+      socialMedia: ["Facebook: Demo Dealer", "Instagram: @demodealer"]
+    })
+  );
+  assert.match(block, /^Website provider: Room 58$/m);
+  assert.match(block, /^Website provider email: support@room58\.example$/m);
+  assert.match(block, /^Email host: Rackspace$/m);
+  assert.match(block, /^Google Business Profile: maps\.google\.com\/demo-dealer$/m);
+  assert.match(block, /^Social: Facebook: Demo Dealer; Instagram: @demodealer$/m);
+});
+ok("provider email counts as owed when blank; DNS/GBP/social do not", () => {
+  const a = parseIntakeFormSubmission({ legalName: "X LLC" });
+  assert.ok(a.unansweredQuestions.some(q => /contact email for your website provider/i.test(q)));
+  assert.ok(!a.unansweredQuestions.some(q => /domain \/ DNS/i.test(q)));
+  assert.ok(!a.unansweredQuestions.some(q => /Google Business Profile/i.test(q)));
+  assert.ok(!a.unansweredQuestions.some(q => /social media/i.test(q)));
 });
 
 console.log(`dealer_intake_mail:eval PASS (${passed} checks)`);
