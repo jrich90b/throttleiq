@@ -10063,7 +10063,20 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const drYear = String(drVehicle.year ?? "").trim();
     const drModel = String(drVehicle.model ?? drVehicle.description ?? "").trim();
     const drBikeLabel = [drYear, drModel].filter(Boolean).join(" ").trim() || null;
-    draft = buildDemoRideEventSoftInvite(drFirstName, drAgentName, drDealerName, drBikeLabel);
+    // Hand the builder the SAME two lane inputs the orchestrator and the redraft path hand it. It
+    // decides both lane questions itself, so passing them IS the parity — omitting them silently
+    // selected the pre-ruling copy on this chokepoint alone. Measured on the live store 2026-08-16:
+    // +18455515759 (7/28), +17169401820 (8/12) and +17169071289 (8/15) are all
+    // `GLA - Demo Ride - DAT` and all drafted "see one in person", two of them re-introducing the
+    // agent on a second demo-ride lead days after the first — the exact drafts Joe reported.
+    //   - leadSource    → Joe's 2026-08-15 DAT ruling: on that lane the ride DID happen, so stop
+    //     offering to show them a bike they have already ridden.
+    //   - alreadyTexted → Joe's 2026-07-23 no-re-introduction ruling. Counts only outbounds the
+    //     customer really RECEIVED, so an unsent draft can never suppress a genuine first intro.
+    draft = buildDemoRideEventSoftInvite(drFirstName, drAgentName, drDealerName, drBikeLabel, {
+      leadSource: conv.lead?.source,
+      alreadyTexted: hasCustomerReceivedOutbound(conv.messages)
+    });
   }
 
   // Sender/lead names for the initial-ADF ack overrides below. Hoisted so the three branches share

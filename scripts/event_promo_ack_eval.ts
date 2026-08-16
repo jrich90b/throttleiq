@@ -198,13 +198,36 @@ assert.ok(
 );
 
 // WIRING — a builder that reads the source proves nothing if a caller never passes it, and the
-// ratchet cannot see that (the "ratchet cannot prove wiring" trap). BOTH paths must hand it over:
-// the live ADF arrival (orchestrator) and the thumbs-down redraft (index). `.includes()` on purpose
-// — eval_source_pin_ratchet counts assertions containing an escaped paren.
+// ratchet cannot see that (the "ratchet cannot prove wiring" trap). ALL THREE chokepoints must hand
+// it over: the live ADF arrival (orchestrator), the initial-ADF draft (sendgridInbound) and the
+// thumbs-down redraft (index). `.includes()` on purpose — eval_source_pin_ratchet counts assertions
+// containing an escaped paren.
+//
+// ⚠️ This set shipped guarding only TWO of the three, and the third was the live defect: the
+// initial-ADF draft called the builder with NO options, so on that chokepoint alone `leadSource`
+// was undefined (→ the pre-ruling "see one in person" copy on a DAT lead) and `alreadyTexted` was
+// undefined (→ a full re-introduction on a repeat lead). The older assertion further down — "the
+// initial-ADF draft must override a demo_ride_event lead with the shared soft invite" — passed the
+// whole time, because CALLING the builder was all it checked. Measured on the live store
+// 2026-08-16: +18455515759 (7/28), +17169401820 (8/12) and +17169071289 (8/15) all drafted it.
 const orchestratorSrc = fs.readFileSync("services/api/src/domain/orchestrator.ts", "utf8");
 assert.ok(
   orchestratorSrc.includes("leadSource: ctx?.lead?.source") && orchestratorSrc.includes("alreadyTexted: !!ctx?.customerReceivedOutbound"),
   "the live ADF arrival path must pass BOTH the lead source and the already-texted signal"
+);
+// The WHOLE call, not the two keys separately: `leadSource: conv.lead?.source` appears elsewhere in
+// this file for unrelated calls, so a split assertion would go on passing with this call site
+// reverted to its no-options form — which is precisely the failure being fixed.
+const sendgridWiringSrc = fs.readFileSync("services/api/src/routes/sendgridInbound.ts", "utf8");
+const SENDGRID_DEMO_RIDE_CALL = [
+  "buildDemoRideEventSoftInvite(drFirstName, drAgentName, drDealerName, drBikeLabel, {",
+  "      leadSource: conv.lead?.source,",
+  "      alreadyTexted: hasCustomerReceivedOutbound(conv.messages)",
+  "    });"
+].join("\n");
+assert.ok(
+  sendgridWiringSrc.includes(SENDGRID_DEMO_RIDE_CALL),
+  "the initial-ADF draft path must pass BOTH the lead source and the already-texted signal"
 );
 // Every self-introduction shape this codebase actually emits (see buildAgentIntro /
 // buildPersonaSelfIntroPattern in agentVoice): the greeting opener, and the "it's/this is/I'm
