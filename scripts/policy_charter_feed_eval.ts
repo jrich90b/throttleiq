@@ -125,10 +125,23 @@ assert.ok(realRules!.includes("C1.8"), "the real charter states the DAT already-
 assert.ok(/never introduce again/i.test(realRules!), "C1.2a actually says not to re-introduce");
 assert.ok(/already ridden|already rode/i.test(realRules!), "C1.8 actually says not to offer a bike they rode");
 assert.ok(realRules!.includes("C1.7"), "the advancing-question rule still reaches the reviewer");
+// C1.4a — the carve-out that stops the reviewer calling a CORRECT thank-you a fabrication. C1.4
+// alone tells it "ADF form fields are not the customer speaking … demo rides", which had it flag
+// +17165241170 twice in two days over a Dealer Lead App "Demo Bikes Ridden" entry that Joe ruled
+// on 8/11 IS evidence of a ride (live in code as visitFraming.dealerRecordedDemoRide). A ruling
+// that lives only in code cannot reach an LLM reviewer — it has to be in the fed sections.
+assert.ok(realRules!.includes("C1.4a"), "the real charter carries the Dealer Lead App demo-ride exception");
+assert.ok(/demo bikes ridden/i.test(realRules!), "C1.4a names the field the exception turns on");
+assert.ok(/dealer lead app/i.test(realRules!), "C1.4a names the record type, so the reviewer can tell it from any other ADF");
+assert.ok(realRules!.includes("C1.4"), "the general no-fabricated-attribution rule stays alongside its exception");
+// The exception must reach the PROMPT, not merely the extract — the whole point of the feed.
+const promptWithCharter = buildClaudeDraftReviewSystemPrompt(realRules);
+assert.ok(promptWithCharter.includes("C1.4a"), "C1.4a reaches the reviewer system prompt");
+assert.ok(promptWithCharter.includes("NEVER drop a concrete fact"), "and the baked rules still survive beside it");
 assert.ok(!realRules!.includes("C3."), "cadence rules stay out of the reviewer's prompt");
 // Sections list is the contract the extractor is built on.
 assert.deepEqual([...REVIEW_RELEVANT_CHARTER_SECTIONS], ["C1", "C2"], "reviewer scope is C1 + C2 (plus the named C7 rule)");
-n += 8;
+n += 14;
 
 // --- 5) WIRING — the loader must actually be handed to the live API call. ---
 // Everything above can pass while the feature is completely inert: if reviewDraftWithClaude builds
