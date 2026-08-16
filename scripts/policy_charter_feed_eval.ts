@@ -130,4 +130,21 @@ assert.ok(!realRules!.includes("C3."), "cadence rules stay out of the reviewer's
 assert.deepEqual([...REVIEW_RELEVANT_CHARTER_SECTIONS], ["C1", "C2"], "reviewer scope is C1 + C2 (plus the named C7 rule)");
 n += 8;
 
+// --- 5) WIRING — the loader must actually be handed to the live API call. ---
+// Everything above can pass while the feature is completely inert: if reviewDraftWithClaude builds
+// its system prompt WITHOUT the loader, the charter never leaves the disk and the reviewer keeps
+// approving ruling-breaking drafts exactly as it did on 8/15. A sabotage that did precisely this
+// went undetected until this assertion existed. `.includes()` on purpose — eval_source_pin_ratchet
+// counts assertions containing an escaped paren.
+const reviewSrc = fs.readFileSync("services/api/src/domain/claudeDraftReview.ts", "utf8");
+assert.ok(
+  reviewSrc.includes("system: buildClaudeDraftReviewSystemPrompt(loadReviewRelevantCharterRules())"),
+  "the live review call must build its prompt FROM the charter loader, or the feed is dead code"
+);
+assert.ok(
+  reviewSrc.includes('from "./policyCharterFeed.js"'),
+  "claudeDraftReview must import the charter feed"
+);
+n += 2;
+
 console.log(`PASS policy charter feed eval (${n} assertions)`);
