@@ -448,7 +448,10 @@ const CEILINGS: Ceiling[] = [
     // THIRD time on this branch): authored at 70_336 -> 70_316, re-derived to 70_297 after the
     // intake-email slice, and now measured again on top of the vehicle-fact slice. Taking any
     // earlier number would have handed a previous reduction back.
-    max: 70_276,
+    // 70_276 -> 70_264. Phase 2 dealer DNS plan/apply arrived as domain/dealerDnsApply.ts with
+    // two one-line routes, funded by converting 4 more of the hand-copied manager blocks in the
+    // dealer-setups family to requireManagerAccess (35 copies remain as future funding).
+    max: 70_264,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

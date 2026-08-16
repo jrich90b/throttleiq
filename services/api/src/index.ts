@@ -590,6 +590,7 @@ import {
   moveEvent
 } from "./domain/googleCalendar.js";
 import { dealerIntakeSendInviteHandler, dealerIntakeStatusHandler, dealerIntakeFormPageHandler, dealerIntakeFormSubmitHandler, startDealerIntakeMailPollLoop } from "./domain/dealerIntakeMail.js";
+import { dealerDnsPlanHandler, dealerDnsApplyHandler } from "./domain/dealerDnsApply.js";
 import {
   generateCandidateSlots,
   expandBusyBlocks,
@@ -35750,11 +35751,7 @@ app.post("/active-clients/:id/stripe/sync", requirePermission("canAccessTodos"),
   }
 });
 
-app.get("/dealer-setups/:id/vercel", requirePermission("canAccessTodos"), async (req, res) => {
-  const user = (req as any).user ?? null;
-  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
-    return res.status(403).json({ ok: false, error: "manager required" });
-  }
+app.get("/dealer-setups/:id/vercel", requirePermission("canAccessTodos"), requireManagerAccess, async (req, res) => {
   const setup = await getDealerSetup(req.params.id);
   if (!setup) return res.status(404).json({ ok: false, error: "Dealer setup not found." });
   const status = getVercelAutomationStatus();
@@ -35763,11 +35760,7 @@ app.get("/dealer-setups/:id/vercel", requirePermission("canAccessTodos"), async 
   return res.json({ ok: true, configured: status.configured, projectId: status.projectId, teamId: status.teamId, domains });
 });
 
-app.post("/dealer-setups/:id/vercel/domains", requirePermission("canAccessTodos"), async (req, res) => {
-  const user = (req as any).user ?? null;
-  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
-    return res.status(403).json({ ok: false, error: "manager required" });
-  }
+app.post("/dealer-setups/:id/vercel/domains", requirePermission("canAccessTodos"), requireManagerAccess, async (req, res) => {
   const setup = await getDealerSetup(req.params.id);
   if (!setup) return res.status(404).json({ ok: false, error: "Dealer setup not found." });
   const appDomain = new URL(setup.appUrl).hostname;
@@ -35789,11 +35782,7 @@ function buildDealerDnsChecklist(setup: DealerSetup) {
   }));
 }
 
-app.post("/dealer-setups/:id/dns/checklist", requirePermission("canAccessTodos"), async (req, res) => {
-  const user = (req as any).user ?? null;
-  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
-    return res.status(403).json({ ok: false, error: "manager required" });
-  }
+app.post("/dealer-setups/:id/dns/checklist", requirePermission("canAccessTodos"), requireManagerAccess, async (req, res) => {
   const setup = await getDealerSetup(req.params.id);
   if (!setup) return res.status(404).json({ ok: false, error: "Dealer setup not found." });
   const deployment = buildDealerApiDeployment(setup);
@@ -35829,11 +35818,7 @@ app.post("/dealer-setups/:id/api/deploy-profile", requirePermission("canAccessTo
   return res.json({ ok: true, setup: updated ?? setup, deployment });
 });
 
-app.post("/dealer-setups/:id/runtime-package", requirePermission("canAccessTodos"), async (req, res) => {
-  const user = (req as any).user ?? null;
-  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
-    return res.status(403).json({ ok: false, error: "manager required" });
-  }
+app.post("/dealer-setups/:id/runtime-package", requirePermission("canAccessTodos"), requireManagerAccess, async (req, res) => {
   const setup = await getDealerSetup(req.params.id);
   if (!setup) return res.status(404).json({ ok: false, error: "Dealer setup not found." });
   const runtimePackage = buildDealerRuntimePackage(setup);
@@ -35851,6 +35836,9 @@ app.post("/dealer-setups/:id/intake/send-invite", requirePermission("canAccessTo
 app.get("/dealer-setups/:id/intake/status", requirePermission("canAccessTodos"), requireManager, dealerIntakeStatusHandler);
 app.get("/public/dealer-intake/:token", dealerIntakeFormPageHandler);
 app.post("/public/dealer-intake/:token", dealerIntakeFormSubmitHandler);
+// Dealer DNS plan/apply (Phase 2; apply flag-gated DEALER_DNS_APPLY_ENABLED) — domain/dealerDnsApply.ts.
+app.post("/dealer-setups/:id/dns/plan", requirePermission("canAccessTodos"), requireManagerAccess, dealerDnsPlanHandler);
+app.post("/dealer-setups/:id/dns/apply", requirePermission("canAccessTodos"), requireManagerAccess, dealerDnsApplyHandler);
 
 app.post("/dealer-setups/:id/launch-dry-run", requirePermission("canAccessTodos"), requireManagerAccess, async (req, res) => {
   const setup = await getDealerSetup(req.params.id);
