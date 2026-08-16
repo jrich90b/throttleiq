@@ -24,6 +24,7 @@ import {
   CLAUDE_DRAFT_REVIEW_TOOL_SCHEMA,
   buildClaudeDraftReviewSystemPrompt,
   claudeDraftReviewEnabled,
+  draftIsMachineAuthored,
   selectDraftsForClaudeReview
 } from "../services/api/src/domain/claudeDraftReview.ts";
 import { WORKER_MINUTE_LANE_TASKS, WORKER_TICK_TASKS } from "../services/api/src/domain/workerTasks.ts";
@@ -46,9 +47,45 @@ const FRESH_DRAFT = { direction: "out", provider: "draft_ai", body: "Great quest
   assert.equal(picks.length, 1, "a fresh unreviewed pending draft on an agent-mode thread is selected");
   assert.equal(String(picks[0].draft.id), "m_draft");
 }
+// --- THE GATE IS AUTHORSHIP, NOT THREAD OWNERSHIP (2026-08-16) -------------------------------
+// This used to skip every `mode: "human"` thread because "the human owns the words". True of a draft
+// a human TYPED; false of the rows actually there. MEASURED on the live store: since 8/1, 52
+// machine-written drafts landed on human-mode threads vs 55 everywhere else — about half of all
+// machine-drafted volume — and human threads carried 0 reviewer receipts vs 9. Real defects went
+// unreviewed there, including a draft telling Igor +17164442120 "I saw you want to do the Jumpstart
+// experience" on a thread where he has never sent a single message.
+{
+  const picks = selectDraftsForClaudeReview({ conversations: [conv({ mode: "human" }, [CUSTOMER, FRESH_DRAFT])], nowMs: NOW });
+  assert.equal(picks.length, 1, "a MACHINE-written draft on a human-owned thread IS reviewed — nobody owns those words");
+}
+{
+  // The same measurement found 3 of 46 human-thread drafts carried a person's name on the SAME
+  // `provider: "draft_ai"` row. Keying on the provider — the obvious fix — would have handed a
+  // human's own words to an automatic rewriter. This is the assertion that forbids that.
+  const typed = conv({ mode: "human" }, [CUSTOMER, { ...FRESH_DRAFT, actorUserName: "Joe Hartrich" }]);
+  assert.equal(selectDraftsForClaudeReview({ conversations: [typed], nowMs: NOW }).length, 0, "a draft a PERSON typed is never reviewed, on a human-mode thread");
+  const typedSuggest = conv({ mode: "suggest" }, [CUSTOMER, { ...FRESH_DRAFT, actorUserName: "Joe Hartrich" }]);
+  assert.equal(selectDraftsForClaudeReview({ conversations: [typedSuggest], nowMs: NOW }).length, 0, "…and not on a suggest thread either — authorship, not mode");
+}
+{
+  // The predicate itself, executed. Fail direction: an unrecognised actor reads as a PERSON.
+  assert.equal(draftIsMachineAuthored({}), true, "no actor => machine-written");
+  assert.equal(draftIsMachineAuthored({ actorUserName: "  " }), true, "blank actor => machine-written");
+  assert.equal(draftIsMachineAuthored({ actorUserName: "Auto-redraft (thumbs-down)" }), true, "our own auto-redraft is machine-written");
+  assert.equal(draftIsMachineAuthored({ actorUserName: "Joe Hartrich" }), false, "a named person is not machine-written");
+  assert.equal(draftIsMachineAuthored({ actorUserName: "Some New Rep" }), false, "an UNKNOWN actor reads as a person — never rewrite words we cannot prove we wrote");
+  // Our own rewrite IS machine-written, and this says so honestly. What stops the rewrite-its-own-
+  // rewrite loop is the selector's explicit guard, NOT a lie here. While this returned false the
+  // guard was dead code: deleting it broke nothing and no eval failed.
+  assert.equal(draftIsMachineAuthored({ actorUserName: "Claude review" }), true, "our own rewrite is machine-written — the loop is stopped by the explicit guard, not by mislabelling it");
+  const autoRedraft = conv({ mode: "human" }, [CUSTOMER, { ...FRESH_DRAFT, actorUserName: "Auto-redraft (thumbs-down)" }]);
+  assert.equal(selectDraftsForClaudeReview({ conversations: [autoRedraft], nowMs: NOW }).length, 1, "our own auto-redraft is reviewable on a human thread");
+}
+
 const NO_REVIEW: Array<[string, any]> = [
   ["the reviewer's own rewrite (loop guard — actor \"Claude review\")", conv({}, [CUSTOMER, { ...FRESH_DRAFT, actorUserName: "Claude review" }])],
-  ["human-mode thread (the human owns the words)", conv({ mode: "human" }, [CUSTOMER, FRESH_DRAFT])],
+  ["the reviewer's own rewrite on a HUMAN thread (loop guard survives the mode change)", conv({ mode: "human" }, [CUSTOMER, { ...FRESH_DRAFT, actorUserName: "Claude review" }])],
+  ["a person's typed draft on a human thread", conv({ mode: "human" }, [CUSTOMER, { ...FRESH_DRAFT, actorUserName: "Scott Hartrich" }])],
   ["closed conversation", conv({ status: "closed" }, [CUSTOMER, FRESH_DRAFT])],
   ["already stamped for this draft", conv({ claudeDraftReview: { messageId: "m_draft", verdict: "ok", at: "2026-08-15T11:00:00Z" } }, [CUSTOMER, FRESH_DRAFT])],
   ["no pending draft (customer message is newest)", conv({}, [CUSTOMER])],
