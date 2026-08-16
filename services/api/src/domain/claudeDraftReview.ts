@@ -48,10 +48,17 @@ export type ClaudeDraftReviewReceipt = { messageId: string; verdict: "ok" | "rew
 
 /**
  * Actors that are US, not a person. A draft carrying one of these names was machine-written, so
- * reviewing it takes nothing away from anybody. "Claude review" is machine-written too but is
- * handled separately below — reviewing our own rewrite is the self-review loop, not a safety rule.
+ * reviewing it takes nothing away from anybody.
+ *
+ * `CLAUDE_REVIEW_ACTOR` is in this set because it IS machine-written — saying otherwise would be a
+ * lie that happens to stop the self-review loop. The loop is stopped by its own explicit guard in
+ * the selector instead. Keeping those two separate matters: while this set implicitly called our own
+ * rewrite "a person", the explicit guard was dead code — removing it changed nothing and no eval
+ * failed (caught by sabotage) — so a later correction of the semantics would have silently re-opened
+ * a rewrite-its-own-rewrite loop at one API call a minute.
  */
-export const MACHINE_DRAFT_ACTORS = new Set(["Auto-redraft (thumbs-down)"]);
+export const CLAUDE_REVIEW_ACTOR = "Claude review";
+export const MACHINE_DRAFT_ACTORS = new Set(["Auto-redraft (thumbs-down)", CLAUDE_REVIEW_ACTOR]);
 
 /**
  * Did a PERSON write this draft? The gate that matters is authorship, not thread ownership.
@@ -115,7 +122,7 @@ export function selectDraftsForClaudeReview(args: {
     // Never review our own superseding rewrite — a rewrite is a new unstamped pending draft, and
     // without this the next tick examines it (in theory forever, one call per minute).
     // (actorUserName is stamped by saveOperatorDraft.)
-    if (String((draft as any).actorUserName ?? "") === "Claude review") continue;
+    if (String((draft as any).actorUserName ?? "") === CLAUDE_REVIEW_ACTOR) continue;
     // A draft a PERSON typed is theirs, on any thread. This replaced the old `conv.mode === "human"`
     // skip, which read thread ownership as draft authorship and left ~half of all machine-written
     // drafts reviewed by nobody. See draftIsMachineAuthored for the measurement.

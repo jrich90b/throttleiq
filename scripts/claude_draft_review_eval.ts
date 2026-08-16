@@ -74,6 +74,10 @@ const FRESH_DRAFT = { direction: "out", provider: "draft_ai", body: "Great quest
   assert.equal(draftIsMachineAuthored({ actorUserName: "Auto-redraft (thumbs-down)" }), true, "our own auto-redraft is machine-written");
   assert.equal(draftIsMachineAuthored({ actorUserName: "Joe Hartrich" }), false, "a named person is not machine-written");
   assert.equal(draftIsMachineAuthored({ actorUserName: "Some New Rep" }), false, "an UNKNOWN actor reads as a person — never rewrite words we cannot prove we wrote");
+  // Our own rewrite IS machine-written, and this says so honestly. What stops the rewrite-its-own-
+  // rewrite loop is the selector's explicit guard, NOT a lie here. While this returned false the
+  // guard was dead code: deleting it broke nothing and no eval failed.
+  assert.equal(draftIsMachineAuthored({ actorUserName: "Claude review" }), true, "our own rewrite is machine-written — the loop is stopped by the explicit guard, not by mislabelling it");
   const autoRedraft = conv({ mode: "human" }, [CUSTOMER, { ...FRESH_DRAFT, actorUserName: "Auto-redraft (thumbs-down)" }]);
   assert.equal(selectDraftsForClaudeReview({ conversations: [autoRedraft], nowMs: NOW }).length, 1, "our own auto-redraft is reviewable on a human thread");
 }
