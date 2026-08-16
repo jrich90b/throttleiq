@@ -165,6 +165,22 @@ await check("a day that is still invalid after the repair propagates nothing", a
   assert.deepEqual(after.friday, { open: "09:00", close: "18:00" });
 });
 
+// 6b. The repair is not always enough, and the check AFTER it is load-bearing. A 1 PM open with a
+//     1 AM close bumps to 13:00, which equals its own open — a zero-length day. It must be dropped
+//     like any other nonsense range, not stored. (Written after a sabotage run: deleting the
+//     post-repair check passed every other case in this file.)
+await check("a repair that lands back on the open time is still dropped", async () => {
+  const normalized = normalizeBusinessHoursMap({ friday: { open: "13:00", close: "01:00" } });
+  assert.equal(Object.prototype.hasOwnProperty.call(normalized, "friday"), false);
+  await seedScheduler(LIVE_SCHEDULER_HOURS);
+  await reconcileDealerProfileHours(LIVE_PROFILE_HOURS, {
+    ...LIVE_PROFILE_HOURS,
+    friday: { open: "13:00", close: "01:00" }
+  });
+  const after = await schedulerHours();
+  assert.deepEqual(after.friday, { open: "09:00", close: "18:00" });
+});
+
 // 7. The second, independent "losing the hours" mechanism: `hours` was the one profile field that
 //    took the incoming object wholesale while address/policies/voice/followUp all spread-merge, so a
 //    partial save wiped every day it did not send.
