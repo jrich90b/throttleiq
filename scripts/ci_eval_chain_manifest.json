@@ -323,6 +323,7 @@
     "visit_department_purpose:eval",
     "service_records_handoff_reply:eval",
     "vehicle_fact_confident_none:eval",
+    "vehicle_fact_explicit_request:eval",
     "initial_adf_todo_cadence:eval",
     "voice_call_followup:eval",
     "conversation_replay:eval",

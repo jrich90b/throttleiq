@@ -23,6 +23,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { isVehicleFactQuestionParserConfidentNone } from "../services/api/src/domain/llmDraft.ts";
+import { isVehicleFactKeywordFallbackAllowed } from "../services/api/src/domain/vehicleFactQuestionRoute.ts";
 
 const MIN = 0.74;
 
@@ -69,19 +70,52 @@ assert.equal(
   "a confident real classification is not a confident none"
 );
 
-// 2) Source guards: both path resolvers consult the helper BEFORE their keyword fallback chain,
-//    and the outage fallback itself is kept.
+// 1b) The confident-none rule still BINDS THE DECISION, now via the shared referee that both
+//     resolvers call. Assert the decision (fallback blocked / allowed), not the helper name —
+//     this is what actually reaches the customer.
+assert.equal(
+  isVehicleFactKeywordFallbackAllowed({
+    parsed: { questionType: "none", explicitRequest: false, confidence: 0.8 },
+    candidateQuestionType: "service_records",
+    minConfidence: MIN
+  }),
+  false,
+  "adf_ref_11422: a confident parser none must still block the keyword fallback"
+);
+// ...including for the money types, whose behaviour this refactor must not change...
+assert.equal(
+  isVehicleFactKeywordFallbackAllowed({
+    parsed: { questionType: "none", explicitRequest: false, confidence: 0.8 },
+    candidateQuestionType: "price",
+    minConfidence: MIN
+  }),
+  false,
+  "a confident none must block the fallback for money types exactly as before"
+);
+// ...and a parser outage still reaches the fallback (the fail-safe this whole path exists for).
+assert.equal(
+  isVehicleFactKeywordFallbackAllowed({
+    parsed: null,
+    candidateQuestionType: "service_records",
+    minConfidence: MIN
+  }),
+  true,
+  "a null parse (parser outage) must still reach the keyword fallback"
+);
+
+// 2) Source guards: both path resolvers consult the shared referee BEFORE their keyword fallback
+//    chain, and the outage fallback itself is kept.
 function checkResolver(file: string, fnNeedle: string, label: string) {
   const src = fs.readFileSync(path.resolve(file), "utf8");
   const start = src.indexOf(fnNeedle);
   assert.ok(start > 0, `${label}: resolver must exist`);
-  const guardIdx = src.indexOf("isVehicleFactQuestionParserConfidentNone(", start);
+  const guardIdx = src.indexOf("isVehicleFactKeywordFallbackAllowed(", start);
   const fallbackIdx = src.indexOf("\\btires?\\b", start);
-  assert.ok(guardIdx > start, `${label}: resolver must consult the confident-none verdict`);
+  assert.ok(guardIdx > start, `${label}: resolver must consult the shared fallback referee`);
   assert.ok(fallbackIdx > start, `${label}: the parser-outage keyword fallback must be KEPT`);
   assert.ok(
     guardIdx < fallbackIdx,
-    `${label}: the confident-none guard must run BEFORE the keyword fallback`
+    `${label}: the parser-first referee must gate the keyword fallback, not trail it`
   );
 }
 

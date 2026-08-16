@@ -326,7 +326,6 @@ import {
   parseVoiceDurableFactsWithLLM,
   parseAccessoryRequestWithLLM,
   parseVehicleFactQuestionWithLLM,
-  isVehicleFactQuestionParserConfidentNone,
   parseVisitDepartmentPurposeWithLLM,
   parseVehicleInfoRequestWithLLM,
   parseDealershipFaqTopicWithLLM,
@@ -648,6 +647,7 @@ import { buildWalkInReturnDayCheckInLine } from "./domain/walkInFollowUpTopic.js
 import { decideWatchSiblingScopeAsk } from "./domain/watchSiblingScope.js";
 import { applyWatchFieldHygiene, formatWatchYearLabel } from "./domain/watchFieldHygiene.js";
 import { decideWatchPins } from "./domain/watchYearPin.js";
+import { isVehicleFactKeywordFallbackAllowed } from "./domain/vehicleFactQuestionRoute.js";
 import { resolveModelDiscontinuation, type DiscontinuationStatus } from "./domain/modelDiscontinuation.js";
 import {
   conversationWatchAlertBlocked,
@@ -10072,34 +10072,20 @@ function resolveVehicleFactQuestionDecision(
     };
   }
 
-  // Parser-first (adf_ref_11422 replay miss): when the typed parser RAN and confidently says
-  // this turn is NOT a vehicle-fact question, believe it — never let the legacy keyword
-  // fallback below hijack the turn ("I need a front tire" contains "tire" and was answered
-  // with the service-RECORDS canned reply instead of parts/service help). Fail direction: a
-  // wrong confident "none" falls through to the semantic-slot department handoff / general
-  // draft pipeline, which still replies (fail-safe). A null or low-confidence parse (parser
-  // outage) skips this guard, so the keyword fallback below stays as the outage fail-safe.
-  if (
-    isVehicleFactQuestionParserConfidentNone(
-      parsed,
-      Number(process.env.LLM_VEHICLE_FACT_CONFIDENCE_MIN ?? 0.74)
-    )
-  ) {
-    return null;
-  }
-
+  // Parser-first: when the typed parser RAN and contradicted the legacy keyword fallback, the
+  // parser wins. That tie-break lives in ONE referee shared with the ADF door —
+  // isVehicleFactKeywordFallbackAllowed (domain/vehicleFactQuestionRoute), which carries both
+  // the adf_ref_11422 confident-"none" rule and the explicitRequest:false rule.
   const lower = String(text ?? "").toLowerCase().trim();
   if (!lower) return null;
   const lowMileageUsedPreference =
     /\blow\s*mileage\b|\blow\s*miles\b/.test(lower) &&
     (/\bused\b|\bpre[-\s]?owned\b/.test(lower) || /\bnot\s+new\b/.test(lower));
   if (lowMileageUsedPreference) return null;
-  const fallback = (questionType: VehicleFactQuestionDecision["questionType"], requestedFields: string[]) => ({
-    questionType,
-    requestedFields,
-    confidence: 0,
-    source: "fallback" as const
-  });
+  const fallback = (questionType: VehicleFactQuestionDecision["questionType"], requestedFields: string[]) =>
+    isVehicleFactKeywordFallbackAllowed({ parsed, candidateQuestionType: questionType })
+      ? { questionType, requestedFields, confidence: 0, source: "fallback" as const }
+      : null;
   if (
     /\b(?:qualif(?:y|ies)|eligible|eligibility)\b[\s\S]{0,80}\b(?:apr|interest|rate|finance|financing|program|special)\b/.test(lower) ||
     /\b(?:apr|interest|rate|finance|financing|program|special)\b[\s\S]{0,80}\b(?:qualif(?:y|ies)|eligible|eligibility)\b/.test(lower)
