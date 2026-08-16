@@ -430,7 +430,11 @@ const CEILINGS: Ceiling[] = [
     // hand-copied Gmail status endpoint blocks (support/personal) plus the new setup one into
     // buildGmailStatusHandler in domain/googleCalendar.ts. Net -19 with all three call sites,
     // both intake routes, and the poll-loop starter included.
-    max: 70_317,
+    // 70_317 -> 70_310. The branded public intake form (/public/dealer-intake/:token) arrived as
+    // two more dealerIntakeMail.ts handlers + one-line routes, funded by requireManagerAccess:
+    // 5 of the 44(!) hand-copied "manager or canViewAllTasks" blocks in the dealer-setups family
+    // collapsed into the shared middleware. 39 copies remain as future funding.
+    max: 70_310,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

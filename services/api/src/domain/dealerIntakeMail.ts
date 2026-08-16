@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import crypto from "node:crypto";
 import { dataPath } from "./dataDir.js";
 import { readJsonStoreText, writeJsonStoreText } from "./storePersistence.js";
 import {
@@ -43,6 +44,8 @@ export type DealerIntakeMailRecord = {
   to: string;
   threadId?: string;
   inviteMessageId?: string;
+  formToken?: string;
+  formSubmittedAt?: string;
   sentAt: string;
   status: "awaiting_reply" | "ingested" | "error";
   processedMessageIds: string[];
@@ -167,7 +170,10 @@ export function buildIntakeQuestionnaireText(dealerName: string): string {
   return lines.join("\n");
 }
 
-export function buildIntakeInviteEmail(setup: Pick<DealerSetup, "dealerName" | "primaryContact">): {
+export function buildIntakeInviteEmail(
+  setup: Pick<DealerSetup, "dealerName" | "primaryContact">,
+  formUrl?: string
+): {
   subject: string;
   bodyText: string;
 } {
@@ -176,19 +182,23 @@ export function buildIntakeInviteEmail(setup: Pick<DealerSetup, "dealerName" | "
   const bodyText = [
     `Hi ${firstName || "there"},`,
     "",
-    "Excited to get you up and running on LeadRider. Below is a short questionnaire — it",
-    "covers the basics we need to set up your texting line, email, calendar, and inventory",
-    "feed. Just hit reply and answer under each question, in your own words; skip anything",
-    "you're not sure about and we'll sort it out on a call.",
+    "Excited to get you up and running on LeadRider. We need a few basics to set up your",
+    "texting line, email, calendar, and inventory feed" +
+      (formUrl ? " — the easiest way is our setup form:" : ". Just hit reply and answer below."),
+    ...(formUrl
+      ? [
+          "",
+          `    ${formUrl}`,
+          "",
+          "It takes about 10 minutes, saves as soon as you submit, and works fine on a phone.",
+          "Prefer email? Just reply to this message and answer in your own words instead."
+        ]
+      : ["", "----------------------------------------", "", buildIntakeQuestionnaireText(setup.dealerName)]),
     "",
     "Two important notes:",
-    "- Please don't put passwords, API keys, or card numbers anywhere in your reply.",
-    "- We do need your federal EIN for text-message carrier registration, but NOT over",
-    "  email reply — call us with it or send it in a separate direct email.",
-    "",
-    "----------------------------------------",
-    "",
-    buildIntakeQuestionnaireText(setup.dealerName),
+    "- Please don't put passwords, API keys, or card numbers in the form or any reply.",
+    "- We do need your federal EIN for text-message carrier registration, but NOT through",
+    "  the form or email — call us with it or send it in a separate direct email.",
     "",
     "Thanks!",
     "The LeadRider team"
@@ -461,7 +471,9 @@ export async function sendDealerIntakeInvite(
   if (!setup) throw new Error("Dealer setup not found.");
   const to = String(opts.toOverride ?? "").trim() || extractEmailAddress(setup.primaryContact ?? "");
   if (!to) throw new Error("No recipient: primary contact has no email address (pass one explicitly).");
-  const { subject, bodyText } = buildIntakeInviteEmail(setup);
+  const formToken = crypto.randomBytes(18).toString("hex");
+  const formUrl = `${String(process.env.LEADRIDER_API_BASE_URL ?? "https://api.leadrider.ai").replace(/\/$/, "")}/public/dealer-intake/${formToken}`;
+  const { subject, bodyText } = buildIntakeInviteEmail(setup, formUrl);
   const sent = await sendSetupGmailEmail({ to, subject, bodyText });
   const now = new Date().toISOString();
   await ensureLoaded();
@@ -472,6 +484,7 @@ export async function sendDealerIntakeInvite(
     to,
     threadId: sent.threadId ?? undefined,
     inviteMessageId: sent.id ?? undefined,
+    formToken,
     sentAt: now,
     status: "awaiting_reply",
     processedMessageIds: [],
@@ -502,6 +515,190 @@ export function matchReplyToInvite(
     if (fromEmail && invite.to.toLowerCase() === fromEmail) return invite.id;
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Branded public intake FORM (Joe 2026-08-16: "a branded LeadRider form on a page
+// they fill out" instead of questions in the email). The invite email carries a
+// tokenized link; the page posts labeled fields; mapping is DETERMINISTIC
+// (structured extraction of labeled inputs — allowed per AGENTS.md; free-text
+// answers like hours stay verbatim). Reply-by-email stays as the fallback lane.
+// ---------------------------------------------------------------------------
+
+function escapeHtml(value: string): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+const FORM_FIELDS: Array<{
+  name: keyof DealerIntakeAnswers & string;
+  label: string;
+  hint?: string;
+  multiline?: boolean;
+  perLine?: boolean; // textarea parsed one item per line (lists)
+  section?: string;
+}> = [
+  { name: "legalName", label: "Full legal entity name", hint: "Exactly as registered — used for SMS carrier registration.", section: "Dealership identity" },
+  { name: "dbaName", label: "DBA name, if different" },
+  { name: "address", label: "Street address", hint: "Street, city, state, zip." },
+  { name: "website", label: "Website address" },
+  { name: "mainPhone", label: "Main phone number" },
+  { name: "primaryContact", label: "Primary contact for this setup", hint: "Name, role, cell, email.", section: "People" },
+  { name: "ownerGm", label: "Owner / General Manager", hint: "Name and email." },
+  { name: "salespeople", label: "Salespeople who appear as the text-message sender", hint: "One per line: Name - cell number.", multiline: true, perLine: true },
+  { name: "messageApprover", label: "Who approves outgoing messages before they send?" },
+  { name: "afterHoursEscalation", label: "Who should be contacted after hours if something urgent comes up?" },
+  { name: "salesHours", label: "Sales department hours", hint: "In your own words — \"9-6 weekdays, Sat till 3, closed Sunday\" is perfect.", multiline: true, section: "Hours" },
+  { name: "serviceHours", label: "Service department hours", multiline: true },
+  { name: "closures", label: "Holiday closures or other regular closures", multiline: true },
+  { name: "crmProvider", label: "Which CRM do you use?", section: "Leads and systems" },
+  { name: "monthlyLeadVolume", label: "Roughly how many leads per month?" },
+  { name: "leadSources", label: "Where do your leads come from?", hint: "One per line — website, marketplaces, walk-ins, events…", multiline: true, perLine: true },
+  { name: "leadNotificationDestination", label: "Where do lead notifications arrive today?", hint: "An inbox, the CRM, a phone…" },
+  { name: "inventoryFeedUrl", label: "Inventory feed or export URL", hint: "The link your website/inventory provider gives you." },
+  { name: "inventoryFeedOwner", label: "Who keeps that inventory feed up to date?" },
+  { name: "tonePreferences", label: "How should messages to your customers sound?", hint: "Friendly, formal, short…", multiline: true, section: "Voice" },
+  { name: "neverSay", label: "Anything we should NEVER say or promise in a message?", hint: "One per line.", multiline: true, perLine: true },
+  { name: "extraNotes", label: "Anything else we should know?", multiline: true }
+];
+
+export function renderIntakeFormHtml(setup: Pick<DealerSetup, "dealerName">): string {
+  const dealer = escapeHtml(setup.dealerName);
+  const fields = FORM_FIELDS.map(f => {
+    const section = f.section ? `<h2>${escapeHtml(f.section)}</h2>` : "";
+    const hint = f.hint ? `<p class="hint">${escapeHtml(f.hint)}</p>` : "";
+    const input = f.multiline
+      ? `<textarea name="${f.name}" rows="3" maxlength="2000"></textarea>`
+      : `<input type="text" name="${f.name}" maxlength="2000" />`;
+    return `${section}<label>${escapeHtml(f.label)}${hint}${input}</label>`;
+  }).join("\n");
+  return `<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>${dealer} — LeadRider setup</title><style>
+:root{--brand:#fb7f04;--action:#a94e00;--ink:#050505;--paper:#fbfaf9;--line:#d9d5cf}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+.bar{height:6px;background:var(--brand)}.wrap{max-width:720px;margin:0 auto;padding:24px 16px 64px}
+.logo{font-weight:800;font-size:22px;letter-spacing:-.02em}.logo span{color:var(--action)}
+h1{font-size:24px;margin:16px 0 4px}h2{font-size:15px;text-transform:uppercase;letter-spacing:.06em;color:var(--action);margin:32px 0 4px;border-bottom:1px solid var(--line);padding-bottom:6px}
+.sub{color:#4d4a45;margin:0 0 8px}
+.warn{background:#fdeada;border:1px solid var(--brand);border-radius:8px;padding:12px 14px;margin:16px 0;font-size:14px}
+label{display:block;margin:16px 0;font-weight:600;font-size:15px}
+.hint{font-weight:400;color:#6b675f;font-size:13px;margin:2px 0 6px}
+input,textarea{width:100%;margin-top:6px;padding:10px 12px;font:inherit;border:1px solid var(--line);border-radius:8px;background:#fff}
+input:focus,textarea:focus{outline:2px solid var(--brand);border-color:var(--brand)}
+button{margin-top:24px;background:var(--action);color:#fff;border:0;border-radius:8px;padding:14px 28px;font:inherit;font-weight:700;cursor:pointer}
+button:hover{background:#933f00}.foot{margin-top:32px;font-size:13px;color:#6b675f}
+</style></head><body><div class="bar"></div><div class="wrap">
+<div class="logo">Lead<span>Rider</span></div>
+<h1>${dealer} — setup questionnaire</h1>
+<p class="sub">Answer in your own words — plain sentences are perfect. Skip anything you're unsure of; everything saves when you hit Submit.</p>
+<div class="warn"><strong>Please do NOT enter passwords, API keys, card numbers, or your EIN anywhere on this form.</strong> We never ask for them here. We do need your EIN separately for SMS carrier registration — call us with it or send it in a direct email.</div>
+<form method="POST" action="">
+${fields}
+<button type="submit">Submit to LeadRider</button>
+</form>
+<div class="foot">This private link was sent to ${dealer} by LeadRider. Questions? Just reply to the email that brought you here.</div>
+</div></body></html>`;
+}
+
+// Deterministic mapping of the LABELED form fields — no LLM needed: the form itself
+// disambiguates which answer is which. Free-text values stay verbatim.
+export function parseIntakeFormSubmission(body: Record<string, unknown>): DealerIntakeAnswers {
+  const text = (name: string) => String((body as any)?.[name] ?? "").trim().slice(0, 2000);
+  const lines = (name: string) => text(name).split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const salespeople = lines("salespeople").map(line => {
+    // Split on the FIRST separator only — phone numbers contain their own hyphens.
+    const sep = line.match(/\s[-–—:]\s|[–—:]/);
+    if (sep && sep.index !== undefined) {
+      return { name: line.slice(0, sep.index).trim(), cell: line.slice(sep.index + sep[0].length).trim() };
+    }
+    return { name: line, cell: "" };
+  });
+  const answers: DealerIntakeAnswers = {
+    legalName: text("legalName"),
+    dbaName: text("dbaName"),
+    address: text("address"),
+    website: text("website"),
+    mainPhone: text("mainPhone"),
+    primaryContact: text("primaryContact"),
+    ownerGm: text("ownerGm"),
+    salespeople,
+    messageApprover: text("messageApprover"),
+    afterHoursEscalation: text("afterHoursEscalation"),
+    salesHours: text("salesHours"),
+    serviceHours: text("serviceHours"),
+    closures: text("closures"),
+    crmProvider: text("crmProvider"),
+    monthlyLeadVolume: text("monthlyLeadVolume"),
+    leadSources: lines("leadSources"),
+    leadNotificationDestination: text("leadNotificationDestination"),
+    inventoryFeedUrl: text("inventoryFeedUrl"),
+    inventoryFeedOwner: text("inventoryFeedOwner"),
+    tonePreferences: text("tonePreferences"),
+    neverSay: lines("neverSay"),
+    unansweredQuestions: FORM_FIELDS.filter(f => f.name !== "extraNotes" && f.name !== "dbaName" && !text(f.name)).map(f => f.label),
+    extraNotes: text("extraNotes"),
+    sensitiveDataWarning: ""
+  };
+  // Deterministic compliance gate: detect a leaked EIN/card BEFORE scrubbing so the
+  // warning survives even though the value never does.
+  const flat = JSON.stringify(answers);
+  if (/\b\d{2}-\d{7}\b/.test(flat) || /\b(?:\d[ -]?){13,16}\b/.test(flat.replace(/\b\d{10,11}\b/g, ""))) {
+    answers.sensitiveDataWarning = "The form submission contained what looks like an EIN or card number; the value was redacted and NOT stored.";
+  }
+  return scrubDeep(answers);
+}
+
+const FORM_TOKEN_SHAPE = /^[a-f0-9]{24,64}$/;
+
+export async function findIntakeRecordByFormToken(token: string): Promise<DealerIntakeMailRecord | null> {
+  if (!FORM_TOKEN_SHAPE.test(String(token ?? ""))) return null;
+  await ensureLoaded();
+  return rows.find(row => row.formToken === token) ?? null;
+}
+
+const FORM_CLOSED_HTML = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><body style="font:16px -apple-system,sans-serif;padding:40px;max-width:560px;margin:0 auto"><h2>This setup link isn't active</h2><p>It may have been mistyped or replaced. Reply to the LeadRider email that brought you here and we'll send a fresh one.</p></body>`;
+
+export async function dealerIntakeFormPageHandler(req: any, res: any) {
+  const record = await findIntakeRecordByFormToken(String(req.params?.token ?? ""));
+  const setup = record ? await getDealerSetup(record.dealerSetupId) : null;
+  if (!record || !setup) return res.status(404).type("html").send(FORM_CLOSED_HTML);
+  return res.type("html").send(renderIntakeFormHtml(setup));
+}
+
+export async function dealerIntakeFormSubmitHandler(req: any, res: any) {
+  const record = await findIntakeRecordByFormToken(String(req.params?.token ?? ""));
+  const setup = record ? await getDealerSetup(record.dealerSetupId) : null;
+  if (!record || !setup) return res.status(404).type("html").send(FORM_CLOSED_HTML);
+  const answers = parseIntakeFormSubmission(req.body ?? {});
+  const label = `intake form ${new Date().toISOString().slice(0, 10)}`;
+  const applied = applyIntakeAnswersToSetup(setup, answers, label);
+  await updateDealerSetup(setup.id, { ...applied.patch, stepId: "intake", stepStatus: applied.stepStatus, stepNote: applied.stepNote });
+  record.formSubmittedAt = new Date().toISOString();
+  record.status = "ingested";
+  record.lastIngestAt = record.formSubmittedAt;
+  record.lastBlanks = applied.blanks;
+  record.lastSensitiveWarning = String(answers.sensitiveDataWarning ?? "").trim() || undefined;
+  record.updatedAt = record.formSubmittedAt;
+  scheduleSave();
+  await addAgentTask({
+    provider: "claude",
+    kind: "dealer_setup",
+    title: `Intake form submitted: ${setup.dealerName}`,
+    instructions: [
+      `Dealer intake FORM submitted for ${setup.dealerName} [${setup.slug}].`,
+      applied.diffs.length ? `Changes: ${applied.diffs.join("; ")}` : "No record changes (already matched).",
+      applied.blanks.length ? `Left blank: ${applied.blanks.join("; ")}` : "Fully answered.",
+      record.lastSensitiveWarning ? `SENSITIVE DATA flagged (NOT stored): ${record.lastSensitiveWarning}` : ""
+    ].filter(Boolean).join("\n"),
+    clientName: setup.dealerName,
+    priority: record.lastSensitiveWarning ? "high" : "normal",
+    risk: "low"
+  });
+  console.log(`[dealer intake] form submitted for ${setup.slug} (${applied.diffs.length} changes, ${applied.blanks.length} blanks)`);
+  return res.type("html").send(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><body style="font:16px -apple-system,sans-serif;padding:40px;max-width:560px;margin:0 auto"><div style="height:6px;background:#fb7f04;border-radius:3px"></div><h2>Thanks — got it!</h2><p>Your answers are saved with LeadRider. ${applied.blanks.length ? "We'll follow up on the few items left blank — no need to resubmit." : "Everything we need is here."} We'll be in touch with next steps.</p></body>`);
 }
 
 // Express handlers + the poll loop live HERE, not in index.ts — the source-size ratchet

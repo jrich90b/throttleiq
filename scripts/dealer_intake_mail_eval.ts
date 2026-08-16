@@ -22,6 +22,8 @@ import {
   buildIntakeNotesBlock,
   isDealerIntakeEmailEnabled,
   matchReplyToInvite,
+  parseIntakeFormSubmission,
+  renderIntakeFormHtml,
   scrubSensitive,
   type DealerIntakeAnswers
 } from "../services/api/src/domain/dealerIntakeMail.ts";
@@ -152,7 +154,58 @@ ok("invite email warns about secrets and keeps the EIN out", () => {
   const { subject, bodyText } = buildIntakeInviteEmail({ dealerName: "Demo Dealer", primaryContact: "Sam Rider, GM" });
   assert.ok(subject.includes("Demo Dealer"));
   assert.match(bodyText, /don't put passwords, API keys, or card numbers/i);
-  assert.match(bodyText, /NOT over\s+email reply/i);
+  assert.match(bodyText, /NOT through\s+the form or email/i);
+});
+ok("invite email carries the form link when one is minted", () => {
+  const { bodyText } = buildIntakeInviteEmail(
+    { dealerName: "Demo Dealer", primaryContact: "Sam Rider, GM" },
+    "https://api.leadrider.ai/public/dealer-intake/abc123"
+  );
+  assert.ok(bodyText.includes("https://api.leadrider.ai/public/dealer-intake/abc123"));
+  assert.match(bodyText, /prefer email\? just reply/i);
+});
+
+// --- Branded public intake form (deterministic labeled-field mapping) ---
+ok("form page carries the no-secrets warning and has NO EIN field", () => {
+  const html = renderIntakeFormHtml({ dealerName: "Demo Dealer" });
+  assert.match(html, /do NOT enter passwords, API keys, card numbers, or your EIN/i);
+  assert.ok(!/name="ein/i.test(html), "the form must not collect an EIN");
+  assert.ok(html.includes("LeadRider"));
+});
+ok("form page escapes a hostile dealer name", () => {
+  const html = renderIntakeFormHtml({ dealerName: '<script>alert(1)</script>' });
+  assert.ok(!html.includes("<script>alert"), "dealer name must be HTML-escaped");
+});
+ok("form submission maps labeled fields deterministically", () => {
+  const a = parseIntakeFormSubmission({
+    legalName: " Demo Powersports LLC ",
+    salesHours: "9-6 weekdays, Sat till 3, closed Sunday",
+    salespeople: "Sam Rider - 555-201-3344\nTina Vasquez — 406-555-8181",
+    leadSources: "website\ncycletrader",
+    neverSay: "never promise OTD"
+  });
+  assert.equal(a.legalName, "Demo Powersports LLC");
+  assert.equal(a.salesHours, "9-6 weekdays, Sat till 3, closed Sunday");
+  assert.deepEqual(a.salespeople[0], { name: "Sam Rider", cell: "555-201-3344" });
+  assert.deepEqual(a.salespeople[1], { name: "Tina Vasquez", cell: "406-555-8181" });
+  assert.deepEqual(a.leadSources, ["website", "cycletrader"]);
+  assert.deepEqual(a.neverSay, ["never promise OTD"]);
+});
+ok("form submission reports blank labeled fields as unanswered", () => {
+  const a = parseIntakeFormSubmission({ legalName: "X LLC" });
+  assert.ok(a.unansweredQuestions.length > 5, "blank fields must be reported");
+  assert.ok(a.unansweredQuestions.some(q => /inventory feed/i.test(q)));
+  assert.ok(!a.unansweredQuestions.some(q => /DBA/i.test(q)), "DBA is optional, not a blank");
+});
+ok("form submission scrubs a leaked EIN and flags it", () => {
+  const a = parseIntakeFormSubmission({ extraNotes: "our EIN is 16-1234567 btw" });
+  assert.ok(!JSON.stringify(a).includes("16-1234567"), "EIN value must never survive");
+  assert.ok(a.sensitiveDataWarning.length > 0, "leak must be flagged");
+});
+ok("form submission keeps a normal phone number intact", () => {
+  const a = parseIntakeFormSubmission({ mainPhone: "716-692-7200" });
+  assert.equal(a.mainPhone, "716-692-7200");
+  assert.equal(a.sensitiveDataWarning, "");
 });
 
 console.log(`dealer_intake_mail:eval PASS (${passed} checks)`);

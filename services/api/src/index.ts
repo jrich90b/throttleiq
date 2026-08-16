@@ -590,7 +590,7 @@ import {
   deleteEvent,
   moveEvent
 } from "./domain/googleCalendar.js";
-import { dealerIntakeSendInviteHandler, dealerIntakeStatusHandler, startDealerIntakeMailPollLoop } from "./domain/dealerIntakeMail.js";
+import { dealerIntakeSendInviteHandler, dealerIntakeStatusHandler, dealerIntakeFormPageHandler, dealerIntakeFormSubmitHandler, startDealerIntakeMailPollLoop } from "./domain/dealerIntakeMail.js";
 import {
   generateCandidateSlots,
   expandBusyBlocks,
@@ -4504,6 +4504,7 @@ function isPublicPath(pathname: string): boolean {
     pathname.startsWith("/webhooks/twilio") ||
     pathname.startsWith("/crm/leads/adf/sendgrid") ||
     pathname.startsWith("/public/booking") ||
+    pathname.startsWith("/public/dealer-intake") ||
     pathname.startsWith("/public/command-booking") ||
     pathname.startsWith("/public/appointment") ||
     pathname.startsWith("/public/marketing") ||
@@ -4566,6 +4567,16 @@ app.use(async (req, res, next) => {
 function requireManager(req: any, res: any, next: any) {
   if (AUTH_DISABLED) return next();
   if (req.user?.role !== "manager") return res.status(403).json({ ok: false, error: "manager required" });
+  return next();
+}
+
+// Manager OR canViewAllTasks — the gate the dealer-setups family had hand-copied inline.
+function requireManagerAccess(req: any, res: any, next: any) {
+  if (AUTH_DISABLED) return next();
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
   return next();
 }
 
@@ -35473,21 +35484,13 @@ const allowedDealerSetupStepStatuses: DealerSetupStepStatus[] = [
   "done"
 ];
 
-app.get("/dealer-setups", requirePermission("canAccessTodos"), async (req, res) => {
-  const user = (req as any).user ?? null;
-  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
-    return res.status(403).json({ ok: false, error: "manager required" });
-  }
+app.get("/dealer-setups", requirePermission("canAccessTodos"), requireManagerAccess, async (req, res) => {
   const limit = Number(req.query.limit ?? "100");
   const setups = await listDealerSetups(Number.isFinite(limit) ? limit : 100);
   return res.json({ ok: true, setups });
 });
 
-app.post("/dealer-setups", requirePermission("canAccessTodos"), async (req, res) => {
-  const user = (req as any).user ?? null;
-  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
-    return res.status(403).json({ ok: false, error: "manager required" });
-  }
+app.post("/dealer-setups", requirePermission("canAccessTodos"), requireManagerAccess, async (req, res) => {
   const dealerName = String(req.body?.dealerName ?? "").replace(/\s+/g, " ").trim();
   if (!dealerName) return res.status(400).json({ ok: false, error: "Dealer name is required." });
   const routingModeRaw = String(req.body?.routingMode ?? "").trim();
@@ -35515,11 +35518,7 @@ app.post("/dealer-setups", requirePermission("canAccessTodos"), async (req, res)
   return res.json({ ok: true, setup });
 });
 
-app.patch("/dealer-setups/:id", requirePermission("canAccessTodos"), async (req, res) => {
-  const user = (req as any).user ?? null;
-  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
-    return res.status(403).json({ ok: false, error: "manager required" });
-  }
+app.patch("/dealer-setups/:id", requirePermission("canAccessTodos"), requireManagerAccess, async (req, res) => {
   const stageRaw = String(req.body?.stage ?? "").trim();
   const statusRaw = String(req.body?.status ?? "").trim();
   const routingModeRaw = String(req.body?.routingMode ?? "").trim();
@@ -35863,12 +35862,10 @@ app.post("/dealer-setups/:id/runtime-package", requirePermission("canAccessTodos
 // Dealer intake email loop (flag-gated DEALER_INTAKE_EMAIL_ENABLED, default OFF) — domain/dealerIntakeMail.ts.
 app.post("/dealer-setups/:id/intake/send-invite", requirePermission("canAccessTodos"), requireManager, dealerIntakeSendInviteHandler);
 app.get("/dealer-setups/:id/intake/status", requirePermission("canAccessTodos"), requireManager, dealerIntakeStatusHandler);
+app.get("/public/dealer-intake/:token", dealerIntakeFormPageHandler);
+app.post("/public/dealer-intake/:token", dealerIntakeFormSubmitHandler);
 
-app.post("/dealer-setups/:id/launch-dry-run", requirePermission("canAccessTodos"), async (req, res) => {
-  const user = (req as any).user ?? null;
-  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
-    return res.status(403).json({ ok: false, error: "manager required" });
-  }
+app.post("/dealer-setups/:id/launch-dry-run", requirePermission("canAccessTodos"), requireManagerAccess, async (req, res) => {
   const setup = await getDealerSetup(req.params.id);
   if (!setup) return res.status(404).json({ ok: false, error: "Dealer setup not found." });
   const dryRun = buildDealerLaunchDryRun(setup);
@@ -35903,11 +35900,7 @@ async function runDealerSmokeChecks(setup: DealerSetup) {
   ]);
 }
 
-app.post("/dealer-setups/:id/smoke-test", requirePermission("canAccessTodos"), async (req, res) => {
-  const user = (req as any).user ?? null;
-  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
-    return res.status(403).json({ ok: false, error: "manager required" });
-  }
+app.post("/dealer-setups/:id/smoke-test", requirePermission("canAccessTodos"), requireManagerAccess, async (req, res) => {
   const setup = await getDealerSetup(req.params.id);
   if (!setup) return res.status(404).json({ ok: false, error: "Dealer setup not found." });
   const checks = await runDealerSmokeChecks(setup);
