@@ -523,6 +523,7 @@
     "non_adf_thanks_strip:eval",
     "past_purchase_complaint:eval",
     "past_purchase_complaint_parser:eval",
-    "opt_out_display:eval"
+    "opt_out_display:eval",
+    "dealer_hours_write_through:eval"
   ]
 }

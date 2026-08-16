@@ -415,7 +415,11 @@ const CEILINGS: Ceiling[] = [
     // Repairing the escaping is the landmine, not the fix: single-escaped they match 121 of those
     // bodies and empty or gut most of them. Deleted instead, and pinned by
     // non_adf_thanks_strip:eval, which executes the shipped function on verbatim store bodies.
-    max: 70_339,
+    // 70_339 -> 70_338. The dealer-profile hours write-through. index.ts was sitting EXACTLY on the
+    // ceiling again, so the slice funded itself: the four-line `hours:` replace-not-merge expression
+    // collapsed to one `hours,` and moved into schedulerConfig.ts as `reconcileDealerProfileHours`,
+    // which is where businessHours already lives. Net -1 with the write-through call included.
+    max: 70_338,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
