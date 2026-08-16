@@ -52,8 +52,19 @@ assert.ok(/adfDepartmentRoute\.kind === "riding_academy"/.test(sendgrid), "ridin
 assert.ok(/riding_academy/.test(llm), "the parser schema + prompt must include riding_academy");
 assert.ok(/input\.department === "riding_academy"/.test(reducer), "the decision must pass riding_academy through");
 // Gated so it never runs on a clean bike lead the existing signals already handled.
-assert.ok(/isInitialAdf && !!effectiveInquiry && !adfDepartmentExistingSignal && adfDepartmentCue/.test(sendgrid),
-  "parser must be gated to initial ADF + missed-signal + a catalog/placeholder cue");
+// WIDENED 2026-08-16: the gate now also opens for a lead that ALREADY carries a persisted department
+// lane, so a SECOND lead form can be comprehended instead of silently re-entering the bike path
+// (Aidan Stewart +15857041173 / Mitchell +17165975331: two forms each, classification.ruleName back to
+// "default", email draft regenerated as bike-pricing copy at a rider-education student). The parse is
+// also what RELEASES a lane when the customer really does move to bikes — without it the lane could
+// only ever be sticky. The missed-signal + cue conditions are unchanged, so a clean bike lead with no
+// prior lane is gated exactly as before. See department_lane_persistence:eval.
+assert.ok(
+  /\(isInitialAdf \|\| !!persistedDepartmentLane\) &&\s*!!effectiveInquiry &&\s*!adfDepartmentExistingSignal &&\s*adfDepartmentCue/.test(
+    sendgrid
+  ),
+  "parser must be gated to (initial ADF OR an established lane) + missed-signal + a catalog/placeholder cue"
+);
 // The cue also fires on any terse inquiry, so a non-lexicon item with a concrete bike model in the
 // Vehicle field (e.g. "sunglasses" + "Street Glide") still gets the parser — closing the only gap.
 assert.ok(/adfDepartmentTerseInquiry/.test(sendgrid) && /adfDepartmentCue[\s\S]{0,160}adfDepartmentTerseInquiry/.test(sendgrid),

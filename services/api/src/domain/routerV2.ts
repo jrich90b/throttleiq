@@ -4,6 +4,7 @@ export {
   buildNoResponseFallbackTodoSummary,
   buildRouteDecisionSnapshot,
   decideAdfDepartmentRoute,
+  decideDepartmentLaneTurn,
   decideCadenceInviteArm,
   decideConversationCloseoutTurn,
   decideDraftModelArm,

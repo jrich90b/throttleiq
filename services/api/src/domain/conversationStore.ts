@@ -1020,6 +1020,12 @@ export type Conversation = {
   originalLead?: LeadProfile;
   latestLead?: LeadProfile;
   classification?: { bucket?: string; cta?: string; channel?: string; ruleName?: string };
+  /**
+   * The department lane this lead was comprehended into (rider education, parts, apparel, service),
+   * persisted so a SECOND lead form does not silently re-enter the generic bike path. Written only
+   * through `setConversationDepartmentLane`, from `decideDepartmentLaneTurn`'s verdict.
+   */
+  departmentLane?: { kind: "apparel" | "parts" | "service" | "riding_academy"; at: string };
   appointment?: AppointmentMemory;
   dealerRide?: {
     staffNotify?: {
@@ -3334,6 +3340,28 @@ export function setConversationClassification(
   classification: Conversation["classification"]
 ): Conversation {
   conv.classification = classification;
+  conv.updatedAt = nowIso();
+  scheduleSave();
+  return conv;
+}
+
+/**
+ * Single writer for `conv.departmentLane`. Takes `decideDepartmentLaneTurn().persist` verbatim:
+ * a lane to remember, or null to clear one the customer has moved off. Nothing else may write this
+ * field — the referee owns whether the lane holds (routine contract: ask the referee, never add the
+ * Nth inline writer).
+ */
+export function setConversationDepartmentLane(
+  conv: Conversation,
+  lane: "apparel" | "parts" | "service" | "riding_academy" | null
+): Conversation {
+  const current = conv.departmentLane?.kind ?? null;
+  if (current === lane) return conv;
+  if (!lane) {
+    delete conv.departmentLane;
+  } else {
+    conv.departmentLane = { kind: lane, at: nowIso() };
+  }
   conv.updatedAt = nowIso();
   scheduleSave();
   return conv;

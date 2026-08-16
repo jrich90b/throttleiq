@@ -27,6 +27,7 @@ import {
   appendOutbound,
   mergeConversationLead,
   setConversationClassification,
+  setConversationDepartmentLane,
   setConversationSoftTag,
   updateHoldingFromInbound,
   confirmAppointmentIfMatchesSuggested,
@@ -203,7 +204,7 @@ import {
 import { resolveFirstTimeRiderGuidanceSource } from "../domain/inboundPipeline.js";
 import { isJumpStartExperienceRequestText } from "../domain/ridingAcademy.js";
 import { applyDraftStateInvariants } from "../domain/draftStateInvariants.js";
-import { resolveRoutingParserDecision, decideAdfDepartmentRoute } from "../domain/routerV2.js";
+import { resolveRoutingParserDecision, decideAdfDepartmentRoute, decideDepartmentLaneTurn } from "../domain/routerV2.js";
 import { listUsers } from "../domain/userStore.js";
 import { formatEmailLayout } from "../domain/tone.js";
 import {
@@ -5369,7 +5370,16 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   // `vehicle` and low confidence into one `none`). Keep the raw verdict so the subjectless-lead
   // referee reads the parser rather than re-deriving it, and so no second LLM call is spent.
   let adfDepartmentVerdict: AdfDepartmentVerdict = toAdfDepartmentVerdict(null);
-  if (isInitialAdf && !!effectiveInquiry && !adfDepartmentExistingSignal && adfDepartmentCue) {
+  // A lane established by an EARLIER lead form (persisted). Its presence also re-opens the parser
+  // gate below: without a fresh parse on a repeat ADF there is no way to detect that the customer
+  // has moved to bikes, and the lane could never be released.
+  const persistedDepartmentLane = conv?.departmentLane?.kind ?? null;
+  if (
+    (isInitialAdf || !!persistedDepartmentLane) &&
+    !!effectiveInquiry &&
+    !adfDepartmentExistingSignal &&
+    adfDepartmentCue
+  ) {
     const adfDepartmentParse = await parseAdfDepartmentInterestWithLLM({
       inquiry: effectiveInquiry,
       vehicle: adfDepartmentVehicleContext || null,
@@ -5391,6 +5401,29 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       });
     }
   }
+  // Carry the lane across repeat lead forms (see decideDepartmentLaneTurn). Without this a second
+  // ADF drops a rider-education lead straight back into the bike-pricing path.
+  const departmentLaneDecision = decideDepartmentLaneTurn({
+    priorLane: persistedDepartmentLane,
+    thisTurnLane: adfDepartmentRoute.kind,
+    // Release only on a CONFIDENT vehicle verdict, at the same bar the route override uses. A
+    // missing or low-confidence parse must never drop a lane (fail direction).
+    vehicleSubjectThisTurn:
+      adfDepartmentVerdict.accepted &&
+      adfDepartmentVerdict.department === "vehicle" &&
+      adfDepartmentVerdict.confidence >= Number(process.env.ADF_DEPARTMENT_CONFIDENCE_MIN ?? 0.7)
+  });
+  if (departmentLaneDecision.kind !== adfDepartmentRoute.kind) {
+    console.log("[sendgrid inbound] department lane", {
+      convId: conv?.id ?? null,
+      priorLane: persistedDepartmentLane,
+      thisTurnLane: adfDepartmentRoute.kind,
+      lane: departmentLaneDecision.kind,
+      reason: departmentLaneDecision.reason
+    });
+  }
+  adfDepartmentRoute = { kind: departmentLaneDecision.kind };
+  setConversationDepartmentLane(conv, departmentLaneDecision.persist);
   // PLACEMENT NOTE: computed here, with the other parser-derived signals, rather than next to the
   // bucket chain it feeds. `dealer_ride_initial_draft:eval` reads a fixed 2000-char source window
   // starting at the FIRST mention of the dealer-lead-app no-demo flag and ending at its own bucket
@@ -5463,6 +5496,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     // on a Street 750).
     inferredBucket = "general_inquiry";
     inferredCta = "contact_us";
+    // ...and the contact_us we just set must SURVIVE. `shouldPricingIntentSetQuoteCta` runs further
+    // down and rewrites cta to request_a_quote whenever a pricing intent is still standing, which is
+    // how two live course leads ended up quote-tagged with the lane correctly applied (Matthew Barber
+    // +17163686137 -> dialogState pricing_init, Mitchell +17165975331). Every sibling lane that forces
+    // a non-bike route clears the pricing intent the same way (forcedTradeIn, EagleRider); the course
+    // lane was the one that did not. `initialAdfRiderCourseDecision` already cleared it above, so this
+    // covers the parser-routed and carried-forward cases that branch never saw.
+    pricingInquiryIntent = false;
   } else if (adfDepartmentRoute.kind === "parts" || semanticPartsIntent || partsIntentFromText) {
     inferredBucket = "parts";
     inferredCta = "parts_request";
