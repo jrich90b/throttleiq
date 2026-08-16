@@ -556,6 +556,7 @@ import {
 import {
   getSchedulerConfig,
   saveSchedulerConfig,
+  reconcileDealerProfileHours,
   dayKey,
   getPreferredSalespeople,
   type SchedulerConfig
@@ -39268,6 +39269,7 @@ app.put("/dealer-profile", requireManager, async (req, res) => {
     };
   }
   delete incoming.warrantyRmaWorkflow;
+  const hours = await reconcileDealerProfileHours(current?.hours, incoming?.hours);
   const merged = {
     ...current,
     ...incoming,
@@ -39275,10 +39277,7 @@ app.put("/dealer-profile", requireManager, async (req, res) => {
       ...(current?.address ?? {}),
       ...(incoming?.address ?? {})
     },
-    hours:
-      incoming?.hours && typeof incoming.hours === "object"
-        ? incoming.hours
-        : current?.hours,
+    hours,
     policies: {
       ...(current?.policies ?? {}),
       ...(incoming?.policies ?? {})
