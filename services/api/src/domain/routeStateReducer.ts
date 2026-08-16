@@ -4713,6 +4713,143 @@ export function decideSoldCloseout(input: SoldCloseoutInput): SoldCloseoutDecisi
   };
 }
 
+// === Sold sale-record referee (Ethan Mouyeos +17166970787, 2026-08-16) ==========================
+// A sale happens ONCE. Recording an outcome about it later is not a second sale.
+//
+// Three writers stamped `conv.sale` and only one of them checked whether a sale was already on the
+// record: `applyUnitLessSoldSaleStub` refuses outright (`if (conv.sale?.soldAt) return null`), while
+// `applySoldCloseout` and the console header's appointment-outcome "sold" branch both assigned
+// wholesale. The LEAST careful of the three carried the WEAKEST data — it stamps `soldAt: now`,
+// attributes the sale to whoever took the APPOINTMENT, and names the bike the customer INQUIRED
+// about (the #470 wrong-bike trap the stub's own comment warns against).
+//
+// MEASURED: Joe recorded a back-dated "showed → sold" outcome on 2026-08-16 for a bike bought on
+// 2026-04-15. The true sale date, the true unit label, and the cadence anchor were all replaced with
+// that afternoon's timestamp; the owner sequence lost its step history and re-queued a day-one text.
+//
+// THE INVARIANT: `soldAt` never moves FORWARD. A later sold signal may ENRICH a recorded sale —
+// fill a field that is empty, append its note — but may never restate the date, re-attribute the
+// sale, or replace a NAMED unit with a lead-record guess. That keeps the legitimate correction the
+// stub's comment describes (a unit-less stub later given a real bike) while refusing the
+// restatement, because filling an empty field and overwriting a set one are different acts.
+//
+// FAIL DIRECTION: preserving the earlier record keeps the truth we already had; overwriting
+// silently downgrades the sale date, the commission attribution and which unit was sold, and
+// nothing downstream can tell that it happened.
+export type SoldSaleRecordFields = {
+  soldAt?: string | null;
+  soldById?: string | null;
+  soldByName?: string | null;
+  stockId?: string | null;
+  vin?: string | null;
+  label?: string | null;
+  note?: string | null;
+};
+
+export type SoldSaleRecordInput = {
+  /** `conv.sale` exactly as stored. Absent, or absent `soldAt`, = no sale on the record yet. */
+  existing?: (SoldSaleRecordFields & Record<string, unknown>) | null;
+  /** The record this sold signal wants to write. */
+  incoming: SoldSaleRecordFields & Record<string, unknown>;
+};
+
+export type SoldSaleRecordDecision = {
+  /** The record to store. Callers assign this instead of their own object. */
+  sale: SoldSaleRecordFields & Record<string, unknown>;
+  /** True when a sale was already recorded and its date/attribution were kept. */
+  preservedExistingSale: boolean;
+  /** Fields the incoming signal filled in because the stored record left them empty. */
+  enrichedFields: string[];
+  why: string;
+};
+
+/** A sale record "names a unit" only when it carries a real stock id or VIN — a label alone is a guess. */
+function soldSaleNamesUnit(sale: SoldSaleRecordFields | null | undefined): boolean {
+  return Boolean(String(sale?.stockId ?? "").trim() || String(sale?.vin ?? "").trim());
+}
+
+export function decideSoldSaleRecord(input: SoldSaleRecordInput): SoldSaleRecordDecision {
+  const incoming = input.incoming ?? {};
+  const existing = input.existing ?? null;
+  const existingSoldAt = String(existing?.soldAt ?? "").trim();
+  if (!existingSoldAt) {
+    return {
+      sale: { ...incoming },
+      preservedExistingSale: false,
+      enrichedFields: [],
+      why: "no sale on the record yet — stamped the incoming sold signal as the sale"
+    };
+  }
+
+  const enrichedFields: string[] = [];
+  // Take the incoming value ONLY where the stored record is empty. `soldAt` is never in this set:
+  // it is the identity of the sale and a later signal restating it is the whole defect.
+  const keep = (field: keyof SoldSaleRecordFields): string | undefined => {
+    const current = String(existing?.[field] ?? "").trim();
+    if (current) return current;
+    const next = String(incoming?.[field] ?? "").trim();
+    if (!next) return undefined;
+    enrichedFields.push(String(field));
+    return next;
+  };
+
+  // The unit is decided as ONE fact, not field by field: a stored record that names no unit may be
+  // given the incoming one whole (stub -> real bike), but a record that already names a unit keeps
+  // its stock id, VIN and label together. Merging them independently could pair one bike's stock id
+  // with another's label.
+  const existingNamesUnit = soldSaleNamesUnit(existing);
+  const unit = existingNamesUnit
+    ? {
+        stockId: String(existing?.stockId ?? "").trim() || undefined,
+        vin: String(existing?.vin ?? "").trim() || undefined,
+        label: String(existing?.label ?? "").trim() || String(incoming?.label ?? "").trim() || undefined
+      }
+    : soldSaleNamesUnit(incoming)
+      ? {
+          stockId: String(incoming?.stockId ?? "").trim() || undefined,
+          vin: String(incoming?.vin ?? "").trim() || undefined,
+          label: String(incoming?.label ?? "").trim() || String(existing?.label ?? "").trim() || undefined
+        }
+      : {
+          stockId: undefined,
+          vin: undefined,
+          label: String(existing?.label ?? "").trim() || String(incoming?.label ?? "").trim() || undefined
+        };
+  if (!existingNamesUnit && soldSaleNamesUnit(incoming)) enrichedFields.push("unit");
+
+  // Notes accumulate: a back-filled outcome note is real information about the deal even when the
+  // sale itself must not move. Compared SEGMENT-WISE, not as whole strings — the same outcome POSTed
+  // twice would otherwise append its note to a note that already ends with it, and the record would
+  // grow on every replay. Idempotence is the point: re-recording an outcome must be inert.
+  const existingNote = String(existing?.note ?? "").trim();
+  const incomingNote = String(incoming?.note ?? "").trim();
+  const existingSegments = existingNote
+    .split("|")
+    .map(segment => segment.trim())
+    .filter(Boolean);
+  const noteIsNew = Boolean(incomingNote) && !existingSegments.includes(incomingNote);
+  const note = noteIsNew
+    ? [existingNote, incomingNote].filter(Boolean).join(" | ")
+    : existingNote || incomingNote || undefined;
+  if (!existingNote && incomingNote) enrichedFields.push("note");
+
+  return {
+    sale: {
+      ...existing,
+      soldAt: existingSoldAt,
+      soldById: keep("soldById"),
+      soldByName: keep("soldByName"),
+      ...unit,
+      note
+    },
+    preservedExistingSale: true,
+    enrichedFields,
+    why: enrichedFields.length
+      ? `sale already recorded at ${existingSoldAt} — kept it and filled ${enrichedFields.join(", ")}`
+      : `sale already recorded at ${existingSoldAt} — kept it; the later signal added nothing new`
+  };
+}
+
 // When a lead's thread CLOSES, what else has to settle? One referee for what were two independent
 // answers. This is the SIBLING of `decideSoldCloseout` and deliberately not merged with it: that
 // one answers "does the unit HOLD come off", this one answers "what does closing itself entail".
@@ -5613,12 +5750,23 @@ export type CadenceStartInput = {
     status?: string | null;
     scheduleInviteCount?: number | null;
     scheduleMuted?: boolean | null;
+    /** Which ladder the stored cadence runs — "post_sale" is the one this lane can re-arm. */
+    kind?: string | null;
+    /** What the stored cadence was anchored to. For post_sale that is the sale it belongs to. */
+    anchorAt?: string | null;
   } | null;
   /**
    * post_sale only: has this lead actually bought? (`closedReason === "sold" || sale.soldAt`).
    * The caller resolves it because the two source fields live in different places on the record.
    */
   sold?: boolean | null;
+  /**
+   * post_sale only: `conv.sale?.soldAt` exactly as stored — the IDENTITY of the sale being armed.
+   * The owner sequence belongs to a SALE, not to the moment a staff member typed an outcome, so
+   * this is what tells a re-recorded outcome apart from a genuinely new sale. Absent = a caller
+   * that has not been taught the distinction, which gets today's behavior rather than silence.
+   */
+  saleSoldAt?: string | null;
   /**
    * `conv.followUp?.reason` exactly as stored. A recognized non-sales class
    * (`NON_SALES_CADENCE_REASONS`) refuses every customer-chase lane. Absent/unknown = ordinary
@@ -5732,16 +5880,46 @@ export function decideCadenceStart(input: CadenceStartInput): CadenceStartDecisi
             ? `standard_ramp: refused — this lead is a non-sales class (${followUpReason})`
             : `standard_ramp: refused — a ${existingStatus} cadence already owns this lead`;
       break;
-    case "post_sale":
+    case "post_sale": {
       // No closed check on purpose: a sold conversation IS closed (reason "sold").
       // No non-sales check on purpose either: this lane is already gated on an actual sale, and a
       // vendor/job-seeker never sells. Adding one here would only risk the load-bearing divergence
       // above for no reachable case.
-      start = input.sold === true;
+      //
+      // ALREADY-RAN CLAUSE (Ethan Mouyeos +17166970787, 2026-08-16). Every other lane here refuses
+      // when a cadence record already owns the lead; post_sale never got that clause, so `sold ===
+      // true` re-armed the owner sequence at step 0 EVERY time any sold signal landed. Joe recorded
+      // a back-dated appointment outcome on an April sale while clearing a digest list and the lead
+      // was re-queued for a day-ONE owner text — on a bike bought four months earlier, whose day-60
+      // step had already been sent and answered. Six more names on that same list would each have
+      // done it.
+      //
+      // Keyed on the SALE, not on "now": the sequence belongs to a sale, so an existing post_sale
+      // cadence anchored to THIS sale's `soldAt` means the sequence is already running and must be
+      // left where it is. A genuinely different sale (a reopened lead that bought again, a
+      // different `soldAt`) still arms normally, and a caller that passes no `saleSoldAt` keeps
+      // today's behavior.
+      //
+      // FAIL DIRECTION: refusing leaves an owner sequence exactly where the real sale put it —
+      // the customer keeps the schedule they have already been living on. Re-arming is the
+      // unsafe direction: it replays day-one copy at someone who bought months ago AND re-dates
+      // the 1-year anniversary step to a year after the records clean-up.
+      const existingKind = String(input.existing?.kind ?? "").trim().toLowerCase();
+      const existingAnchor = String(input.existing?.anchorAt ?? "").trim();
+      const saleSoldAt = String(input.saleSoldAt ?? "").trim();
+      const sequenceAlreadyRunning =
+        existingKind === "post_sale" &&
+        hasCadenceRecord &&
+        !!saleSoldAt &&
+        existingAnchor === saleSoldAt;
+      start = input.sold === true && !sequenceAlreadyRunning;
       why = start
         ? "post_sale: the lead bought — started the owner sequence"
-        : "post_sale: refused — nothing on this lead says it sold";
+        : sequenceAlreadyRunning
+          ? "post_sale: refused — the owner sequence for this sale is already running"
+          : "post_sale: refused — nothing on this lead says it sold";
       break;
+    }
     case "deferred_long_term":
       start = !conversationClosed && !nonSalesLead;
       why = start

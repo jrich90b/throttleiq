@@ -16,6 +16,8 @@ import {
   decideCadenceStart,
   decideHeldDraftRelease,
   decideSoldCloseout,
+  decideSoldSaleRecord,
+  type SoldSaleRecordDecision,
   decideLeadCloseout,
   decidePendingCloseoutOnSend,
   type PendingCloseoutSendDecision,
@@ -5196,7 +5198,10 @@ export function startPostSaleCadence(conv: Conversation, anchorAtIso: string, ti
     lane: "post_sale",
     conversationStatus: conv.status,
     existing: conv.followUpCadence,
-    sold: conv.closedReason === "sold" || Boolean(conv.sale?.soldAt)
+    sold: conv.closedReason === "sold" || Boolean(conv.sale?.soldAt),
+    // The IDENTITY of the sale this sequence would belong to. The referee refuses to re-arm a
+    // sequence already anchored to it, so a re-recorded outcome cannot replay day one.
+    saleSoldAt: conv.sale?.soldAt ?? null
   });
   if (!decision.start) return;
   const nextDueAt = computePostSaleDueAt(anchorAtIso, POST_SALE_DAY_OFFSETS[0], timeZone);
@@ -5541,6 +5546,21 @@ export function applyCadenceReplacement(
 // Deliberately does NOT stamp `conv.updatedAt` or save: the outcome path's caller saves, and the
 // endpoint saves inline right after. Adding a write here would change persisted timestamps, which
 // a cleanup must not do.
+/**
+ * THE one place `conv.sale` is stamped from a sold signal. Asks `decideSoldSaleRecord` whether the
+ * incoming record may replace what is already stored — see that referee for the invariant and the
+ * production miss (Ethan Mouyeos +17166970787, a back-dated outcome that restated an April sale as
+ * today's). Callers pass the record they WANT to write and get the one that is actually correct.
+ */
+export function applySoldSaleRecord(
+  conv: Conversation,
+  incoming: NonNullable<Conversation["sale"]>
+): SoldSaleRecordDecision {
+  const decision = decideSoldSaleRecord({ existing: conv.sale ?? null, incoming });
+  conv.sale = decision.sale as NonNullable<Conversation["sale"]>;
+  return decision;
+}
+
 export function applySoldCloseout(
   conv: Conversation,
   input: {
@@ -5559,7 +5579,7 @@ export function applySoldCloseout(
     soldKey: input.soldKey,
     holdMatchesSoldUnit: input.holdMatchesSoldUnit
   });
-  conv.sale = input.sale;
+  applySoldSaleRecord(conv, input.sale);
   if (decision.closeConversation) {
     conv.status = "closed";
     conv.closedAt = input.nowIso;

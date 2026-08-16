@@ -1062,6 +1062,7 @@ import {
   applyCadenceReplacement,
   applyAppointmentAttribution,
   applySoldCloseout,
+  applySoldSaleRecord,
   applyLeadCloseout,
   armPendingCloseout,
   applyPendingCloseoutOnSend,
@@ -40760,7 +40761,8 @@ app.post("/conversations/:id/appointment/outcome", requirePermission("canEditApp
       const leadVehicle = conv?.lead?.vehicle ?? {};
       const label =
         [leadVehicle?.year, leadVehicle?.make, leadVehicle?.model].filter(Boolean).join(" ").trim() || undefined;
-      conv.sale = {
+      // A back-dated outcome records the OUTCOME, not a second sale — referee owns the merge.
+      applySoldSaleRecord(conv, {
         soldAt: nowIso,
         soldById: soldById || undefined,
         soldByName: soldByName || undefined,
@@ -40768,7 +40770,7 @@ app.post("/conversations/:id/appointment/outcome", requirePermission("canEditApp
         vin: String(leadVehicle?.vin ?? "").trim() || undefined,
         label,
         note: appointmentOutcomeNote || undefined
-      };
+      });
       applyLeadCloseout(conv, { nowIso, lane: "appointment_outcome_sold", reason: "sold" });
       markOpenTodosDoneForConversation(conv.id);
       setFollowUpMode(conv, "active", "post_sale");
@@ -41856,7 +41858,8 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
         const leadVehicle = conv?.lead?.vehicle ?? {};
         const label =
           [leadVehicle?.year, leadVehicle?.make, leadVehicle?.model].filter(Boolean).join(" ").trim() || undefined;
-        conv.sale = {
+        // Same referee as the console-header branch: never restate an already-recorded sale.
+        applySoldSaleRecord(conv, {
           soldAt: nowIsoValue,
           soldById: soldById || undefined,
           soldByName: soldByName || undefined,
@@ -41864,7 +41867,7 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
           vin: String(leadVehicle?.vin ?? "").trim() || undefined,
           label,
           note: effectiveAppointmentOutcomeNote || undefined
-        };
+        });
         applyLeadCloseout(conv, {
           nowIso: nowIsoValue,
           lane: "appointment_outcome_sold",
