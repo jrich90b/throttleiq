@@ -94,6 +94,12 @@ exposure; changes to this charter's boundary rules.
 - **C1.2** The full self-intro ("it's Alexandra over at American Harley-Davidson") is
   INTENDED on both text and email first touches — keep it; don't dedupe it away. *(7/26 #3:
   "Keep the intro")*
+- **C1.2a** …but ONLY on a first touch. Once the customer has received ANY message from us on
+  the thread, never introduce again — no "Hey there, it's {name} over at {dealer}". A second
+  lead form from the same customer is still the same thread: answer the new bike, don't restart.
+  And the name must not change mid-thread across channels: if they met Alexandra by text, the
+  email is Alexandra too. *(7/23 #: Brian +17166021492 got a fresh self-intro on turn 25; 8/15:
+  Boyd +17169401820 and Mark +17169071289 re-introduced on a second demo-ride lead the next day)*
 - **C1.3** Replies hard-anchor to the live conversation: price/MSRP answers lock to the
   bike under discussion THIS TURN, never a stale ADF lead-record vehicle. *(7/23 #6)*
 - **C1.4** Never attribute to the customer a claim they didn't make (timeframes, colors,
@@ -124,6 +130,14 @@ exposure; changes to this charter's boundary rules.
   approved turning it on 8/8 — "Ok approve d deploy" — and `DRAFT_ADVANCE_EVERY_REPLY=1` has
   been live in the runtime env since 2026-08-08T12:35:55Z. The baseline it moves: only 65 of
   383 replies, 17%, ended by asking anything in the prior 30 days.)*
+- **C1.8** Never offer to show someone a bike they have already ridden. On a
+  `GLA - Demo Ride - DAT` lead the ride DID happen — Joe ran the event and saw those customers —
+  so the first touch says so ("Hope you enjoyed riding the …") and must NOT say "if you'd ever
+  like to see one in person". This lane ONLY: every other demo-ride source keeps the rule that
+  the lead source alone never proves a ride happened, and an unknown source falls back to it.
+  Unchanged either way: no appointment times, no availability claim, no follow-up cadence.
+  *(Joe 8/15 "2 yes", knowingly superseding the completed-ride half of his 7/02 ruling for this
+  lane; he reported the sentence three times first. Built as PR #721.)*
 
 ## C2 — When to stay silent
 
