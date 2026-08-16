@@ -70,8 +70,8 @@ const APRIL_SALE = {
   soldAt: "2026-04-15T19:30:03.963Z",
   soldById: "giovanni",
   soldByName: "Giovanni Boccabella",
-  stockId: "U577-08",
-  vin: "1HD1GN4128K123456",
+  stockId: "STOCK-SOLD-A",
+  vin: "VINFIXTUREA000001",
   label: "2008 Harley-Davidson Fat Bob",
   note: "Delivered."
 };
@@ -103,7 +103,7 @@ check("a2 back-filled outcome does not re-attribute the sale to whoever took the
 
 check("a3 a NAMED unit is never replaced by the lead-record guess (the #470 wrong-bike trap)", () => {
   const d = decideSoldSaleRecord({ existing: APRIL_SALE, incoming: BACKFILLED_OUTCOME });
-  assert.equal(d.sale.stockId, "U577-08");
+  assert.equal(d.sale.stockId, "STOCK-SOLD-A");
   assert.equal(d.sale.vin, APRIL_SALE.vin);
   assert.equal(d.sale.label, "2008 Harley-Davidson Fat Bob");
 });
@@ -130,21 +130,21 @@ check("a6 a unit-less STUB may still be given a real bike — enrichment, not re
   const stub = { soldAt: "2026-05-01T10:00:00.000Z", note: "Sold, unit not named." };
   const d = decideSoldSaleRecord({
     existing: stub,
-    incoming: { ...BACKFILLED_OUTCOME, stockId: "U901-24", label: "2024 Street Glide" }
+    incoming: { ...BACKFILLED_OUTCOME, stockId: "STOCK-SOLD-B", label: "2024 Street Glide" }
   });
   assert.equal(d.sale.soldAt, stub.soldAt, "the stub's date is still the sale date");
-  assert.equal(d.sale.stockId, "U901-24", "the real bike fills the empty unit");
+  assert.equal(d.sale.stockId, "STOCK-SOLD-B", "the real bike fills the empty unit");
   assert.equal(d.sale.label, "2024 Street Glide");
   assert.ok(d.enrichedFields.includes("unit"));
 });
 
 check("a7 an empty attribution is filled, a set one is not", () => {
   const d = decideSoldSaleRecord({
-    existing: { soldAt: "2026-05-01T10:00:00.000Z", stockId: "U901-24" },
+    existing: { soldAt: "2026-05-01T10:00:00.000Z", stockId: "STOCK-SOLD-B" },
     incoming: BACKFILLED_OUTCOME
   });
   assert.equal(d.sale.soldById, "appointment-taker", "empty attribution takes the incoming value");
-  assert.equal(d.sale.stockId, "U901-24", "a named unit still wins");
+  assert.equal(d.sale.stockId, "STOCK-SOLD-B", "a named unit still wins");
   assert.ok(d.enrichedFields.includes("soldById"));
 });
 
@@ -157,10 +157,10 @@ check("a8 replaying the SAME outcome twice is inert — no duplicated note, no d
 
 check("a9 the unit is decided as ONE fact — a named record never pairs one bike's id with another's label", () => {
   const d = decideSoldSaleRecord({
-    existing: { soldAt: "2026-05-01T10:00:00.000Z", stockId: "U577-08", label: "2008 Fat Bob" },
-    incoming: { ...BACKFILLED_OUTCOME, stockId: "U901-24", vin: "OTHERVIN", label: "2024 Street Glide" }
+    existing: { soldAt: "2026-05-01T10:00:00.000Z", stockId: "STOCK-SOLD-A", label: "2008 Fat Bob" },
+    incoming: { ...BACKFILLED_OUTCOME, stockId: "STOCK-SOLD-B", vin: "OTHERVIN", label: "2024 Street Glide" }
   });
-  assert.equal(d.sale.stockId, "U577-08");
+  assert.equal(d.sale.stockId, "STOCK-SOLD-A");
   assert.equal(d.sale.label, "2008 Fat Bob");
   assert.equal(d.sale.vin ?? null, null, "the other bike's VIN must not be grafted on");
 });

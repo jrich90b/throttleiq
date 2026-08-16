@@ -5561,6 +5561,36 @@ export function applySoldSaleRecord(
   return decision;
 }
 
+/**
+ * The appointment-outcome "sold" record, built the ONE way both outcome paths built it — the
+ * console header's outcome branch and the todo-outcome branch had byte-identical copies of this
+ * five-line construction in index.ts.
+ *
+ * It is the WEAKEST sold signal we have and the comment is the point: it stamps "now", attributes
+ * the sale to whoever took the APPOINTMENT, and names the bike off `lead.vehicle` — the bike the
+ * customer INQUIRED about, which is the #470 wrong-bike trap. That is fine for a lead whose sale we
+ * are hearing about for the first time and wrong for one already on the record, so it goes through
+ * `decideSoldSaleRecord` rather than assigning.
+ */
+export function applyAppointmentOutcomeSoldSale(
+  conv: Conversation,
+  input: { nowIso: string; note?: string }
+): SoldSaleRecordDecision {
+  const leadVehicle: any = conv?.lead?.vehicle ?? {};
+  return applySoldSaleRecord(conv, {
+    soldAt: input.nowIso,
+    soldById: conv.appointment?.bookedSalespersonId ?? conv.leadOwner?.id ?? undefined,
+    soldByName:
+      String(conv.appointment?.bookedSalespersonName ?? conv.leadOwner?.name ?? "").trim() || undefined,
+    stockId: String(leadVehicle?.stockId ?? "").trim() || undefined,
+    vin: String(leadVehicle?.vin ?? "").trim() || undefined,
+    label:
+      [leadVehicle?.year, leadVehicle?.make, leadVehicle?.model].filter(Boolean).join(" ").trim() ||
+      undefined,
+    note: input.note || undefined
+  });
+}
+
 export function applySoldCloseout(
   conv: Conversation,
   input: {
