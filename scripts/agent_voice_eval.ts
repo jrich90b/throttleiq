@@ -14,6 +14,7 @@ import {
   resolveAdfAckFirstName,
   hasCustomerReceivedOutbound,
   shouldIntroduceOnAdfTouch,
+  buildDealerRideIdentitySentence,
   stripLeadingAgentGreeting
 } from "../services/api/src/domain/agentVoice.ts";
 
@@ -237,6 +238,82 @@ assert.ok(
       `Hey ${resolveAdfAckFirstName({ firstName: raw })}, `,
       greet(raw),
       `the ADF ack name and the greeting must agree on "${raw}" — two readers of one fact is the bug class`
+    );
+  }
+}
+
+
+// ── Charter C1.2a on the DEALER-RIDE builders (Rick Williamson +17165241170, 2026-08-16) ──────────
+// The rule ("once the customer has received ANY message from us on the thread, never introduce
+// again; a second lead form is still the same thread") was implemented in ONE place — the
+// riding-academy ack. The three dealer-ride builders hardcoded "This is {name} at {dealer}. ", so a
+// second Dealer Lead App form on 8/15 drew "Hi Rick — This is Scott at American Harley-Davidson…"
+// eleven days into a live SMS conversation with Scott. MEASURED on the live store: 32 of 90
+// repeat-ADFs on an already-two-way thread re-introduced, 18 of them this builder's own line.
+{
+  const IDENT = { senderFirst: "Scott", dealerName: "American Harley-Davidson" };
+  const say = (messages: any[]) => buildDealerRideIdentitySentence({ ...IDENT, messages });
+
+  // A genuine first touch still introduces — unchanged behaviour, and the fail-safe direction.
+  assert.equal(say([]), "This is Scott at American Harley-Davidson. ", "a genuine first touch still introduces");
+  assert.equal(say([inbound()]), "This is Scott at American Harley-Davidson. ", "inbound-only history still introduces");
+  assert.equal(
+    say([inbound(), draft(), inbound()]),
+    "This is Scott at American Harley-Davidson. ",
+    "an unsent draft must NOT suppress the intro (the Zackary regression, same fail direction)"
+  );
+  assert.equal(say(null as any), "This is Scott at American Harley-Davidson. ", "missing history fails toward introducing");
+
+  // THE MISS: Rick's real provider sequence, copied verbatim from the live store record for
+  // +17165241170 (ADF, two stale drafts, a delivered twilio send, his replies, a stale draft, the
+  // SECOND ADF). The builder must not re-introduce on the touch that follows.
+  const RICK = [
+    { direction: "in", provider: "sendgrid_adf" },
+    { direction: "out", provider: "draft_ai", draftStatus: "stale" },
+    { direction: "out", provider: "draft_ai", draftStatus: "stale" },
+    { direction: "out", provider: "twilio" },
+    { direction: "in", provider: "twilio" },
+    { direction: "out", provider: "twilio" },
+    { direction: "in", provider: "twilio" },
+    { direction: "out", provider: "draft_ai", draftStatus: "stale" },
+    { direction: "in", provider: "sendgrid_adf" }
+  ];
+  assert.equal(say(RICK), "", "Rick: a second Dealer Lead App form must not re-introduce Scott");
+  assert.equal(
+    say([inbound(), sent("human"), inbound()]),
+    "",
+    "a staff text counts too — never re-introduce over a human (C1.2a)"
+  );
+
+  // The sentence the builders actually compose, so the assertion covers the CUSTOMER-VISIBLE text
+  // and not just the flag. Greeting + identity + the thank-you the builder appends.
+  const compose = (messages: any[]) =>
+    `Hi Rick — ${say(messages)}Thanks again for coming in for the test ride on the 2021 Road Glide Special.`;
+  assert.equal(
+    compose([]),
+    "Hi Rick — This is Scott at American Harley-Davidson. Thanks again for coming in for the test ride on the 2021 Road Glide Special."
+  );
+  assert.equal(
+    compose(RICK),
+    "Hi Rick — Thanks again for coming in for the test ride on the 2021 Road Glide Special.",
+    "the repeat touch keeps the greeting and the thank-you, and drops only the self-introduction"
+  );
+  assert.ok(!compose(RICK).includes("  "), "dropping the identity sentence must not leave a double space");
+
+  // WIRING, counted — the ratchet cannot prove a call site exists (trap 2). Both twins of the
+  // post-ride builder AND the ride-outcome draft must go through the helper: index.ts carries two
+  // builders + the import (3), sendgridInbound.ts one builder + the import (2).
+  const liveSrc = fs.readFileSync(new URL("../services/api/src/index.ts", import.meta.url), "utf8");
+  const mailSrc = fs.readFileSync(new URL("../services/api/src/routes/sendgridInbound.ts", import.meta.url), "utf8");
+  const count = (src: string) => src.split("buildDealerRideIdentitySentence").length - 1;
+  assert.equal(count(liveSrc), 3, "index.ts: the import + BOTH dealer-ride builders call the C1.2a helper");
+  assert.equal(count(mailSrc), 2, "sendgridInbound.ts: the import + the post-ride builder call the C1.2a helper");
+  // And no builder may go back to hardcoding the identity sentence.
+  for (const [name, src] of [["index.ts", liveSrc], ["sendgridInbound.ts", mailSrc]] as const) {
+    assert.equal(
+      src.split("This is ${senderFirst} at ${dealerName}.").length - 1,
+      0,
+      `${name} must not hardcode the self-introduction — it goes through buildDealerRideIdentitySentence`
     );
   }
 }

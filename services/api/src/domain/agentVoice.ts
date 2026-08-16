@@ -342,6 +342,37 @@ export function shouldIntroduceOnAdfTouch(args: {
 }
 
 /**
+ * The "This is {sender} at {dealer}. " identity SENTENCE used by the dealer-ride draft builders —
+ * or "" once the customer has already received a message from us on this thread.
+ *
+ * ⭐ WHY THIS EXISTS. Charter **C1.2a** ("Once the customer has received ANY message from us on the
+ * thread, never introduce again … A second lead form from the same customer is still the same
+ * thread") was implemented in exactly ONE place — the riding-academy `buildAdfFirstTouchAck` call in
+ * sendgridInbound. The three dealer-ride builders hardcoded the identity sentence unconditionally, so
+ * the rule never reached them.
+ *
+ * MEASURED on the live store 2026-08-16: of 90 repeat-ADFs landing on a thread that already had a
+ * two-way exchange, **32 re-introduced**, 18 of them with this builder's own "This is {name} at
+ * {dealer}. Thanks again for coming in for the test ride" line and many of those DELIVERED. The
+ * reported instance is Rick Williamson (+17165241170): a second Dealer Lead App form on 8/15 drew
+ * "Hi Rick — This is Scott at American Harley-Davidson…" eleven days into a live SMS conversation
+ * with Scott, in which Rick had already said he was working on affording the bike.
+ *
+ * Fail direction is safe and matches `shouldIntroduceOnAdfTouch`: the provider allowlist behind
+ * `hasCustomerReceivedOutbound` fails toward "not received" ⇒ we introduce, which is harmless. The
+ * reverse — staying silent about who we are on the customer's genuine first message — is the bug
+ * that predicate exists to prevent, so a never-sent `draft_ai` row still yields the intro. Pure.
+ */
+export function buildDealerRideIdentitySentence(args: {
+  senderFirst: string;
+  dealerName: string;
+  messages: ReadonlyArray<{ direction?: string | null; provider?: string | null } | null | undefined> | null | undefined;
+}): string {
+  if (!shouldIntroduceOnAdfTouch({ isAdfEvent: true, messages: args.messages })) return "";
+  return `This is ${args.senderFirst} at ${args.dealerName}. `;
+}
+
+/**
  * Greeting-less intro clause: "it's {agent} over at {dealer}. " (trailing space).
  * Use when a greeting is emitted separately (e.g. a template already opens with
  * `buildAgentGreeting(...)`) or for a bare mid-reply identity line that should not

@@ -80,7 +80,7 @@ import {
   resolveRidingAcademyAdfLaneClaim,
   buildAdfFirstTouchAck
 } from "../domain/ridingAcademy.js";
-import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildRidingAcademyEnrollmentAck, shouldIntroduceOnAdfTouch, stripAgentIntroPhraseForDealer, stripLeadingAgentGreeting, hasCustomerReceivedOutbound, GENERIC_AGENT_DISPLAY_NAME, GENERIC_DEALER_DISPLAY_NAME, resolveDealerAgentName, greetingFirstName, resolveAdfAckFirstName } from "../domain/agentVoice.js";
+import { buildAgentIntro, buildDealerRideIdentitySentence, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildRidingAcademyEnrollmentAck, shouldIntroduceOnAdfTouch, stripAgentIntroPhraseForDealer, stripLeadingAgentGreeting, hasCustomerReceivedOutbound, GENERIC_AGENT_DISPLAY_NAME, GENERIC_DEALER_DISPLAY_NAME, resolveDealerAgentName, greetingFirstName, resolveAdfAckFirstName } from "../domain/agentVoice.js";
 import { buildAdfResubmissionAck, detectAdfFormResubmission } from "../domain/adfResubmission.js";
 import { buildMarketplaceRelayFirstTouchReply, buildMarketplaceRelayTaskSummary } from "../domain/marketplaceRelay.js";
 import { isHtmlClientNoticeOnly } from "../domain/inboundMailActionability.js";
@@ -1748,9 +1748,8 @@ function buildDealerLeadAppPostRideReply(args: {
   // happened; otherwise an initial-touch intro. Mirror of the index.ts twin (route-parity).
   const visited = customerVisitConfirmed(args.conv);
   const useVisitFraming = !phantomVisitGuardEnabled() || visited;
-  const intro = useVisitFraming
-    ? `${greeting}This is ${senderFirst} at ${dealerName}. Thanks again for coming in for the test ride on the ${modelLabel}.`
-    : `${greeting}This is ${senderFirst} at ${dealerName}. Thanks for your interest in the ${modelLabel}.`;
+  const identity = buildDealerRideIdentitySentence({ senderFirst, dealerName, messages: args.conv?.messages }); // charter C1.2a: introduce on the FIRST touch only
+  const intro = `${greeting}${identity}${useVisitFraming ? `Thanks again for coming in for the test ride on the ${modelLabel}.` : `Thanks for your interest in the ${modelLabel}.`}`;
   if (args.inventoryStatus === "in_stock") {
     return useVisitFraming
       ? `${intro} If any questions come up or you want to come back in and go over options, just text me anytime.`
