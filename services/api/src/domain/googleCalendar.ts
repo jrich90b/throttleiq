@@ -11,6 +11,10 @@ const __dirname = path.dirname(__filename);
 const TOKEN_PATH = path.resolve(__dirname, "../../data/google_tokens.json");
 const SUPPORT_MAIL_TOKEN_PATH = process.env.GOOGLE_SUPPORT_MAIL_TOKEN_PATH || dataPath("google_support_mail_tokens.json");
 const PERSONAL_MAIL_TOKEN_PATH = process.env.GOOGLE_PERSONAL_MAIL_TOKEN_PATH || dataPath("google_personal_mail_tokens.json");
+// Dealer-onboarding mailbox (setup@leadrider.ai): sends intake invites and receives the
+// dealer's questionnaire replies. Kept separate from support@ so the support auto-trash
+// pipeline can never eat a dealer intake reply.
+const SETUP_MAIL_TOKEN_PATH = process.env.GOOGLE_SETUP_MAIL_TOKEN_PATH || dataPath("google_setup_mail_tokens.json");
 
 export function getOAuthClient(redirectUriOverride?: string) {
   const clientId = process.env.GOOGLE_CLIENT_ID!;
@@ -84,6 +88,27 @@ export async function getAuthedPersonalGmailClient() {
   );
 }
 
+export async function loadSetupMailTokens() {
+  try {
+    const raw = await fs.readFile(SETUP_MAIL_TOKEN_PATH, "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+export async function saveSetupMailTokens(tokens: any) {
+  await fs.mkdir(path.dirname(SETUP_MAIL_TOKEN_PATH), { recursive: true });
+  await fs.writeFile(SETUP_MAIL_TOKEN_PATH, JSON.stringify(tokens, null, 2), "utf8");
+}
+
+export async function getAuthedSetupGmailClient() {
+  return getAuthedGmailClient(
+    await loadSetupMailTokens(),
+    "Setup Gmail not connected. Visit /integrations/google/start?kind=setup_mail"
+  );
+}
+
 function decodeBase64Url(value?: string | null) {
   if (!value) return "";
   return Buffer.from(value.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
@@ -125,6 +150,35 @@ export async function getPersonalGmailProfile() {
   return resp.data;
 }
 
+export async function getSetupGmailProfile() {
+  const gmail = await getAuthedSetupGmailClient();
+  const resp = await gmail.users.getProfile({ userId: "me" });
+  return resp.data;
+}
+
+// Shared status handler for the three Gmail integrations (support/personal/setup) — one
+// implementation instead of a hand-copied block per mailbox in index.ts.
+export function buildGmailStatusHandler(getProfile: () => Promise<any>) {
+  return async (_req: any, res: any) => {
+    try {
+      const profile = await getProfile();
+      return res.json({
+        ok: true,
+        connected: true,
+        email: profile.emailAddress ?? null,
+        messagesTotal: profile.messagesTotal ?? null,
+        threadsTotal: profile.threadsTotal ?? null
+      });
+    } catch (err: any) {
+      const message = err?.message ?? String(err);
+      let reason = "error";
+      if (/invalid_grant/i.test(message)) reason = "invalid_grant";
+      else if (/not connected/i.test(message)) reason = "not_connected";
+      return res.json({ ok: true, connected: false, reason, error: message });
+    }
+  };
+}
+
 async function listInboxMessages(gmail: any, limit = 10) {
   const list = await gmail.users.messages.list({
     userId: "me",
@@ -161,6 +215,25 @@ export async function listSupportInboxMessages(limit = 10) {
 
 export async function listPersonalInboxMessages(limit = 10) {
   return listInboxMessages(await getAuthedPersonalGmailClient(), limit);
+}
+
+export async function listSetupInboxMessages(limit = 15) {
+  return listInboxMessages(await getAuthedSetupGmailClient(), limit);
+}
+
+// Full plain-text body of one setup-mailbox message (for intake-reply ingestion).
+export async function getSetupGmailMessageText(messageId: string) {
+  const gmail = await getAuthedSetupGmailClient();
+  const full = await gmail.users.messages.get({ userId: "me", id: messageId, format: "full" });
+  const headers = full.data.payload?.headers ?? [];
+  return {
+    id: full.data.id ?? messageId,
+    threadId: full.data.threadId ?? "",
+    from: findHeader(headers, "From"),
+    subject: findHeader(headers, "Subject"),
+    date: findHeader(headers, "Date"),
+    text: extractPlainText(full.data.payload)
+  };
 }
 
 export async function createSupportGmailDraftReply(messageId: string, bodyText: string) {
@@ -224,6 +297,31 @@ export async function sendPersonalGmailEmail(input: { to: string; subject: strin
   const gmail = await getAuthedPersonalGmailClient();
   const to = input.to.replace(/\s+/g, " ").trim();
   const subject = input.subject.replace(/\s+/g, " ").trim() || "LeadRider follow-up";
+  const bodyText = input.bodyText.trim();
+  if (!to) throw new Error("Recipient email is required.");
+  if (!bodyText) throw new Error("Email body is required.");
+  const lines = [
+    `To: ${to}`,
+    `Subject: ${encodeHeaderValue(subject)}`,
+    "MIME-Version: 1.0",
+    "Content-Type: text/plain; charset=UTF-8",
+    "",
+    bodyText
+  ];
+  const raw = Buffer.from(lines.join("\r\n")).toString("base64url");
+  const sent = await gmail.users.messages.send({
+    userId: "me",
+    requestBody: {
+      raw
+    }
+  });
+  return sent.data;
+}
+
+export async function sendSetupGmailEmail(input: { to: string; subject: string; bodyText: string }) {
+  const gmail = await getAuthedSetupGmailClient();
+  const to = input.to.replace(/\s+/g, " ").trim();
+  const subject = input.subject.replace(/\s+/g, " ").trim() || "LeadRider dealer setup";
   const bodyText = input.bodyText.trim();
   if (!to) throw new Error("Recipient email is required.");
   if (!bodyText) throw new Error("Email body is required.");

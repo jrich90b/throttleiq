@@ -27,6 +27,7 @@
     "outbound_echo_guard:eval",
     "eval_suite_manifest:eval",
     "ci_eval_chain_guard:eval",
+    "dealer_intake_mail:eval",
     "pitch_numbers:eval",
     "manufactured_confidence_ratchet:eval",
     "parser_fallback_gate_audit:eval",

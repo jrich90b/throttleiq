@@ -567,9 +567,12 @@ import {
   saveTokens,
   saveSupportMailTokens,
   savePersonalMailTokens,
+  saveSetupMailTokens,
   getAuthedCalendarClient,
   getSupportGmailProfile,
   getPersonalGmailProfile,
+  getSetupGmailProfile,
+  buildGmailStatusHandler,
   listSupportInboxMessages,
   listPersonalInboxMessages,
   createSupportGmailDraftReply,
@@ -587,6 +590,7 @@ import {
   deleteEvent,
   moveEvent
 } from "./domain/googleCalendar.js";
+import { dealerIntakeSendInviteHandler, dealerIntakeStatusHandler, startDealerIntakeMailPollLoop } from "./domain/dealerIntakeMail.js";
 import {
   generateCandidateSlots,
   expandBusyBlocks,
@@ -35067,21 +35071,21 @@ app.post("/campaigns/:id/publish/instagram", requireManager, async (req, res) =>
 app.get("/integrations/google/start", async (req, res) => {
   const kind = String(req.query.kind ?? "calendar").trim().toLowerCase();
   const leadriderGoogleRedirectUri = `${String(process.env.LEADRIDER_API_BASE_URL ?? "https://api.leadrider.ai").replace(/\/$/, "")}/integrations/google/callback`;
-  const redirectUri = kind === "support_mail" || kind === "personal_mail" ? leadriderGoogleRedirectUri : undefined;
+  const isMailKind = kind === "support_mail" || kind === "personal_mail" || kind === "setup_mail";
+  const redirectUri = isMailKind ? leadriderGoogleRedirectUri : undefined;
   const oauth2 = getOAuthClient(redirectUri);
-  const scopes =
-    kind === "support_mail" || kind === "personal_mail"
-      ? [
-          "https://www.googleapis.com/auth/gmail.modify",
-          "https://www.googleapis.com/auth/gmail.compose",
-          "https://www.googleapis.com/auth/gmail.send"
-        ]
-      : ["https://www.googleapis.com/auth/calendar"];
+  const scopes = isMailKind
+    ? [
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.compose",
+        "https://www.googleapis.com/auth/gmail.send"
+      ]
+    : ["https://www.googleapis.com/auth/calendar"];
   const url = oauth2.generateAuthUrl({
     access_type: "offline",
     prompt: "consent",
     scope: scopes,
-    state: kind === "support_mail" ? "support_mail" : kind === "personal_mail" ? "personal_mail" : "calendar"
+    state: isMailKind ? kind : "calendar"
   });
   res.redirect(url);
 });
@@ -35100,43 +35104,9 @@ app.get("/integrations/google/status", async (_req, res) => {
   }
 });
 
-app.get("/integrations/google/support-mail/status", async (_req, res) => {
-  try {
-    const profile = await getSupportGmailProfile();
-    return res.json({
-      ok: true,
-      connected: true,
-      email: profile.emailAddress ?? null,
-      messagesTotal: profile.messagesTotal ?? null,
-      threadsTotal: profile.threadsTotal ?? null
-    });
-  } catch (err: any) {
-    const message = err?.message ?? String(err);
-    let reason = "error";
-    if (/invalid_grant/i.test(message)) reason = "invalid_grant";
-    else if (/not connected/i.test(message)) reason = "not_connected";
-    return res.json({ ok: true, connected: false, reason, error: message });
-  }
-});
-
-app.get("/integrations/google/personal-mail/status", async (_req, res) => {
-  try {
-    const profile = await getPersonalGmailProfile();
-    return res.json({
-      ok: true,
-      connected: true,
-      email: profile.emailAddress ?? null,
-      messagesTotal: profile.messagesTotal ?? null,
-      threadsTotal: profile.threadsTotal ?? null
-    });
-  } catch (err: any) {
-    const message = err?.message ?? String(err);
-    let reason = "error";
-    if (/invalid_grant/i.test(message)) reason = "invalid_grant";
-    else if (/not connected/i.test(message)) reason = "not_connected";
-    return res.json({ ok: true, connected: false, reason, error: message });
-  }
-});
+app.get("/integrations/google/support-mail/status", buildGmailStatusHandler(getSupportGmailProfile));
+app.get("/integrations/google/personal-mail/status", buildGmailStatusHandler(getPersonalGmailProfile));
+app.get("/integrations/google/setup-mail/status", buildGmailStatusHandler(getSetupGmailProfile));
 
 app.get("/integrations/google/callback", async (req, res) => {
   const code = String(req.query.code ?? "");
@@ -35144,7 +35114,8 @@ app.get("/integrations/google/callback", async (req, res) => {
 
   const state = String(req.query.state ?? "calendar").trim().toLowerCase();
   const leadriderGoogleRedirectUri = `${String(process.env.LEADRIDER_API_BASE_URL ?? "https://api.leadrider.ai").replace(/\/$/, "")}/integrations/google/callback`;
-  const redirectUri = state === "support_mail" || state === "personal_mail" ? leadriderGoogleRedirectUri : undefined;
+  const redirectUri =
+    state === "support_mail" || state === "personal_mail" || state === "setup_mail" ? leadriderGoogleRedirectUri : undefined;
   const oauth2 = getOAuthClient(redirectUri);
   const { tokens } = await oauth2.getToken(code);
   if (state === "support_mail") {
@@ -35154,6 +35125,10 @@ app.get("/integrations/google/callback", async (req, res) => {
   if (state === "personal_mail") {
     await savePersonalMailTokens(tokens);
     return res.send("LeadRider personal Gmail connected. You can close this tab.");
+  }
+  if (state === "setup_mail") {
+    await saveSetupMailTokens(tokens);
+    return res.send("LeadRider dealer-setup Gmail connected. You can close this tab.");
   }
   await saveTokens(tokens);
 
@@ -35884,6 +35859,10 @@ app.post("/dealer-setups/:id/runtime-package", requirePermission("canAccessTodos
     filename: `${setup.slug || "dealer"}-runtime-config-package.json`
   });
 });
+
+// Dealer intake email loop (flag-gated DEALER_INTAKE_EMAIL_ENABLED, default OFF) — domain/dealerIntakeMail.ts.
+app.post("/dealer-setups/:id/intake/send-invite", requirePermission("canAccessTodos"), requireManager, dealerIntakeSendInviteHandler);
+app.get("/dealer-setups/:id/intake/status", requirePermission("canAccessTodos"), requireManager, dealerIntakeStatusHandler);
 
 app.post("/dealer-setups/:id/launch-dry-run", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
@@ -70267,6 +70246,8 @@ const server = app.listen(port, () => {
     const supportMailInterval = setInterval(runSupportMailPoll, supportMailPollMinutes * 60 * 1000);
     (supportMailInterval as any).unref?.();
   }
+
+  startDealerIntakeMailPollLoop();
 
   const personalMailAutoPollEnabled =
     (process.env.PERSONAL_MAIL_AUTO_POLL_ENABLED ?? "true").toLowerCase() !== "false" &&

@@ -425,7 +425,12 @@ const CEILINGS: Ceiling[] = [
     // — beside shouldIntroduceOnAdfTouch, the rule it applies, and in a module index.ts already
     // imports from, so the import costs nothing — and each builder's three-line intro ternary
     // collapsed to one composed template. Net -2 with both new call sites included.
-    max: 70_336,
+    // 70_336 -> 70_317. Dealer intake email loop (Phase 1 hands-off onboarding) arrived as
+    // domain/dealerIntakeMail.ts with one-line wiring, and funded itself by un-stacking the two
+    // hand-copied Gmail status endpoint blocks (support/personal) plus the new setup one into
+    // buildGmailStatusHandler in domain/googleCalendar.ts. Net -19 with all three call sites,
+    // both intake routes, and the poll-loop starter included.
+    max: 70_317,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
