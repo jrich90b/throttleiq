@@ -195,6 +195,7 @@
     "cadence_start:eval",
     "cadence_revival:eval",
     "sold_closeout:eval",
+    "sold_sale_record_idempotency:eval",
     "lead_closeout:eval",
     "appointment_confirm_record:eval",
     "appointment_booking_record:eval",

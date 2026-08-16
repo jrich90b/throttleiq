@@ -542,6 +542,44 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     }, ["decideSoldCloseout"]);
   }
 
+  // Added 2026-08-16 with the sold sale-RECORD referee (Ethan Mouyeos +17166970787). Fully
+  // projectable: the arbitration is entirely between what the lead ALREADY has stored in
+  // `conv.sale` and the record an incoming sold signal wants to write, and the stored half comes
+  // straight off the conversation.
+  //
+  // PROBE: the incoming record is held fixed and deliberately shaped like the WEAKEST writer — the
+  // console header's appointment-outcome branch, which stamps "now", attributes to whoever took the
+  // appointment, and names the bike off `lead.vehicle`. That is the signal that caused the miss, so
+  // it is the one worth fingerprinting. Sampled twice: once where the incoming signal names a unit
+  // and once where it does not, because "may a stub be given a real bike" is the one case where the
+  // referee is allowed to take the incoming unit.
+  for (const incomingNamesUnit of [true, false] as const) {
+    add(`soldSaleRecord:${incomingNamesUnit ? "incoming_unit" : "incoming_no_unit"}`, conv => {
+      if (typeof reducer.decideSoldSaleRecord !== "function") return undefined;
+      const decision = reducer.decideSoldSaleRecord({
+        existing: conv?.sale ?? null,
+        incoming: {
+          soldAt: "2026-01-01T00:00:00.000Z", // PROBE — the restatement the referee must refuse
+          soldById: "probe-outcome-staff", // PROBE
+          soldByName: "Probe Outcome Staff", // PROBE
+          stockId: incomingNamesUnit ? "PROBE-STOCK" : undefined, // PROBE
+          vin: undefined,
+          label: incomingNamesUnit ? "Probe Lead Vehicle" : undefined, // PROBE
+          note: "probe outcome note" // PROBE
+        }
+      });
+      return {
+        preservedExistingSale: decision.preservedExistingSale,
+        enrichedFields: [...decision.enrichedFields].sort(),
+        soldAt: decision.sale.soldAt ?? null,
+        soldById: decision.sale.soldById ?? null,
+        stockId: decision.sale.stockId ?? null,
+        vin: decision.sale.vin ?? null,
+        label: decision.sale.label ?? null
+      };
+    }, ["decideSoldSaleRecord"]);
+  }
+
   // Added 2026-08-03 with the LEAD-closeout un-stacking (the sibling of the block above: that one
   // answers "does the unit hold come off", this one "what does closing itself entail"). Sampled
   // once PER LANE, because the lanes are the whole disagreement — the generic close pauses the

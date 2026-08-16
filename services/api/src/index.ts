@@ -1062,6 +1062,7 @@ import {
   applyCadenceReplacement,
   applyAppointmentAttribution,
   applySoldCloseout,
+  applyAppointmentOutcomeSoldSale,
   applyLeadCloseout,
   armPendingCloseout,
   applyPendingCloseoutOnSend,
@@ -40755,20 +40756,8 @@ app.post("/conversations/:id/appointment/outcome", requirePermission("canEditApp
       );
     } else if (appointmentOutcomeStatus === "sold") {
       const cfg = await getSchedulerConfigHot();
-      const soldById = conv.appointment?.bookedSalespersonId ?? conv.leadOwner?.id ?? "";
-      const soldByName = String(conv.appointment?.bookedSalespersonName ?? conv.leadOwner?.name ?? "").trim();
-      const leadVehicle = conv?.lead?.vehicle ?? {};
-      const label =
-        [leadVehicle?.year, leadVehicle?.make, leadVehicle?.model].filter(Boolean).join(" ").trim() || undefined;
-      conv.sale = {
-        soldAt: nowIso,
-        soldById: soldById || undefined,
-        soldByName: soldByName || undefined,
-        stockId: String(leadVehicle?.stockId ?? "").trim() || undefined,
-        vin: String(leadVehicle?.vin ?? "").trim() || undefined,
-        label,
-        note: appointmentOutcomeNote || undefined
-      };
+      // A back-dated outcome records the OUTCOME, not a second sale — referee owns the merge.
+      applyAppointmentOutcomeSoldSale(conv, { nowIso, note: appointmentOutcomeNote || undefined });
       applyLeadCloseout(conv, { nowIso, lane: "appointment_outcome_sold", reason: "sold" });
       markOpenTodosDoneForConversation(conv.id);
       setFollowUpMode(conv, "active", "post_sale");
@@ -41851,20 +41840,11 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
         );
       } else if (appointmentOutcomeStatus === "sold") {
         const cfg = await getSchedulerConfigHot();
-        const soldById = conv.appointment?.bookedSalespersonId ?? conv.leadOwner?.id ?? "";
-        const soldByName = String(conv.appointment?.bookedSalespersonName ?? conv.leadOwner?.name ?? "").trim();
-        const leadVehicle = conv?.lead?.vehicle ?? {};
-        const label =
-          [leadVehicle?.year, leadVehicle?.make, leadVehicle?.model].filter(Boolean).join(" ").trim() || undefined;
-        conv.sale = {
-          soldAt: nowIsoValue,
-          soldById: soldById || undefined,
-          soldByName: soldByName || undefined,
-          stockId: String(leadVehicle?.stockId ?? "").trim() || undefined,
-          vin: String(leadVehicle?.vin ?? "").trim() || undefined,
-          label,
+        // Same builder + referee as the console-header branch: never restate a recorded sale.
+        applyAppointmentOutcomeSoldSale(conv, {
+          nowIso: nowIsoValue,
           note: effectiveAppointmentOutcomeNote || undefined
-        };
+        });
         applyLeadCloseout(conv, {
           nowIso: nowIsoValue,
           lane: "appointment_outcome_sold",

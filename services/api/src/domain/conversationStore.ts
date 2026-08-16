@@ -16,6 +16,8 @@ import {
   decideCadenceStart,
   decideHeldDraftRelease,
   decideSoldCloseout,
+  decideSoldSaleRecord,
+  type SoldSaleRecordDecision,
   decideLeadCloseout,
   decidePendingCloseoutOnSend,
   type PendingCloseoutSendDecision,
@@ -5196,7 +5198,10 @@ export function startPostSaleCadence(conv: Conversation, anchorAtIso: string, ti
     lane: "post_sale",
     conversationStatus: conv.status,
     existing: conv.followUpCadence,
-    sold: conv.closedReason === "sold" || Boolean(conv.sale?.soldAt)
+    sold: conv.closedReason === "sold" || Boolean(conv.sale?.soldAt),
+    // The IDENTITY of the sale this sequence would belong to. The referee refuses to re-arm a
+    // sequence already anchored to it, so a re-recorded outcome cannot replay day one.
+    saleSoldAt: conv.sale?.soldAt ?? null
   });
   if (!decision.start) return;
   const nextDueAt = computePostSaleDueAt(anchorAtIso, POST_SALE_DAY_OFFSETS[0], timeZone);
@@ -5541,6 +5546,51 @@ export function applyCadenceReplacement(
 // Deliberately does NOT stamp `conv.updatedAt` or save: the outcome path's caller saves, and the
 // endpoint saves inline right after. Adding a write here would change persisted timestamps, which
 // a cleanup must not do.
+/**
+ * THE one place `conv.sale` is stamped from a sold signal. Asks `decideSoldSaleRecord` whether the
+ * incoming record may replace what is already stored — see that referee for the invariant and the
+ * production miss (Ethan Mouyeos +17166970787, a back-dated outcome that restated an April sale as
+ * today's). Callers pass the record they WANT to write and get the one that is actually correct.
+ */
+export function applySoldSaleRecord(
+  conv: Conversation,
+  incoming: NonNullable<Conversation["sale"]>
+): SoldSaleRecordDecision {
+  const decision = decideSoldSaleRecord({ existing: conv.sale ?? null, incoming });
+  conv.sale = decision.sale as NonNullable<Conversation["sale"]>;
+  return decision;
+}
+
+/**
+ * The appointment-outcome "sold" record, built the ONE way both outcome paths built it — the
+ * console header's outcome branch and the todo-outcome branch had byte-identical copies of this
+ * five-line construction in index.ts.
+ *
+ * It is the WEAKEST sold signal we have and the comment is the point: it stamps "now", attributes
+ * the sale to whoever took the APPOINTMENT, and names the bike off `lead.vehicle` — the bike the
+ * customer INQUIRED about, which is the #470 wrong-bike trap. That is fine for a lead whose sale we
+ * are hearing about for the first time and wrong for one already on the record, so it goes through
+ * `decideSoldSaleRecord` rather than assigning.
+ */
+export function applyAppointmentOutcomeSoldSale(
+  conv: Conversation,
+  input: { nowIso: string; note?: string }
+): SoldSaleRecordDecision {
+  const leadVehicle: any = conv?.lead?.vehicle ?? {};
+  return applySoldSaleRecord(conv, {
+    soldAt: input.nowIso,
+    soldById: conv.appointment?.bookedSalespersonId ?? conv.leadOwner?.id ?? undefined,
+    soldByName:
+      String(conv.appointment?.bookedSalespersonName ?? conv.leadOwner?.name ?? "").trim() || undefined,
+    stockId: String(leadVehicle?.stockId ?? "").trim() || undefined,
+    vin: String(leadVehicle?.vin ?? "").trim() || undefined,
+    label:
+      [leadVehicle?.year, leadVehicle?.make, leadVehicle?.model].filter(Boolean).join(" ").trim() ||
+      undefined,
+    note: input.note || undefined
+  });
+}
+
 export function applySoldCloseout(
   conv: Conversation,
   input: {
@@ -5559,7 +5609,7 @@ export function applySoldCloseout(
     soldKey: input.soldKey,
     holdMatchesSoldUnit: input.holdMatchesSoldUnit
   });
-  conv.sale = input.sale;
+  applySoldSaleRecord(conv, input.sale);
   if (decision.closeConversation) {
     conv.status = "closed";
     conv.closedAt = input.nowIso;
