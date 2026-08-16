@@ -22,6 +22,7 @@
  */
 import { anthropicMessagesRequest, extractAnthropicToolInput } from "./anthropicRequest.js";
 import { addOpsAnomaly } from "./opsAnomalyStore.js";
+import { loadReviewRelevantCharterRules } from "./policyCharterFeed.js";
 import {
   getAllConversations,
   getLatestPendingDraft,
@@ -98,8 +99,15 @@ export const CLAUDE_DRAFT_REVIEW_TOOL_SCHEMA: { [key: string]: unknown } = {
 /**
  * The reviewer's instructions. Exported so the eval can pin the load-bearing rules by executing
  * this builder — the never-delete-a-concrete-fact rule is the one that must never regress.
+ *
+ * `charterRules` are Joe's written rulings (domain/policyCharterFeed). They are APPENDED to the
+ * baked rules below, never a replacement: a charter that is missing, unreadable or empty must leave
+ * the reviewer exactly as strict as it is today. See policyCharterFeed for the 2026-08-15
+ * measurement behind the feed — the reviewer stamped `ok` on a draft breaking two of Joe's rulings
+ * because it had never been told they existed.
  */
-export function buildClaudeDraftReviewSystemPrompt(): string {
+export function buildClaudeDraftReviewSystemPrompt(charterRules?: string | null): string {
+  const charter = String(charterRules ?? "").trim();
   return [
     "You are an independent reviewer for a Harley-Davidson dealership's texting assistant. A draft",
     "reply to a customer is about to be shown to staff for approval. Decide if it is CLEARLY WRONG",
@@ -121,6 +129,18 @@ export function buildClaudeDraftReviewSystemPrompt(): string {
     "- Answer the customer's question(s) FIRST, then end with exactly ONE question that moves",
     "  toward a visit or a decision.",
     "- If the original draft ends with an opt-out sentence (\"Reply STOP to opt out\"), keep it.",
+    // Joe's own standing rulings, read from the charter at review time so a NEW ruling reaches the
+    // reviewer with no code change. Empty string when the charter is unreadable => baked rules only.
+    ...(charter
+      ? [
+          "",
+          "DEALER POLICY — the dealership owner's own standing rulings, and the reason this reviewer",
+          "exists. These are NOT style preferences: a draft that breaks one is CLEARLY WRONG and gets",
+          "verdict \"rewrite\", and your rewrite must obey them too. Judge the draft against these even",
+          "when it otherwise reads well.",
+          charter
+        ]
+      : []),
     "",
     "Return via the tool: verdict, a one-sentence reason, and fixed_draft (empty string when verdict",
     "is \"ok\")."
@@ -147,7 +167,9 @@ export async function reviewDraftWithClaude(args: {
       apiKey,
       model: String(process.env.CLAUDE_DRAFT_REVIEW_MODEL ?? process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-6").trim(),
       maxTokens: 700,
-      system: buildClaudeDraftReviewSystemPrompt(),
+      // Joe's rulings, re-read from the charter (cached) — a charter he edits today changes the
+      // next review with no deploy. Unreadable => null => baked rules only, i.e. today's behaviour.
+      system: buildClaudeDraftReviewSystemPrompt(loadReviewRelevantCharterRules()),
       messages: [
         {
           role: "user",
