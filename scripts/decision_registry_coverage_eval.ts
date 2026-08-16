@@ -80,6 +80,11 @@ for (const fn of [
   "decidePostSaleOwnershipTurn",
   "decideWatchScopeTurn",
   "decideAdfDepartmentRoute",
+  // Combines the SAME turn-only ADF department verdict as the route above with one persisted input
+  // (conv.departmentLane). The turn half is never stored, so a stored conversation cannot reproduce
+  // its inputs. Its decision table is pinned instead by department_lane_persistence:eval, which
+  // executes the referee directly across the full prior-lane x this-turn-verdict x release grid.
+  "decideDepartmentLaneTurn",
   // Reads the SAME turn-only ADF department verdict as the route above (department + confidence),
   // which is never persisted, so a stored conversation cannot reproduce its inputs. Its decision
   // table is pinned instead by no_subject_web_lead_handoff:eval, which executes it against the

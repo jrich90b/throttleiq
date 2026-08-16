@@ -263,6 +263,7 @@
     "watch_opt_out:eval",
     "post_sale_ownership:eval",
     "adf_department_interest:eval",
+    "department_lane_persistence:eval",
     "no_subject_web_lead_handoff:eval",
     "accessory_parts_route:eval",
     "event_promo_ack:eval",

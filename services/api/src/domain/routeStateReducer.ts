@@ -1924,6 +1924,66 @@ export function decideAdfDepartmentRoute(input: AdfDepartmentRouteInput): AdfDep
   return { kind: "none" };
 }
 
+// --- Department lane PERSISTENCE across repeat lead forms (2026-08-16) ------
+//
+// `decideAdfDepartmentRoute` above only ever sees ONE lead form. Its caller gates the parser on
+// `isInitialAdf`, so the verdict is computed on the FIRST ADF and then thrown away — a second lead
+// form on the same lead re-enters the generic bike path with no memory that this lead is a rider-
+// education (or parts/apparel/service) customer at all.
+//
+// MEASURED 2026-08-16 on the live americanharley store, n=5 Riding Academy leads, perfectly
+// separated: every lead carrying TWO ADFs had lost the lane (`classification.ruleName` back to
+// "default" — Aidan Stewart +15857041173, Mitchell +17165975331); every lead with ONE kept it
+// (`adf_department_riding_academy`). Aidan's second form (Wait List -> Enrolled) regenerated his
+// email draft as "I'd love to help with pricing. Which 2026 model are you interested in?" — to a
+// student whose own enrollment form says "Future Motorcycle Purchase Expectation: No" — and that
+// regeneration OVERWROTE a corrected draft, so instance-level heals do not hold while this is open.
+//
+// This referee is the memory: the lane, once established by comprehension, carries to later turns
+// until comprehension itself releases it.
+//
+// FAIL DIRECTION: unsure => CARRY the prior lane. A course lead wrongly kept in the course lane gets
+// a course question staff can redirect; a course lead wrongly dropped back to the bike lane gets the
+// measured live defect (bike-pricing copy at someone who told us they are not buying a bike) AND
+// silently destroys any corrected draft. So only a fresh, confident parser verdict moves the lane —
+// never the absence of one.
+// ---------------------------------------------------------------------------
+export type DepartmentLaneTurnInput = {
+  /** Lane persisted on the conversation by an earlier lead form ("none"/null if never established). */
+  priorLane?: AdfDepartmentRouteKind | null;
+  /** This turn's `decideAdfDepartmentRoute` verdict; "none" when the parser did not run. */
+  thisTurnLane: AdfDepartmentRouteKind;
+  /**
+   * This turn's parser said the customer is on a VEHICLE (bike-purchase) subject. Only a positive,
+   * accepted verdict releases a persisted lane — a missing or low-confidence parse must not.
+   */
+  vehicleSubjectThisTurn: boolean;
+};
+
+export type DepartmentLaneTurnDecision = {
+  /** The lane in force for THIS turn. */
+  kind: AdfDepartmentRouteKind;
+  /** What to persist on the conversation (null = clear it). Never "none" — absence IS null. */
+  persist: Exclude<AdfDepartmentRouteKind, "none"> | null;
+  reason: "fresh_verdict" | "released_to_vehicle" | "carried_forward" | "none";
+};
+
+export function decideDepartmentLaneTurn(input: DepartmentLaneTurnInput): DepartmentLaneTurnDecision {
+  const prior: Exclude<AdfDepartmentRouteKind, "none"> | null =
+    input.priorLane && input.priorLane !== "none" ? input.priorLane : null;
+  // Fresh comprehension outranks memory, in both directions.
+  if (input.thisTurnLane !== "none") {
+    const fresh: Exclude<AdfDepartmentRouteKind, "none"> = input.thisTurnLane;
+    return { kind: fresh, persist: fresh, reason: "fresh_verdict" };
+  }
+  if (!prior) return { kind: "none", persist: null, reason: "none" };
+  // The customer moved to bikes — release the lane rather than trapping them in it forever.
+  if (input.vehicleSubjectThisTurn) {
+    return { kind: "none", persist: null, reason: "released_to_vehicle" };
+  }
+  return { kind: prior, persist: prior, reason: "carried_forward" };
+}
+
 // --- Subjectless web-lead handoff (2026-08-10) -----------------------------
 //
 // The SAME parser verdict (`parseAdfDepartmentInterestWithLLM`) that routes a department request
