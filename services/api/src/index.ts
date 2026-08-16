@@ -19,7 +19,7 @@ import { resolveAdfFirstTouchAckKind, buildAdfFirstTouchAck, resolveEnrollmentAc
 import { readFirstTimeRiderPolicy, hasRiderCoursePublicInfo, readEnrollmentRidingHistory, isThreadParkedOnUpcomingClass, applyRiderExperienceState } from "./domain/firstTimeRiderPolicy.js";
 import { buildFirstTimeRiderGuidanceReply, buildInitialAdfFirstTimeRiderGuidanceReply, hasExplicitRiderCourseInfoText, hasAmbiguousRiderCourseInfoText, asksRiderCourseLogistics, RIDER_COURSE_LOGISTICS_TODO } from "./domain/firstTimeRiderReply.js";
 import { readRidingAcademyRecordFields } from "./domain/ridingAcademy.js";
-import { buildAgentIntro, normalizeNonAdfReplySpacing, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildRidingAcademyEnrollmentAck, buildJumpstartOneOnOneInvite, buildFirstTimeRiderBeginnerReply, buildAcquiredVehicleAck, buildWatchAvailableReply, buildCholoWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, resolveIntroducedOwnerFirstName, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, hasCustomerReceivedOutbound, hasRecentDeliveredHumanOutbound } from "./domain/agentVoice.js";
+import { buildAgentIntro, buildDealerRideIdentitySentence, normalizeNonAdfReplySpacing, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildRidingAcademyEnrollmentAck, buildJumpstartOneOnOneInvite, buildFirstTimeRiderBeginnerReply, buildAcquiredVehicleAck, buildWatchAvailableReply, buildCholoWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, resolveIntroducedOwnerFirstName, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, hasCustomerReceivedOutbound, hasRecentDeliveredHumanOutbound } from "./domain/agentVoice.js";
 import {
   postSaleVehicleIsNew,
   postSaleAccessoryOrEnjoyMessage,
@@ -16448,9 +16448,8 @@ function buildDealerLeadAppPostRideReply(args: {
   // A Dealer Lead App lead with a recorded demo ride HAS been in (Joe, 8/11) — see dealerRecordedDemoRide.
   const visited = customerVisitConfirmed(args.conv) || dealerRecordedDemoRide(args.conv);
   const useVisitFraming = !phantomVisitGuardEnabled() || visited;
-  const intro = useVisitFraming
-    ? `${greeting}This is ${senderFirst} at ${dealerName}. Thanks again for coming in for the test ride on the ${modelLabel}.`
-    : `${greeting}This is ${senderFirst} at ${dealerName}. Thanks for your interest in the ${modelLabel}.`;
+  const identity = buildDealerRideIdentitySentence({ senderFirst, dealerName, messages: args.conv?.messages }); // charter C1.2a: introduce on the FIRST touch only
+  const intro = `${greeting}${identity}${useVisitFraming ? `Thanks again for coming in for the test ride on the ${modelLabel}.` : `Thanks for your interest in the ${modelLabel}.`}`;
   if (args.inventoryStatus === "in_stock") {
     return `${intro}${buildWalkInSoftTimingAsk(useVisitFraming, true)}`;
   }
@@ -16594,9 +16593,8 @@ function buildDealerRideOutcomeCustomerDraft(args: {
     !phantomVisitGuardEnabled() ||
     rideOutcomeImpliesVisit(args.primaryStatus, args.secondaryStatus, args.outcome) ||
     customerVisitConfirmed(args.conv);
-  const intro = rideVisited
-    ? `${greeting}This is ${senderFirst} at ${dealerName}. Thanks again for coming in for the test ride on the ${modelLabel}.`
-    : `${greeting}This is ${senderFirst} at ${dealerName}. Thanks for your interest in the ${modelLabel}.`;
+  const identity = buildDealerRideIdentitySentence({ senderFirst, dealerName, messages: args.conv?.messages }); // charter C1.2a: introduce on the FIRST touch only
+  const intro = `${greeting}${identity}${rideVisited ? `Thanks again for coming in for the test ride on the ${modelLabel}.` : `Thanks for your interest in the ${modelLabel}.`}`;
 
   if (args.secondaryStatus === "sold" || args.outcome === "sold") {
     return `${intro} Congrats on the ${modelLabel}. If you need anything, just let me know.`;

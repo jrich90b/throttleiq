@@ -62,14 +62,21 @@ const regenPendingDrafts =
 const regenPendingSkips =
   regenPendingBlock.includes('respondRegenerateSkipped("dealer_ride_outcome_pending")') &&
   !regenPendingDrafts;
+// The self-introduction itself is no longer written here: charter C1.2a (never re-introduce once the
+// customer has received a message from us) moved it into `buildDealerRideIdentitySentence` in
+// domain/agentVoice.ts, which `agent_voice_eval` EXECUTES over Rick Williamson's real message
+// sequence (+17165241170). This guard keeps its own subject — that the builder resolves the SENDER
+// from the lead owner rather than a generic name — and now asserts the identity sentence is composed
+// through the shared helper, so it cannot drift back to a hardcoded, unguarded intro.
+const IDENTITY_CALL = "buildDealerRideIdentitySentence({ senderFirst, dealerName, messages: args.conv?.messages })";
 const initialBuilderPrefersLeadOwner =
   apiRoute.includes("args.conv?.leadOwner?.name") &&
   apiRoute.includes("args.conv?.leadOwner?.firstName") &&
-  apiRoute.includes("This is ${senderFirst} at ${dealerName}");
+  apiRoute.includes(IDENTITY_CALL);
 const regenBuilderPrefersLeadOwner =
   apiIndex.includes("args.conv?.leadOwner?.name") &&
   apiIndex.includes("args.conv?.leadOwner?.firstName") &&
-  apiIndex.includes("This is ${senderFirst} at ${dealerName}");
+  apiIndex.includes(IDENTITY_CALL);
 
 const checks: Check[] = [
   check("initial_adf_has_guarded_customer_thank_you_helper", initialRouteBlock, true),

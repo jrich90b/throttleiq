@@ -419,7 +419,13 @@ const CEILINGS: Ceiling[] = [
     // ceiling again, so the slice funded itself: the four-line `hours:` replace-not-merge expression
     // collapsed to one `hours,` and moved into schedulerConfig.ts as `reconcileDealerProfileHours`,
     // which is where businessHours already lives. Net -1 with the write-through call included.
-    max: 70_338,
+    // 70_338 -> 70_336. Charter C1.2a on the dealer-ride builders (Rick +17165241170). index.ts was
+    // sitting EXACTLY on the ceiling again (+5 for two guarded call sites), so the slice funded
+    // itself: the identity SENTENCE moved to buildDealerRideIdentitySentence in domain/agentVoice.ts
+    // — beside shouldIntroduceOnAdfTouch, the rule it applies, and in a module index.ts already
+    // imports from, so the import costs nothing — and each builder's three-line intro ternary
+    // collapsed to one composed template. Net -2 with both new call sites included.
+    max: 70_336,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
