@@ -22,11 +22,20 @@ import path from "node:path";
 import {
   CLAUDE_DRAFT_REVIEW_MAX_PER_TICK_DEFAULT,
   CLAUDE_DRAFT_REVIEW_TOOL_SCHEMA,
+  CLAUDE_EMAIL_DRAFT_REVIEW_MAX_PER_TICK_DEFAULT,
   buildClaudeDraftReviewSystemPrompt,
   claudeDraftReviewEnabled,
   draftIsMachineAuthored,
-  selectDraftsForClaudeReview
+  emailDraftReviewHash,
+  selectDraftsForClaudeReview,
+  selectEmailDraftsForClaudeReview
 } from "../services/api/src/domain/claudeDraftReview.ts";
+import {
+  appendOutbound,
+  getLatestPendingDraft,
+  saveOperatorDraft,
+  upsertConversationByLeadKey
+} from "../services/api/src/domain/conversationStore.ts";
 import { WORKER_MINUTE_LANE_TASKS, WORKER_TICK_TASKS } from "../services/api/src/domain/workerTasks.ts";
 import { WORKER_SCHEDULES } from "../services/worker/src/config.ts";
 
@@ -182,10 +191,96 @@ for (const [label, c] of NO_REVIEW) {
   assert.ok(rewriteBlock.includes('actor: { userName: "Claude review" }'), "the superseding draft is attributed so staff know who wrote it");
 }
 
+// --- THE EMAIL LANE (2026-08-17) --------------------------------------------------------------
+// `conv.emailDraft` is a live, sendable draft the console's Email tab renders and staff send
+// verbatim — and nothing had ever reviewed one (227 conversations carry one; 95 still offered as
+// sendable). It has no timestamp, no message id and (until this change) no author, so each SMS
+// guard needed a working equivalent rather than a copy.
+{
+  const emailConv = (over: Record<string, unknown>) =>
+    conv({ emailDraft: "Hi Dave,\nThanks for your credit application. Our finance team will reach out shortly.\nAlexandra", ...over }, [CUSTOMER]);
+
+  assert.equal(selectEmailDraftsForClaudeReview({ conversations: [emailConv({})], nowMs: NOW }).length, 1, "a fresh machine-written email draft IS reviewed — the lane nobody was watching");
+
+  // The DISPLAY referee decides what staff are offered; a draft it withholds needs no reviewer.
+  assert.equal(selectEmailDraftsForClaudeReview({ conversations: [emailConv({ status: "closed" })], nowMs: NOW }).length, 0, "a suppressed (closed/sold) email draft is not reviewed — staff are not being offered it");
+  assert.equal(selectEmailDraftsForClaudeReview({ conversations: [emailConv({ emailDraft: "   " })], nowMs: NOW }).length, 0, "an empty email draft is not reviewed");
+
+  // Authorship: the email lane's equivalent of the SMS actor gate.
+  assert.equal(selectEmailDraftsForClaudeReview({ conversations: [emailConv({ emailDraftActor: "Scott Hartrich" })], nowMs: NOW }).length, 0, "an email a PERSON typed is theirs — never rewritten");
+  assert.equal(selectEmailDraftsForClaudeReview({ conversations: [emailConv({ emailDraftActor: "Claude review" })], nowMs: NOW }).length, 0, "the reviewer never re-reviews its own email rewrite (explicit loop guard)");
+
+  // Freshness is proxied by THREAD activity: emailDraft has no `at` of its own, and conv.updatedAt
+  // churns every ~60s from the cadence realign heal, so it can never be the signal.
+  const coldThread = conv({ emailDraft: "Hi Dave,\nStill here when you're ready.\nAlexandra" }, [
+    { ...CUSTOMER, at: new Date(NOW - 80 * 60 * MIN).toISOString() }
+  ]);
+  assert.equal(selectEmailDraftsForClaudeReview({ conversations: [coldThread], nowMs: NOW }).length, 0, "a dormant thread's email draft is out of scope — no timestamp means thread activity is the only freshness signal");
+
+  // The receipt is a body HASH (no message id exists to key on).
+  const reviewed = emailConv({});
+  const hash = emailDraftReviewHash(String(reviewed.emailDraft));
+  reviewed.claudeEmailDraftReview = { hash, verdict: "ok", at: "2026-08-15T11:00:00Z" };
+  assert.equal(selectEmailDraftsForClaudeReview({ conversations: [reviewed], nowMs: NOW }).length, 0, "an already-stamped email draft is not reviewed twice");
+  reviewed.emailDraft = String(reviewed.emailDraft) + " P.S. we also have the Road Glide.";
+  assert.equal(selectEmailDraftsForClaudeReview({ conversations: [reviewed], nowMs: NOW }).length, 1, "…but an EDITED email draft is a new draft and comes back for review");
+
+  const many = Array.from({ length: 6 }, (_, i) => emailConv({ id: `+1555100${i}` }));
+  assert.equal(selectEmailDraftsForClaudeReview({ conversations: many, nowMs: NOW }).length, CLAUDE_EMAIL_DRAFT_REVIEW_MAX_PER_TICK_DEFAULT, "the email per-tick budget holds, separate from the SMS one so neither starves the other");
+}
+
+// --- EXECUTED, not asserted-by-source: the two guards that would silently rot ------------------
+// #721 shipped inert because its eval asserted that a CALL happened and never what it was called
+// WITH. Both of these run the real store.
+{
+  // 1) THE LOOP GUARD. The receipt must record what is STORED AFTER the pass. Stamping the hash of
+  //    the text we REVIEWED would leave our own rewrite unstamped, and the next tick would review
+  //    it, rewrite it, and repeat — one API call a minute, forever.
+  const original = "Hi Dave,\nOur finance team will reach out shortly.\nAlexandra";
+  const rewritten = "Hi Dave,\nYou're approved — Scott will call today to finish up.\nAlexandra";
+  assert.notEqual(emailDraftReviewHash(original), emailDraftReviewHash(rewritten), "a rewrite changes the hash, so the OLD hash cannot stamp the NEW text");
+  const loopConv = conv({ emailDraft: rewritten, emailDraftActor: null }, [CUSTOMER]);
+  loopConv.claudeEmailDraftReview = { hash: emailDraftReviewHash(original), verdict: "rewrite", at: "2026-08-17T14:00:00Z" };
+  assert.equal(selectEmailDraftsForClaudeReview({ conversations: [loopConv], nowMs: NOW }).length, 1, "PROOF the stale-hash bug would loop: stamping the reviewed text leaves our own rewrite selectable");
+  loopConv.claudeEmailDraftReview = { hash: emailDraftReviewHash(rewritten), verdict: "rewrite", at: "2026-08-17T14:00:00Z" };
+  assert.equal(selectEmailDraftsForClaudeReview({ conversations: [loopConv], nowMs: NOW }).length, 0, "stamping the STORED text closes the loop");
+}
+{
+  // 2) THE CROSS-CHANNEL GUARD. saveOperatorDraft discards pending drafts before it reaches the
+  //    email branch, so an email fix would mark a perfectly good pending SMS draft stale.
+  const c = upsertConversationByLeadKey("+17165550377", "suggest");
+  appendOutbound(c, "salesperson", c.leadKey, "Saturday at 10 works — see you then!", "draft_ai");
+  assert.ok(getLatestPendingDraft(c), "SMS draft seeded");
+  saveOperatorDraft(c, {
+    body: "Hi Dave,\nCorrected email.\nAlexandra",
+    channel: "email",
+    actor: { userName: "Claude review" },
+    keepPendingDraftsOnOtherChannel: true
+  });
+  assert.ok(getLatestPendingDraft(c), "an EMAIL fix must NOT discard the pending SMS draft — the appointment time survives");
+  assert.equal(String(c.emailDraft), "Hi Dave,\nCorrected email.\nAlexandra", "the email draft was actually replaced");
+  assert.equal(String((c as any).emailDraftActor), "Claude review", "the email rewrite is attributed, which is also what stops it being re-reviewed");
+
+  // The default is unchanged: a human operator taking the thread over still supersedes both.
+  const c2 = upsertConversationByLeadKey("+17165550388", "suggest");
+  appendOutbound(c2, "salesperson", c2.leadKey, "Saturday at 10 works — see you then!", "draft_ai");
+  saveOperatorDraft(c2, { body: "Hi Dave,\nMine now.\nScott", channel: "email", actor: { userName: "Scott Hartrich" } });
+  assert.equal(getLatestPendingDraft(c2), null, "default behaviour is untouched — an operator's email still supersedes the SMS draft");
+  assert.equal(String((c2 as any).emailDraftActor), "Scott Hartrich", "an operator's email draft is stamped with their name, putting it out of the reviewer's reach");
+}
+{
+  // The email rewrite files a work order and never reaches across channels.
+  const src = fs.readFileSync(path.join(process.cwd(), "services/api/src/domain/claudeDraftReview.ts"), "utf8");
+  const emailBlock = src.slice(src.indexOf("for (const { conv, draft, hash } of emailPicks)"), src.indexOf("(conv as any).claudeEmailDraftReview ="));
+  assert.ok(emailBlock.includes("keepPendingDraftsOnOtherChannel: true"), "the email rewrite must not discard the other channel's draft");
+  assert.ok(emailBlock.includes("addOpsAnomaly"), "an email rewrite files a work order too — the instance heal becomes a class investigation");
+  assert.ok(emailBlock.includes("emailDraftReviewHash(verdict.fixedDraft)"), "the receipt stamps the STORED text, not the reviewed text");
+}
+
 // --- Three-point lane registration (a task missing anywhere silently never runs) -------------
 assert.ok((WORKER_TICK_TASKS as readonly string[]).includes("claude-draft-review"), "registered tick task");
 assert.ok((WORKER_MINUTE_LANE_TASKS as readonly string[]).includes("claude-draft-review"), "on the API minute lane");
 const minuteSchedule = WORKER_SCHEDULES.find(s => s.cron === "* * * * *");
 assert.ok(minuteSchedule && minuteSchedule.tasks.includes("claude-draft-review"), "on the worker minute schedule");
 
-console.log("PASS claude_draft_review:eval — selection table (4 review-cases incl. sold/closed + 9 holds + cap), kill switch, prompt rules, work-order wiring, 3-point lane registration");
+console.log("PASS claude_draft_review:eval — SMS selection table (4 review-cases incl. sold/closed + 9 holds + cap) + EMAIL selection table, executed loop guard + cross-channel guard, kill switch, prompt rules, work-order wiring, 3-point lane registration");
