@@ -155,6 +155,12 @@ NOT_PROJECTABLE.decideLeadUnitAvailabilityDisclosure =
 NOT_PROJECTABLE.decideProactiveCadenceValue =
   "scores a proposed outbound that only exists mid-tick — there is no stored value to project";
 
+// ADF email mirror: compares two MID-TURN draft strings (the SMS body before the lane-ack overrides
+// vs the body the turn finally ships). Neither is stored on the conversation, so there is nothing to
+// project from a replayed record. Pinned by adf_email_mirrors_final_ack:eval instead.
+NOT_PROJECTABLE.decideAdfEmailMirror =
+  "compares two mid-turn draft strings; neither is persisted, so there is nothing to project";
+
 // --- the check ---------------------------------------------------------------------------------
 
 const src = (() => {

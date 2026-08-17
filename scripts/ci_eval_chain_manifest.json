@@ -282,6 +282,7 @@
     "riding_academy_waitlist_ack:eval",
     "rider_course_schedule:eval",
     "riding_academy_status_lane:eval",
+    "adf_email_mirrors_final_ack:eval",
     "finance_process_handoff:eval",
     "enough_info_handoff:eval",
     "budget_gated_on_financing:eval",

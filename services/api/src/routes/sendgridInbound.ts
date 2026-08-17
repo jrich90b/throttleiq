@@ -86,7 +86,7 @@ import { buildAdfResubmissionAck, detectAdfFormResubmission } from "../domain/ad
 import { buildMarketplaceRelayFirstTouchReply, buildMarketplaceRelayTaskSummary } from "../domain/marketplaceRelay.js";
 import { isHtmlClientNoticeOnly } from "../domain/inboundMailActionability.js";
 import { buildTradeAdfAck, tradeAdfPurchaseIsOnFloor } from "../domain/tradeAdfReply.js";
-import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn, decideRidingAcademyTurn, shouldCloseEventPromoLeadOnIntake, resolveRideChallengeEventTouch, decideIncomingInventoryPurpose, decideWalkInInventoryWatchTurn, decideSaleTradeJourneyBucket, decideNoSubjectWebLeadHandoff, toAdfDepartmentVerdict } from "../domain/routeStateReducer.js";
+import { decideAdfEmailMirror, decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn, decideRidingAcademyTurn, shouldCloseEventPromoLeadOnIntake, resolveRideChallengeEventTouch, decideIncomingInventoryPurpose, decideWalkInInventoryWatchTurn, decideSaleTradeJourneyBucket, decideNoSubjectWebLeadHandoff, toAdfDepartmentVerdict } from "../domain/routeStateReducer.js";
 import type { AdfDepartmentVerdict } from "../domain/routeStateReducer.js";
 import { buildLongTermTimelineMessage } from "../domain/longTermMessage.js";
 import { orchestrateInbound } from "../domain/orchestrator.js";
@@ -9225,6 +9225,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     incrementPricingAttempt(conv);
   }
 
+  // Whether an email draft actually reached the conversation this turn. Read by the ADF email
+  // mirror below (decideAdfEmailMirror): a turn whose draft-guard invariant BLOCKED publication
+  // already handed staff a manual_handoff task, and re-publishing later would route around it.
+  let adfEmailPublished = false;
   if (isInitialAdf) {
     const profile = await getDealerProfile();
     const stockForNote = conv.lead?.vehicle?.stockId ?? null;
@@ -9245,7 +9249,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         buildInventoryAvailable = false;
       }
     }
-    publishAdfEmailDraft(
+    adfEmailPublished = publishAdfEmailDraft(
       buildInitialEmailDraft(conv, profile, inventoryNote, buildInventoryAvailable, {
         inventoryStatus: initialAvailability,
         testRideInventoryStatus: initialAvailability,
@@ -9253,9 +9257,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         // invariant guard can refuse one the store is shut for (+16397209755 got "8:00 Pm" here too).
         businessHours: (await getSchedulerConfig()).businessHours
       })
-    );
+    ).ok;
   } else {
-    publishAdfEmailDraft(result.draft);
+    adfEmailPublished = publishAdfEmailDraft(result.draft).ok;
   }
 
   if (result.requestedTime && !conv.appointment?.bookedEventId) {
@@ -10057,6 +10061,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   }
   draft = await withInitialOffersLine(draft);
 
+  // Snapshot for the ADF email mirror at the end of this block. Everything below replaces `draft`
+  // with a LANE-SPECIFIC ack; the email draft was published ~800 lines up from the generic template
+  // and never heard about any of it. See decideAdfEmailMirror.
+  const draftBeforeAdfAckOverrides = draft;
+
   // Non-sales marketing lead (sweepstakes / event RSVP / bare event_promo): a friendly
   // acknowledgement, never the sales-inquiry / "stop in and check it out" draft this would
   // otherwise be (2026-06-20 context-fidelity audit). Overrides the finalized sales draft so
@@ -10213,6 +10222,32 @@ export async function handleSendgridInbound(req: Request, res: Response) {
               dlsParse?.interestedModel ?? null
             )
           : buildNonBuyerSurveyAck(adfAckFirstName(), adfAckAgentName(), adfAckDealerName());
+    }
+  }
+
+  // ADF EMAIL MIRROR (+15852503838, operator: "Email does not respond correctly like the sms").
+  // The five lane acks above (Riding Academy enrollment, non-buyer survey, dealer-lead survey,
+  // event-promo / marketing opt-in, GLA demo ride) each replace the SMS `draft` — and each is a
+  // ruling Joe already made. The email draft was published from the GENERIC template before any of
+  // them ran, so the email lane shipped bike-shopper copy to a Riding Academy enrollee while the SMS
+  // for the same turn named his course, his e-course link and his unpaid seat. Carry the final body
+  // across. Publishing through the same `publishAdfEmailDraft` chokepoint keeps the draft-guard
+  // invariant and the email layout pass; the referee is what decides, and it fails toward keeping
+  // whatever is already published. No new copy — this only stops the two lanes disagreeing.
+  const adfEmailMirror = decideAdfEmailMirror({
+    emailPublished: adfEmailPublished,
+    draftBeforeAckOverrides: draftBeforeAdfAckOverrides,
+    finalDraft: draft
+  });
+  if (adfEmailMirror.kind === "mirror_final_draft") {
+    // Same guard and same layout pass as publishAdfEmailDraft, deliberately WITHOUT its wrapper:
+    // that wrapper raises a manual_handoff task whenever the draft guard refuses a body, and the SMS
+    // lane runs this exact body through this exact guard a few statements below. Going through the
+    // wrapper would file the handoff twice for one refusal. On a refusal the mirror simply does
+    // nothing and the already-published email stands — the SMS lane still raises the one alarm.
+    const mirrorInvariant = applyAdfReplyInvariant(withAdfHardshipAck(adfEmailMirror.body));
+    if (mirrorInvariant.allow) {
+      setEmailDraft(conv, mirrorInvariant.draftText);
     }
   }
 
