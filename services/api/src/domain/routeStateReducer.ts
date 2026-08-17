@@ -9222,3 +9222,56 @@ export function decideDepartmentRequestTurn(
   if (input.catalogPartsTerm) return { department: "parts", reason: "catalog_corroborated" };
   return { department: null, reason: "no_accessory_noun" };
 }
+
+/**
+ * ADF EMAIL MIRROR — does the email draft still say what the SMS draft ended up saying?
+ *
+ * Shape of the bug this referees (+15852503838 Scott Raichel, operator: "Email does not respond
+ * correctly like the sms"). In `handleSendgridInbound` the email draft is published EARLY, from the
+ * generic `buildInitialEmailDraft` template. ~800 lines later a stack of lane-specific ack overrides
+ * replaces the SMS `draft` — Riding Academy enrollment, non-buyer survey, dealer-lead survey,
+ * event-promo/marketing opt-in, GLA demo ride. Every one of those overrides is a ruling Joe already
+ * made, and NONE of them reached the email lane, because nothing carried the final draft back.
+ *
+ * Measured on the live store 2026-08-17: Scott is a `Riding Academy - Enrolled` lead whose SMS first
+ * touch (2026-08-11 00:54Z) is fully course-aware — names the Riding Academy, the e-course link, and
+ * the unpaid seat — while the email draft sitting on the same conversation today is the generic
+ * bike-shopper body ("happy to help with pricing, options, and availability") plus an
+ * `inventory_visit` booking link. Same lead, same turn, two lanes.
+ *
+ * FAIL DIRECTION. Every arm below fails toward KEEPING the email that was already published rather
+ * than replacing it: an empty final draft never blanks a live email, and a turn where no override
+ * fired is left exactly as it is. The only case that moves is the one we can name — a lane ack
+ * genuinely replaced the SMS body, so the email is provably stale.
+ *
+ * This mirrors an ALREADY-DECIDED body. It never composes copy and never re-opens the routing
+ * decision: whatever the SMS lane concluded this turn is what the email lane says.
+ */
+export type AdfEmailMirrorInput = {
+  /** Did this turn actually publish an email draft? (a blocked invariant publishes nothing) */
+  emailPublished: boolean;
+  /** The SMS draft as it stood BEFORE the lane-specific ack overrides ran. */
+  draftBeforeAckOverrides: string | null | undefined;
+  /** The SMS draft this turn actually ships. */
+  finalDraft: string | null | undefined;
+};
+
+export type AdfEmailMirrorDecision =
+  | { kind: "mirror_final_draft"; body: string; reason: "ack_override_replaced_draft" }
+  | {
+      kind: "keep_published_email";
+      reason: "no_email_published" | "final_draft_blank" | "no_ack_override";
+    };
+
+export function decideAdfEmailMirror(input: AdfEmailMirrorInput): AdfEmailMirrorDecision {
+  // Nothing was published (draft-guard invariant blocked it, and staff already hold a handoff task).
+  // Publishing now would route around that guard, so leave it alone.
+  if (!input.emailPublished) return { kind: "keep_published_email", reason: "no_email_published" };
+  const final = String(input.finalDraft ?? "").trim();
+  // Never trade a wrong-but-present email for an empty one.
+  if (!final) return { kind: "keep_published_email", reason: "final_draft_blank" };
+  const before = String(input.draftBeforeAckOverrides ?? "").trim();
+  // No lane ack fired this turn — the email is as current as it ever was.
+  if (final === before) return { kind: "keep_published_email", reason: "no_ack_override" };
+  return { kind: "mirror_final_draft", body: final, reason: "ack_override_replaced_draft" };
+}
