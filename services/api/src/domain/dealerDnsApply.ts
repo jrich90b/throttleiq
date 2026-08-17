@@ -1,18 +1,22 @@
 import { promises as dns } from "node:dns";
 import {
-  Route53Client,
-  ListHostedZonesByNameCommand,
-  ChangeResourceRecordSetsCommand
-} from "@aws-sdk/client-route-53";
+  LightsailClient,
+  GetDomainCommand,
+  CreateDomainEntryCommand,
+  UpdateDomainEntryCommand
+} from "@aws-sdk/client-lightsail";
 import { getDealerSetup, updateDealerSetup, buildDealerApiDeployment, type DealerSetup } from "./dealerSetupStore.js";
 
 /**
  * Dealer DNS plan/apply (Phase 2 hands-off onboarding, Joe 2026-08-17).
  *
- * The leadrider.ai zone lives on AWS Route53 (verified by NS lookup 8/16). This module turns
+ * The leadrider.ai zone is a LIGHTSAIL DNS zone (Joe's screenshot 8/17 — Lightsail
+ * "Domains & DNS", account 922454075137; same awsdns machinery, different API than
+ * Route53, which is why "I don't use Route 53" and the NS lookup were both right). This module turns
  * the Dealer Setup record's generated DNS records into a reviewable PLAN (dry-run default:
  * desired vs currently-resolving, per-record action) and, behind an explicit apply that is
- * ALSO flag-gated (DEALER_DNS_APPLY_ENABLED, default OFF), UPSERTs them via the Route53 API.
+ * ALSO flag-gated (DEALER_DNS_APPLY_ENABLED, default OFF), creates/updates them via the
+ * Lightsail domain API (create-or-update per entry; Lightsail has no batch upsert).
  *
  * Guardrails:
  *  - ZONE FENCE (deterministic compliance gate): every record name must sit inside
@@ -20,7 +24,7 @@ import { getDealerSetup, updateDealerSetup, buildDealerApiDeployment, type Deale
  *    write DNS for any other domain, no matter what a record generator produces.
  *  - Plan is the default; apply is a separate handler, flag-gated and credential-gated
  *    with explicit, actionable errors when AWS is not configured.
- *  - Verify-after-apply: Route53 acknowledges with a change id; public resolvers lag
+ *  - Verify-after-apply: the API acknowledges per entry; public resolvers lag
  *    (propagation), so the step note records the change id and the plan can be re-run to
  *    watch records converge.
  */
@@ -98,33 +102,33 @@ export async function buildDealerDnsPlan(
   return { zone: ZONE_NAME, records, changes: records.filter(r => r.action !== "noop").length };
 }
 
-async function applyPlanToRoute53(plan: DealerDnsPlan): Promise<{ changeId: string; upserted: number }> {
-  const client = new Route53Client({});
-  const zones = await client.send(new ListHostedZonesByNameCommand({ DNSName: `${ZONE_NAME}.`, MaxItems: 1 }));
-  const zone = (zones.HostedZones ?? [])[0];
-  const zoneName = String(zone?.Name ?? "").replace(/\.$/, "");
-  if (!zone?.Id || zoneName !== ZONE_NAME) {
-    throw new Error(`Route53 hosted zone for ${ZONE_NAME} not found (got ${zoneName || "nothing"}). Check the AWS account/key.`);
+// Lightsail's domain APIs live only in us-east-1, regardless of where instances run.
+async function applyPlanToLightsail(plan: DealerDnsPlan): Promise<{ changeId: string; upserted: number }> {
+  const client = new LightsailClient({ region: "us-east-1" });
+  const domain = await client.send(new GetDomainCommand({ domainName: ZONE_NAME }));
+  const entries = domain.domain?.domainEntries ?? [];
+  const norm = (v?: string | null) => String(v ?? "").toLowerCase().replace(/\.$/, "");
+  let upserted = 0;
+  const applied: string[] = [];
+  for (const record of plan.records) {
+    if (record.action === "noop") continue;
+    const existing = entries.find(e => norm(e.name) === norm(record.name) && String(e.type ?? "") === record.type);
+    const domainEntry = {
+      name: record.name,
+      target: record.desired,
+      type: record.type,
+      ...(existing?.id ? { id: existing.id } : {})
+    };
+    if (existing?.id) {
+      await client.send(new UpdateDomainEntryCommand({ domainName: ZONE_NAME, domainEntry }));
+      applied.push(`updated ${record.name}`);
+    } else {
+      await client.send(new CreateDomainEntryCommand({ domainName: ZONE_NAME, domainEntry }));
+      applied.push(`created ${record.name}`);
+    }
+    upserted += 1;
   }
-  const changes = plan.records
-    .filter(record => record.action !== "noop")
-    .map(record => ({
-      Action: "UPSERT" as const,
-      ResourceRecordSet: {
-        Name: `${record.name}.`,
-        Type: record.type,
-        TTL: 300,
-        ResourceRecords: [{ Value: record.desired }]
-      }
-    }));
-  if (!changes.length) return { changeId: "(no changes)", upserted: 0 };
-  const resp = await client.send(
-    new ChangeResourceRecordSetsCommand({
-      HostedZoneId: zone.Id,
-      ChangeBatch: { Comment: "LeadRider dealer-setup DNS apply", Changes: changes }
-    })
-  );
-  return { changeId: String(resp.ChangeInfo?.Id ?? "?"), upserted: changes.length };
+  return { changeId: applied.join("; ") || "(no changes)", upserted };
 }
 
 // ---------------------------------------------------------------------------
@@ -150,7 +154,7 @@ export async function dealerDnsApplyHandler(req: any, res: any) {
   if (!awsDnsCredentialsPresent()) {
     return res.status(409).json({
       ok: false,
-      error: "AWS credentials are not configured (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY with Route53 access)."
+      error: "AWS credentials are not configured (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY with Lightsail DNS access)."
     });
   }
   const setup = await getDealerSetup(req.params.id);
@@ -158,14 +162,14 @@ export async function dealerDnsApplyHandler(req: any, res: any) {
   const plan = await buildDealerDnsPlan(setup);
   if (plan.blocked) return res.status(400).json({ ok: false, error: plan.blocked });
   try {
-    const result = await applyPlanToRoute53(plan);
+    const result = await applyPlanToLightsail(plan);
     const updated = await updateDealerSetup(setup.id, {
       stage: "dns",
       status: "in_progress",
       stepId: "domains",
       stepStatus: result.upserted ? "ready_to_verify" : "done",
       stepNote: result.upserted
-        ? `Route53 UPSERT ${result.upserted} record(s), change ${result.changeId}. Re-run the plan to watch propagation.`
+        ? `Lightsail DNS: ${result.changeId} (${result.upserted} entr${result.upserted === 1 ? "y" : "ies"}). Re-run the plan to watch propagation.`
         : "DNS already matches — nothing to change."
     });
     console.log(`[dealer dns] applied ${result.upserted} change(s) for ${setup.slug} (${result.changeId})`);
