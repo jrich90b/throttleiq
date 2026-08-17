@@ -4335,6 +4335,64 @@ export function decideFinanceDeclinedCadence(
   };
 }
 
+// ── THE ENGAGEMENT BUMP (`cadence.kind = "engaged"`) ─────────────────────────────────────────
+// The cadence tick promotes a lead onto the FASTER `engaged` ladder once it sees engagement, live
+// agent context, or a finance-docs signal. That promotion lived inline in the tick as one of seven
+// unrefereed writers of `cadence.kind`, and exactly ONE of the seven ever read
+// `decideFinanceDeclinedCadence` — so the bump could promote a lead the finance referee had just
+// placed on the long-term ladder by Joe's 2026-08-01 "5 yes long term" ruling.
+//
+// MEASURED 2026-08-17, and it is a LOOP, not a one-off overwrite:
+//   1. tick N   — the bump flips `long_term` -> `engaged` (referee never asked)
+//   2. tick N   — the touch goes out at rung 0 and `advanceFollowUpCadence` climbs the ENGAGED ladder
+//   3. tick N+1 — `decideFinanceDeclinedCadence` now sees a short-term kind, returns
+//                 `needsLongTermHeal`, and the heal writes `kind = long_term` AND `stepIndex = 0`
+//   4. back to 1, forever — the ladder can never climb, so it re-fires roughly every 24h
+// Fingerprint on the live store: `usedVariants` keyed `engaged:*:0:*` on a record stored as
+// `long_term`, `stepIndex: 0` with `deliveredTouches` > 0 (the heal resets the step, never the
+// touch counter). Two live leads carried it — +17163135464 and +17167995566 — each with two
+// touches ~24h apart at rung 0 and a third already queued.
+//
+// FAIL DIRECTION: blocking the bump can only make us text a declined lead LESS often, and less
+// often is what Joe's ruling already asked for.
+//
+// `isFinanceDeclined` is the predicate, NOT `blockEngagedDowngrade`. The latter is
+// `isFinanceDeclined && kind === "long_term"`, which reads FALSE on exactly the tick where the kind
+// is still `engaged` and about to be healed — step 3 above — so gating on it would leave the loop
+// running. This is the trap that makes the near-miss fix look correct.
+export type EngagedCadenceBumpInput = {
+  /** `cadence.kind` as it stands right now. */
+  cadenceKind?: string | null;
+  /** Does anything justify the faster ladder — engagement, live agent context, finance docs? */
+  hasEngagementSignal: boolean;
+  isPostSale: boolean;
+  isTradeNoInterest: boolean;
+  isTradeInAppraisalLead: boolean;
+  isSellMyBikeLead: boolean;
+  /** A 4+ month stated timeframe caps the tempo at long_term (Joe, 2026-07-16). */
+  cadenceTempoCapped: boolean;
+  /** `decideFinanceDeclinedCadence(...).isFinanceDeclined` for this same conversation. */
+  isFinanceDeclined: boolean;
+};
+
+export type EngagedCadenceBumpDecision = { bump: boolean; why: string };
+
+export function decideEngagedCadenceBump(input: EngagedCadenceBumpInput): EngagedCadenceBumpDecision {
+  const kind = String(input.cadenceKind ?? "").trim().toLowerCase();
+  if (kind === "engaged") return { bump: false, why: "already on the engaged ladder" };
+  if (input.isPostSale) return { bump: false, why: "post_sale outranks the engagement bump" };
+  if (input.isFinanceDeclined)
+    return { bump: false, why: "finance-declined leads stay on the long-term ladder (Joe, 2026-08-01)" };
+  if (input.cadenceTempoCapped)
+    return { bump: false, why: "a 4+ month stated timeframe caps the tempo at long_term (Joe, 2026-07-16)" };
+  if (input.isTradeNoInterest) return { bump: false, why: "trade lead with no vehicle interest" };
+  if (input.isTradeInAppraisalLead) return { bump: false, why: "trade-in appraisal lead" };
+  if (input.isSellMyBikeLead) return { bump: false, why: "sell-my-bike lead" };
+  if (!input.hasEngagementSignal)
+    return { bump: false, why: "no engagement, agent context or finance-docs signal" };
+  return { bump: true, why: "engagement signal present and nothing caps the tempo" };
+}
+
 /**
  * May we PROACTIVELY text the business manager asking for a finance outcome? (Joe ruling
  * 2026-08-04: "a pre qual should not create a finance outcome.")

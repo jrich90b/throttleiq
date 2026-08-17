@@ -815,6 +815,7 @@ import {
   decideFinanceHardshipTurn,
   decideIncomingInventoryPurpose,
   decideFinanceDeclinedCadence,
+  decideEngagedCadenceBump,
   decideNonMotorcycleTradeTurn,
   decideServiceAppointmentTurn,
   decideSchedulingTurn,
@@ -32637,14 +32638,20 @@ async function processDueFollowUpsUnlocked() {
     // A 4+ month stated timeframe caps the tempo at long_term — don't let the generic engagement bump
     // override the customer's own timeline (Joe, 2026-07-16). Fail-direction safe (fewer touches).
     const cadenceTempoCapped = cadenceTempoCappedToLongTerm(conv.lead);
+    // Ask the referee — this used to be an inline `cadence.kind = "engaged"` that never consulted
+    // decideFinanceDeclinedCadence, so it fought the finance heal above and pinned a declined lead
+    // at rung 0 forever (see decideEngagedCadenceBump for the measured loop).
     if (
-      !isPostSale &&
-      !isTradeNoInterest &&
-      !isTradeInAppraisalLead &&
-      !isSellMyBikeLead &&
-      !cadenceTempoCapped &&
-      (conv.engagement?.at || hasAgentContextForCadence || hasFinanceDocsCadenceSignal) &&
-      cadence.kind !== "engaged"
+      decideEngagedCadenceBump({
+        cadenceKind: cadence.kind,
+        hasEngagementSignal: !!(conv.engagement?.at || hasAgentContextForCadence || hasFinanceDocsCadenceSignal),
+        isPostSale,
+        isTradeNoInterest,
+        isTradeInAppraisalLead,
+        isSellMyBikeLead,
+        cadenceTempoCapped,
+        isFinanceDeclined: financeDeclinedHeal.isFinanceDeclined
+      }).bump
     ) {
       cadence.kind = "engaged";
     }
