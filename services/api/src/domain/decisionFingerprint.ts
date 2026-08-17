@@ -178,6 +178,35 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     });
   }, ["decideFinanceDeclinedCadence"]);
 
+  // Added 2026-08-17 — the engagement bump, pulled out of the cadence tick after it fought the
+  // finance-declined heal and pinned two live leads at rung 0 (+17163135464, +17167995566).
+  // PARTIALLY projectable: `hasEngagementSignal` also folds in live agent context and a
+  // finance-docs signal that are not stored cadence state, so the projection samples the stored
+  // half (`conv.engagement.at`) and holds the tick-local flags at their common value. That is
+  // enough to pin the arm that matters here — a declined lead must never take the bump.
+  add("engagedCadenceBump", conv => {
+    if (typeof reducer.decideEngagedCadenceBump !== "function") return undefined;
+    if (typeof reducer.decideFinanceDeclinedCadence !== "function") return undefined;
+    const financeDeclined = reducer.decideFinanceDeclinedCadence({
+      followUpReason: conv?.followUp?.reason ?? null,
+      financeOutcomeStatus: conv?.financeOutcome?.status ?? null,
+      appointmentOutcomeStatus: conv?.appointment?.staffNotify?.outcome?.status ?? null,
+      appointmentOutcomeSecondaryStatus: conv?.appointment?.staffNotify?.outcome?.secondaryStatus ?? null,
+      cadenceKind: conv?.followUpCadence?.kind ?? null,
+      cadenceStatus: conv?.followUpCadence?.status ?? null
+    });
+    return reducer.decideEngagedCadenceBump({
+      cadenceKind: conv?.followUpCadence?.kind ?? null,
+      hasEngagementSignal: !!conv?.engagement?.at,
+      isPostSale: str(conv?.followUpCadence?.kind) === "post_sale",
+      isTradeNoInterest: false,
+      isTradeInAppraisalLead: false,
+      isSellMyBikeLead: false,
+      cadenceTempoCapped: false,
+      isFinanceDeclined: !!financeDeclined?.isFinanceDeclined
+    });
+  }, ["decideEngagedCadenceBump"]);
+
   // Added 2026-08-04 (Joe: "a pre qual should not create a finance outcome"). Fully projectable —
   // every input is stored conversation state, so a prequal-origin lead that starts nagging the
   // business manager again shows up as a decision DIFF, not just a missing SMS nobody notices.

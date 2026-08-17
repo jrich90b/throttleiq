@@ -24,6 +24,7 @@ export {
   decideJumpstartInviteTurn,
   decideFinancePricingTurn,
   decideFinanceDeclinedCadence,
+  decideEngagedCadenceBump,
   decideBusinessManagerFinanceOutcomePrompt,
   decideHeldDraftRelease,
   isRealReplyProvider,

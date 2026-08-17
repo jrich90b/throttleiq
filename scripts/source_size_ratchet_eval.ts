@@ -455,7 +455,11 @@ const CEILINGS: Ceiling[] = [
     // append the line" blocks collapsed into appendVoiceFactsCadenceLine (voiceCadenceFacts), which
     // funded the two new promise-mint sites — and is the same duplication that let the promise
     // follow-through be wired to one author instead of every one.
-    max: 70_253,
+    // 70_253 -> 70_251. The engagement-bump un-stacking: the inline `cadence.kind = "engaged"`
+    // in the cadence tick — one of seven unrefereed writers of that field, and the one that fought
+    // the finance-declined heal into a daily-forever loop — is now decideEngagedCadenceBump in
+    // routeStateReducer, so the tick states the inputs and the referee owns the rule.
+    max: 70_251,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
