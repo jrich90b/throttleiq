@@ -115,7 +115,30 @@ n += 8;
 const api = fs.readFileSync("services/api/src/index.ts", "utf8");
 const store = fs.readFileSync("services/api/src/domain/conversationStore.ts", "utf8");
 assert.match(api, /const cadenceTempoCapped = cadenceTempoCappedToLongTerm\(conv\.lead\)/, "live tick computes the cap");
-assert.match(api, /!cadenceTempoCapped &&[\s\S]{0,160}cadence\.kind = "engaged"/, "live tick prevent-upgrade guards the engaged bump");
+// The bump moved out of the tick and into decideEngagedCadenceBump (2026-08-17) — it is now a
+// refereed decision, so pin the BEHAVIOUR by executing the referee, and keep only a call-shape
+// pin on the tick. The old regex asserted the inline `cadence.kind = "engaged"` assignment, which
+// no longer exists; re-adding it would mean re-stacking the writer the referee replaced.
+assert.match(api, /cadenceTempoCapped,?\n/, "live tick still passes the cap into the bump decision");
+{
+  const { decideEngagedCadenceBump } = await import("../services/api/src/domain/routeStateReducer.ts");
+  const base = {
+    cadenceKind: "standard",
+    hasEngagementSignal: true,
+    isPostSale: false,
+    isTradeNoInterest: false,
+    isTradeInAppraisalLead: false,
+    isSellMyBikeLead: false,
+    cadenceTempoCapped: false,
+    isFinanceDeclined: false
+  };
+  assert.equal(decideEngagedCadenceBump(base).bump, true, "engagement bumps an uncapped lead");
+  assert.equal(
+    decideEngagedCadenceBump({ ...base, cadenceTempoCapped: true }).bump,
+    false,
+    "a 4+ month stated timeframe must still cap the tempo (Joe, 2026-07-16)"
+  );
+}
 assert.match(api, /!cadenceTempoCappedToLongTerm\(conv\.lead\) &&[\s\S]{0,120}engagement\?\.at/, "regen engagedKind respects the cap (route parity)");
 assert.match(api, /realignOverEagerEngagedCadence\(conv, cfg\.timezone, now\)/, "reconcile runs the heal");
 assert.match(api, /engaged_cadence_capped_to_long_term/, "route outcome recorded");

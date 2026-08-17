@@ -32635,26 +32635,17 @@ async function processDueFollowUpsUnlocked() {
       !isTradeInAppraisalLead &&
       !isSellMyBikeLead;
     const hasAgentContextForCadence = !!getActiveAgentContextText(conv).trim();
-    // A 4+ month stated timeframe caps the tempo at long_term — don't let the generic engagement bump
-    // override the customer's own timeline (Joe, 2026-07-16). Fail-direction safe (fewer touches).
+    // A 4+ month stated timeframe caps the tempo at long_term (Joe, 2026-07-16); fewer touches.
     const cadenceTempoCapped = cadenceTempoCappedToLongTerm(conv.lead);
-    // Ask the referee — this used to be an inline `cadence.kind = "engaged"` that never consulted
-    // decideFinanceDeclinedCadence, so it fought the finance heal above and pinned a declined lead
-    // at rung 0 forever (see decideEngagedCadenceBump for the measured loop).
-    if (
-      decideEngagedCadenceBump({
-        cadenceKind: cadence.kind,
-        hasEngagementSignal: !!(conv.engagement?.at || hasAgentContextForCadence || hasFinanceDocsCadenceSignal),
-        isPostSale,
-        isTradeNoInterest,
-        isTradeInAppraisalLead,
-        isSellMyBikeLead,
-        cadenceTempoCapped,
-        isFinanceDeclined: financeDeclinedHeal.isFinanceDeclined
-      }).bump
-    ) {
-      cadence.kind = "engaged";
-    }
+    // Refereed — was an inline `cadence.kind = "engaged"` that never asked the finance referee, so
+    // it fought the heal above and pinned declined leads at rung 0 forever (see the referee).
+    const engagedBump = decideEngagedCadenceBump({
+      cadenceKind: cadence.kind,
+      hasEngagementSignal: !!(conv.engagement?.at || hasAgentContextForCadence || hasFinanceDocsCadenceSignal),
+      isPostSale, isTradeNoInterest, isTradeInAppraisalLead, isSellMyBikeLead, cadenceTempoCapped,
+      isFinanceDeclined: financeDeclinedHeal.isFinanceDeclined
+    });
+    if (engagedBump.bump) cadence.kind = "engaged";
     const isEngagedCadence = cadence.kind === "engaged";
     const contextTag = isEngagedCadence
       ? await resolveCadenceContextTag(conv, cadence)
