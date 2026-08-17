@@ -4379,10 +4379,14 @@ export type EngagedCadenceBumpDecision = { bump: boolean; why: string };
 
 export function decideEngagedCadenceBump(input: EngagedCadenceBumpInput): EngagedCadenceBumpDecision {
   const kind = String(input.cadenceKind ?? "").trim().toLowerCase();
-  if (kind === "engaged") return { bump: false, why: "already on the engaged ladder" };
+  // ORDER MATTERS. The hard NOs are checked BEFORE "already engaged" on purpose: a declined lead
+  // sitting on `engaged` mid-loop must answer "declined leads stay long-term", not "nothing to do".
+  // Put the cheap `kind === "engaged"` short-circuit first and that row becomes untestable — it
+  // returns false for the wrong reason, so a sabotage of the finance clause still passes.
   if (input.isPostSale) return { bump: false, why: "post_sale outranks the engagement bump" };
   if (input.isFinanceDeclined)
     return { bump: false, why: "finance-declined leads stay on the long-term ladder (Joe, 2026-08-01)" };
+  if (kind === "engaged") return { bump: false, why: "already on the engaged ladder" };
   if (input.cadenceTempoCapped)
     return { bump: false, why: "a 4+ month stated timeframe caps the tempo at long_term (Joe, 2026-07-16)" };
   if (input.isTradeNoInterest) return { bump: false, why: "trade lead with no vehicle interest" };

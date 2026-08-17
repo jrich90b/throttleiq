@@ -184,7 +184,15 @@ for (const marker of [
 // decideFinanceDeclinedCadence. On a declined lead that fought the heal above and produced a
 // LOOP: bump -> engaged, send at rung 0, heal -> long_term + stepIndex 0, repeat every ~24h.
 // Two live leads were in it, each with two delivered touches 24h apart and a third queued.
-type BumpRow = { name: string; input: Parameters<typeof decideEngagedCadenceBump>[0]; bump: boolean };
+type BumpRow = {
+  name: string;
+  input: Parameters<typeof decideEngagedCadenceBump>[0];
+  bump: boolean;
+  /** Pinned so a row cannot pass for the WRONG reason — the trap that made the first cut of the
+   *  mid-loop row inert (a `kind === "engaged"` short-circuit answered it before the finance
+   *  clause was ever reached, so sabotaging the finance clause still passed). */
+  why?: RegExp;
+};
 
 const BASE_BUMP: Parameters<typeof decideEngagedCadenceBump>[0] = {
   cadenceKind: "long_term",
@@ -203,14 +211,16 @@ const BUMP_ROWS: BumpRow[] = [
     // THE FIX. Robert Cloud's live shape.
     name: "declined lead with engagement -> NEVER bump (Joe 2026-08-01, 5 yes long term)",
     input: { ...BASE_BUMP, isFinanceDeclined: true },
-    bump: false
+    bump: false,
+    why: /finance-declined/i
   },
   {
     // THE NEAR-MISS. Gating on blockEngagedDowngrade instead of isFinanceDeclined would read
     // FALSE here (kind is not long_term yet) and leave the loop running. Pin the mid-heal tick.
     name: "declined lead ALREADY flipped to engaged mid-loop -> still never bump",
     input: { ...BASE_BUMP, cadenceKind: "engaged", isFinanceDeclined: true },
-    bump: false
+    bump: false,
+    why: /finance-declined/i
   },
   { name: "no engagement signal -> no bump", input: { ...BASE_BUMP, hasEngagementSignal: false }, bump: false },
   { name: "post_sale outranks the bump", input: { ...BASE_BUMP, isPostSale: true }, bump: false },
@@ -223,7 +233,9 @@ const BUMP_ROWS: BumpRow[] = [
 
 for (const row of BUMP_ROWS) {
   try {
-    assert.equal(decideEngagedCadenceBump(row.input).bump, row.bump, `${row.name}: bump`);
+    const decision = decideEngagedCadenceBump(row.input);
+    assert.equal(decision.bump, row.bump, `${row.name}: bump`);
+    if (row.why) assert.ok(row.why.test(decision.why), `${row.name}: expected reason ${row.why}, got "${decision.why}"`);
     console.log(`  ok  bump: ${row.name}`);
   } catch (err: any) {
     failures += 1;
@@ -284,10 +296,22 @@ for (const row of BUMP_ROWS) {
   }
 }
 
-// The bump must be REFEREED at the call site, not decided inline again.
-if (!indexSource.includes("decideEngagedCadenceBump")) {
+// The bump must be REFEREED at the call site, not decided inline again — and pinned by the EXACT
+// call shape. `indexSource.includes("decideEngagedCadenceBump")` is NOT enough: the explanatory
+// comment above the call contains that same word, so reverting to the inline bump left the marker
+// satisfied and the sabotage passed. Pin the invocation and the argument that carries the fix.
+for (const marker of ["decideEngagedCadenceBump({", "isFinanceDeclined: financeDeclinedHeal.isFinanceDeclined"]) {
+  const hits = indexSource.split(marker).length - 1;
+  if (hits < 1) {
+    failures += 1;
+    console.error(`  FAIL index.ts engagement bump is missing the call-shape marker ${JSON.stringify(marker)}`);
+  }
+}
+// ...and the inline bump must be GONE. Its signature was the raw assignment guarded by a bare
+// kind check; if that reappears, someone re-stacked the writer this referee replaced.
+if (/cadence\.kind !== "engaged"\s*\n\s*\) \{\s*\n\s*cadence\.kind = "engaged";/.test(indexSource)) {
   failures += 1;
-  console.error('  FAIL index.ts no longer asks decideEngagedCadenceBump for the engagement bump');
+  console.error("  FAIL index.ts still decides the engagement bump inline — the referee was bypassed");
 }
 
 if (failures) {
