@@ -48,12 +48,39 @@ function isDraft(m: AnyObj): boolean {
   return m?.direction === "out" && m?.provider === "draft_ai";
 }
 
+/**
+ * Did this SENT message start life as an agent draft? On approval the store folds the draft into
+ * the outbound row — `originalDraftBody` + `draftUsed` + the `authoredBy` authorship stamp — and
+ * the separate `draft_ai` row does not always survive. Measured on the live store 2026-08-17 over
+ * the trailing 30 days: of 373 answered turns, 52 have NO `draft_ai` row yet their sent reply
+ * carries this provenance. Those 52 are turns where the agent DID draft and staff USED it, and the
+ * old single `turnsWithoutRealtimeDraft` counted every one of them as if the agent had said nothing.
+ *
+ * The fold keeps no draft TIMESTAMP, so these turns stay unmeasurable for speed — that is exactly
+ * why they get their own counter instead of a guessed latency.
+ */
+function hasApprovedAgentDraft(m: AnyObj): boolean {
+  return (
+    String(m?.originalDraftBody ?? "").trim().length > 0 ||
+    m?.draftUsed === true ||
+    m?.authoredBy === "agent"
+  );
+}
+
 export type LatencyPair = {
   convId: string;
   name: string;
   inboundAt: string;
   draftMin: number | null;
   sentMin: number | null;
+  /**
+   * Thread ownership, read from `conv.mode`. On a HUMAN-owned thread the agent stands down by
+   * design, so "no draft" there is the product working, not a silent agent. This is the mode as it
+   * reads NOW, not necessarily at the turn — good enough to attribute a count, never to grade one.
+   */
+  threadMode: string | null;
+  /** The answering send carried agent-draft provenance (see hasApprovedAgentDraft). */
+  approvedAgentDraft: boolean;
 };
 
 /**
@@ -94,7 +121,9 @@ export function collectLatencyPairs(conversations: AnyObj[], windowStartMs: numb
             name,
             inboundAt: pendingInboundAt,
             draftMin: draftMs != null ? (draftMs - pendingInboundMs) / MIN : null,
-            sentMin: sentMs != null ? (sentMs - pendingInboundMs) / MIN : null
+            sentMin: sentMs != null ? (sentMs - pendingInboundMs) / MIN : null,
+            threadMode: conv.mode == null ? null : String(conv.mode),
+            approvedAgentDraft: hasApprovedAgentDraft(m)
           });
         }
         pendingInboundMs = null;
@@ -124,9 +153,30 @@ export function summarizeLatency(pairs: LatencyPair[]) {
   const realtimeDrafts = pairs
     .map(p => p.draftMin)
     .filter((v): v is number => v != null && v >= 0 && v <= REALTIME_DRAFT_WINDOW_MIN);
-  const noRealtimeDraft = pairs.filter(
-    p => p.draftMin == null || p.draftMin > REALTIME_DRAFT_WINDOW_MIN
+  const noRealtimePairs = pairs.filter(p => p.draftMin == null || p.draftMin > REALTIME_DRAFT_WINDOW_MIN);
+  const noRealtimeDraft = noRealtimePairs.length;
+  // WHY there is no timed draft — because the single total reads as "the agent said nothing" and
+  // mostly it is not that. This audit's own output on the live store, 2026-08-17, trailing 30d,
+  // 373 answered turns, 322 with no timed draft:
+  //     231  human-owned thread — staff mid-conversation, the agent standing down as designed
+  //      55  a draft the staff SENT, folded into the outbound row with no timestamp left
+  //      36  the real residual
+  // Reporting the 322 alone invites the conclusion that the agent is silent on 86% of answered
+  // turns. The honest figure is 36 — a 9x difference in how the same field reads.
+  //
+  // Precedence is deliberate: `approvedButUntimed` is tested FIRST, because a turn whose reply the
+  // agent demonstrably wrote did NOT stand down — filing it under human-owned would be wrong even
+  // when a human owns the thread. `unexplained` is therefore a true residual, and the three always
+  // sum to `turnsWithoutRealtimeDraft` (pinned by the self-test).
+  //
+  // `turnsWithoutRealtimeDraft` itself is UNCHANGED, on purpose: the release gate grades
+  // `slowOver5minCount` and `medianMin` off this same block, and re-defining a field in place is how
+  // a threshold silently moves. This adds context, it moves nothing.
+  const noDraftApprovedButUntimed = noRealtimePairs.filter(p => p.approvedAgentDraft).length;
+  const noDraftHumanOwnedThread = noRealtimePairs.filter(
+    p => !p.approvedAgentDraft && p.threadMode === "human"
   ).length;
+  const noDraftUnexplained = noRealtimeDraft - noDraftApprovedButUntimed - noDraftHumanOwnedThread;
   // Effective customer-facing response: sends within the response cap.
   const sents = pairs
     .map(p => p.sentMin)
@@ -137,7 +187,10 @@ export function summarizeLatency(pairs: LatencyPair[]) {
       medianMin: pct(realtimeDrafts, 50),
       p90Min: pct(realtimeDrafts, 90),
       slowOver5minCount: realtimeDrafts.filter(v => v > 5).length,
-      turnsWithoutRealtimeDraft: noRealtimeDraft
+      turnsWithoutRealtimeDraft: noRealtimeDraft,
+      noDraftApprovedButUntimed,
+      noDraftHumanOwnedThread,
+      noDraftUnexplained
     },
     effective: {
       n: sents.length,
@@ -199,6 +252,59 @@ function selfTest() {
   if (s.effective.over1hPct !== 33) fail(`one of three over 1h = 33%, got ${s.effective.over1hPct}`);
   if (s.agentDraft.n !== 2) fail(`two draft measurements (A,C), got ${s.agentDraft.n}`);
 
+  // WHY a turn carries no timed draft — its own fixture, so the assertions above keep grading
+  // exactly what they graded before. Four shapes, one per bucket, plus the precedence case.
+  const mkAttr = (id: string, mode: string | null, sendFields: AnyObj): AnyObj => ({
+    id,
+    mode,
+    lead: { firstName: id },
+    messages: [
+      { direction: "in", provider: "twilio", at: "2026-06-13T14:00:00.000Z", body: "hi" },
+      { direction: "out", provider: "twilio", at: "2026-06-13T14:04:00.000Z", body: "reply", ...sendFields }
+    ]
+  });
+  const attrPairs = collectLatencyPairs(
+    [
+      // Staff mid-conversation on a human-owned thread: the agent stands down BY DESIGN.
+      mkAttr("human-standdown", "human", {}),
+      // Suggest thread, no draft row, but the send is a draft staff approved — the store folded the
+      // draft in and kept no timestamp. Each of the three provenance fields must be enough alone.
+      mkAttr("approved-original-body", "suggest", { originalDraftBody: "the agent wrote this" }),
+      mkAttr("approved-draft-used", "suggest", { draftUsed: true }),
+      mkAttr("approved-authored-by", "suggest", { authoredBy: "agent" }),
+      // PRECEDENCE: human-owned AND agent-written. The agent did not stand down, so this is an
+      // approved-but-untimed draft, never a human standdown.
+      mkAttr("human-thread-agent-draft", "human", { originalDraftBody: "the agent wrote this too" }),
+      // The residual: suggest thread, nothing from the agent at all. This is the real gap.
+      mkAttr("unexplained", "suggest", {})
+    ],
+    windowStart
+  );
+  const a = summarizeLatency(attrPairs).agentDraft;
+  if (attrPairs.length !== 6) fail(`attribution fixture must yield 6 pairs, got ${attrPairs.length}`);
+  if (a.n !== 0) fail(`attribution fixture has no draft_ai rows, so no timed drafts; got n=${a.n}`);
+  if (a.turnsWithoutRealtimeDraft !== 6) fail(`all 6 lack a timed draft, got ${a.turnsWithoutRealtimeDraft}`);
+  if (a.noDraftApprovedButUntimed !== 4) {
+    fail(`4 sends carry agent-draft provenance (3 field shapes + the human-thread one), got ${a.noDraftApprovedButUntimed}`);
+  }
+  if (a.noDraftHumanOwnedThread !== 1) {
+    fail(`only the pure human standdown counts as human-owned, got ${a.noDraftHumanOwnedThread}`);
+  }
+  if (a.noDraftUnexplained !== 1) fail(`one true residual, got ${a.noDraftUnexplained}`);
+  // The invariant is the whole guard: whatever the buckets are, they must account for the total, or
+  // a future edit can quietly drop turns out of the accounting and the residual reads healthy.
+  const attributed = a.noDraftApprovedButUntimed + a.noDraftHumanOwnedThread + a.noDraftUnexplained;
+  if (attributed !== a.turnsWithoutRealtimeDraft) {
+    fail(`buckets must sum to the total: ${attributed} vs ${a.turnsWithoutRealtimeDraft}`);
+  }
+  // Same invariant on the ORIGINAL fixture, where drafts DO exist — the accounting has to hold on
+  // real mixed data, not only on the shapes written to exercise it.
+  const mixed =
+    s.agentDraft.noDraftApprovedButUntimed + s.agentDraft.noDraftHumanOwnedThread + s.agentDraft.noDraftUnexplained;
+  if (mixed !== s.agentDraft.turnsWithoutRealtimeDraft) {
+    fail(`buckets must sum on the mixed fixture too: ${mixed} vs ${s.agentDraft.turnsWithoutRealtimeDraft}`);
+  }
+
   // EXECUTE the real CLI and read what it actually WROTE. The assertions above call the pure
   // helpers, so they stayed green when `trailing30d` was deleted from the emitted object — and the
   // readiness bar would then have silently fallen back to the 24h window and gone back to flipping
@@ -244,6 +350,17 @@ function selfTest() {
       fail("trailing30d must carry an effective median — that is the number the bar reads");
     }
     if (written.summary?.effective?.medianMin == null) fail("the daily summary must survive untouched — the release gate reads it");
+    // The attribution has to reach the FILE, not just the pure helper — the emitted JSON is what
+    // the readiness bar, the release gate and every future reader actually open.
+    for (const block of [written.summary?.agentDraft, written.trailing30d?.summary?.agentDraft]) {
+      for (const field of ["noDraftApprovedButUntimed", "noDraftHumanOwnedThread", "noDraftUnexplained"]) {
+        if (typeof block?.[field] !== "number") {
+          fail(`the emitted agentDraft block must carry ${field} — a bare turnsWithoutRealtimeDraft reads as "the agent said nothing"`);
+        }
+      }
+    }
+    const md = fs.readFileSync(path.join(outDir, "response_latency_report.md"), "utf8");
+    if (!md.includes("unexplained")) fail("the markdown report must name the unexplained residual — that is the line a human reads");
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -322,6 +439,7 @@ function main() {
     "",
     "## Agent draft speed (the agent's job — graded)",
     `- median: ${summary.agentDraft.medianMin ?? "n/a"} min | p90: ${summary.agentDraft.p90Min ?? "n/a"} min | slow (>5min): ${summary.agentDraft.slowOver5minCount}`,
+    `- no timed draft: ${summary.agentDraft.turnsWithoutRealtimeDraft} — of which ${summary.agentDraft.noDraftHumanOwnedThread} human-owned thread (agent stands down by design), ${summary.agentDraft.noDraftApprovedButUntimed} a draft staff SENT but the store kept no draft timestamp, ${summary.agentDraft.noDraftUnexplained} unexplained (the number to look at)`,
     "",
     "## Effective first response (what the customer feels — Suggest-mode gated)",
     `- median: ${summary.effective.medianMin ?? "n/a"} min | p90: ${summary.effective.p90Min ?? "n/a"} min`,
