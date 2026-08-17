@@ -10,9 +10,13 @@ import path from "node:path";
 import { checkMessage } from "./voice_charter_audit.ts";
 
 process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "eval-no-live-key";
-const { applyVoiceDurableFacts, buildVoiceFactsCadenceLine, fillLeadVehicleFromVoiceFacts } = await import(
-  "../services/api/src/domain/voiceCadenceFacts.ts"
-);
+const {
+  applyVoiceDurableFacts,
+  applyVoiceFactsCadenceNotifyPromise,
+  buildVoiceFactsCadenceLine,
+  fillLeadVehicleFromVoiceFacts,
+  resolveVoiceFactsCadenceLine
+} = await import("../services/api/src/domain/voiceCadenceFacts.ts");
 
 const nowIso = "2026-06-11T16:00:00.000Z";
 const now = new Date(nowIso);
@@ -166,7 +170,7 @@ assert.equal(
 const apiSource = await fs.readFile(path.resolve("services/api/src/index.ts"), "utf8");
 assert.match(apiSource, /parseVoiceDurableFactsWithLLM\(\{ summary: summaryText/, "voice summary ingestion must extract durable facts");
 assert.equal(
-  (apiSource.match(/buildVoiceFactsCadenceLine\(conv, now\)/g) ?? []).length,
+  apiSource.split("appendVoiceFactsCadenceLine(conv, message, now, wasCadenceLineUsedRecently)").length - 1,
   3,
   "all three cadence personalization sites must append the voice facts line"
 );
@@ -284,5 +288,118 @@ assert.match(
   /CONDITIONAL on something the STORE decides/,
   "conditional staff promises must stay staff-owned in the prompt"
 );
+
+// ── The promise the cadence line makes must mint something (Robert Cloud +17163135464, Joe 8/16) ──
+// "Still keeping an eye out for pre-owned options around $23,000 for you." was DELIVERED and the
+// lead had no watch and no task. It went out through the endpoint that carries PR #709's arm; the
+// arm's cost gate reads "keep an eye out" and the sentence says "keepING", so it never ran. The
+// follow-through is now minted by the author, off the same typed facts that built the sentence.
+{
+  const promiseNowIso = "2026-08-16T15:51:26.251Z";
+  const promiseNow = new Date(promiseNowIso);
+  const SENT =
+    "Hey Robert, just checking back on the Road Glide Special. Want me to send photos or price and " +
+    "payment numbers? Still keeping an eye out for pre-owned options around $23,000 for you.";
+  // Minimal stand-in for index.ts's mergeInventoryWatches: same {merged, added} contract.
+  const mergeWatches = (existing: any[], incoming: any[]) => {
+    const added = incoming.filter(
+      i => !existing.some(e => String(e.model ?? "").toLowerCase() === String(i.model ?? "").toLowerCase())
+    );
+    return { merged: [...existing, ...added], added };
+  };
+  const robert = () => ({
+    id: "+17163135464",
+    lead: { vehicle: { make: "Harley-Davidson", year: "2018", model: "Road Glide Special", condition: "used" } },
+    voiceFacts: {
+      quotedUnit: "used Road Glide Special",
+      quotedPrice: null,
+      otdPrice: null,
+      budgetMax: 23000,
+      wantsPreowned: true,
+      preferences: [],
+      blockers: [],
+      updatedAt: "2026-07-13T20:50:49.860Z"
+    },
+    messages: []
+  });
+  const mint = (conv: any, body = SENT, when = promiseNowIso) =>
+    applyVoiceFactsCadenceNotifyPromise(conv, {
+      sentBody: body,
+      nowIso: when,
+      mergeWatches,
+      setDialogState: () => {}
+    });
+
+  // Promise-ness is decided where the sentence is authored — no downstream keyword test.
+  assert.equal(resolveVoiceFactsCadenceLine(robert(), promiseNow)!.notifyPromise, true, "budget line is a promise");
+  assert.equal(
+    resolveVoiceFactsCadenceLine(novelPrefConv, now)!.notifyPromise,
+    true,
+    "the 'still watching for' line is a promise too"
+  );
+  const quoteOnly: any = {
+    voiceFacts: { quotedUnit: "Breakout", quotedPrice: 14995, otdPrice: null, budgetMax: null, wantsPreowned: null, preferences: [], blockers: [], updatedAt: nowIso }
+  };
+  assert.equal(
+    resolveVoiceFactsCadenceLine(quoteOnly, now)!.notifyPromise,
+    false,
+    "the in-stock quote line reports status and promises nothing"
+  );
+
+  // 1) THE REPRODUCTION: the sent body carries the promise => a watch on the right bike.
+  {
+    const conv: any = robert();
+    const out = mint(conv);
+    assert.equal(out.outcome, "watch_set", "a delivered watch promise must mint a watch");
+    assert.equal(out.model, "Road Glide Special", "the watch targets the phone-discussed unit, year stripped");
+    assert.equal(conv.inventoryWatches.length, 1);
+    assert.equal(conv.inventoryWatches[0].condition, "used", "wantsPreowned pins the condition");
+  }
+  // 2) A repeat send is idempotent — the existing watch already tracks the promise.
+  {
+    const conv: any = robert();
+    mint(conv);
+    assert.equal(mint(conv).outcome, "none", "a second send must not stack a duplicate watch");
+    assert.equal(conv.inventoryWatches.length, 1);
+  }
+  // 3) The body is load-bearing, not just the facts: a body the value gate replaced (or a draft
+  //    edited past the promise) promised nothing, so it mints nothing.
+  assert.equal(
+    mint(robert(), "Hey Robert, just checking back on the Road Glide Special.").outcome,
+    "none",
+    "no promise in the sent body => no side effect"
+  );
+  // 4) Status line, sold lead and stale facts stay silent.
+  assert.equal(
+    mint({ ...robert(), voiceFacts: { ...robert().voiceFacts, quotedPrice: 14995 } } as any,
+      "That used Road Glide Special we went over on the phone is still here at $14,995.").outcome,
+    "none",
+    "the quote status line is not a promise"
+  );
+  assert.equal(mint({ ...robert(), closedReason: "sold" } as any).outcome, "none", "sold leads never mint");
+  assert.equal(mint(robert(), SENT, "2026-10-01T00:00:00.000Z").outcome, "none", "stale facts never mint");
+  // 5) No usable model => the referee's dismissible dated task, never a watch that alerts on nothing.
+  for (const unit of ["", "Harley-Davidson Full Line"]) {
+    const conv: any = { ...robert(), lead: { vehicle: {} }, voiceFacts: { ...robert().voiceFacts, quotedUnit: unit } };
+    const out = mint(conv);
+    assert.equal(out.outcome, "task", `no usable model (${unit || "empty"}) falls to a dated task`);
+    assert.equal(out.taskDueAt, "2026-08-17T15:51:26.251Z", "the task is dated ~24h out");
+    assert.equal(conv.inventoryWatches, undefined, "and no watch is created");
+  }
+  // 6) No money on the watch: a budget bound is a figure, and the plan shape carries none.
+  {
+    const conv: any = robert();
+    mint(conv);
+    assert.equal(conv.inventoryWatches[0].maxPrice, undefined, "the budget is never pinned onto the watch");
+  }
+
+  // WIRING (the ratchet cannot prove this — count the sites): BOTH lanes a body reaches a
+  // customer must mint. Wiring the rule to one author is the bug this fixes.
+  assert.equal(
+    apiSource.split("applyVoiceFactsCadenceNotifyPromise(conv, {").length - 1,
+    2,
+    "both the staff/agent send endpoint and the cadence auto-sender must mint the follow-through"
+  );
+}
 
 console.log("PASS voice cadence facts eval");

@@ -451,7 +451,11 @@ const CEILINGS: Ceiling[] = [
     // 70_276 -> 70_264. Phase 2 dealer DNS plan/apply arrived as domain/dealerDnsApply.ts with
     // two one-line routes, funded by converting 4 more of the hand-copied manager blocks in the
     // dealer-setups family to requireManagerAccess (35 copies remain as future funding).
-    max: 70_264,
+    // 70_264 -> 70_253. The voice-facts cadence slice: three hand-copied "freshen the facts, then
+    // append the line" blocks collapsed into appendVoiceFactsCadenceLine (voiceCadenceFacts), which
+    // funded the two new promise-mint sites — and is the same duplication that let the promise
+    // follow-through be wired to one author instead of every one.
+    max: 70_253,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
