@@ -75,7 +75,7 @@ import {
   makeSchedulingReaskDayAware,
   resolveNamedSchedulingDay
 } from "./domain/testRideDayAwareReply.js";
-import { applyVoiceDurableFacts, buildVoiceFactsCadenceLine, ensureVoiceFactsFresh, fillLeadVehicleFromVoiceFacts } from "./domain/voiceCadenceFacts.js";
+import { appendVoiceFactsCadenceLine, applyVoiceDurableFacts, applyVoiceFactsCadenceNotifyPromise, fillLeadVehicleFromVoiceFacts } from "./domain/voiceCadenceFacts.js";
 import {
   decideVoiceNextStep,
   resolveVoiceLiveCallBreatherHours,
@@ -15560,17 +15560,7 @@ async function buildCadenceRegeneratedDraft(
         message = `${message} ${personalizationLine}`.trim();
       }
     }
-    {
-      await ensureVoiceFactsFresh(conv);
-      const voiceFactsLine = buildVoiceFactsCadenceLine(conv, now);
-      if (
-        voiceFactsLine &&
-        !message.toLowerCase().includes(voiceFactsLine.toLowerCase()) &&
-        !wasCadenceLineUsedRecently(conv, voiceFactsLine)
-      ) {
-        message = `${message} ${voiceFactsLine}`.trim();
-      }
-    }
+    message = (await appendVoiceFactsCadenceLine(conv, message, now, wasCadenceLineUsedRecently)).body;
     return { body: message };
   }
 
@@ -15668,17 +15658,7 @@ async function buildCadenceRegeneratedDraft(
       message = `${message} ${personalizationLine}`.trim();
     }
   }
-  {
-    await ensureVoiceFactsFresh(conv);
-    const voiceFactsLine = buildVoiceFactsCadenceLine(conv, now);
-    if (
-      voiceFactsLine &&
-      !message.toLowerCase().includes(voiceFactsLine.toLowerCase()) &&
-      !wasCadenceLineUsedRecently(conv, voiceFactsLine)
-    ) {
-      message = `${message} ${voiceFactsLine}`.trim();
-    }
-  }
+  message = (await appendVoiceFactsCadenceLine(conv, message, now, wasCadenceLineUsedRecently)).body;
   return { body: message };
 }
 
@@ -33208,15 +33188,7 @@ async function processDueFollowUpsUnlocked() {
         ) {
           message = `${message} ${personalizationLine}`.trim();
         }
-        await ensureVoiceFactsFresh(conv);
-        const voiceFactsLine = buildVoiceFactsCadenceLine(conv, now);
-        if (
-          voiceFactsLine &&
-          !message.toLowerCase().includes(voiceFactsLine.toLowerCase()) &&
-          !wasCadenceLineUsedRecently(conv, voiceFactsLine)
-        ) {
-          message = `${message} ${voiceFactsLine}`.trim();
-        }
+        message = (await appendVoiceFactsCadenceLine(conv, message, now, wasCadenceLineUsedRecently)).body;
       }
     }
     message = normalizeInventoryWatchReplyGrammar(message);
@@ -33401,6 +33373,14 @@ async function processDueFollowUpsUnlocked() {
       provider: from ? "twilio" : "human",
       from: from ?? "salesperson",
       to
+    });
+    // Same promise, the other lane: an auto-sent cadence never passes the manual-outbound arm.
+    // Placed after every suppression gate, so only a body we are committed to sending mints.
+    applyVoiceFactsCadenceNotifyPromise(conv, {
+      sentBody: useEmail ? String(emailMessage ?? "") : smsMessage,
+      nowIso: new Date().toISOString(),
+      mergeWatches: mergeInventoryWatches, setDialogState,
+      recordOutcome: (o, d) => recordRouteOutcome("live", o, { convId: conv.id, leadKey: conv.leadKey, ...d })
     });
 
     const maybeAddCallTodoForFollowUp = () => {
@@ -51730,6 +51710,15 @@ app.post("/conversations/:id/send", async (req, res) => {
     markOpenTodosResolvedByCommunication(conv, text, {
       channel: opts?.channel ?? "manual",
       source: "manual_outbound"
+    });
+    // The voice-facts cadence promise mints its own follow-through, BEFORE and outside the
+    // hint-gated arm below — that gate is what silenced it (Robert Cloud +17163135464, Joe 8/16;
+    // see applyVoiceFactsCadenceNotifyPromise). Deterministic, no parser.
+    applyVoiceFactsCadenceNotifyPromise(conv, {
+      sentBody: text, nowIso: new Date().toISOString(), persist: true,
+      sourceMessageId: opts?.sourceMessageId ? String(opts.sourceMessageId) : undefined,
+      mergeWatches: mergeInventoryWatches, setDialogState,
+      recordOutcome: (o, d) => recordRouteOutcome("manual", o, { convId: conv.id, leadKey: conv.leadKey, ...d })
     });
 
     // Staff-text promise → dated task (Joe, 2026-07-19): the TEXT sibling of the

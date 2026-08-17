@@ -7,8 +7,17 @@
  * Breakout." Facts persist on conv.voiceFacts (voiceContext expires in 48h)
  * and render deterministically — numbers come from typed fields, never prose.
  */
-import { saveConversation, type Conversation } from "./conversationStore.js";
-import { parseVoiceDurableFactsWithLLM, type VoiceDurableFactsParse } from "./llmDraft.js";
+import {
+  applyInventoryNotifyPromiseOutcome,
+  saveConversation,
+  type Conversation
+} from "./conversationStore.js";
+import { resolveInventoryNotifyPromisePlan } from "./inventoryNotifyPromise.js";
+import {
+  parseVoiceDurableFactsWithLLM,
+  type UnifiedSemanticSlotParse,
+  type VoiceDurableFactsParse
+} from "./llmDraft.js";
 import { isSpecificModel } from "./modelDeflection.js";
 
 const FACT_CONFIDENCE_MIN = Number(process.env.VOICE_DURABLE_FACTS_CONFIDENCE_MIN ?? 0.7);
@@ -147,6 +156,21 @@ export function buildVoiceFactsCadenceLine(
   conv: Pick<Conversation, "voiceFacts" | "closedReason" | "sale" | "followUpCadence" | "lead">,
   now: Date = new Date()
 ): string | null {
+  return resolveVoiceFactsCadenceLine(conv, now)?.line ?? null;
+}
+
+/**
+ * The line PLUS whether it promised the customer future outreach.
+ *
+ * Two of the three branches below are promises ("still keeping an eye out…", "still watching
+ * for…") and one is a status report ("that Breakout is still here at $14,995"). Promise-ness is
+ * decided HERE, where the sentence is authored, so nothing downstream has to sniff our own copy
+ * with a keyword test to find out what we said.
+ */
+export function resolveVoiceFactsCadenceLine(
+  conv: Pick<Conversation, "voiceFacts" | "closedReason" | "sale" | "followUpCadence" | "lead">,
+  now: Date = new Date()
+): { line: string; notifyPromise: boolean } | null {
   const facts = conv?.voiceFacts;
   if (!facts) return null;
   // Post-sale follow-ups must never resurrect pre-purchase quotes/budgets
@@ -168,12 +192,18 @@ export function buildVoiceFactsCadenceLine(
   if (unit && quoted > 0) {
     const unitLabel = /^the\b/i.test(unit) ? unit.replace(/^the\s+/i, "") : unit;
     const otdPart = otd > 0 ? `, about ${formatDollars(otd)} out the door` : "";
-    return `That ${unitLabel} we went over on the phone is still here at ${formatDollars(quoted)}${otdPart}.`;
+    return {
+      line: `That ${unitLabel} we went over on the phone is still here at ${formatDollars(quoted)}${otdPart}.`,
+      notifyPromise: false
+    };
   }
   const budget = Number(facts.budgetMax ?? 0);
   if (budget > 0) {
     const preowned = facts.wantsPreowned ? "pre-owned options" : "options";
-    return `Still keeping an eye out for ${preowned} around ${formatDollars(budget)} for you.`;
+    return {
+      line: `Still keeping an eye out for ${preowned} around ${formatDollars(budget)} for you.`,
+      notifyPromise: true
+    };
   }
   if (facts.preferences?.length) {
     // Don't say we're "watching for" a model we're already presenting as available — the
@@ -187,11 +217,150 @@ export function buildVoiceFactsCadenceLine(
     );
     const novel = facts.preferences.filter(p => !preferenceMatchesOfferedModel(p, offeredModel));
     if (novel.length) {
-      return `Still watching for something with ${novel.slice(0, 2).join(" and ")} for you.`;
+      return {
+        line: `Still watching for something with ${novel.slice(0, 2).join(" and ")} for you.`,
+        notifyPromise: true
+      };
     }
     return null;
   }
   return null;
+}
+
+/**
+ * The ONE "freshen the facts, then append the line if it isn't already there" block. index.ts
+ * carried three hand-maintained copies (two in the regenerate draft builder, one in the live
+ * cadence sender).
+ */
+export async function appendVoiceFactsCadenceLine(
+  conv: Conversation,
+  message: string,
+  now: Date,
+  wasUsedRecently: (conv: Conversation, line: string) => boolean
+): Promise<{ body: string }> {
+  await ensureVoiceFactsFresh(conv);
+  const line = resolveVoiceFactsCadenceLine(conv, now)?.line;
+  if (!line) return { body: message };
+  if (message.toLowerCase().includes(line.toLowerCase()) || wasUsedRecently(conv, line)) {
+    return { body: message };
+  }
+  return { body: `${message} ${line}`.trim() };
+}
+
+/**
+ * "Still keeping an eye out for pre-owned options around $23,000 for you." must mint SOMETHING —
+ * the rule PR #709 shipped for the reply and manual-outbound authors
+ * (domain/inventoryNotifyPromise.ts). Joe's report 2026-08-16, Robert Cloud +17163135464: that
+ * exact sentence was DELIVERED at 15:51Z and the lead has no watch and no task.
+ *
+ * WHY #709 DID NOT COVER IT, executed 2026-08-17 against the real body: the message went out
+ * through the very endpoint that carries #709's arm, and the arm's COST GATE never let it in.
+ * `hasManualPromiseHint` matches "keep an eye out" — this sentence says "keepING an eye out", and
+ * the sibling cue in `hasManualOutboundWatchCue` has the same uninflected list. Both read false.
+ * ("Still WATCHING for …", the other promise this module authors, misses "watch for" the same way.)
+ *
+ * Widening those two regexes was the tempting one-word fix and it is the wrong one, for two
+ * measured reasons. (1) `watching for` is also the watch-MATCH-ALERT phrasing — "the Low Rider ST
+ * you were watching for just came in" — 24 of the 26 outbounds a widened gate newly admits over
+ * 30d are alerts about a watch that already exists, so we would buy two LLM parses per alert to
+ * rediscover it. (2) It leaves the mechanism intact: the sentence is AUTHORED here, from typed
+ * fields, and asking a lexical gate plus two parsers to recover from prose a spec we are holding
+ * in hand is the round-trip the de-tangle program exists to remove. Any future rephrasing of the
+ * copy silently re-breaks it — which is exactly what happened to #709.
+ *
+ * So the follow-through is minted by the author, off the same typed facts that built the sentence
+ * (quotedUnit / the lead's motorcycle of interest, plus wantsPreowned). No parser, no phrase list.
+ * The watch-vs-task decision and the placeholder guard stay with the existing referee — this adds
+ * no second opinion about either, and `mergeInventoryWatches` + addTodo's open-task merge make a
+ * repeat send idempotent.
+ *
+ * Called at the two places a body reaches the customer: the staff/agent send endpoint (how this
+ * one went out — an approved draft) and the cadence auto-sender. Both, deliberately: wiring a rule
+ * to one of several authors is the bug being fixed here, not a shortcut worth repeating.
+ *
+ * The BUDGET is deliberately not pinned onto the watch: a price bound is a money figure, and
+ * #709's plan shape carries none. A watch on the right model is honest without it.
+ */
+export function applyVoiceFactsCadenceNotifyPromise(
+  conv: Conversation,
+  args: {
+    /** The body we are committed to putting in front of the customer. */
+    sentBody: string;
+    nowIso: string;
+    sourceMessageId?: string;
+    mergeWatches: Parameters<typeof applyInventoryNotifyPromiseOutcome>[2]["mergeWatches"];
+    setDialogState: Parameters<typeof applyInventoryNotifyPromiseOutcome>[2]["setDialogState"];
+    /** Instrumentation + persistence live here so neither caller hand-maintains its own copy. */
+    recordOutcome?: (outcome: string, detail: Record<string, unknown>) => void;
+    persist?: boolean;
+  }
+): ReturnType<typeof applyInventoryNotifyPromiseOutcome> {
+  const parsedNowMs = Date.parse(args.nowIso);
+  const nowMs = Number.isFinite(parsedNowMs) ? parsedNowMs : Date.now();
+  const resolved = resolveVoiceFactsCadenceLine(conv, new Date(nowMs));
+  // Re-derived rather than passed in, so it holds however the body was composed — and a body the
+  // value gate replaced, or a draft edited past the promise, correctly mints nothing.
+  if (!resolved?.notifyPromise || !args.sentBody.includes(resolved.line)) return { outcome: "none" };
+  const spec = resolveVoiceFactsWatchSpec(conv);
+  const applied = applyInventoryNotifyPromiseOutcome(
+    conv,
+    resolveInventoryNotifyPromisePlan({
+      // The referee reads only `.watch`; the voice facts ARE the structured spec a slot parse
+      // would have had to recover from prose.
+      slots: (spec ? { watch: spec } : null) as UnifiedSemanticSlotParse | null,
+      nowIso: args.nowIso,
+      taskDueIso: new Date(nowMs + 24 * 60 * 60 * 1000).toISOString()
+    }),
+    {
+      sourceMessageId: args.sourceMessageId,
+      semanticCondition: spec?.condition ?? null,
+      conditionText: args.sentBody.toLowerCase(),
+      mergeWatches: args.mergeWatches,
+      setDialogState: args.setDialogState
+    }
+  );
+  if (applied.outcome === "none") return applied;
+  args.recordOutcome?.(`voice_facts_watch_promise_${applied.outcome}`, {
+    model: applied.model ?? null,
+    added: applied.added ?? null,
+    taskDueAt: applied.taskDueAt ?? null
+  });
+  if (args.persist) saveConversation(conv);
+  return applied;
+}
+
+/**
+ * WHAT to watch, from typed fields only. The phone-discussed unit wins (the durable-facts parser's
+ * quoted/discussed-unit rule already excludes the bike they own or are trading — charter C5.2),
+ * and the lead's motorcycle of interest is the fallback because it is the same bike the cadence
+ * body just named to the customer. Nothing usable ⇒ null ⇒ the referee falls to a dated task.
+ */
+function resolveVoiceFactsWatchSpec(
+  conv: Pick<Conversation, "voiceFacts" | "lead">
+): { model: string; year?: string; condition?: "new" | "used" } | null {
+  const raw = String(
+    conv?.voiceFacts?.quotedUnit ||
+      conv?.lead?.vehicle?.model ||
+      conv?.lead?.vehicle?.description ||
+      ""
+  ).trim();
+  if (!raw) return null;
+  const year = raw.match(/\b(?:19|20)\d{2}\b/)?.[0];
+  const conditionWord = /\b(pre[-\s]?owned|used|new)\b/i.exec(raw)?.[1]?.toLowerCase();
+  const model = raw
+    .replace(/\b(?:19|20)\d{2}\b/g, "")
+    .replace(/\b(pre[-\s]?owned|used|new)\b/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  if (!model) return null;
+  const condition: "new" | "used" | undefined = conv?.voiceFacts?.wantsPreowned
+    ? "used"
+    : conditionWord
+      ? conditionWord === "new"
+        ? "new"
+        : "used"
+      : undefined;
+  return { model, ...(year ? { year } : {}), ...(condition ? { condition } : {}) };
 }
 
 function normalizeModelTokenForVoiceFacts(value: string): string {
