@@ -58,6 +58,31 @@ const FRESH_DRAFT = { direction: "out", provider: "draft_ai", body: "Great quest
   const picks = selectDraftsForClaudeReview({ conversations: [conv({ mode: "human" }, [CUSTOMER, FRESH_DRAFT])], nowMs: NOW });
   assert.equal(picks.length, 1, "a MACHINE-written draft on a human-owned thread IS reviewed — nobody owns those words");
 }
+// --- A CLOSED THREAD IS A SOLD CUSTOMER, NOT A DEAD ONE (2026-08-17) --------------------------
+// Same category error as the mode gate above, one field over: `conv.status` names the LEAD's
+// lifecycle, not the conversation's activity. The dominant closedReason is "sold", and sold
+// customers keep texting about delivery, parts and service. MEASURED on the live store 8/17 14:35Z:
+// 31 of 43 pending drafts sat on CLOSED threads and the reviewer opened none of them; only 12 sat on
+// open threads. The draft that produced this: Brent +17169941544 (closed, closedReason "sold", bike
+// picked up 8/15) thanked the store and asked to be called when his seat/tour pack/CarPlay module
+// arrive — and the pending draft promised to watch for "the 2026 Road Glide you've got on order",
+// two days AFTER he took delivery. Closing a lead does not hide its draft: the console pre-loads a
+// pending draft into the send box, one tap from Send.
+{
+  const sold = conv({ status: "closed", closedReason: "sold" }, [CUSTOMER, FRESH_DRAFT]);
+  const picks = selectDraftsForClaudeReview({ conversations: [sold], nowMs: NOW });
+  assert.equal(picks.length, 1, "a machine draft on a SOLD/closed thread IS reviewed — closed names the lead, not the conversation");
+  assert.equal(String(picks[0].draft.id), "m_draft");
+  // The protections that actually bound this are authorship and freshness, NOT the lead's status —
+  // so they must still hold on a closed thread. Without these, re-opening closed threads would
+  // re-open the two holes the 8/16 authorship fix closed.
+  const typedOnClosed = conv({ status: "closed" }, [CUSTOMER, { ...FRESH_DRAFT, actorUserName: "Scott Hartrich" }]);
+  assert.equal(selectDraftsForClaudeReview({ conversations: [typedOnClosed], nowMs: NOW }).length, 0, "a PERSON's typed draft stays untouched on a closed thread too");
+  const staleOnClosed = conv({ status: "closed" }, [CUSTOMER, { ...FRESH_DRAFT, at: new Date(NOW - 30 * 60 * MIN).toISOString() }]);
+  assert.equal(selectDraftsForClaudeReview({ conversations: [staleOnClosed], nowMs: NOW }).length, 0, "the 24h ceiling still bounds closed threads — the old pile is not retro-reviewed");
+  const ownRewriteOnClosed = conv({ status: "closed" }, [CUSTOMER, { ...FRESH_DRAFT, actorUserName: "Claude review" }]);
+  assert.equal(selectDraftsForClaudeReview({ conversations: [ownRewriteOnClosed], nowMs: NOW }).length, 0, "the self-review loop guard survives on a closed thread");
+}
 {
   // The same measurement found 3 of 46 human-thread drafts carried a person's name on the SAME
   // `provider: "draft_ai"` row. Keying on the provider — the obvious fix — would have handed a
@@ -86,7 +111,6 @@ const NO_REVIEW: Array<[string, any]> = [
   ["the reviewer's own rewrite (loop guard — actor \"Claude review\")", conv({}, [CUSTOMER, { ...FRESH_DRAFT, actorUserName: "Claude review" }])],
   ["the reviewer's own rewrite on a HUMAN thread (loop guard survives the mode change)", conv({ mode: "human" }, [CUSTOMER, { ...FRESH_DRAFT, actorUserName: "Claude review" }])],
   ["a person's typed draft on a human thread", conv({ mode: "human" }, [CUSTOMER, { ...FRESH_DRAFT, actorUserName: "Scott Hartrich" }])],
-  ["closed conversation", conv({ status: "closed" }, [CUSTOMER, FRESH_DRAFT])],
   ["already stamped for this draft", conv({ claudeDraftReview: { messageId: "m_draft", verdict: "ok", at: "2026-08-15T11:00:00Z" } }, [CUSTOMER, FRESH_DRAFT])],
   ["no pending draft (customer message is newest)", conv({}, [CUSTOMER])],
   ["draft superseded by a real send (not pending)", conv({}, [CUSTOMER, FRESH_DRAFT, { direction: "out", provider: "twilio", body: "sent reply", at: new Date(NOW - 2 * MIN).toISOString(), id: "m_sent" }])],
@@ -164,4 +188,4 @@ assert.ok((WORKER_MINUTE_LANE_TASKS as readonly string[]).includes("claude-draft
 const minuteSchedule = WORKER_SCHEDULES.find(s => s.cron === "* * * * *");
 assert.ok(minuteSchedule && minuteSchedule.tasks.includes("claude-draft-review"), "on the worker minute schedule");
 
-console.log("PASS claude_draft_review:eval — selection table (1 review + 8 holds + cap), kill switch, prompt rules, work-order wiring, 3-point lane registration");
+console.log("PASS claude_draft_review:eval — selection table (4 review-cases incl. sold/closed + 9 holds + cap), kill switch, prompt rules, work-order wiring, 3-point lane registration");

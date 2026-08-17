@@ -95,6 +95,30 @@ export function draftIsMachineAuthored(draft: { actorUserName?: string | null } 
  *
  * The skip now keys on authorship, so a human's typed draft stays untouched on ANY thread — which is
  * the protection the old rule was reaching for, applied to the right thing.
+ *
+ * THE SAME CATEGORY ERROR, ONE FIELD OVER (2026-08-17). This also used to skip every
+ * `status: "closed"` conversation. But `conv.status` names the LEAD's lifecycle, not the
+ * conversation's activity: the dominant `closedReason` is **"sold"**, and a sold customer keeps
+ * texting — about delivery, parts, service. MEASURED on the americanharley store, 8/17 14:35Z:
+ * **31 of the 43 pending drafts sat on closed threads, and the reviewer opened none of them**, while
+ * only 12 sat on open threads (of which it owed exactly 1). A third of the pending pile had no
+ * reviewer at all.
+ *
+ * The live example that produced this change: Brent `+17169941544` bought his Road Glide on 8/15
+ * (the thread is closed, `closedReason: "sold"`, VIN on file) and texted on 8/17 to thank the store
+ * and to ask us to call him when his seat, tour pack and CarPlay module land. The pending draft
+ * answered neither ask and told a customer who had taken delivery two days earlier that we would
+ * "keep an eye on the 2026 Road Glide you've got on order and let you know as soon as it's here" —
+ * and because the thread was closed, nothing reviewed it. A closed thread does NOT hide the draft
+ * from staff: the console pre-loads the pending draft straight into the send box, so it sits one tap
+ * from Send.
+ *
+ * Reviewing these is safe by construction: this pass can only ever REPLACE a pending draft that
+ * already exists (`saveOperatorDraft` supersedes it) — it never creates an outbound where there was
+ * none, and it never sends. So on a closed thread it can only improve what staff would otherwise
+ * send. Spend stays bounded by the guards that actually bound it: pending + unstamped + <24h +
+ * machine-written, capped per tick. At the measured volume that is ~1 extra review, not 31 (only 1
+ * of the 31 was inside the freshness ceiling).
  */
 export function selectDraftsForClaudeReview(args: {
   conversations: Conversation[];
@@ -107,7 +131,8 @@ export function selectDraftsForClaudeReview(args: {
   const out: Array<{ conv: Conversation; draft: Message }> = [];
   for (const conv of args.conversations) {
     if (out.length >= maxPerTick) break;
-    if (String(conv?.status ?? "").toLowerCase() === "closed") continue;
+    // NOTE: deliberately NOT skipping `status: "closed"` — see the header. A sold thread is closed
+    // and still live, and its pending draft is one tap from Send in the console.
     const draft = getLatestPendingDraft(conv);
     if (!draft) continue;
     const draftId = String(draft.id ?? "").trim();
