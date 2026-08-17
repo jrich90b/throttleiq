@@ -1241,6 +1241,16 @@ export type Conversation = {
   financeDocs?: FinanceDocsState;
   tradePayoff?: TradePayoffState;
   emailDraft?: string;
+  /**
+   * WHO wrote `emailDraft` — the email lane's answer to `Message.actorUserName` (2026-08-17).
+   *
+   * The SMS reviewer refuses to touch a draft a PERSON typed by reading the draft row's actor.
+   * `emailDraft` is a bare STRING with no row and no actor, so the email lane had no way to tell a
+   * pipeline template from words an operator typed — and an automatic reviewer with no such gate
+   * would eventually rewrite a human's own email. Null/absent = machine-written (the pipeline
+   * clears it on every regeneration); a name = a person authored it and it is theirs.
+   */
+  emailDraftActor?: string | null;
   // STEP 2 of the self-correcting draft loop: when the pre-publish quality gate fails a draft, we
   // store NO draft and set this "held / being fixed" marker instead — so a bad draft never reaches
   // the outgoing field. Cleared the moment a passing draft publishes. Dark unless the live gate flag
@@ -2752,6 +2762,10 @@ export function appendOutbound(
     const firstName = String(conv?.lead?.firstName ?? conv?.lead?.name ?? "").trim();
     const emailDraft = formatEmailLayout(tonedBody, { firstName, fallbackName: "there" });
     conv.emailDraft = emailDraft;
+    // Machine-written. Clearing on EVERY regeneration is load-bearing: a stale actor left over from
+    // an operator's earlier email would permanently mark this pipeline template "human-authored"
+    // and hide it from the reviewer for the life of the thread.
+    conv.emailDraftActor = null;
     if (outboundAsksForShortList(stateSignalBody)) {
       markPendingShortListPrompt(conv, `outbound_${provider}`);
     }
@@ -3474,17 +3488,34 @@ export function saveOperatorDraft(
     channel: "sms" | "email";
     mediaUrls?: string[];
     actor?: { userId?: string | null; userName?: string | null };
+    /**
+     * Opt-in, email-only: leave the OTHER channel's draft state alone (2026-08-17).
+     *
+     * A human operator taking a thread over means to supersede whatever was queued, so the default
+     * stays as it was. But an automated single-channel fixer — the Claude email reviewer — must not
+     * reach across channels: discarding pending drafts and releasing the held marker are SMS-draft
+     * concerns, and an email rewrite silently marking a perfectly good pending SMS draft stale is
+     * exactly the last-writer-override failure mode. No live thread carries both today (measured
+     * 8/17: 0), which is precisely why this must be guarded now rather than after it bites.
+     */
+    keepPendingDraftsOnOtherChannel?: boolean;
   }
 ): { draft: string; channel: "sms" | "email" } {
   const body = String(args.body ?? "").trim();
-  discardPendingDrafts(conv, "operator_draft_replaced");
-  // An operator-authored draft resolves any prior held state (draft-quality / context-fidelity) —
-  // mirror publishCustomerReplyDraft, where a passing draft supersedes the held marker. Otherwise the
-  // console keeps showing "being fixed" over a real draft (seen on s R Gurajala, 2026-06-24).
-  releaseHeldDraft(conv, "operator_draft");
-  if ((conv as any).contextFidelityShadow) (conv as any).contextFidelityShadow = null;
+  const touchesSmsDraftState = !(args.keepPendingDraftsOnOtherChannel && args.channel === "email");
+  if (touchesSmsDraftState) {
+    discardPendingDrafts(conv, "operator_draft_replaced");
+    // An operator-authored draft resolves any prior held state (draft-quality / context-fidelity) —
+    // mirror publishCustomerReplyDraft, where a passing draft supersedes the held marker. Otherwise the
+    // console keeps showing "being fixed" over a real draft (seen on s R Gurajala, 2026-06-24).
+    releaseHeldDraft(conv, "operator_draft");
+    if ((conv as any).contextFidelityShadow) (conv as any).contextFidelityShadow = null;
+  }
   if (args.channel === "email") {
     conv.emailDraft = body;
+    // Stamp authorship so the email reviewer can tell our own text from a person's (see the field's
+    // docs). A named operator marks it human-owned and permanently off-limits to the reviewer.
+    conv.emailDraftActor = String(args.actor?.userName ?? "").trim() || null;
     conv.updatedAt = nowIso();
     scheduleSave();
     return { draft: body, channel: "email" };

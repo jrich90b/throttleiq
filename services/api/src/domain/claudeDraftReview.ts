@@ -20,12 +20,15 @@
  * is the backstop behind both (it skips drafts this pass already stamped — the receipt is
  * `conv.claudeDraftReview`).
  */
+import { createHash } from "node:crypto";
+
 import { anthropicMessagesRequest, extractAnthropicToolInput } from "./anthropicRequest.js";
 import { addOpsAnomaly } from "./opsAnomalyStore.js";
 import { loadReviewRelevantCharterRules } from "./policyCharterFeed.js";
 import {
   getAllConversations,
   getLatestPendingDraft,
+  resolveEmailDraftForDisplay,
   saveOperatorDraft,
   saveConversation,
   flushConversationStore,
@@ -132,6 +135,89 @@ export function selectDraftsForClaudeReview(args: {
   return out;
 }
 
+// --- THE EMAIL LANE (2026-08-17) ---------------------------------------------------------------
+// Joe, 8/17: "a lot of drafts are coming through bad right now." The API was fine; the reviewer
+// simply could not see half the drafts. `conv.emailDraft` is a LIVE, SENDABLE draft the console's
+// Email tab renders and staff send verbatim — and NOTHING has ever reviewed one. Measured on the
+// americanharley store 8/17: 227 conversations carry an email draft, 95 of them still offered as
+// sendable by `resolveEmailDraftForDisplay`.
+//
+// Three things make this lane genuinely different from SMS, and each one shapes the code below:
+//
+//  1. NO TIMESTAMP. `emailDraft` is a bare string on the conversation — it has no `at`, which is
+//     why `routeWatchdogClassification` and `scoringExclusions` both had to special-case it. So the
+//     24h age ceiling is impossible here; freshness is proxied by the THREAD's newest message.
+//     `conv.updatedAt` is NOT usable: it churns every ~60s from the long-term-cadence realign heal.
+//  2. NO MESSAGE ID. The receipt cannot key on one, so it keys on a hash of the body — and the
+//     stamp records the hash of whatever is STORED after the pass, which is what stops the reviewer
+//     re-reviewing (and re-rewriting) its own output once a minute, forever.
+//  3. NO ACTOR — until now. `emailDraftActor` (added with this change) is the email lane's
+//     `Message.actorUserName`, so a human's typed email is as untouchable here as on SMS.
+export const CLAUDE_EMAIL_DRAFT_REVIEW_MAX_PER_TICK_DEFAULT = 2;
+export const CLAUDE_EMAIL_DRAFT_REVIEW_MAX_THREAD_AGE_MS_DEFAULT = 36 * 60 * 60 * 1000;
+
+/** The email lane's receipt. Keyed on the body hash because `emailDraft` has no message id. */
+export type ClaudeEmailDraftReviewReceipt = { hash: string; verdict: "ok" | "rewrite"; at: string };
+
+/**
+ * Identity of an email draft. sha1/12 deliberately matches the 30-minute backstop scanner's key —
+ * the two must agree on what "the same draft" means, or every already-reviewed draft re-surfaces as
+ * new the day one of them changes algorithm.
+ */
+export function emailDraftReviewHash(draft: string): string {
+  return createHash("sha1").update(String(draft ?? "").trim(), "utf8").digest("hex").slice(0, 12);
+}
+
+/** Newest message time on the thread — the only freshness signal an untimestamped draft has. */
+function newestMessageMs(conv: Conversation): number {
+  let newest = 0;
+  for (const m of Array.isArray(conv?.messages) ? conv.messages : []) {
+    const t = Date.parse(String(m?.at ?? ""));
+    if (Number.isFinite(t) && t > newest) newest = t;
+  }
+  return newest;
+}
+
+/**
+ * Which email drafts should be reviewed RIGHT NOW? Pure and executable, mirroring the SMS selector.
+ *
+ * The suppression referee runs FIRST and does double duty: `resolveEmailDraftForDisplay` already
+ * withholds drafts on closed/sold threads and drafts whose finance callback a decision has replaced.
+ * A draft staff are not being offered needs no reviewer — and reviewing one would spend a call to
+ * "fix" text the referee has already taken off the table.
+ */
+export function selectEmailDraftsForClaudeReview(args: {
+  conversations: Conversation[];
+  nowMs: number;
+  maxPerTick?: number;
+  maxThreadAgeMs?: number;
+}): Array<{ conv: Conversation; draft: string; hash: string }> {
+  const maxPerTick = args.maxPerTick ?? CLAUDE_EMAIL_DRAFT_REVIEW_MAX_PER_TICK_DEFAULT;
+  const maxThreadAgeMs = args.maxThreadAgeMs ?? CLAUDE_EMAIL_DRAFT_REVIEW_MAX_THREAD_AGE_MS_DEFAULT;
+  const out: Array<{ conv: Conversation; draft: string; hash: string }> = [];
+  for (const conv of args.conversations) {
+    if (out.length >= maxPerTick) break;
+    // The display referee owns "is this still honest enough to offer?" — never read emailDraft raw.
+    const draft = String(resolveEmailDraftForDisplay(conv)?.emailDraft ?? "").trim();
+    if (!draft) continue;
+    const actor = (conv as any).emailDraftActor as string | null | undefined;
+    // Never re-review our own rewrite. Explicit, exactly like the SMS guard — NOT by mislabelling
+    // our own output "human", which would be a lie that happens to stop a loop.
+    if (String(actor ?? "").trim() === CLAUDE_REVIEW_ACTOR) continue;
+    // A draft a PERSON typed is theirs. Fail direction: an unrecognised actor reads as a person.
+    if (!draftIsMachineAuthored({ actorUserName: actor })) continue;
+    const newest = newestMessageMs(conv);
+    if (!newest) continue; // no datable activity ⇒ leave it alone
+    const threadAge = args.nowMs - newest;
+    if (threadAge < 0 || threadAge > maxThreadAgeMs) continue;
+    const hash = emailDraftReviewHash(draft);
+    const receipt = (conv as any).claudeEmailDraftReview as ClaudeEmailDraftReviewReceipt | undefined;
+    if (receipt?.hash === hash) continue;
+    out.push({ conv, draft, hash });
+  }
+  return out;
+}
+
 export const CLAUDE_DRAFT_REVIEW_TOOL_SCHEMA: { [key: string]: unknown } = {
   type: "object",
   additionalProperties: false,
@@ -201,6 +287,7 @@ export async function reviewDraftWithClaude(args: {
   draftBody: string;
   thread: Array<{ direction: string; body: string }>;
   leadLine: string;
+  channel?: "sms" | "email";
 }): Promise<ClaudeDraftReviewVerdict> {
   const keep: ClaudeDraftReviewVerdict = { verdict: "ok", reason: "review_unavailable", fixedDraft: "" };
   const apiKey = String(process.env.ANTHROPIC_API_KEY ?? "").trim();
@@ -220,7 +307,25 @@ export async function reviewDraftWithClaude(args: {
       messages: [
         {
           role: "user",
-          content: `LEAD: ${args.leadLine}\n\nCONVERSATION (oldest first):\n${thread}\n\nPENDING DRAFT (about to be shown to staff):\n${args.draftBody}`
+          content: [
+            `LEAD: ${args.leadLine}`,
+            "",
+            `CONVERSATION (oldest first):\n${thread}`,
+            "",
+            `PENDING DRAFT (about to be shown to staff):\n${args.draftBody}`,
+            // The baked rules describe an SMS reply ("texting a friend", keep the STOP line). An
+            // email draft is rendered in the console's Email tab and sent verbatim, so a rewrite
+            // that returns a bare SMS line would strip the greeting and sign-off staff expect.
+            ...(args.channel === "email"
+              ? [
+                  "",
+                  "CHANNEL: EMAIL. This draft is sent as an email, not a text. If you rewrite it,",
+                  "return a COMPLETE email in the same shape as the draft above — keep its greeting,",
+                  "its sign-off and who it is from. Do not add an SMS opt-out line. It may run a",
+                  "little longer than a text, but every other rule above still applies exactly."
+                ]
+              : [])
+          ].join("\n")
         }
       ],
       toolName: "draft_review",
@@ -250,11 +355,19 @@ export async function reviewDraftWithClaude(args: {
  * approve). Every outcome stamps the receipt so no draft is examined twice. Fail direction
  * everywhere: keep the pipeline's draft.
  */
+export type ClaudeDraftReviewOutcome =
+  | "claude_draft_review_ok"
+  | "claude_draft_review_rewrite"
+  | "claude_draft_review_unavailable"
+  | "claude_email_draft_review_ok"
+  | "claude_email_draft_review_rewrite"
+  | "claude_email_draft_review_unavailable";
+
 export async function processClaudeDraftReview(deps: {
-  recordOutcome: (outcome: "claude_draft_review_ok" | "claude_draft_review_rewrite" | "claude_draft_review_unavailable", detail: Record<string, unknown>) => void;
+  recordOutcome: (outcome: ClaudeDraftReviewOutcome, detail: Record<string, unknown>) => void;
   nowMs?: number;
-}): Promise<{ reviewed: number; rewritten: number }> {
-  if (!claudeDraftReviewEnabled()) return { reviewed: 0, rewritten: 0 };
+}): Promise<{ reviewed: number; rewritten: number; emailReviewed: number; emailRewritten: number }> {
+  if (!claudeDraftReviewEnabled()) return { reviewed: 0, rewritten: 0, emailReviewed: 0, emailRewritten: 0 };
   const nowMs = deps.nowMs ?? Date.now();
   const picks = selectDraftsForClaudeReview({ conversations: getAllConversations(), nowMs });
   let rewritten = 0;
@@ -312,6 +425,70 @@ export async function processClaudeDraftReview(deps: {
     );
     saveConversation(conv);
   }
-  if (picks.length) await flushConversationStore();
-  return { reviewed: picks.length, rewritten };
+
+  // --- The email lane, in the SAME task -------------------------------------------------------
+  // Deliberately not a separate registered task: the SMS pass needs THREE registrations (tick task,
+  // API minute lane, worker minute schedule) and the eval exists because "a task missing anywhere
+  // silently never runs". Running both channels inside one task makes that impossible to half-wire.
+  // Budgets are separate so neither channel can starve the other.
+  const emailPicks = selectEmailDraftsForClaudeReview({ conversations: getAllConversations(), nowMs });
+  let emailRewritten = 0;
+  for (const { conv, draft, hash } of emailPicks) {
+    const lead = conv.lead ?? {};
+    const leadLine = [
+      String((lead as any).firstName ?? (lead as any).name ?? "").trim(),
+      String((lead as any).source ?? "").trim(),
+      String((lead as any).vehicle?.description ?? "").trim()
+    ]
+      .filter(Boolean)
+      .join(" | ") || "unknown";
+    // No draft row to exclude here — the email draft lives on the conversation, not in the thread.
+    const thread = (Array.isArray(conv.messages) ? conv.messages : [])
+      .filter(m => (m.direction === "in" || m.direction === "out") && String(m.body ?? "").trim())
+      .filter(m => String((m as any).draftStatus ?? "") !== "stale")
+      .map(m => ({ direction: String(m.direction), body: String(m.body ?? "") }));
+    const verdict = await reviewDraftWithClaude({ draftBody: draft, thread, leadLine, channel: "email" });
+    if (verdict.reason === "review_unavailable") {
+      deps.recordOutcome("claude_email_draft_review_unavailable", {
+        convId: conv.id, leadKey: conv.leadKey ?? null, draftHash: hash
+      });
+      continue;
+    }
+    let storedHash = hash;
+    if (verdict.verdict === "rewrite") {
+      saveOperatorDraft(conv, {
+        body: verdict.fixedDraft,
+        channel: "email",
+        actor: { userName: CLAUDE_REVIEW_ACTOR },
+        // Never let an email fix reach across and discard a pending SMS draft (see the option docs).
+        keepPendingDraftsOnOtherChannel: true
+      });
+      // The receipt must record what is STORED NOW, not what we reviewed: `emailDraft` has no id, so
+      // a stamp carrying the OLD hash would leave our own rewrite unstamped and the next tick would
+      // review it, rewrite it, and do so again — one API call a minute, forever.
+      storedHash = emailDraftReviewHash(verdict.fixedDraft);
+      emailRewritten += 1;
+      void addOpsAnomaly({
+        type: "other",
+        severity: "warning",
+        title: "Claude draft review rewrote a pipeline EMAIL draft",
+        note: `The pipeline's email draft was clearly wrong: ${verdict.reason}. The superseding draft is in the console's Email tab (actor "Claude review"). Root-cause the email-lane arm that produced the original — it is a static template keyed to classification, not a reply to the thread.`,
+        reporter: { name: "claude-draft-review" },
+        context: { convId: conv.id, leadKey: conv.leadKey ?? null }
+      }).catch(() => {});
+    }
+    (conv as any).claudeEmailDraftReview = {
+      hash: storedHash,
+      verdict: verdict.verdict,
+      at: new Date(nowMs).toISOString()
+    } satisfies ClaudeEmailDraftReviewReceipt;
+    deps.recordOutcome(
+      verdict.verdict === "rewrite" ? "claude_email_draft_review_rewrite" : "claude_email_draft_review_ok",
+      { convId: conv.id, leadKey: conv.leadKey ?? null, draftHash: storedHash, reason: verdict.reason }
+    );
+    saveConversation(conv);
+  }
+
+  if (picks.length || emailPicks.length) await flushConversationStore();
+  return { reviewed: picks.length, rewritten, emailReviewed: emailPicks.length, emailRewritten };
 }
