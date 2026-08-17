@@ -21,6 +21,7 @@ import fs from "node:fs";
 import { judgeCadenceQualityWithLLM } from "../services/api/src/domain/llmDraft.ts";
 import {
   formatCadenceQualityInventoryFacts,
+  formatCadenceQualityUnitFacts,
   buildCadenceQualityJudgeArgs,
   type CadenceQualityInventoryFacts
 } from "../services/api/src/domain/cadenceQualityFacts.ts";
@@ -112,6 +113,44 @@ for (const r of rows) {
     "a lead naming no unit must attach null — never a fabricated NOT_MATCHED assertion"
   );
   assert.ok("lead" in withUnit && "sale" in withUnit, "the assembly must still carry lead + sale");
+
+  // THE STRING THE JUDGE ACTUALLY READS — not the formatter in isolation (2026-08-17).
+  // The two assertions above passed all along while production shipped a fabricated premise: they
+  // stop at `withoutUnit.inventory === null` and never ask what `formatCadenceQualityUnitFacts` DOES
+  // with that null. Its guard was `!== undefined`, and `null !== undefined`, so the never-looked case
+  // printed the full "NOT_MATCHED — you know NOTHING, any claim is unsupported" paragraph on 99 of
+  // 109 live judge records, and held a TRUE in-stock claim at 0.9 (+17169013675, stock S7-26).
+  // Same shape as the last-writer-override class: the eval asserted the CALL, never the argument the
+  // caller passes on. So assert on the assembled prompt text, exactly as llmDraft.ts builds it.
+  const promptFor = (conv: any, inventory: CadenceQualityInventoryFacts | null) =>
+    formatCadenceQualityUnitFacts({ lead: conv?.lead, sale: conv?.sale, inventory });
+
+  const neverLookedConv = { lead: { vehicle: { model: "2026 Low Rider S", stockId: "", vin: "" } } };
+  const neverLookedArgs = await buildCadenceQualityJudgeArgs({ conv: neverLookedConv, message: "test", channel: "sms" });
+  const neverLookedPrompt = promptFor(neverLookedConv, neverLookedArgs.inventory);
+  assert.ok(
+    !neverLookedPrompt.includes("NOT_MATCHED"),
+    `a lead naming no stock#/VIN must send the judge NO inventory block — nobody looked, so there is ` +
+      `nothing to assert. Got:\n${neverLookedPrompt}`
+  );
+  assert.ok(
+    neverLookedPrompt.includes("Known lead"),
+    "omitting inventory must not drop the rest of the unit facts"
+  );
+
+  // ...and the GENUINE not-matched (we looked at a named unit and missed) must still print, or the
+  // fix would have deleted the judge's only defence against a claim about a unit we do not carry.
+  const lookedAndMissedConv = { lead: { vehicle: { model: "2026 Low Rider S", stockId: "ZZ-NOT-A-REAL-STOCK-ID" } } };
+  const lookedAndMissedArgs = await buildCadenceQualityJudgeArgs({ conv: lookedAndMissedConv, message: "test", channel: "sms" });
+  assert.equal(
+    lookedAndMissedArgs.inventory?.matched,
+    false,
+    "a lead naming a unit we cannot find must resolve to matched:false, not null"
+  );
+  assert.ok(
+    promptFor(lookedAndMissedConv, lookedAndMissedArgs.inventory).includes("NOT_MATCHED"),
+    "a unit we LOOKED UP and missed must still be reported NOT_MATCHED to the judge"
+  );
 }
 
 const cases: {

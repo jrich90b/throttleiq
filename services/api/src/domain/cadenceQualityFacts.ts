@@ -77,7 +77,16 @@ export function formatCadenceQualityUnitFacts(input: {
       source: lead?.source ?? null
     })}`
   ];
-  if (input?.inventory !== undefined) lines.push(formatCadenceQualityInventoryFacts(input.inventory));
+  // `null` means NOBODY LOOKED (the lead names no stock#/VIN, so `resolveCadenceQualityInventoryFacts`
+  // returned null so the caller could OMIT the block) — it is NOT the same as "we looked and missed",
+  // which is `{ matched: false }`. The guard used to be `!== undefined`, and `null !== undefined` is
+  // true, so the never-looked case fell into `formatCadenceQualityInventoryFacts`'s `!inv` branch and
+  // the judge was handed a manufactured "NOT_MATCHED — you know NOTHING, any claim is unsupported"
+  // on 99 of 109 live judge records (2026-08-17). It held a TRUE in-stock claim about a unit that is
+  // in the feed at 0.9 (+17169013675, 2026 Low Rider S, stock S7-26). Omit the block instead: an
+  // auditor told nothing grades on the rest of the evidence; an auditor told a fabricated fact
+  // condemns the truth.
+  if (input?.inventory != null) lines.push(formatCadenceQualityInventoryFacts(input.inventory));
   const purchased = resolvePurchasedUnitLabel(input?.sale);
   if (purchased) {
     lines.push(
