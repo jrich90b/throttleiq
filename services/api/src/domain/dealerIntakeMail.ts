@@ -46,6 +46,8 @@ export type DealerIntakeMailRecord = {
   inviteMessageId?: string;
   formToken?: string;
   formSubmittedAt?: string;
+  followUpSentAt?: string;
+  lastFollowUpBlanks?: string[];
   sentAt: string;
   status: "awaiting_reply" | "ingested" | "error";
   processedMessageIds: string[];
@@ -136,7 +138,11 @@ export const INTAKE_QUESTIONS: Array<{ section: string; items: string[] }> = [
       "Where do your leads come from? (website, marketplaces, walk-ins, events, …)",
       "Where do lead notifications arrive today? (an inbox, the CRM, a phone…)",
       "Inventory feed or export URL (the link your website/inventory provider gives you)",
-      "Who keeps that inventory feed up to date?"
+      "Who keeps that inventory feed up to date?",
+      "What sales tax rate applies to vehicle purchases at your store? (e.g. 8.75%)",
+      "Do you have an online credit application? Paste the link customers use to apply.",
+      "Where is the current-promotions page on your website, if you have one?",
+      "Will you provide LeadRider a CRM login so leads and calls get logged back into your CRM automatically? Just yes or no here — if yes, we collect the login through a secure channel, NEVER this form."
     ]
   },
   {
@@ -264,6 +270,10 @@ export const DEALER_INTAKE_ANSWERS_JSON_SCHEMA = {
     leadNotificationDestination: { type: "string" },
     inventoryFeedUrl: { type: "string" },
     inventoryFeedOwner: { type: "string" },
+    taxRate: { type: "string", description: "Sales tax rate for vehicle purchases, as written (e.g. 8.75%)." },
+    creditAppUrl: { type: "string", description: "URL of the dealer's online credit application; empty if none." },
+    offersUrl: { type: "string", description: "URL of the dealer's current-promotions page; empty if none." },
+    crmLoginWillingness: { type: "string", description: "Whether they'll provide a CRM login (yes/no + any comment). NEVER the credential itself." },
     websiteProvider: { type: "string", description: "Company/person who runs the dealer's website." },
     websiteProviderEmail: { type: "string", description: "Contact email for the website provider (used to request DNS records + SMS consent wording, dealer CC'd)." },
     dnsManager: { type: "string", description: "Who manages the domain/DNS if different from the website provider." },
@@ -287,7 +297,8 @@ export const DEALER_INTAKE_ANSWERS_JSON_SCHEMA = {
     "legalName", "dbaName", "address", "website", "mainPhone", "primaryContact", "ownerGm",
     "salespeople", "messageApprover", "afterHoursEscalation", "salesHours", "serviceHours",
     "closures", "crmProvider", "monthlyLeadVolume", "leadSources", "leadNotificationDestination",
-    "inventoryFeedUrl", "inventoryFeedOwner", "websiteProvider", "websiteProviderEmail",
+    "inventoryFeedUrl", "inventoryFeedOwner", "taxRate", "creditAppUrl", "offersUrl",
+    "crmLoginWillingness", "websiteProvider", "websiteProviderEmail",
     "dnsManager", "emailHostProvider", "googleBusinessProfile", "socialMedia",
     "consoleUsers", "outboundEmailIdentity", "calendarGoogleAccount", "privacyPolicyUrl",
     "tonePreferences", "neverSay", "unansweredQuestions", "extraNotes", "sensitiveDataWarning"
@@ -314,6 +325,10 @@ export type DealerIntakeAnswers = {
   leadNotificationDestination: string;
   inventoryFeedUrl: string;
   inventoryFeedOwner: string;
+  taxRate: string;
+  creditAppUrl: string;
+  offersUrl: string;
+  crmLoginWillingness: string;
   websiteProvider: string;
   websiteProviderEmail: string;
   dnsManager: string;
@@ -427,7 +442,7 @@ export function buildIntakeNotesBlock(a: DealerIntakeAnswers): string {
   add("Service hours", a.serviceHours);
   add("Closures", a.closures);
   if (Array.isArray(a.salespeople) && a.salespeople.length) {
-    lines.push(`Salespeople: ${a.salespeople.map(p => `${p.name} (${p.cell})`.trim()).join("; ")}`);
+    lines.push(`Salespeople: ${a.salespeople.map(p => (p.cell ? `${p.name} (${p.cell})` : p.name)).join("; ")}`);
   }
   add("Message approver", a.messageApprover);
   add("After-hours escalation", a.afterHoursEscalation);
@@ -437,6 +452,10 @@ export function buildIntakeNotesBlock(a: DealerIntakeAnswers): string {
   // "Inventory/export URL:", "Tone:" and "Rules:" lines out of notes.
   add("Inventory/export URL", a.inventoryFeedUrl);
   add("Inventory feed owner", a.inventoryFeedOwner);
+  add("Tax rate", a.taxRate);
+  add("Credit app URL", a.creditAppUrl);
+  add("Promotions page", a.offersUrl);
+  add("CRM login", a.crmLoginWillingness);
   add("Website provider", a.websiteProvider);
   add("Website provider email", a.websiteProviderEmail);
   add("DNS manager", a.dnsManager);
@@ -489,9 +508,19 @@ export function applyIntakeAnswersToSetup(
   }
   const notesBlock = buildIntakeNotesBlock(a);
   const existingNotes = String(setup.notes ?? "").trim();
-  if (notesBlock && !existingNotes.includes(notesBlock)) {
-    patch.notes = existingNotes ? `${existingNotes}\n\n[${ingestLabel}]\n${notesBlock}` : `[${ingestLabel}]\n${notesBlock}`;
-    diffs.push(`notes: +${notesBlock.split("\n").length} intake lines appended`);
+  if (notesBlock) {
+    // Intake sections are machine-owned: REPLACE any prior [intake …] sections instead of
+    // appending (a re-parse of the same answers is never byte-identical, so append-with-
+    // dedupe piled up near-duplicates — seen on the demo record 8/16). Human-written note
+    // segments (anything not starting with "[intake") are always preserved.
+    const humanSegments = existingNotes
+      ? existingNotes.split(/\n\n+/).filter(segment => !segment.trimStart().startsWith("[intake"))
+      : [];
+    const next = [...humanSegments, `[${ingestLabel}]\n${notesBlock}`].join("\n\n");
+    if (next !== existingNotes) {
+      patch.notes = next;
+      diffs.push(`notes: intake section refreshed (${notesBlock.split("\n").length} lines)`);
+    }
   }
   const blanks = Array.isArray(a.unansweredQuestions) ? a.unansweredQuestions.filter(Boolean) : [];
   // Step status keys off what the dealer actually skipped (the parser's blank report), not
@@ -613,13 +642,17 @@ const FORM_FIELDS: Array<{
   { name: "leadNotificationDestination", label: "Where do lead notifications arrive today?", hint: "An inbox, the CRM, a phone…" },
   { name: "inventoryFeedUrl", label: "Inventory feed or export URL", hint: "The link your website/inventory provider gives you." },
   { name: "inventoryFeedOwner", label: "Who keeps that inventory feed up to date?" },
+  { name: "taxRate", label: "Sales tax rate on vehicle purchases", hint: "E.g. 8.75% — used so payment estimates come out right." },
+  { name: "creditAppUrl", label: "Online credit application link", hint: "The link customers use to apply for financing. Leave blank if you don't have one." },
+  { name: "offersUrl", label: "Current-promotions page on your website", hint: "Leave blank if you don't have one." },
+  { name: "crmLoginWillingness", label: "Will you provide LeadRider a CRM login?", hint: "So leads and calls get logged back into your CRM automatically. Yes or no is all we need here — if yes, we collect the login through a secure channel, NEVER this form." },
   { name: "websiteProvider", label: "Who runs your website?", hint: "The company or person — your website provider.", section: "Your website & email providers" },
   { name: "websiteProviderEmail", label: "Best contact email for your website provider", hint: "We'll email them directly, with you CC'd, to add the technical records LeadRider needs (DNS) and the SMS consent wording on your web lead forms — the carriers require it before approving your texting number." },
   { name: "dnsManager", label: "Who manages your domain / DNS, if different?" },
   { name: "emailHostProvider", label: "Who hosts your business email?", hint: "E.g. Rackspace, Google Workspace, GoDaddy." },
   { name: "outboundEmailIdentity", label: "What email address should messages to your customers come from?", hint: "The from/reply-to address customers see. Note any logo or email signature you want used." },
   { name: "privacyPolicyUrl", label: "Privacy policy page on your website, if you have one", hint: "Carriers require one covering SMS consent. No page yet? Leave blank — your website provider will add it and we'll include it in our email to them." },
-  { name: "googleBusinessProfile", label: "Your Google Business Profile", hint: "Link to your dealership's Google listing and/or which Google account manages it — so we can eventually help respond to reviews. Never the password.", section: "Google & social" },
+  { name: "googleBusinessProfile", label: "Your Google Business Profile", hint: "Paste the Google Maps link to your dealership, or just tell us the account email that manages the listing — no ID numbers needed. Never the password.", section: "Google & social" },
   { name: "calendarGoogleAccount", label: "Which Google account runs your appointment calendar?", hint: "Address only — never the password — plus who at the store can click Allow when we connect it." },
   { name: "socialMedia", label: "Social media accounts", hint: "One per line: platform + page name or URL — for future integrations.", multiline: true, perLine: true },
   { name: "tonePreferences", label: "How should messages to your customers sound?", hint: "Friendly, formal, short…", multiline: true, section: "Voice" },
@@ -665,10 +698,65 @@ ${fields}
 </div></body></html>`;
 }
 
+// Missing-info follow-up (Joe 8/17): when an ingest leaves blanks, setup@ chases the DEALER
+// automatically — each owed item with the WHY (the form's own hint text) and the form link.
+// Loop-safe: never re-sent while the owed list is unchanged (a "thanks!" reply that answers
+// nothing must not trigger the same nag again).
+export function buildMissingInfoFollowUpEmail(
+  setup: Pick<DealerSetup, "dealerName" | "primaryContact">,
+  blanks: string[],
+  formUrl?: string
+): { subject: string; bodyText: string } {
+  const contact = String(setup.primaryContact ?? "").trim();
+  const firstName = contact ? contact.split(/[\s,<(]/)[0] : "";
+  const items = blanks.map(label => {
+    const field = FORM_FIELDS.find(f => f.label === label);
+    return field?.hint ? `- ${label}\n    (${field.hint})` : `- ${label}`;
+  });
+  const bodyText = [
+    `Hi ${firstName || "there"},`,
+    "",
+    `Thanks — we got your setup answers for ${setup.dealerName}. Just ${blanks.length === 1 ? "one thing" : `${blanks.length} things`} still missing:`,
+    "",
+    ...items,
+    "",
+    formUrl
+      ? `Easiest fix: open your setup form and fill in just those — everything you already answered is saved:\n\n    ${formUrl}\n\nOr simply reply to this email with the answers.`
+      : "Just reply to this email with the answers.",
+    "",
+    "As always: no passwords, API keys, card numbers, or your EIN by email or form.",
+    "",
+    "Thanks!",
+    "The LeadRider team"
+  ].join("\n");
+  return { subject: `${setup.dealerName} setup — ${blanks.length === 1 ? "one item" : "a few items"} still needed`, bodyText };
+}
+
+async function maybeSendMissingInfoFollowUp(
+  invite: DealerIntakeMailRecord,
+  setup: DealerSetup,
+  blanks: string[]
+): Promise<boolean> {
+  if (!isDealerIntakeEmailEnabled() || !blanks.length) return false;
+  const last = invite.lastFollowUpBlanks ?? [];
+  if (last.length === blanks.length && last.every((b, i) => b === blanks[i])) return false;
+  const formUrl = invite.formToken
+    ? `${String(process.env.LEADRIDER_API_BASE_URL ?? "https://api.leadrider.ai").replace(/\/$/, "")}/public/dealer-intake/${invite.formToken}`
+    : undefined;
+  const { subject, bodyText } = buildMissingInfoFollowUpEmail(setup, blanks, formUrl);
+  await sendSetupGmailEmail({ to: invite.to, subject, bodyText });
+  invite.followUpSentAt = new Date().toISOString();
+  invite.lastFollowUpBlanks = blanks;
+  scheduleSave();
+  console.log(`[dealer intake] missing-info follow-up sent to ${invite.to} (${blanks.length} item(s))`);
+  return true;
+}
+
 // A blank in these fields is normal, not something the dealer "owes" — everything else
 // blank goes into the still-owed list the console task and intake step report.
 const OPTIONAL_FORM_FIELDS = new Set<string>([
-  "extraNotes", "dbaName", "dnsManager", "googleBusinessProfile", "socialMedia", "privacyPolicyUrl"
+  "extraNotes", "dbaName", "dnsManager", "googleBusinessProfile", "socialMedia", "privacyPolicyUrl",
+  "creditAppUrl", "offersUrl"
 ]);
 
 // Deterministic mapping of the LABELED form fields — no LLM needed: the form itself
@@ -704,6 +792,10 @@ export function parseIntakeFormSubmission(body: Record<string, unknown>): Dealer
     leadNotificationDestination: text("leadNotificationDestination"),
     inventoryFeedUrl: text("inventoryFeedUrl"),
     inventoryFeedOwner: text("inventoryFeedOwner"),
+    taxRate: text("taxRate"),
+    creditAppUrl: text("creditAppUrl"),
+    offersUrl: text("offersUrl"),
+    crmLoginWillingness: text("crmLoginWillingness"),
     websiteProvider: text("websiteProvider"),
     websiteProviderEmail: text("websiteProviderEmail"),
     dnsManager: text("dnsManager"),
@@ -761,6 +853,7 @@ export async function dealerIntakeFormSubmitHandler(req: any, res: any) {
   record.lastSensitiveWarning = String(answers.sensitiveDataWarning ?? "").trim() || undefined;
   record.updatedAt = record.formSubmittedAt;
   scheduleSave();
+  const followUpSent = await maybeSendMissingInfoFollowUp(record, setup, applied.blanks).catch(() => false);
   await addAgentTask({
     provider: "claude",
     kind: "dealer_setup",
@@ -768,7 +861,9 @@ export async function dealerIntakeFormSubmitHandler(req: any, res: any) {
     instructions: [
       `Dealer intake FORM submitted for ${setup.dealerName} [${setup.slug}].`,
       applied.diffs.length ? `Changes: ${applied.diffs.join("; ")}` : "No record changes (already matched).",
-      applied.blanks.length ? `Left blank: ${applied.blanks.join("; ")}` : "Fully answered.",
+      applied.blanks.length
+        ? `Left blank: ${applied.blanks.join("; ")}${followUpSent ? " — follow-up email sent to the dealer." : ""}`
+        : "Fully answered.",
       record.lastSensitiveWarning ? `SENSITIVE DATA flagged (NOT stored): ${record.lastSensitiveWarning}` : ""
     ].filter(Boolean).join("\n"),
     clientName: setup.dealerName,
@@ -866,10 +961,13 @@ export async function pollDealerIntakeMail(limit = 15): Promise<{
       invite.updatedAt = new Date().toISOString();
       scheduleSave();
       ingested += 1;
+      const followUpSent = await maybeSendMissingInfoFollowUp(invite, setup, applied.blanks).catch(() => false);
       const summaryLines = [
         `Dealer intake reply from ${invite.to} ingested for ${setup.dealerName} [${setup.slug}].`,
         applied.diffs.length ? `Changes: ${applied.diffs.join("; ")}` : "No record changes (already matched).",
-        applied.blanks.length ? `Still owed: ${applied.blanks.join("; ")}` : "Fully answered.",
+        applied.blanks.length
+          ? `Still owed: ${applied.blanks.join("; ")}${followUpSent ? " — follow-up email sent to the dealer." : ""}`
+          : "Fully answered.",
         invite.lastSensitiveWarning
           ? `SENSITIVE DATA in the reply (NOT ingested): ${invite.lastSensitiveWarning}. Ask the dealer to use the proper channel.`
           : ""

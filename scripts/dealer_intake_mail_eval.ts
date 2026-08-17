@@ -20,6 +20,8 @@ import {
   applyIntakeAnswersToSetup,
   buildIntakeInviteEmail,
   buildIntakeNotesBlock,
+  buildMissingInfoFollowUpEmail,
+  DEALER_INTAKE_ANSWERS_JSON_SCHEMA,
   isDealerIntakeEmailEnabled,
   matchReplyToInvite,
   parseIntakeFormSubmission,
@@ -49,6 +51,10 @@ function answers(overrides: Partial<DealerIntakeAnswers> = {}): DealerIntakeAnsw
     leadNotificationDestination: "",
     inventoryFeedUrl: "",
     inventoryFeedOwner: "",
+    taxRate: "",
+    creditAppUrl: "",
+    offersUrl: "",
+    crmLoginWillingness: "",
     websiteProvider: "",
     websiteProviderEmail: "",
     dnsManager: "",
@@ -274,6 +280,58 @@ ok("launch-completeness answers land in notes; privacy policy blank does not nag
   const a = parseIntakeFormSubmission({ legalName: "X LLC" });
   assert.ok(a.unansweredQuestions.some(q => /console login/i.test(q)), "console users blank must be owed");
   assert.ok(!a.unansweredQuestions.some(q => /privacy policy/i.test(q)), "privacy policy blank is normal, not owed");
+});
+
+// --- Phase 2.5: audit fields, follow-up chase, dedupe, coverage guard (Joe 8/17) ---
+ok("audit fields collected: tax rate, credit app, promotions, CRM login willingness", () => {
+  const html = renderIntakeFormHtml({ dealerName: "Demo Dealer" });
+  for (const f of ["taxRate", "creditAppUrl", "offersUrl", "crmLoginWillingness"]) {
+    assert.ok(html.includes(`name="${f}"`), `form must collect ${f}`);
+  }
+  assert.match(html, /NEVER this form/i);
+  const block = buildIntakeNotesBlock(answers({ taxRate: "8.75%", crmLoginWillingness: "yes" }));
+  assert.match(block, /^Tax rate: 8\.75%$/m);
+  assert.match(block, /^CRM login: yes$/m);
+});
+ok("tax rate + CRM login count as owed when blank; credit app + promotions do not", () => {
+  const a = parseIntakeFormSubmission({ legalName: "X LLC" });
+  assert.ok(a.unansweredQuestions.some(q => /tax rate/i.test(q)));
+  assert.ok(a.unansweredQuestions.some(q => /CRM login/i.test(q)));
+  assert.ok(!a.unansweredQuestions.some(q => /credit application/i.test(q)));
+  assert.ok(!a.unansweredQuestions.some(q => /promotions/i.test(q)));
+});
+ok("missing-info follow-up lists each owed item with its why + form link + no-secrets line", () => {
+  const { subject, bodyText } = buildMissingInfoFollowUpEmail(
+    { dealerName: "Demo Dealer", primaryContact: "Sam Rider" },
+    ["Sales tax rate on vehicle purchases", "Inventory feed or export URL"],
+    "https://api.leadrider.ai/public/dealer-intake/tok123"
+  );
+  assert.match(subject, /still needed/i);
+  assert.match(bodyText, /Sales tax rate on vehicle purchases/);
+  assert.match(bodyText, /payment estimates come out right/i);
+  assert.ok(bodyText.includes("https://api.leadrider.ai/public/dealer-intake/tok123"));
+  assert.match(bodyText, /no passwords, API keys, card numbers, or your EIN/i);
+});
+ok("re-ingest REPLACES the machine-owned intake section; human notes survive", () => {
+  const first = applyIntakeAnswersToSetup({ notes: "Joe's manual note about pricing" } as any, answers({ salesHours: "9-6" }), "intake A");
+  const second = applyIntakeAnswersToSetup({ notes: first.patch.notes } as any, answers({ salesHours: "9-6, Sat 9-3" }), "intake B");
+  assert.ok(second.patch.notes.includes("Joe's manual note about pricing"), "human note must survive");
+  assert.equal((second.patch.notes.match(/\[intake /g) ?? []).length, 1, "only ONE intake section may remain");
+  assert.ok(second.patch.notes.includes("9-6, Sat 9-3"));
+});
+ok("salesperson without a cell renders without empty parentheses", () => {
+  const block = buildIntakeNotesBlock(answers({ salespeople: [{ name: "Chuck New", cell: "" }] }));
+  assert.match(block, /^Salespeople: Chuck New$/m);
+  assert.ok(!block.includes("()"));
+});
+ok("coverage guard: form fields and parser schema stay in lockstep", () => {
+  const schemaKeys = new Set(Object.keys((DEALER_INTAKE_ANSWERS_JSON_SCHEMA as any).properties));
+  const META = new Set(["unansweredQuestions", "sensitiveDataWarning"]);
+  const html = renderIntakeFormHtml({ dealerName: "X" });
+  for (const key of schemaKeys) {
+    if (META.has(key)) continue;
+    assert.ok(html.includes(`name="${key}"`), `schema field ${key} has no form input — add it to FORM_FIELDS or META`);
+  }
 });
 
 console.log(`dealer_intake_mail:eval PASS (${passed} checks)`);
