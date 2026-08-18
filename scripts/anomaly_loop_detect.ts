@@ -20,6 +20,12 @@ import path from "node:path";
 const { classifyOutcomeAnomaly, suppressStaleFindings, suppressAlreadyShippedEchoes, isSupersededGrade, rankSupersededGradeLast } = await import(
   "../services/api/src/domain/anomalyClassifier.ts"
 );
+import {
+  formatStaleDetectorFeedBanner,
+  resolveStaleHours,
+  summarizeDetectorFeeds,
+  type DetectorFeedInput
+} from "./detectorFeedFreshness.ts";
 type NamingCommit = { hash: string; subject: string; dateMs: number };
 
 // The set of eval scripts wired into ci:eval — a dimension's fix counts as "shipped" (so its stale
@@ -48,6 +54,28 @@ if (!fs.existsSync(feedPath)) {
 }
 const feed = JSON.parse(fs.readFileSync(feedPath, "utf8"));
 const anomalies: any[] = Array.isArray(feed?.anomalies) ? feed.anomalies : [];
+
+// PROVENANCE: how old was each INPUT? This work order stamps itself `generatedAt: now` no matter how
+// dead its feeds are, and on 2026-08-18 four of nine — including this primary one — were a day stale
+// because the 08:50-08:54 crons died inside a deploy's npm install. Record every feed's age so a
+// quiet queue can be told apart from a quiet detector chain. See scripts/detectorFeedFreshness.ts.
+const feedStaleHours = resolveStaleHours();
+const feedProvenance: DetectorFeedInput[] = [];
+function mtimeMsOf(file: string): number | null {
+  try {
+    return fs.statSync(file).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+feedProvenance.push({
+  name: "outcome-audit (primary)",
+  file: feedPath,
+  present: true,
+  generatedAt: feed?.generatedAt ?? null,
+  mtimeMs: mtimeMsOf(feedPath),
+  findings: anomalies.length
+});
 
 // Merge the Net 3 open-critic feed (reports/open_critic/latest.json) when present — the open-ended
 // critic writes the SAME OutcomeAnomaly shape (category="discovery") into a sibling file so the
@@ -78,16 +106,39 @@ for (const sib of [
   // loop consumes offline findings exactly like live ones (corpus_replay_nightly.ts, 05:00 UTC).
   { name: "corpus-replay (offline flywheel)", file: path.join(reportRoot, "corpus_replay", "latest.json") }
 ]) {
-  if (!fs.existsSync(sib.file)) continue;
+  if (!fs.existsSync(sib.file)) {
+    feedProvenance.push({ name: sib.name, file: sib.file, present: false });
+    continue;
+  }
+  let sibGeneratedAt: string | null = null;
+  let sibFindings: number | null = null;
   try {
     const s = JSON.parse(fs.readFileSync(sib.file, "utf8"));
+    sibGeneratedAt = s?.generatedAt ?? null;
     if (Array.isArray(s?.anomalies)) {
+      sibFindings = s.anomalies.length;
       anomalies.push(...s.anomalies);
       console.log(`Merged ${s.anomalies.length} ${sib.name} finding(s) from ${sib.file}`);
     }
   } catch {
     /* a malformed sibling feed must never break the deterministic loop */
   }
+  // Recorded even when the parse failed: a feed that is present but unreadable is exactly the case
+  // the freshness banner must not stay quiet about.
+  feedProvenance.push({
+    name: sib.name,
+    file: sib.file,
+    present: true,
+    generatedAt: sibGeneratedAt,
+    mtimeMs: mtimeMsOf(sib.file),
+    findings: sibFindings
+  });
+}
+
+const feedFreshness = summarizeDetectorFeeds(feedProvenance, { staleHours: feedStaleHours });
+{
+  const banner = formatStaleDetectorFeedBanner(feedFreshness);
+  if (banner) console.warn(banner);
 }
 
 const rawAnomalyCount = anomalies.length;
@@ -443,6 +494,14 @@ fs.mkdirSync(outDir, { recursive: true });
 const payload = {
   generatedAt: new Date().toISOString(),
   feedGeneratedAt: feed?.generatedAt ?? null,
+  // How old every INPUT feed was at merge time. `generatedAt` above is when this file was WRITTEN,
+  // which says nothing about whether the detectors ran — read `staleFeeds`/`oldestFeedAgeHours`
+  // before believing an empty or short queue (scripts/detectorFeedFreshness.ts).
+  feedSources: feedFreshness.sources,
+  staleFeedCount: feedFreshness.staleSources.length,
+  staleFeeds: feedFreshness.staleSources,
+  oldestFeedAgeHours: feedFreshness.oldestAgeHours,
+  feedStaleHours: feedFreshness.staleHours,
   totalAnomalies: anomalies.length,
   rawAnomalyCount,
   suppressedByDispositionCount: suppressedByDisposition.length,

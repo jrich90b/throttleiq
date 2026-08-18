@@ -43,6 +43,7 @@ import {
 } from "../services/api/src/domain/dispositionLedger.ts";
 import { isReportGradeStale, refreshSupersededGrades } from "../services/api/src/domain/anomalyClassifier.ts";
 import { readLoopPrLedger } from "./loopPrLedger.ts";
+import { formatStaleDetectorFeedBanner, type DetectorFeedSource } from "./detectorFeedFreshness.ts";
 import os from "node:os";
 import {
   DEFAULT_MERGE_FREEZE_MAX_AGE_MINUTES,
@@ -163,6 +164,23 @@ function loadReport(): {
     disposedNow: ledgered.suppressed,
     regressions: ledgered.regressions
   };
+}
+
+// Were the DETECTORS alive when this work order was built? `generatedAt` says when the file was
+// written, never whether its inputs ran (measured 2026-08-18: four of nine feeds, including the
+// primary one, were a day stale because the 08:50-08:54 crons died inside a deploy's npm install —
+// and `list` printed a clean queue). This must run BEFORE the empty-queue early exit, or the one
+// case it exists for prints "the loop is healthy" and returns. Warn only; never suppress or reorder.
+function warnIfDetectorFeedsStale(report: { payload: any }): void {
+  const sources: DetectorFeedSource[] = Array.isArray(report?.payload?.feedSources) ? report.payload.feedSources : [];
+  if (!sources.length) return; // a feed written before this provenance existed — nothing to claim
+  const banner = formatStaleDetectorFeedBanner({
+    sources,
+    staleSources: sources.filter(s => s?.stale),
+    oldestAgeHours: report?.payload?.oldestFeedAgeHours ?? null,
+    staleHours: report?.payload?.feedStaleHours ?? 26
+  });
+  if (banner) console.warn(banner);
 }
 
 // Loud, unmissable banner: a caller acting on a pre-deploy verdict is about to rebuild something
@@ -327,6 +345,7 @@ if (sub === "dispose") {
 if (sub === "list") {
   const report = loadReport();
   const orders = report.orders;
+  warnIfDetectorFeedsStale(report);
   if (!orders.length) {
     console.log("No work orders — the loop is healthy (stop:true).");
     process.exit(0);
@@ -345,6 +364,7 @@ if (sub === "list") {
 if (sub === "prep") {
   const report = loadReport();
   const orders = report.orders;
+  warnIfDetectorFeedsStale(report);
   warnIfReportStale(report);
   const id = flag("id");
   const wo = id ? orders.find(w => keyOf(w) === id) : (has("top") ? orders[0] : undefined);
