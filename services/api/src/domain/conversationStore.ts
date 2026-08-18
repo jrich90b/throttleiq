@@ -4285,6 +4285,7 @@ export function listConversations() {
         suppressed: !!resolveOptOutForDisplay(c),
         draftHeld: c.draftHeld,
         hasPendingDraft: pd.pendingDraft,
+        closedAt: c.closedAt,
         messages: c.messages
       });
       const lastNonCall = pickInboxPreviewMessage(c.messages);
