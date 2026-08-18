@@ -463,7 +463,9 @@ const CEILINGS: Ceiling[] = [
     // owner, the lead profile and clear the closed state" block moved into
     // applyPriorJourneyCarryOver (domain/priorJourney.ts) and is now SHARED with the ADF path,
     // which had been carrying leadOwner alone.
-    max: 70_243,
+    // 70_243 -> 70_242. The returning-customer fact reaches the draft context in one line, funded
+    // by folding a three-line memorySummary guard whose every neighbour was already a one-liner.
+    max: 70_242,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
@@ -539,7 +541,9 @@ const CEILINGS: Ceiling[] = [
     // 16_140. Main had since ratcheted to 16_099 (#678), so landing 16_140 verbatim would have
     // RAISED the ceiling and undone two reductions — the #418 trap. Re-derived from the real
     // post-rebase count.
-    max: 16_088,
+    // 16_088 -> 16_086. The priorJourney draft fact: the reasoning lives in domain/priorJourney.ts,
+    // so llmDraft carries only the field, the import and the prompt line.
+    max: 16_086,
     note: "every parser prompt + JSON schema; second-largest and on the same trajectory"
   }
 ];

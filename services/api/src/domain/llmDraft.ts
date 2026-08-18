@@ -1,4 +1,5 @@
 import { mapBusinessHoursQuestionParse } from "./inboundPipeline.js";
+import { buildPriorJourneyDraftFact, type PriorJourneyRecord } from "./priorJourney.js";
 import {
   BUSINESS_HOURS_QUESTION_JSON_SCHEMA,
   buildBusinessHoursQuestionPrompt
@@ -353,6 +354,8 @@ export type DraftContext = {
   history: { direction: "in" | "out"; body: string }[];
   voiceSummary?: string | null;
   memorySummary?: string | null;
+  /** The purchase a RETURNING customer's new journey grew out of; "none" on every other thread. */
+  priorJourney?: PriorJourneyRecord | null;
   pickup?: any;
   weather?: any;
   // Affect: the LLM affect parser confidently flagged a personal hardship/serious situation this
@@ -15962,6 +15965,9 @@ ${ctx.voiceSummary ?? "none"}
 
 Memory summary (if any):
 ${ctx.memorySummary ?? "none"}
+
+Returning customer (TRUE, from our own sale record — state it, never contradict it):
+${buildPriorJourneyDraftFact(ctx.priorJourney)}
 
 Suggested appointment slots (if any):
 ${JSON.stringify(ctx.suggestedSlots ?? [], null, 2)}
