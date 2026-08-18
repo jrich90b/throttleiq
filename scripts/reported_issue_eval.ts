@@ -16,7 +16,13 @@ import fs from "node:fs";
  */
 
 const { decideOpsAnomalyReportedIssue } = await import("../services/api/src/domain/conversationOutcomeAudit.ts");
-const { classifyOutcomeAnomaly } = await import("../services/api/src/domain/anomalyClassifier.ts");
+const { classifyOutcomeAnomaly, DIMENSION_FIX_CUTOVERS, ECHO_SUPPRESSIBLE_DIMENSIONS } = await import(
+  "../services/api/src/domain/anomalyClassifier.ts"
+);
+const { findingKeyOf } = await import("../services/api/src/domain/loopPrDedup.ts");
+const { partitionByDispositions } = await import("../services/api/src/domain/dispositionLedger.ts");
+const { isReproduceEligibleDimension } = await import("../services/api/src/domain/reproduceConfirm.ts");
+type DispositionRecord = import("../services/api/src/domain/dispositionLedger.ts").DispositionRecord;
 
 const NOW = new Date("2026-06-27T12:00:00.000Z");
 const ago = (days: number) => new Date(NOW.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
@@ -100,6 +106,138 @@ assert.equal(
   false,
   "stays approve-first even if the dimension graduates (human judgment)"
 );
+
+// ---------------------------------------------------------------------------------------------
+// 2b. THE DRAFT REVIEWER GETS ITS OWN DIMENSION (2026-08-18).
+//
+// The Claude draft reviewer files into the SAME opsAnomalyStore as the human "Report issue" button,
+// with type `other`. While both mapped to `reported_issue` they shared ONE key per lead
+// (`<convId>::reported_issue`) — so a single TIMELESS `no-action`/`joe-ruled` disposition on a
+// human's note permanently muted the machine reviewer on that lead. Measured on the live feed:
+// `+17167995566` (no-action 8/14) and `+17165241170` (joe-ruled 8/4) each swallowed a later reviewer
+// finding, invisible forever, while the reviewer was filing 18 reports in a single day across 11
+// leads. These assertions pin the split, and the mute test below is the regression itself.
+// ---------------------------------------------------------------------------------------------
+const REVIEWER_NOTE =
+  "The pipeline's draft was clearly wrong: The draft ignores the customer's actual question about the mirrors.";
+const reviewer = (over: any = {}) =>
+  map({
+    type: "other",
+    title: "Claude draft review rewrote a pipeline draft",
+    note: REVIEWER_NOTE,
+    reporter: { name: "claude-draft-review" },
+    ...over
+  });
+
+{
+  const a = reviewer()!;
+  assert(a, "a reviewer-filed row still crosses into the loop");
+  assert.equal(a.dimension, "draft_review_rewrite", "reviewer rows get their OWN dimension");
+  assert.equal(a.category, "feedback", "…in the feedback family, like the human lane");
+  assert.equal(a.severity, "P2", "P2");
+  assert.equal(a.convId, "+1555", "convId carried");
+  assert.ok(a.detail.includes("draft-review rewrite"), "detail is prefixed so triage can tell at a glance");
+  assert.ok(a.detail.includes("ignores the customer"), "…and still carries the reviewer's reasoning");
+  assert.ok(!a.detail.includes("operator-reported"), "a machine row never claims to be operator-reported");
+
+  // The split is driven by the REPORTER, not by the type — the reviewer and a human both file `other`.
+  const humanOther = map({ type: "other", note: "Why did this create a new thread?" })!;
+  assert.equal(humanOther.dimension, "reported_issue", "a human note of type other is UNCHANGED");
+  assert.ok(humanOther.detail.includes("operator-reported"), "…and keeps the operator detail prefix");
+
+  // Reporter matching is case/whitespace tolerant; any OTHER reporter stays in the human lane.
+  assert.equal(reviewer({ reporter: { name: "  Claude-Draft-Review  " } })!.dimension, "draft_review_rewrite");
+  assert.equal(reviewer({ reporter: { name: "some-other-bot" } })!.dimension, "reported_issue");
+  assert.equal(reviewer({ reporter: null })!.dimension, "reported_issue", "no reporter => human lane");
+  assert.equal(reviewer({ reporter: { name: "" } })!.dimension, "reported_issue", "blank reporter => human lane");
+}
+
+// The reviewer lane obeys the SAME noise floor — the split widens nothing.
+assert.equal(reviewer({ status: "closed" }), null, "closed reviewer row => null");
+assert.equal(reviewer({ severity: "info" }), null, "info reviewer row => null");
+assert.equal(reviewer({ note: "", title: "" }), null, "no note/title => null");
+assert.equal(reviewer({ context: { convId: "" } }), null, "no convId => null");
+assert.equal(reviewer({ createdAt: ago(40) }), null, "stale reviewer row => null");
+
+// CLASSIFICATION — a judge's opinion, not a verified miss: Tier 2, notify, never auto-merge, even
+// if the dimension graduates. The grader-phantom class is large; a tick must confirm against the
+// thread before treating a reviewer complaint as a real miss.
+{
+  const cls2 = classifyOutcomeAnomaly(reviewer()!, {});
+  assert.equal(cls2.tier, 2, "draft_review_rewrite => Tier 2");
+  assert.equal(cls2.action, "escalate", "escalate (approve-first)");
+  assert.equal(cls2.notify, true, "notify");
+  assert.equal(cls2.workOrder, true, "it is a work order");
+  assert.equal(cls2.autoMergeEligible, false, "never auto-merge an unverified judge opinion");
+  assert.equal(
+    classifyOutcomeAnomaly(reviewer()!, { graduatedCategories: new Set(["draft_review_rewrite"]) })
+      .autoMergeEligible,
+    false,
+    "stays approve-first even if the dimension graduates"
+  );
+}
+
+// TIMESTAMP — still an UPPER BOUND. Measured 2026-08-18 over all 28 matchable live reviewer rows,
+// the lag from the reviewed draft to the report has a median of 23 SECONDS and 25/28 are under 10
+// minutes — but two backfill rows (from the run that extended the reviewer to the email lane) lag
+// 22h and 52h. A backfilled row stamped `occurredAt` would read a PRE-fix draft as a post-fix
+// regression, so the tight median does not license the stronger claim. An upper bound over-surfaces;
+// it never hides.
+{
+  const a = reviewer()!;
+  assert.equal(a.reportedAt, ago(1), "createdAt is carried as reportedAt");
+  assert.equal(a.occurredAt, undefined, "never an occurredAt the row cannot resolve");
+  assert.equal(reviewer({ createdAt: "" })!.reportedAt, undefined, "no createdAt => no reportedAt");
+  assert.equal(
+    DIMENSION_FIX_CUTOVERS["draft_review_rewrite"],
+    undefined,
+    "stays out of the cutover ledger — like reported_issue, it is a coarse dimension"
+  );
+  assert.ok(
+    !ECHO_SUPPRESSIBLE_DIMENSIONS.has("draft_review_rewrite"),
+    "out of echo scope: a commit naming the lead does not prove the reviewer's latest complaint is stale"
+  );
+  assert.ok(
+    !isReproduceEligibleDimension("draft_review_rewrite"),
+    "not reproduce-eligible yet — that set grows only when a dimension earns a matching judge criterion"
+  );
+}
+
+// THE REGRESSION THIS FIXES — a timeless disposition on the HUMAN key must no longer mute the
+// machine reviewer on the same lead, and vice versa.
+{
+  const human = map({ note: "I don't think this one should have been closed" })!;
+  const bot = reviewer()!;
+  const humanKey = findingKeyOf(human.convId, human.dimension);
+  const botKey = findingKeyOf(bot.convId, bot.dimension);
+  assert.notEqual(humanKey, botKey, "same lead, two lanes => two distinct finding keys");
+  assert.equal(humanKey, "+1555::reported_issue", "the human key is unchanged");
+  assert.equal(botKey, "+1555::draft_review_rewrite", "the reviewer gets its own key");
+
+  const timeless = (key: string): DispositionRecord => ({
+    key,
+    disposition: "no-action",
+    at: ago(2),
+    by: "agent-loop",
+    deployTs: null,
+    note: null
+  });
+
+  // Joe rules on his own note. The reviewer's finding on that lead SURVIVES.
+  const afterHuman = partitionByDispositions([human, bot], {
+    ledger: new Map([[humanKey, timeless(humanKey)]])
+  });
+  assert.equal(afterHuman.suppressed.length, 1, "the human note is disposed");
+  assert.equal(afterHuman.kept.length, 1, "…and exactly one finding survives");
+  assert.equal(afterHuman.kept[0].dimension, "draft_review_rewrite", "the survivor is the reviewer's");
+
+  // And the mirror: disposing a reviewer finding must not mute the operator's own button.
+  const afterBot = partitionByDispositions([human, bot], {
+    ledger: new Map([[botKey, timeless(botKey)]])
+  });
+  assert.equal(afterBot.kept.length, 1, "one finding survives");
+  assert.equal(afterBot.kept[0].dimension, "reported_issue", "the operator's lane is never muted by the machine");
+}
 
 // 3. WIRING — the sweep emits the sibling feed and anomaly_loop_detect merges it.
 const sweep = fs.readFileSync("scripts/ops_anomaly_loop_sweep.ts", "utf8");

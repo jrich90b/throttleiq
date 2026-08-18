@@ -121,6 +121,10 @@ const CATEGORY_BY_DIMENSION: Record<string, OutcomeCategory> = {
   open_critic_finding: "discovery",
   intent_unaddressed: "comprehension",
   reported_issue: "feedback",
+  // The Claude draft reviewer rewriting a pipeline draft (see decideOpsAnomalyReportedIssue). Same
+  // "this reply was wrong" family as reported_issue, but filed by a MACHINE at machine cadence —
+  // which is exactly why it gets its own dimension rather than sharing the operator's key.
+  draft_review_rewrite: "feedback",
   // A thumbs-down NOTE that instructs a person to act for a live customer ("book him in at 9:30") —
   // routed by decideThumbsDownNoteRouting, escalated like reported_issue (a human is waiting).
   thumbs_down_action_request: "feedback",
@@ -974,8 +978,33 @@ export type OpsAnomalyReport = {
   note?: string | null;
   status?: string | null;
   createdAt?: string | null;
+  reporter?: { name?: string | null } | null;
   context?: { convId?: string | null; leadKey?: string | null } | null;
 };
+
+/**
+ * The Claude draft reviewer files into the SAME opsAnomalyStore as a human's "Report issue" button,
+ * with type `other`. Splitting it out (2026-08-18) is not cosmetic — it fixes a real silencing hole.
+ *
+ * ONE KEY COVERS THE WHOLE LEAD (`<convId>::<dimension>`). While reviewer rows also mapped to
+ * `reported_issue`, a single `no-action` / `joe-ruled` disposition on one HUMAN note — which is
+ * TIMELESS, unlike the dated `fixed`/`stale-echo` families — permanently muted the machine reviewer
+ * on that lead. Measured on the live feed: `+17167995566` (disposed no-action 8/14) and
+ * `+17165241170` (joe-ruled 8/4) each swallowed a later reviewer finding, invisible forever. The
+ * reviewer files at machine cadence (18 reports on 8/17 across 11 leads, repeat leads the norm), so
+ * one hand disposition was standing as a mute on an automated net — the opposite of the ledger's job.
+ *
+ * The row self-identifies via `reporter.name`, so the split is deterministic, not a guess.
+ *
+ * TIMESTAMP: still `reportedAt` (an UPPER BOUND), deliberately, NOT `occurredAt`. Measured over all
+ * 28 matchable live reviewer rows the lag from the reviewed draft to the report is a median of 23
+ * SECONDS (25/28 under 10 min) — but two backfill rows lag 22h and 52h, from the run that extended
+ * the reviewer to the email lane. A backfilled row stamped `occurredAt` would read a pre-fix draft
+ * as a post-fix regression, so the tight median does not license the stronger claim. Fail-safe:
+ * an upper bound over-surfaces, it never hides.
+ */
+const DRAFT_REVIEW_REPORTER = "claude-draft-review";
+
 export function decideOpsAnomalyReportedIssue(a: OpsAnomalyReport, opts?: { now?: Date }): OutcomeAnomaly | null {
   if (String(a?.status ?? "open").toLowerCase() === "closed") return null;
   const type = String(a?.type ?? "").toLowerCase();
@@ -990,14 +1019,18 @@ export function decideOpsAnomalyReportedIssue(a: OpsAnomalyReport, opts?: { now?
     const ageDays = ((opts?.now ?? new Date()).getTime() - atMs) / (1000 * 60 * 60 * 24);
     if (ageDays < 0 || ageDays > 21) return null;
   }
+  const byDraftReviewer = String(a?.reporter?.name ?? "").trim().toLowerCase() === DRAFT_REVIEW_REPORTER;
+  const dimension = byDraftReviewer ? "draft_review_rewrite" : "reported_issue";
   return {
     convId,
     leadKey: String(a?.context?.leadKey ?? ""),
-    dimension: "reported_issue",
-    category: categoryFor("reported_issue"),
+    dimension,
+    category: categoryFor(dimension),
     severity: "P2",
     healed: false,
-    detail: `operator-reported (${type}): ${note.slice(0, 180)}`,
+    detail: byDraftReviewer
+      ? `draft-review rewrite: ${note.slice(0, 180)}`
+      : `operator-reported (${type}): ${note.slice(0, 180)}`,
     // Upper bound on the offending reply — never occurredAt (see the OutcomeAnomaly field note).
     ...(Number.isFinite(atMs) ? { reportedAt: new Date(atMs).toISOString() } : {})
   };

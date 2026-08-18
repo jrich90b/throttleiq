@@ -88,6 +88,9 @@ for (const sib of [
   { name: "intent-handled (comprehension)", file: path.join(reportRoot, "intent_handled", "anomalies.json") },
   // Operator "Report issue" reports (opsAnomalyStore) → reported_issue. The explicit-human-flag net:
   // agent-behavior reports (routing/cadence/appointment/task/handoff/other) the operator filed by hand.
+  // The Claude draft reviewer files into the SAME store and arrives on this feed too, but under its own
+  // dimension `draft_review_rewrite` (2026-08-18) so a human's TIMELESS disposition can no longer mute
+  // the machine reviewer on that lead, nor the reverse — see decideOpsAnomalyReportedIssue.
   { name: "operator-reported (ops anomaly)", file: path.join(reportRoot, "ops_anomaly", "latest.json") },
   // Thumbs-down NOTES that are staff INSTRUCTIONS for a live customer ("book him in at 9:30"), not
   // code defects (thumbs_down_action_request). The 👎 loop used to bury these; they belong in the
