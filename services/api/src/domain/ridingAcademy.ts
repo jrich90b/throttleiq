@@ -170,21 +170,73 @@ export function resolveRidingAcademyAdfLaneClaim(input: {
 }
 
 /**
+ * WHICH lead form a repeat-ADF thread's first touch is about RIGHT NOW.
+ *
+ * A thread can hold two lead profiles. `updateLeadProfile` (conversationStore) keeps `conv.lead`
+ * pinned to the FIRST form on purpose and files every later form carrying a different `leadRef`
+ * under `conv.latestLead`. That is right for the store — the original lead is worth keeping — but a
+ * first-touch ack is a statement about the customer's CURRENT status, so reading `conv.lead` tells
+ * them about a form they have already moved past.
+ *
+ * MEASURED 2026-08-18 on the live store: 84 threads carry a second form and 4 of them are on this
+ * lane, every one answered by the regenerate path from form 1. Aidan Stewart (+15857041173) moved
+ * Wait List -> Enrolled on 2026-08-15, and the draft regenerated for him at 21:50Z on 8/17 — held by
+ * the quality gate, which is the only reason anyone saw it — told him *"you're on the wait list
+ * right now"*. Maya Iversen (+15854782032) and Andrei Kavalchuk (+15853170121), the two leads this
+ * module's header already names, are in the same state. The LIVE intake never had this bug: it
+ * decides from `effectiveInquiry`, the record it is answering, and it drafted "a seat opened up" for
+ * Aidan the same day. This is exactly the two-path drift CLAUDE.md forbids, and regen is the wrong side.
+ *
+ * FAIL DIRECTION: prefer the NEWEST form we hold. Wrong here means repeating the most recent thing
+ * the school told us; the alternative is asserting a status the customer has already left, which is
+ * the error we actually shipped. No later form, or no `leadRef` to tell two forms apart, ⇒
+ * `conv.lead` ⇒ byte-identical to today.
+ */
+export function resolveLatestAdfLeadProfile<T extends { leadRef?: string | null }>(
+  lead: T | null | undefined,
+  latestLead: T | null | undefined
+): T | null | undefined {
+  const primaryRef = String(lead?.leadRef ?? "").trim();
+  const latestRef = String(latestLead?.leadRef ?? "").trim();
+  return latestRef && latestRef !== primaryRef ? latestLead : lead;
+}
+
+/** Newest ADF record body on the thread — the fallback when the resolved profile carries no inquiry. */
+function readNewestAdfBody(messages: unknown): string {
+  const rows = Array.isArray(messages) ? (messages as any[]) : [];
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    const m = rows[i];
+    if (m?.direction === "in" && String(m?.provider ?? "") === "sendgrid_adf" && String(m?.body ?? "").trim()) {
+      return String(m.body);
+    }
+  }
+  return "";
+}
+
+/**
  * WHICH approved ack replaces the generic sales opener on an ADF FIRST touch — one ordered
  * decision instead of a chain of near-identical inline gates. The riding-academy enrollment wins
  * over the non-buyer survey ack: a course registration is the more specific fact about the lead,
  * and its reply is the one Joe wrote for it. The caller supplies `isAdfFirstTouch` (which already
  * folds in event_promo's precedence). Fail direction: anything unclear returns "none" and the turn
  * routes normally.
+ *
+ * Takes the two lead PROFILES rather than a pre-picked source/inquiry, so "which form is this about"
+ * cannot drift from the ack it feeds, and RETURNS the resolved `inquiry` so the caller's reply extras
+ * read the same record this decision read. `purchaseTimeframe` stays the CALLER's on purpose: it
+ * drives the non-buyer survey ack, and re-reading it off the newer form would flip leads whose first
+ * form said "not interested" — a separate change nobody has measured or approved.
  */
 export function resolveAdfFirstTouchAckKind(input: {
   provider?: string | null;
   messages?: unknown;
   eventPromoKind?: string | null;
-  leadSource?: string | null;
-  inquiry?: string | null;
+  lead?: { leadRef?: string | null; source?: string | null; inquiry?: string | null } | null;
+  latestLead?: { leadRef?: string | null; source?: string | null; inquiry?: string | null } | null;
   purchaseTimeframe?: string | null;
-}): { isAdfFirstTouch: boolean; kind: AdfFirstTouchAckKind } {
+}): { isAdfFirstTouch: boolean; kind: AdfFirstTouchAckKind; inquiry: string } {
+  const record = resolveLatestAdfLeadProfile(input.lead, input.latestLead);
+  const inquiry = String(record?.inquiry ?? "") || readNewestAdfBody(input.messages);
   // DELEGATES to the live lane's resolver rather than repeating the decision. Two copies of
   // "is this a riding-academy first touch, and which one" in ONE module is precisely how the live
   // and regen answers drifted apart in the first place; there is now exactly one.
@@ -194,21 +246,21 @@ export function resolveAdfFirstTouchAckKind(input: {
     provider: input.provider,
     messages: input.messages,
     eventPromoKind: input.eventPromoKind,
-    leadSource: input.leadSource,
-    inquiry: input.inquiry
+    leadSource: record?.source,
+    inquiry
   });
   const isAdfFirstTouch = academy.laneOpen;
-  if (!isAdfFirstTouch) return { isAdfFirstTouch, kind: "none" };
+  if (!isAdfFirstTouch) return { isAdfFirstTouch, kind: "none", inquiry };
   if (academy.kind !== "none") {
-    return { isAdfFirstTouch, kind: academy.kind };
+    return { isAdfFirstTouch, kind: academy.kind, inquiry };
   }
   if (
     decideNonBuyerSurveyTurn({ purchaseTimeframe: input.purchaseTimeframe }).kind ===
     "non_buyer_survey_ack"
   ) {
-    return { isAdfFirstTouch, kind: "non_buyer_survey_ack" };
+    return { isAdfFirstTouch, kind: "non_buyer_survey_ack", inquiry };
   }
-  return { isAdfFirstTouch, kind: "none" };
+  return { isAdfFirstTouch, kind: "none", inquiry };
 }
 
 /** The approved copy for a resolved first-touch ack kind. */

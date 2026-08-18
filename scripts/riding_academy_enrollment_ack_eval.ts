@@ -317,7 +317,9 @@ assert.ok(
 // of index.ts), so the wiring is asserted across BOTH files, by exact call shape in each.
 const adfFirstTouch = fs.readFileSync("services/api/src/domain/ridingAcademy.ts", "utf8");
 assert.ok(
-  /const regenAdfFirstTouch = resolveAdfFirstTouchAckKind\(\{[\s\S]{0,400}leadSource: conv\.lead\?\.source,[\s\S]{0,240}\}\);/.test(
+  // The profiles, not a pre-picked source: the resolver decides WHICH form the turn is about
+  // (`resolveLatestAdfLeadProfile`) — pinned by `regen_latest_adf_form:eval`.
+  /const regenAdfFirstTouch = resolveAdfFirstTouchAckKind\(\{[\s\S]{0,400}lead: conv\.lead,[\s\S]{0,60}latestLead: conv\.latestLead,[\s\S]{0,240}\}\);/.test(
     index
   ) && /if \(regenAdfFirstTouch\.kind !== "none"\) \{/.test(index),
   "the regen path must resolve the enrollment ack through the shared first-touch resolver"

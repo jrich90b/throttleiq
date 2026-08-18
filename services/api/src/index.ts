@@ -54424,13 +54424,13 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       classificationBucket: conv.classification?.bucket,
       classificationCta: conv.classification?.cta
     }).kind,
-    leadSource: conv.lead?.source,
-    inquiry: conv.lead?.inquiry ?? event.body ?? "",
+    lead: conv.lead,
+    latestLead: conv.latestLead,
     purchaseTimeframe: conv.lead?.purchaseTimeframe
   });
   if (regenAdfFirstTouch.kind !== "none") {
     const reply = buildAdfFirstTouchAck(regenAdfFirstTouch.kind, {
-      ...resolveEnrollmentAckExtras(dealerProfile, conv.lead?.inquiry ?? event.body ?? ""),
+      ...resolveEnrollmentAckExtras(dealerProfile, regenAdfFirstTouch.inquiry),
       firstName:
         normalizeDisplayCase(conv.lead?.firstName) ||
         (String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null),
