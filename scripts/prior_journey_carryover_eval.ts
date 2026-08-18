@@ -31,7 +31,8 @@ import fs from "node:fs";
 import {
   buildPriorJourneyRecord,
   applyPriorJourneyCarryOver,
-  buildPriorJourneyDraftFact
+  buildPriorJourneyDraftFact,
+  selectPriorJourneyBackfills
 } from "../services/api/src/domain/priorJourney.js";
 const { priorJourneyPillLabel, priorJourneyDetail, formatSoldOn } = await import(
   "../apps/web/src/app/lib/priorJourneyLabel.ts"
@@ -209,6 +210,59 @@ ok(
 ok(
   index.includes("priorJourney: conv.priorJourney ?? null,"),
   "and the orchestrator context must be fed from the conversation"
+);
+
+// ---------------------------------------------------------------------------
+// 7. THE BACKFILL. applyPriorJourneyCarryOver stamps at CREATION, so it is forward-only and the
+//    four threads that already existed showed nothing — including +17169400722::2, the open one
+//    Joe was looking at. Measured 2026-08-18: 4 live re-engagement threads, ALL missing the record.
+// ---------------------------------------------------------------------------
+const STORE = [
+  SOLD_THREAD,                                                   // the base thread, with the sale
+  { id: "+17169400722::2", messages: [{ direction: "in", body: "used street glides?" }] },
+  { id: "+17163440581", closedReason: "sold", sale: { soldAt: "2026-07-20T14:35:30Z", label: "2023 Road King Special Black" } },
+  { id: "+17163440581::2", messages: [] },
+  { id: "+15550001111", status: "open" },                        // an ordinary thread
+  { id: "+15550002222", closedReason: "not_interested" },        // closed, but never bought
+  { id: "+15550002222::2", messages: [] }                        // ...so its ::2 must stay blank
+] as any[];
+const picks = selectPriorJourneyBackfills(STORE);
+ok(picks.length === 2, `only the re-engagement threads whose base SOLD are picked (got ${picks.length})`);
+const picked = new Set(picks.map(p => String(p.conversation.id)));
+ok(picked.has("+17169400722::2"), "Christopher's open thread must be backfilled — it is the visible one");
+ok(picked.has("+17163440581::2"), "and so must the other sold-base re-engagement");
+ok(
+  !picked.has("+15550002222::2"),
+  "a re-engagement whose base closed NOT INTERESTED must stay blank rather than claim a purchase"
+);
+ok(!picked.has("+15550001111"), "an ordinary thread is never touched");
+ok(!picked.has("+17169400722"), "and neither is a BASE thread — it owns the sale, it did not re-engage");
+ok(
+  picks.find(p => String(p.conversation.id) === "+17169400722::2")?.record.label ===
+    "2021 Harley-Davidson FLTRXS Road Glide Special",
+  "the stamped record names the bike from the BASE thread"
+);
+
+// IDEMPOTENT: the whole reason this can run every boot. Stamp, re-select, expect nothing.
+for (const { conversation, record } of picks) (conversation as any).priorJourney = record;
+ok(
+  selectPriorJourneyBackfills(STORE).length === 0,
+  "a second pass finds nothing — the backfill converges and cannot re-stamp or thrash"
+);
+// FAIL DIRECTION: an orphan ::2 whose base thread is gone must be skipped, not guessed at.
+ok(
+  selectPriorJourneyBackfills([{ id: "+15559999999::2" }] as any[]).length === 0,
+  "a re-engagement thread with no base thread in the store is skipped"
+);
+
+const storeSrc = fs.readFileSync("services/api/src/domain/conversationStore.ts", "utf8");
+ok(
+  /backfillPriorJourneys\(\);/.test(storeSrc) && storeSrc.includes("selectPriorJourneyBackfills("),
+  "the store must RUN the backfill at startup, or the four live threads stay blank forever"
+);
+ok(
+  storeSrc.includes("conversation.priorJourney = record;") && storeSrc.includes("scheduleSave();"),
+  "and persist what it stamps — an in-memory-only repair is lost on the next boot"
 );
 
 console.log(`prior_journey_carryover:eval OK (${checks} assertion(s))`);

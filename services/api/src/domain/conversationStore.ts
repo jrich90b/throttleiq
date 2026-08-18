@@ -4,7 +4,7 @@ import type { InboundMessageEvent } from "./types.js";
 import { maybeMarkEngagedFromInbound } from "./engagement.js";
 import { setInventoryWatchOptOut } from "./inventoryWatchOptOut.js";
 import { decideAwaitingReplyFlag } from "./awaitingReply.js";
-import type { PriorJourneyRecord } from "./priorJourney.js";
+import { selectPriorJourneyBackfills, type PriorJourneyRecord } from "./priorJourney.js";
 import {
   decideUnansweredWatchAlertPause,
   hasSentWatchCloseOut,
@@ -2081,6 +2081,22 @@ async function loadStoreOnStartup() {
   // this one to settle before it clears the maps.
   hydrationChain = run.catch(() => {});
   await run;
+  backfillPriorJourneys();
+}
+
+/**
+ * Stamp the re-engagement threads that pre-date applyPriorJourneyCarryOver.
+ *
+ * Runs once per boot against the hydrated store. Idempotent — an already-stamped thread is skipped
+ * — so it converges to zero work after the first boot. The SELECTION and its fail direction (skip,
+ * never guess) live in domain/priorJourney.ts; this only writes what that returns.
+ */
+function backfillPriorJourneys(): void {
+  const pending = selectPriorJourneyBackfills([...conversations.values()]);
+  if (!pending.length) return;
+  for (const { conversation, record } of pending) conversation.priorJourney = record;
+  scheduleSave();
+  console.log(`[prior-journey-backfill] stamped ${pending.length} re-engagement thread(s) with their previous purchase`);
 }
 
 let storeReadyPromise: Promise<void> | null = null;
