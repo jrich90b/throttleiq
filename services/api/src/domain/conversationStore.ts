@@ -4,6 +4,7 @@ import type { InboundMessageEvent } from "./types.js";
 import { maybeMarkEngagedFromInbound } from "./engagement.js";
 import { setInventoryWatchOptOut } from "./inventoryWatchOptOut.js";
 import { decideAwaitingReplyFlag } from "./awaitingReply.js";
+import type { PriorJourneyRecord } from "./priorJourney.js";
 import {
   decideUnansweredWatchAlertPause,
   hasSentWatchCloseOut,
@@ -994,6 +995,11 @@ export type Conversation = {
   // real back-and-forth re-bumps it. Falls back to updatedAt when unset (older conversations).
   inboxActivityAt?: string;
   messages: Message[];
+  /**
+   * The journey this thread grew out of when a sold/held customer came back to buy or trade again.
+   * Set once at creation by applyPriorJourneyCarryOver; never a live mirror of the other thread.
+   */
+  priorJourney?: PriorJourneyRecord | null;
   leadOwner?: LeadOwner;
   // Audit trail for the manager "Ping" button (newest last, capped at STAFF_PING_HISTORY_LIMIT):
   // who poked whom, when, about which tasks. Internal staff SMS only — never a customer send.
@@ -4315,6 +4321,9 @@ export function listConversations() {
         awaitingReply: awaiting.awaiting
           ? { sinceIso: awaiting.sinceIso, ageMinutes: awaiting.ageMinutes }
           : null,
+        // A returning customer's new thread must say what they already bought, or the row reads as
+        // a confusing duplicate of the thread beside it (Joe, 2026-08-18).
+        priorJourney: c.priorJourney ?? null,
         createdAt: c.createdAt,
         updatedAt,
         lastMessage: lastNonCall,

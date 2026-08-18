@@ -20,6 +20,7 @@ import {
   phantomVisitGuardEnabled
 } from "../domain/visitFraming.js";
 import { hasDeliveredOrPendingDealerRideThankYou } from "../domain/dealerRideThankYouDedup.js";
+import { applyPriorJourneyCarryOver } from "../domain/priorJourney.js";
 import {
   upsertConversationByLeadKey,
   createConversationForLeadKey,
@@ -4540,7 +4541,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const strictSalesTrade = isStrictSalesTradeBucket(rule.bucket) || explicitSalesReengagement;
     if (strictSalesTrade) {
       conv = createConversationForLeadKey(leadKey, latestByLead.mode ?? "suggest");
-      conv.leadOwner = latestByLead.leadOwner ? { ...latestByLead.leadOwner } : undefined;
+      // Same carry-over the SMS path uses. This path produced THREE of the four re-engagement
+      // splits and was carrying leadOwner ALONE — no lead profile, no memory of the purchase.
+      applyPriorJourneyCarryOver(conv, latestByLead);
     }
   }
   if (!conv.leadOwner?.id) {
