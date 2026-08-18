@@ -214,7 +214,58 @@ for (const edge of [
 // ---------------------------------------------------------------------------
 // 5. NEVER ON A THREAD THAT IS DONE OR HAS OPTED OUT.
 // ---------------------------------------------------------------------------
-ok(decide({ status: "closed" }).awaiting === false, "a closed thread is not awaiting anything");
+ok(decide({ status: "closed" }).awaiting === false, "a closed thread with no closedAt stays silent");
+// ---- A SOLD CUSTOMER WHO COMES BACK (Joe, 2026-08-18, Christopher Szczesny +17169400722) ----
+// His thread closed SOLD 8/14; he texted again 8/17 and the row said nothing. MEASURED store-wide:
+// 7 closed threads carry an inbound text postdating their own closedAt, all closed `sold`,
+// including "my hazards won't go off" — a service problem on a bike we sold, unseen for 29 days.
+const CLOSED_AT = new Date(NOW - 4 * 24 * 60 * 60 * 1000).toISOString(); // closed 4 days ago
+ok(
+  decide({
+    status: "closed",
+    closedAt: CLOSED_AT,
+    messages: [inbound("Do u by chance have any used street glides?", 60)]
+  }).awaiting === true,
+  "a customer who writes AFTER we close the thread is re-engaging and must flag"
+);
+ok(
+  decide({
+    status: "closed",
+    closedAt: CLOSED_AT,
+    // 6 days ago — BEFORE the close. This is the ordinary finished conversation.
+    messages: [inbound("sounds good, see you then", 6 * 24 * 60)]
+  }).awaiting === false,
+  "a message that predates the close is just the conversation that ended — stay silent"
+);
+ok(
+  decide({
+    status: "closed",
+    closedAt: CLOSED_AT,
+    messages: [inbound("Thank You !", 60)]
+  }).awaiting === false,
+  "a courtesy thank-you after a sale still stays quiet — the commonest shape in this population"
+);
+// FAIL DIRECTION on this branch INVERTS: silence is the default and it takes proof to break it.
+// An unparseable closedAt must NOT reopen the nag on every closed thread in the store.
+ok(
+  decide({ status: "closed", closedAt: "not-a-date", messages: [inbound("hello?", 60)] }).awaiting === false,
+  "an unparseable closedAt keeps today's silence rather than flagging every closed thread"
+);
+ok(
+  decide({ status: "closed", closedAt: null, messages: [inbound("hello?", 60)] }).awaiting === false,
+  "a missing closedAt does the same"
+);
+ok(
+  decide({
+    status: "closed",
+    closedAt: CLOSED_AT,
+    suppressed: true,
+    messages: [inbound("Do you have any used street glides?", 60)]
+  }).awaiting === false,
+  "an opted-out customer is never chased, closed or not"
+);
+const store2 = fs.readFileSync("services/api/src/domain/conversationStore.ts", "utf8");
+ok(store2.includes("closedAt: c.closedAt,"), "the listing must pass closedAt or the branch is inert");
 ok(decide({ suppressed: true }).awaiting === false, "an opted-out customer must never be chased");
 
 // ---------------------------------------------------------------------------

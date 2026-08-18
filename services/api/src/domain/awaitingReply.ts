@@ -89,9 +89,38 @@ export function decideAwaitingReplyFlag(input: {
   draftHeld?: unknown;
   /** True when a draft is waiting in the approval box ("Draft ready" already shows). */
   hasPendingDraft?: boolean | null;
+  /** When the thread was closed. A customer who writes AFTER this is re-engaging, not finishing. */
+  closedAt?: string | null;
   messages?: AwaitingReplyRow[] | null;
 }): AwaitingReplyDecision {
-  if (String(input.status ?? "").toLowerCase() === "closed") return { awaiting: false, reason: "closed" };
+  // A CLOSED thread is silent — unless the customer has written since we closed it.
+  //
+  // Joe, 2026-08-18, pointing at Christopher Szczesny: his thread was closed SOLD on 8/14 and he
+  // texted again on 8/17, and the row said nothing. Measured across the whole store: **7** closed
+  // threads have an inbound customer text postdating their own `closedAt`, and every one of them
+  // was closed `sold`. Two are the case that matters — `+17169941544` (*"you might want to send Tom
+  // numbers on that"*, actionable) and `+17163440581::2` (*"my hazards won't go off"*, a service
+  // problem on a bike we sold him, unseen for 29 days).
+  //
+  // A sold customer coming back is arguably the most valuable person on the list, and the blanket
+  // closed-skip was silencing exactly them. 7 threads all-time is near-zero added noise.
+  //
+  // FAIL DIRECTION INVERTS HERE, deliberately. Everywhere else in this file "unsure ⇒ flag"; on a
+  // closed thread the default is SILENCE and it takes positive proof of re-engagement to break it,
+  // because closing is an explicit human decision that the conversation is over. So an unparseable
+  // or missing `closedAt` keeps today's behaviour (silent) rather than reopening the nag on every
+  // closed thread in the store.
+  if (String(input.status ?? "").toLowerCase() === "closed") {
+    const closedMs = Date.parse(String(input.closedAt ?? ""));
+    if (!Number.isFinite(closedMs)) return { awaiting: false, reason: "closed" };
+    const lastRow = findLastRealEvent(input.messages);
+    const lastMs = Date.parse(String(lastRow?.at ?? ""));
+    if (lastRow?.direction !== "in" || !Number.isFinite(lastMs) || lastMs <= closedMs) {
+      return { awaiting: false, reason: "closed" };
+    }
+    // Falls through to the same checks an open thread gets — courtesy closers on a sold thread
+    // ("Thank you!", the commonest shape here) must stay quiet exactly as they do anywhere else.
+  }
   if (input.suppressed) return { awaiting: false, reason: "suppressed" };
   // Both of these already put a word on the row. A second flag would be the double-badge the
   // 2026-08-14 appointment-pill fix existed to remove.
