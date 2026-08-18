@@ -189,6 +189,25 @@ export function classifyOutcomeAnomaly(
     };
   }
 
+  // The Claude draft reviewer REWROTE a pipeline draft (decideOpsAnomalyReportedIssue, own dimension
+  // since 2026-08-18 so a human's timeless disposition can no longer mute the machine — see that
+  // function's note). Classified exactly like reported_issue and for the same reason, NOT because it
+  // is a human: it is a JUDGE'S opinion, unconfirmed by construction, and the grader-phantom class is
+  // large — the reviewer has already stamped at least one. Never auto-merge; a tick must pull the
+  // thread's rows and confirm the ignored question exists and the flagged draft actually reached a
+  // customer (a `draft_ai` row left `stale` reached nobody) before it is treated as a real miss.
+  if (anomaly.dimension === "draft_review_rewrite") {
+    return {
+      tier: 2,
+      action: "escalate",
+      workOrder: true,
+      autoMergeEligible: false,
+      notify: true,
+      rationale:
+        "draft reviewer rewrote a pipeline draft (a judge's opinion, unverified) → confirm against the thread, then approve-first PR; never auto-merge"
+    };
+  }
+
   // A thumbs-down NOTE that turned out to be a STAFF INSTRUCTION for a live customer ("book him in at
   // 9:30", "tell him we have the muffler") — not a code defect. Nothing to fix in the agent; a PERSON
   // must act. Always Tier 2, notify, never a code change: it lands in the morning digest's staff-action
