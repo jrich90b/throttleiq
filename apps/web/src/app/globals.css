@@ -7519,6 +7519,31 @@ textarea {
   color: var(--badge-needs-reply-text);
 }
 
+/**
+ * Long-label status badges must stay INSIDE their own shape.
+ *
+ * Joe, 2026-08-18, with a screenshot of "Awaiting your reply" on David Ventry: the words ran
+ * outside the pill on both sides. `.lr-inbox-meta-pill` sets `white-space: nowrap` AND
+ * `min-width: 0`, and it sits in `.lr-inbox-meta-pills`, which is capped (7.5rem; 5.5rem on
+ * mobile). So the flex item's BORDER BOX shrank below its content while the text refused to wrap
+ * and nothing clipped it — background and border rendered narrower than the words on top of them.
+ *
+ * Wrapping inside the pill fixes it at ANY container width, which matters more than the specific
+ * cap: these labels are written for humans and will get longer, and the next long one must not
+ * reintroduce this. The short pills beside them ("Human", the message count) keep `nowrap` — a
+ * two-line "22" would be worse than the bug.
+ */
+.lr-inbox-meta-pill.lr-badge--needs-reply,
+.lr-inbox-meta-pill.lr-badge--being-fixed,
+.lr-inbox-meta-pill.lr-badge--draft-ready {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: center;
+  max-width: 100%;
+  line-height: 1.15;
+  padding-block: 0.24rem;
+}
+
 .lr-badge--being-fixed {
   border-color: var(--badge-being-fixed-border);
   background: var(--badge-being-fixed-bg);
