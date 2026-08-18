@@ -8277,6 +8277,7 @@ app.post("/public/widget/text-us", async (req, res) => {
         tradePayoff: conv.tradePayoff ?? null,
         hold: conv.hold ?? null,
         sale: conv.sale ?? null,
+        priorJourney: conv.priorJourney ?? null,
         pickup: conv.pickup ?? null,
         dealerProfile,
         agentNameOverride: resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile))
@@ -8290,9 +8291,7 @@ app.post("/public/widget/text-us", async (req, res) => {
       if (result.pricingAttempted) incrementPricingAttempt(conv);
       if (result.paymentsAnswered) setDialogState(conv, "payments_answered");
       if (!salesVehicleContext && result.smallTalk) setDialogState(conv, "small_talk");
-      if (result.memorySummary) {
-        setMemorySummary(conv, result.memorySummary, conv.messages.length);
-      }
+      if (result.memorySummary) setMemorySummary(conv, result.memorySummary, conv.messages.length);
       const buyTradeDraft = buildWebTextWidgetSalesBuyTradeDraft({
         firstName,
         context: salesVehicleContext

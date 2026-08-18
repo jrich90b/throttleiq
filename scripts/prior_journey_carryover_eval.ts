@@ -30,7 +30,8 @@ import { strict as assert } from "node:assert";
 import fs from "node:fs";
 import {
   buildPriorJourneyRecord,
-  applyPriorJourneyCarryOver
+  applyPriorJourneyCarryOver,
+  buildPriorJourneyDraftFact
 } from "../services/api/src/domain/priorJourney.js";
 const { priorJourneyPillLabel, priorJourneyDetail, formatSoldOn } = await import(
   "../apps/web/src/app/lib/priorJourneyLabel.ts"
@@ -165,6 +166,49 @@ ok(inbox.includes("c.priorJourney ?"), "the inbox row must render the returning-
 ok(
   inbox.includes("priorJourneyDetail(c.priorJourney)"),
   "and hang the full detail off it, from the pinned formatter"
+);
+
+// ---------------------------------------------------------------------------
+// 6. THE FACT HANDED TO THE DRAFTER. Without this the agent greets a customer with 209 messages
+//    and a bike in his garage as a stranger — the prompt's only signal is "First outbound message:
+//    yes", which is true of every re-engagement thread by construction.
+// ---------------------------------------------------------------------------
+const fact = buildPriorJourneyDraftFact(rec);
+ok(fact.includes("ALREADY BOUGHT"), "the drafter must be told this customer already bought");
+ok(fact.includes("2021 Harley-Davidson FLTRXS Road Glide Special"), "and which bike — it is the likely trade-in");
+ok(fact.includes("Scott Hartrich"), "and who sold it, so the reply can reference the person they know");
+ok(/do not introduce yourself/i.test(fact), "and must be told NOT to introduce itself again");
+ok(/do not ask what they currently ride/i.test(fact), "and NOT to ask what they ride — it is on the invoice");
+
+// FAIL DIRECTION: everything above is asserted to a customer as TRUE, so no bike name ⇒ say nothing.
+ok(buildPriorJourneyDraftFact(null) === "none", "no prior journey ⇒ the prompt block reads none");
+ok(
+  buildPriorJourneyDraftFact({ conversationId: "+1555" }) === "none",
+  "a record with no bike NAME must not claim a purchase we cannot name"
+);
+ok(
+  buildPriorJourneyDraftFact({ conversationId: "+1555", soldByName: "Scott" }) === "none",
+  "a salesperson alone is not a purchase"
+);
+
+// WIRING: the block must be in the prompt and fed from the context, at every draft site.
+const draft = fs.readFileSync("services/api/src/domain/llmDraft.ts", "utf8");
+ok(
+  draft.includes("${buildPriorJourneyDraftFact(ctx.priorJourney)}"),
+  "the prompt must render the fact from the context, not a hand-built string"
+);
+ok(
+  /Returning customer \(TRUE, from our own sale record/.test(draft),
+  "and label it as fact so the composer states it rather than hedging"
+);
+const orch = fs.readFileSync("services/api/src/domain/orchestrator.ts", "utf8");
+ok(
+  orch.includes("priorJourney: ctx?.priorJourney ?? null,"),
+  "the draft context must carry it or the prompt block is always none (the #723 inert-fix class)"
+);
+ok(
+  index.includes("priorJourney: conv.priorJourney ?? null,"),
+  "and the orchestrator context must be fed from the conversation"
 );
 
 console.log(`prior_journey_carryover:eval OK (${checks} assertion(s))`);

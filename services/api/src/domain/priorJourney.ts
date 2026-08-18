@@ -145,3 +145,41 @@ export function applyPriorJourneyCarryOver(
   created.closedAt = undefined;
   created.closedReason = undefined;
 }
+
+/**
+ * The returning-customer FACT handed to the drafter, or "none".
+ *
+ * Joe, 2026-08-18, on the same thread as the console pill: today the agent would greet a customer
+ * with 209 messages and a bike in his garage as a stranger, because the new journey thread has no
+ * outbound yet and the prompt's "First outbound message: yes" is the only signal it has.
+ *
+ * This states FACTS and two prohibitions; it deliberately writes no copy. The composer already has
+ * the voice charter and Joe's rulings — what it lacked was the knowledge. The two prohibitions are
+ * the ones a first-contact framing would otherwise produce: introducing yourself to someone you
+ * sold a bike to, and asking what they ride when it is on the invoice.
+ *
+ * FAIL DIRECTION: "none" unless we hold a real sale record. Everything here is asserted to a
+ * customer as true, so a blank or guessed purchase is worse than silence — it would have the agent
+ * thank somebody for a bike they never bought. `buildPriorJourneyRecord` already refuses to build a
+ * record without a sale; this refuses to render one without a bike NAME.
+ */
+export function buildPriorJourneyDraftFact(prior: PriorJourneyRecord | null | undefined): string {
+  const label = String(prior?.label ?? "").trim();
+  if (!prior || !label) return "none";
+  const bits = [`This customer has ALREADY BOUGHT from us: ${label}`];
+  const soldAt = String(prior.soldAt ?? "").trim();
+  if (soldAt) {
+    const ms = Date.parse(soldAt);
+    if (Number.isFinite(ms)) bits.push(`purchased ${new Date(ms).toISOString().slice(0, 10)}`);
+  }
+  const seller = String(prior.soldByName ?? "").trim();
+  if (seller) bits.push(`sold by ${seller}`);
+  const count = typeof prior.messageCount === "number" ? prior.messageCount : 0;
+  if (count > 0) bits.push(`${count} earlier messages on their previous thread`);
+  return [
+    bits.join("; ") + ".",
+    "This is a RETURNING customer opening a NEW purchase or trade — not a first contact.",
+    "Do NOT introduce yourself or the dealership as if you have never spoken.",
+    "Do NOT ask what they currently ride: the bike above is theirs and is the likely trade-in."
+  ].join(" ");
+}

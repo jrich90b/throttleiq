@@ -1,5 +1,6 @@
 // services/api/src/domain/orchestrator.ts
 import { loadSystemPrompt } from "./loadPrompt.js";
+import type { PriorJourneyRecord } from "./priorJourney.js";
 import type { InboundMessageEvent, OrchestratorResult } from "./types.js";
 import { buildTradeAdfAck, tradeAdfPurchaseIsOnFloor } from "./tradeAdfReply.js";
 import { buildPaymentMethodsReply, hasPaymentMethodsTenderHint } from "./paymentMethodsReply.js";
@@ -2290,6 +2291,8 @@ export async function orchestrateInbound(
     // Recent same-conversation thumbs-down notes (collectRecentStaffCorrections) — hard
     // constraints for the draft composer so it can't repeat a staff-rejected reply.
     staffCorrections?: string[] | null;
+    /** Carried onto a re-engagement thread by applyPriorJourneyCarryOver (domain/priorJourney.ts). */
+    priorJourney?: PriorJourneyRecord | null;
   }
 ): Promise<OrchestratorResult> {
   await loadSystemPrompt("orchestrator");
@@ -5283,6 +5286,8 @@ export async function orchestrateInbound(
         needsEmpathy: ctx?.needsEmpathy ?? null,
         dispositionClosing: ctx?.dispositionClosing ?? null,
         alreadyPurchased: !!ctx?.sale,
+        // A returning customer opening a NEW deal — so the composer stops greeting them as a stranger.
+        priorJourney: ctx?.priorJourney ?? null,
         staffCorrections: ctx?.staffCorrections ?? null,
         // The pre-qualification ladder reaching turns AFTER the first (Joe, 2026-08-11): a GOAL, not
         // a sentence, so the composer answers what the customer actually said and still steers back.
