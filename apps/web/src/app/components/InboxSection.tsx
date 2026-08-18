@@ -5,6 +5,7 @@ import { dueBucketFor, relativeDueLabel, taskEffectiveDueMs } from "../lib/taskT
 import { salesCriticalKind, SALES_REASON_META } from "../lib/taskReason";
 import { isCampaignSentTagFresh } from "../lib/campaignTag";
 import { isTaskCoveredByAppointmentTag, resolveAppointmentTag } from "../lib/appointmentTag";
+import { formatAwaitingFor } from "../lib/awaitingReplyLabel";
 
 // Turn a stored close reason ("not_interested", "wrong_number", free text) into
 // a short human label for the Closed badge, so "Closed" always says WHY.
@@ -706,6 +707,17 @@ export function InboxSection(props: any) {
                                   title="A reply is drafted and waiting — open to review and send"
                                 >
                                   Draft ready
+                                </span>
+                              ) : c.awaitingReply ? (
+                                // The customer spoke last and nothing is drafted. Until now the row
+                                // rendered BLANK here — identical to a finished conversation — which
+                                // is how these got missed (Joe, 2026-08-18). Human-mode threads are
+                                // the bulk of it: the tripwire skips them and its backstop is dead.
+                                <span
+                                  className="lr-inbox-meta-pill lr-badge--needs-reply"
+                                  title={`${formatAwaitingFor(c.awaitingReply.ageMinutes)}They wrote last and nothing is drafted. Replying clears this.`}
+                                >
+                                  Awaiting your reply
                                 </span>
                               ) : null}
                               <span className="lr-inbox-meta-pill" title={`${c.messageCount} messages`}>
