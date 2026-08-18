@@ -225,6 +225,7 @@
     "campaign_inbox_ordering:eval",
     "campaign_sent_tag_ttl:eval",
     "inbox_appointment_pill:eval",
+    "awaiting_reply_flag:eval",
     "inbox_stale_draft_preview:eval",
     "dealer_payment_requests:eval",
     "adf_parser:eval",

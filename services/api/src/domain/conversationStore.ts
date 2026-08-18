@@ -3,6 +3,7 @@ import * as path from "node:path";
 import type { InboundMessageEvent } from "./types.js";
 import { maybeMarkEngagedFromInbound } from "./engagement.js";
 import { setInventoryWatchOptOut } from "./inventoryWatchOptOut.js";
+import { decideAwaitingReplyFlag } from "./awaitingReply.js";
 import {
   decideUnansweredWatchAlertPause,
   hasSentWatchCloseOut,
@@ -4267,9 +4268,25 @@ export function listConversations() {
     };
   }
 
+  // One clock for the whole listing, so every row's "waiting N minutes" is measured from the same
+  // instant instead of drifting across a long map.
+  const listedAtMs = Date.now();
+
   return Array.from(conversations.values())
     .map(c => {
       const pd = pendingDraftInfo(c);
+      // "Awaiting your reply" — the customer spoke last and NOTHING is waiting in the approval box.
+      // Until this the card rendered BLANK in that state, indistinguishable from a finished thread;
+      // the measurement, the three nets that all miss it, and Joe's 2026-08-18 ask are in
+      // domain/awaitingReply.ts.
+      const awaiting = decideAwaitingReplyFlag({
+        nowMs: listedAtMs,
+        status: c.status ?? "open",
+        suppressed: !!resolveOptOutForDisplay(c),
+        draftHeld: c.draftHeld,
+        hasPendingDraft: pd.pendingDraft,
+        messages: c.messages
+      });
       const lastNonCall = pickInboxPreviewMessage(c.messages);
       const updatedAt = lastNonCall?.at ?? c.updatedAt;
       const leadSource = c.lead?.source ?? null;
@@ -4292,6 +4309,11 @@ export function listConversations() {
         // context-fidelity hold vs the draft-quality "being fixed"); the rest of the reason stays
         // server-side. (Truthy object => existing "held" checks still fire.)
         draftHeld: c.draftHeld ? { heldKind: (c.draftHeld as any).heldKind ?? null } : null,
+        // Null (not `false`) when not awaiting, matching draftHeld/walkIn/phoneLog above so the
+        // card's existing truthy checks read the same way.
+        awaitingReply: awaiting.awaiting
+          ? { sinceIso: awaiting.sinceIso, ageMinutes: awaiting.ageMinutes }
+          : null,
         createdAt: c.createdAt,
         updatedAt,
         lastMessage: lastNonCall,

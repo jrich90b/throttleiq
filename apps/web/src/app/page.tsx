@@ -935,6 +935,9 @@ type ConversationListItem = {
   // The API returns the full draftHeld object; heldKind="context_fidelity" drives the reason-aware
   // inbox-card tag + banner ("Needs your reply" vs the draft-quality "being fixed").
   draftHeld?: boolean | { heldKind?: string | null; reason?: string } | null;
+  // The customer wrote last and nothing is drafted — the state the card used to render blank
+  // (Joe, 2026-08-18). Null, not false, when not awaiting, like its sibling flags.
+  awaitingReply?: { sinceIso?: string | null; ageMinutes?: number | null } | null;
 };
 
 type Message = {
