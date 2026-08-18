@@ -183,3 +183,48 @@ export function buildPriorJourneyDraftFact(prior: PriorJourneyRecord | null | un
     "Do NOT ask what they currently ride: the bike above is theirs and is the likely trade-in."
   ].join(" ");
 }
+
+/**
+ * BACKFILL: the re-engagement threads that already existed when the carry-over shipped.
+ *
+ * `applyPriorJourneyCarryOver` stamps `priorJourney` at thread CREATION, so it is forward-only —
+ * the classic residue ([[forward-only-class-fixes-leave-permanent-residue]]). Measured 2026-08-18,
+ * all FOUR live re-engagement threads read `priorJourney: MISSING`, including `+17169400722::2`,
+ * the open one, whose base thread records a 2021 Road Glide Special. Without this the pill and the
+ * drafter fact never appear for the customers who prompted the build.
+ *
+ * Pure SELECTION so the eval can execute it; the caller does the writing. Idempotent by
+ * construction: a thread that already carries a record is skipped, so this converges to zero work
+ * after the first boot and stays there (new threads are stamped at creation).
+ *
+ * HOW A THREAD FINDS ITS PREVIOUS ONE: the re-engagement id is `<base>::<n>` (`buildConversationId`),
+ * so the base thread is the id before the separator. That is the same derivation the console shows,
+ * and it needs no new index.
+ *
+ * FAIL DIRECTION: skip, never guess. No `::`, no base thread, a base thread with no sale, or a
+ * record that `buildPriorJourneyRecord` refuses to build ⇒ the thread is left exactly as it is. A
+ * missing pill is invisible; a pill claiming a bike somebody never bought is a lie to a customer.
+ */
+export function selectPriorJourneyBackfills<
+  T extends { id?: string; priorJourney?: PriorJourneyRecord | null }
+>(conversations: readonly T[]): Array<{ conversation: T; record: PriorJourneyRecord }> {
+  const rows = Array.isArray(conversations) ? conversations : [];
+  const byId = new Map<string, T>();
+  for (const c of rows) {
+    const id = String((c as PriorLike)?.id ?? "").trim();
+    if (id) byId.set(id, c);
+  }
+  const out: Array<{ conversation: T; record: PriorJourneyRecord }> = [];
+  for (const conv of rows) {
+    if (conv?.priorJourney) continue; // already stamped — idempotent
+    const id = String(conv?.id ?? "").trim();
+    const sep = id.indexOf("::");
+    if (sep <= 0) continue; // not a re-engagement thread
+    const base = byId.get(id.slice(0, sep));
+    if (!base) continue;
+    const record = buildPriorJourneyRecord(base as PriorLike);
+    if (!record) continue; // base thread records no sale — say nothing
+    out.push({ conversation: conv, record });
+  }
+  return out;
+}
