@@ -7544,6 +7544,18 @@ textarea {
   padding-block: 0.24rem;
 }
 
+/**
+ * A RETURNING customer — this thread grew out of a completed sale (Joe, 2026-08-18).
+ * Reuses the existing SUCCESS token family rather than inventing a colour: a repeat buyer is the
+ * best news on the board, and a new palette entry would need its own contrast audit (AGENTS.md UI
+ * guardrails). Same family the Sold badge already uses, so the two read as related.
+ */
+.lr-badge--returning {
+  border-color: var(--status-success-border);
+  background: var(--status-success-bg);
+  color: var(--status-success-text);
+}
+
 .lr-badge--being-fixed {
   border-color: var(--badge-being-fixed-border);
   background: var(--badge-being-fixed-bg);

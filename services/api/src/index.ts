@@ -16,6 +16,7 @@ import sharp from "sharp";
 import { orchestrateInbound, evaluateTestRideInventoryGate, buildBlockedTestRideInventoryDraft } from "./domain/orchestrator.js";
 import { resolveWatchOptOutOutcome } from "./domain/watchOptOutTurn.js";
 import { resolveAdfFirstTouchAckKind, buildAdfFirstTouchAck, resolveEnrollmentAckExtras } from "./domain/ridingAcademy.js";
+import { applyPriorJourneyCarryOver } from "./domain/priorJourney.js";
 import { readFirstTimeRiderPolicy, hasRiderCoursePublicInfo, readEnrollmentRidingHistory, isThreadParkedOnUpcomingClass, applyRiderExperienceState } from "./domain/firstTimeRiderPolicy.js";
 import { buildFirstTimeRiderGuidanceReply, buildInitialAdfFirstTimeRiderGuidanceReply, hasExplicitRiderCourseInfoText, hasAmbiguousRiderCourseInfoText, asksRiderCourseLogistics, RIDER_COURSE_LOGISTICS_TODO } from "./domain/firstTimeRiderReply.js";
 import { readRidingAcademyRecordFields } from "./domain/ridingAcademy.js";
@@ -9164,18 +9165,9 @@ async function resolveInboundConversationForSms(event: InboundMessageEvent): Pro
   if (!shouldStartNewSalesJourney(parse)) return latest;
 
   const created = createConversationForLeadKey(event.from, latest.mode ?? "suggest");
-  created.leadOwner = latest.leadOwner ? { ...latest.leadOwner } : undefined;
-  if (latest.lead) {
-    created.lead = {
-      ...latest.lead,
-      walkInComment: undefined,
-      walkInCommentCapturedAt: undefined,
-      walkInCommentUsedAt: undefined
-    };
-  }
-  created.status = "open";
-  created.closedAt = undefined;
-  created.closedReason = undefined;
+  // ONE carry-over, shared with the ADF path (domain/priorJourney.ts) — the two had already
+  // drifted, and the new thread now REMEMBERS the purchase it grew out of.
+  applyPriorJourneyCarryOver(created, latest);
   saveConversation(created);
   return created;
 }

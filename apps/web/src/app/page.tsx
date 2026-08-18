@@ -938,6 +938,14 @@ type ConversationListItem = {
   // The customer wrote last and nothing is drafted — the state the card used to render blank
   // (Joe, 2026-08-18). Null, not false, when not awaiting, like its sibling flags.
   awaitingReply?: { sinceIso?: string | null; ageMinutes?: number | null } | null;
+  // Carried from the sold thread this journey grew out of; see domain/priorJourney.ts.
+  priorJourney?: {
+    conversationId?: string | null;
+    soldAt?: string | null;
+    label?: string | null;
+    soldByName?: string | null;
+    messageCount?: number | null;
+  } | null;
 };
 
 type Message = {

@@ -459,7 +459,11 @@ const CEILINGS: Ceiling[] = [
     // in the cadence tick — one of seven unrefereed writers of that field, and the one that fought
     // the finance-declined heal into a daily-forever loop — is now decideEngagedCadenceBump in
     // routeStateReducer, so the tick states the inputs and the referee owns the rule.
-    max: 70_251,
+    // 70_251 -> 70_243. The re-engagement carry-over: the SMS path's hand-written "inherit the
+    // owner, the lead profile and clear the closed state" block moved into
+    // applyPriorJourneyCarryOver (domain/priorJourney.ts) and is now SHARED with the ADF path,
+    // which had been carrying leadOwner alone.
+    max: 70_243,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

@@ -6,6 +6,7 @@ import { salesCriticalKind, SALES_REASON_META } from "../lib/taskReason";
 import { isCampaignSentTagFresh } from "../lib/campaignTag";
 import { isTaskCoveredByAppointmentTag, resolveAppointmentTag } from "../lib/appointmentTag";
 import { formatAwaitingFor } from "../lib/awaitingReplyLabel";
+import { priorJourneyPillLabel, priorJourneyDetail } from "../lib/priorJourneyLabel";
 
 // Turn a stored close reason ("not_interested", "wrong_number", free text) into
 // a short human label for the Closed badge, so "Closed" always says WHY.
@@ -558,7 +559,18 @@ export function InboxSection(props: any) {
                                 </div>
                               </div>
                               <div className="lr-inbox-badge-row">
-                                {c.walkIn && !isPhoneLogConversation(c) ? (
+                                {c.priorJourney ? (
+                                // A returning customer. Their new thread is a NEW deal by design;
+                                // without this the row looks like a duplicate of the sold thread
+                                // beside it (Joe, 2026-08-18, Christopher Szczesny).
+                                <span
+                                  className="lr-inbox-pill lr-badge--returning"
+                                  title={priorJourneyDetail(c.priorJourney) ?? undefined}
+                                >
+                                  {priorJourneyPillLabel(c.priorJourney)}
+                                </span>
+                              ) : null}
+                              {c.walkIn && !isPhoneLogConversation(c) ? (
                                   <span
                                     className="lr-inbox-icon-pill text-[var(--status-info-text)]"
                                     title="Walk-in"
