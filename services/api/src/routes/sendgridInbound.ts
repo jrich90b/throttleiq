@@ -67,7 +67,8 @@ import {
   markQuestionDone,
   markOpenTodosResolvedByCommunication,
   ensureInitialSmsOptOutFooter,
-  applyPrequalStageReply
+  applyPrequalStageReply,
+  stampEmailDraft
 } from "../domain/conversationStore.js";
 import type { InventoryWatch } from "../domain/conversationStore.js";
 import { isSuppressed } from "../domain/suppressionStore.js";
@@ -2019,7 +2020,8 @@ function toEmailStyledBody(body: string, conv: any): string {
 }
 
 function setEmailDraft(conv: any, text: string): void {
-  conv.emailDraft = toEmailStyledBody(text, conv);
+  // Body + composed-time together, always — see `stampEmailDraft` / `emailDraftAt`.
+  stampEmailDraft(conv, toEmailStyledBody(text, conv));
 }
 
 type EmailReplyDraftInvariantHints = {

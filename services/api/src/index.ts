@@ -527,7 +527,7 @@ import {
   POST_SALE_DAY_OFFSETS,
   inferDisplayWalkIn,
   inferWalkIn,
-  resolveConversationDetailDisplay,
+  resolveConversationDetailDisplay, stampEmailDraft,
   startPostSaleCadence,
   releaseHeldDraft,
   applyAppointmentTeardown,
@@ -5869,7 +5869,7 @@ async function publishCustomerReplyDraft(args: {
   let draft: string;
   if (args.channel === "email") {
     draft = formatEmailBodyForConversation(publishText, args.conv);
-    args.conv.emailDraft = draft;
+    stampEmailDraft(args.conv, draft);
   } else {
     const from = String(args.from ?? "dealership").trim() || "dealership";
     const to =

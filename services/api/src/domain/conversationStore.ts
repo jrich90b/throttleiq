@@ -1251,6 +1251,26 @@ export type Conversation = {
    * clears it on every regeneration); a name = a person authored it and it is theirs.
    */
   emailDraftActor?: string | null;
+  /**
+   * WHEN `emailDraft` was composed — the email lane's answer to `Message.at` (2026-08-18).
+   *
+   * The email draft is the one sendable artifact in the product carrying no time of its own. Every
+   * surface that needed to know whether it had gone stale had to invent a proxy: the reviewer
+   * proxies freshness by the THREAD's newest message, `routeWatchdogClassification` and
+   * `scoringExclusions` both special-case it, and `conv.updatedAt` is unusable because the
+   * long-term-cadence realign heal churns it every ~60s.
+   *
+   * Measured 2026-08-17 21:00Z: of 4 freshly-composed email drafts 3 were wrong for their thread,
+   * every one of them because the thread MOVED after the draft was written (staff walked a delivery
+   * date back; an appointment resolved no-show and a reschedule link already went out; a question
+   * was settled in SMS 40 minutes earlier). Nothing could see it — the reviewer keys its receipt on
+   * the draft's body HASH and skips a hash it has stamped, so a draft reviewed `ok` and made wrong
+   * an hour later stays `ok` for the life of the thread.
+   *
+   * Absent = composed before this field existed. Written only via `stampEmailDraft`, read only
+   * through `resolveEmailDraftForDisplay`.
+   */
+  emailDraftAt?: string;
   // STEP 2 of the self-correcting draft loop: when the pre-publish quality gate fails a draft, we
   // store NO draft and set this "held / being fixed" marker instead — so a bad draft never reaches
   // the outgoing field. Cleared the moment a passing draft publishes. Dark unless the live gate flag
@@ -2761,7 +2781,7 @@ export function appendOutbound(
   ) {
     const firstName = String(conv?.lead?.firstName ?? conv?.lead?.name ?? "").trim();
     const emailDraft = formatEmailLayout(tonedBody, { firstName, fallbackName: "there" });
-    conv.emailDraft = emailDraft;
+    stampEmailDraft(conv, emailDraft);
     // Machine-written. Clearing on EVERY regeneration is load-bearing: a stale actor left over from
     // an operator's earlier email would permanently mark this pipeline template "human-authored"
     // and hide it from the reviewer for the life of the thread.
@@ -3512,7 +3532,7 @@ export function saveOperatorDraft(
     if ((conv as any).contextFidelityShadow) (conv as any).contextFidelityShadow = null;
   }
   if (args.channel === "email") {
-    conv.emailDraft = body;
+    stampEmailDraft(conv, body);
     // Stamp authorship so the email reviewer can tell our own text from a person's (see the field's
     // docs). A named operator marks it human-owned and permanently off-limits to the reviewer.
     conv.emailDraftActor = String(args.actor?.userName ?? "").trim() || null;
@@ -9324,10 +9344,77 @@ export function recordFinanceCustomerUnreachable(
  *     The phrase match is an invariant guard on OUR OWN generated copy, not comprehension of a
  *     customer message.
  *
+ *  3. THE THREAD HAS MOVED SINCE THE DRAFT WAS COMPOSED (2026-08-18). Rules 1 and 2 each ask about
+ *     one specific event; this asks the general question they are special cases of, and it is the
+ *     only rule of the three that can fire on a draft that was CORRECT when it was written.
+ *
+ *     Measured on the live store 2026-08-17 21:00Z. Of the drafts fresh enough to still carry a
+ *     reviewer receipt, three had been overtaken by their own threads — +17164233848 (David) by
+ *     SEVEN turns, ending in staff asking "What time on tomorrow works best?"; +17163686137
+ *     (Matthew) by seven, ending in "you're welcome!"; +17166977040 (Haywood) by a fresh follow-up
+ *     that answered the very thing the draft was still offering to check. All three were still
+ *     being offered as sendable, and nothing in the product could ever have caught them: the
+ *     reviewer keys its receipt on the draft's body HASH and skips a hash it has already stamped,
+ *     so a draft reviewed `ok` and made wrong an hour later stays `ok` for the life of the thread.
+ *
+ *     This does NOT fix generation being blind to state that existed BEFORE it wrote (root cause 1
+ *     of the email lane — still open). It closes the hole where a draft that was fine goes wrong
+ *     and no surface can tell.
+ *
+ *     A "turn" is a message a human on either end actually saw — an unsent draft row is not one
+ *     ("a held/stale draft is not activity — nobody saw it", `shouldSurfaceUnsentFirstTouch`), and
+ *     neither is an outbound stamped `delivered: false`. That is what keeps the ADF first touch out
+ *     of it: the SMS queued beside the email draft is a pending draft in suggest mode. ⚠️ If
+ *     first-touch auto-send is ever flipped on, that same SMS becomes a DELIVERED row a second
+ *     after the email draft is written and this rule will start withholding the email half of the
+ *     first touch — check it before the flip.
+ *
+ *     Strictly forward-only: a draft with no `emailDraftAt` was composed before the stamp existed
+ *     and is left exactly as it is rather than withheld on a guess. Same fail direction as rules 1
+ *     and 2 — an empty Email tab is a human writing the reply; a stale one is a send that
+ *     contradicts what staff told the customer an hour ago.
+ *
  * Related: the declined-side twin is `resolveFinanceOutcomeNotify`'s territory; draft GENERATION
  * reading `conv.financeOutcome` in either polarity is the upstream fix and is still open.
  */
-export type EmailDraftSuppressionReason = "thread_closed" | "finance_outcome_landed";
+export type EmailDraftSuppressionReason = "thread_closed" | "finance_outcome_landed" | "thread_moved";
+
+/**
+ * The ONLY way `emailDraft` is written. Body and time go together or the stamp is worth nothing —
+ * a write site that sets the body and forgets the time produces a draft that reads as pre-stamp
+ * legacy forever, i.e. silently exempt from rule 3. Callers own `emailDraftActor` (it means
+ * different things per site: the pipeline clears it, an operator's name claims the draft).
+ */
+export function stampEmailDraft(conv: { emailDraft?: string; emailDraftAt?: string }, body: string): void {
+  conv.emailDraft = body;
+  conv.emailDraftAt = nowIso();
+}
+
+/**
+ * Did a turn somebody actually saw land after this draft was composed?
+ *
+ * "Somebody saw it" is doing all the work, and the live store corrected the first version of this
+ * function: a PENDING draft row carries `provider: "draft_ai"` and NO `draftStatus` at all — the
+ * status is only stamped `"stale"` when it is superseded, and approval REPLACES the provider with
+ * twilio/sendgrid/human and clears the field (see `consumePendingDraft`). So `draftStatus` alone
+ * reads a live unsent draft as a delivered turn. On +17164233848 that is exactly the newest row,
+ * and it would have withheld the email draft on the strength of an SMS draft nobody had approved —
+ * the ADF first touch's own shape, i.e. the rule would have fired on almost every new lead.
+ * The test is the provider, matching `getLatestPendingDraft`.
+ */
+export function emailDraftThreadMovedSinceComposed(conv: Conversation | null | undefined): boolean {
+  const composedAt = Date.parse(String(conv?.emailDraftAt ?? ""));
+  if (!Number.isFinite(composedAt)) return false; // pre-stamp draft — forward-only, never guess
+  for (const m of Array.isArray(conv?.messages) ? conv!.messages : []) {
+    if (m?.direction !== "in" && m?.direction !== "out") continue;
+    if (!String(m?.body ?? "").trim()) continue;
+    if (m?.provider === "draft_ai" || m?.draftStatus) continue; // an unsent draft is not a turn
+    if (m?.delivered === false) continue; // recorded but never reached the customer
+    const at = Date.parse(String(m?.at ?? ""));
+    if (Number.isFinite(at) && at > composedAt) return true;
+  }
+  return false;
+}
 
 const EMAIL_DRAFT_PENDING_FINANCE_CALLBACK =
   /\b(finance|business)\s+(team|manager|department)\b[^.!?]{0,80}\b(will|to)\s+(reach out|contact|call|be in touch|follow up)/i;
@@ -9353,6 +9440,9 @@ export function resolveEmailDraftForDisplay(conv: Conversation | null | undefine
   }
   if (conv.financeOutcome?.status && emailDraftPromisesPendingFinanceCallback(draft)) {
     return { emailDraft: null, suppressedReason: "finance_outcome_landed" };
+  }
+  if (emailDraftThreadMovedSinceComposed(conv)) {
+    return { emailDraft: null, suppressedReason: "thread_moved" };
   }
   return { emailDraft: conv.emailDraft ?? null, suppressedReason: null };
 }
