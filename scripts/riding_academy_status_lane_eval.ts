@@ -256,7 +256,10 @@ ok(
   "the REGEN path reaches it through the same resolver as live"
 );
 ok(
-  /if \(academy\.kind !== "none"\) \{\s*\n\s*return \{ isAdfFirstTouch, kind: academy\.kind \};/.test(shared),
+  // The resolver also returns the `inquiry` it decided from (regen_latest_adf_form:eval), so the
+  // pin allows extra fields on the returned object — what it cares about is that `academy.kind` is
+  // forwarded WHOLE and unconditionally.
+  /if \(academy\.kind !== "none"\) \{\s*\n\s*return \{ isAdfFirstTouch, kind: academy\.kind[,}]/.test(shared),
   "regen forwards every riding-academy kind, not just the two it used to know"
 );
 for (const k of ["riding_academy_waitlist_to_enrolled_ack", "riding_academy_completion_ack"]) {
