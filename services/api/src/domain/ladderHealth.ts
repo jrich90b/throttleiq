@@ -199,10 +199,34 @@ export type LadderHealthReport = {
  * ⚠️ THE LESSON, for the next lane someone wants to declare: a reason about where the lead CAME FROM
  * ("it's a phone lane", "they were in the store") is not a reason about what we SEND. Check the
  * outbound bodies before declaring a lane silent by design.
+ *
+ * ## RIDING ACADEMY WAS THE THIRD MIS-DECLARATION, AND IT IS THE SAME MISTAKE (2026-08-18)
+ *
+ * Declared here as *"course enrolment, not a motorcycle purchase"* — a statement about the lead's
+ * ORIGIN, which is the one shape this file already warns is not a reason. Measured on the live store
+ * (all 14 Riding Academy leads, every one created inside the last 90 days):
+ *
+ * - We text this lane HEAVILY: **18 agent-authored rows across the 8 most recent leads** — course
+ *   pricing (*"The current price is $321"*), enrolment confirmations, wait-list follow-ups, and a
+ *   real ask when a seat frees up (*"I may have a spot that will open up for this weekends class.
+ *   Are you still interested?"*). It is an active, agent-owned conversational lane, not a receipt.
+ * - The 30-day sweep graded **9 agent-owned first touches at a 0% ask rate**, and the suppression is
+ *   the only reason that row never alarmed.
+ *
+ * The declaration was also load-bearing in the wrong direction: because the lane was silent by
+ * design, nothing flagged that it mis-routes into the BIKE ladder. Two live examples in the same
+ * window — +15854782032 (Maya), whose second lead form drew *"I can ballpark payments once I confirm
+ * the exact price. If you'd like to stop in, what day and time works best?"* on a COURSE enrolment,
+ * and +17167857284 (Ulises), who asked *"will I lose my seat?"* and was answered with dealership
+ * hours and appointment availability.
+ *
+ * ⚠️ WHAT THE ALARM MEANS HERE, so the next reader does not "fix" it with a bike ask: the right ask
+ * on this lane is COURSE-shaped (confirm the start date, hold the seat, are you set for the range
+ * day) — never an appointment to look at a motorcycle. "Not a bike ask" was the true half of the old
+ * reason; "therefore no ask at all" was the false half, and it silenced the lane for both.
  */
 export const NO_LADDER_LANES: { pattern: RegExp; why: string }[] = [
-  { pattern: /ride challenge|sweeps|rsvp/i, why: "a marketing signup, not a buyer" },
-  { pattern: /riding academy/i, why: "course enrolment, not a motorcycle purchase" }
+  { pattern: /ride challenge|sweeps|rsvp/i, why: "a marketing signup, not a buyer" }
 ];
 
 export function laneHasNoLadderByDesign(source: string): string | null {
