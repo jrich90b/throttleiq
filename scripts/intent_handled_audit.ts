@@ -19,10 +19,44 @@
  * Usage:
  *   npx tsx scripts/intent_handled_audit.ts [--since-hours N] [--out-dir DIR] [--max N]
  *   npx tsx scripts/intent_handled_audit.ts --self-test
+ *
+ * OUTPUT PATH — it honours REPORT_ROOT like every sibling sweep (fixed 2026-08-18). It did not,
+ * and that made this net DARK for five days without anyone noticing: the box cron and the loop's
+ * daily block both run `REPORT_ROOT=<runtime>/reports npm run intent_handled:audit`, but the only
+ * env var read here was INTENT_HANDLED_OUT_DIR, so the run fell through to `cwd/reports/...` — i.e.
+ * INSIDE the repo checkout — while `anomaly_loop_detect` reads `$REPORT_ROOT/intent_handled/
+ * anomalies.json`. Every run "succeeded" and wrote where nothing looks. Measured on the box
+ * 2026-08-18: the loop's copy was frozen at 8/13 12:35 (121h) while a fresh run that same minute
+ * landed in `/home/ubuntu/leadrider-api/americanharley/reports/intent_handled/`.
  */
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+
+/**
+ * Where this audit writes. Precedence, most explicit first:
+ *   1. `--out-dir` — an operator naming the exact directory always wins.
+ *   2. `INTENT_HANDLED_OUT_DIR` — the pre-existing per-script override, unchanged.
+ *   3. `REPORT_ROOT`/intent_handled — the shared report root every sibling sweep already uses, and
+ *      the one `anomaly_loop_detect` reads its feed from. THIS is the rung that was missing.
+ *   4. `cwd`/reports/intent_handled — the original local-dev default, unchanged.
+ * Pure: takes its env, resolves no I/O, so the eval can execute it directly.
+ */
+export function resolveIntentHandledOutDir(input?: {
+  outDirArg?: string | null;
+  env?: Record<string, string | undefined>;
+  cwd?: string;
+}): string {
+  const env = input?.env ?? process.env;
+  const cwd = input?.cwd ?? process.cwd();
+  const explicit = String(input?.outDirArg ?? "").trim();
+  if (explicit) return explicit;
+  const perScript = String(env.INTENT_HANDLED_OUT_DIR ?? "").trim();
+  if (perScript) return perScript;
+  const reportRoot = String(env.REPORT_ROOT ?? "").trim();
+  if (reportRoot) return path.join(reportRoot, "intent_handled");
+  return path.resolve(cwd, "reports", "intent_handled");
+}
 
 import {
   isHumanModeStaffReply,
@@ -692,8 +726,7 @@ async function main() {
       : path.resolve(process.cwd(), "services", "api", "data", "conversations.json"));
   const sinceHours = Number(args.get("--since-hours") || process.env.INTENT_HANDLED_SINCE_HOURS || "24");
   const maxCandidates = Number(args.get("--max") || process.env.INTENT_HANDLED_MAX || "150");
-  const outDir =
-    args.get("--out-dir") || process.env.INTENT_HANDLED_OUT_DIR || path.resolve(process.cwd(), "reports", "intent_handled");
+  const outDir = resolveIntentHandledOutDir({ outDirArg: args.get("--out-dir"), env: process.env });
 
   if (process.env.LLM_ENABLED !== "1" || !process.env.OPENAI_API_KEY) {
     console.error("intent-handled audit needs LLM_ENABLED=1 and OPENAI_API_KEY (skipping).");
