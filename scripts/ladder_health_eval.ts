@@ -195,12 +195,57 @@ async function main(): Promise<void> {
   // --- DECLARED NO-LADDER LANES ARE SILENT, AND SAY WHY -----------------------------------------
   // The list is a coverage registry: a lane either asks, or is declared with a reason, or alarms.
   assert.ok(laneHasNoLadderByDesign("Ride Challenge"), "marketing signups are declared");
-  assert.ok(laneHasNoLadderByDesign("Riding Academy - Enrolled"), "course enrolment is declared");
   assert.equal(laneHasNoLadderByDesign("Room58 - Request details"), null, "a real sales lane is NOT declared");
   const signup = Array.from({ length: 20 }, (_, i) => lead("Ride Challenge", 3 + i, { asks: false }));
   const signupLane = assessLadderHealth({ conversations: signup, now: NOW }).lanes.find(l => l.source === "Ride Challenge")!;
   assert.equal(signupLane.alarm, null, "a declared no-ladder lane never alarms");
   assert.ok(/by design/i.test(signupLane.why), "…and its row says why, so nobody re-investigates it");
+
+  // --- THE RIDING ACADEMY LANES MUST STAY VISIBLE -----------------------------------------------
+  // The third mis-declaration, and the same shape as the walk-in family below: *"course enrolment,
+  // not a motorcycle purchase"* describes where the lead CAME FROM, which this file already warns is
+  // never a reason. MEASURED 2026-08-18 on the live store (all 14 Riding Academy leads, every one
+  // created inside 90 days): 18 agent-authored rows across the 8 most recent leads — course pricing
+  // ("The current price is $321"), enrolment confirmations, wait-list follow-ups, and a real ask when
+  // a seat frees up ("I may have a spot that will open up for this weekends class. Are you still
+  // interested?"). The 30-day sweep graded 9 agent-owned first touches at a 0% ask rate, and this
+  // suppression was the only reason that row never alarmed.
+  //
+  // The suppression also hid a routing defect: with the lane silent by design, nothing flagged that
+  // it falls into the BIKE ladder — +15854782032 drew "I can ballpark payments… what day and time
+  // works best?" on a course enrolment, and +17167857284 asked "will I lose my seat?" and got
+  // dealership hours plus appointment availability.
+  //
+  // ⚠️ REGRESSION GUARD. Re-declaring either lane re-blinds the sweep. Note what the alarm asks for:
+  // a COURSE-shaped ask (confirm the start date, hold the seat), never an appointment to look at a
+  // motorcycle — "not a bike ask" was the true half of the old reason, "therefore no ask" the false
+  // half.
+  for (const source of ["Riding Academy - Enrolled", "Riding Academy - Wait List"]) {
+    assert.equal(
+      laneHasNoLadderByDesign(source),
+      null,
+      `${source} is a lane we actively text — it must never be declared silent by design`
+    );
+  }
+  // Not just the declaration: the lane genuinely reaches an alarm on the never-asks shape.
+  const academy = Array.from({ length: 12 }, (_, i) => lead("Riding Academy - Enrolled", 3 + i * 2, { asks: false }));
+  const academyLane = assessLadderHealth({ conversations: academy, now: NOW }).lanes.find(
+    l => l.source === "Riding Academy - Enrolled"
+  )!;
+  assert.equal(
+    academyLane.alarm,
+    "never_asks",
+    "a Riding Academy lane nobody asks anything must surface as a build candidate"
+  );
+  // FAIL DIRECTION: the ask clears the alarm, never the suppression list.
+  const academyAsking = Array.from({ length: 12 }, (_, i) =>
+    lead("Riding Academy - Enrolled", 3 + i * 2, { asks: true })
+  );
+  assert.equal(
+    assessLadderHealth({ conversations: academyAsking, now: NOW }).alarms.length,
+    0,
+    "a Riding Academy lane that DOES ask is silent — the only way to quiet the row is to start asking"
+  );
 
   // --- THE WALK-IN FAMILY MUST STAY VISIBLE -----------------------------------------------------
   // `Traffic Log Pro`, `Walk In` and `Dealer Lead App` are ONE family (`WALK_IN_SOURCE_RE` in
