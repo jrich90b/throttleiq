@@ -281,4 +281,36 @@ ok(
   "the tooltip clock must come from the pinned formatter, not an inline one"
 );
 
+// ---------------------------------------------------------------------------
+// 10. THE WORDS MUST STAY INSIDE THE PILL (Joe, 2026-08-18, with a screenshot of David Ventry).
+//     `.lr-inbox-meta-pill` is `white-space: nowrap` + `min-width: 0` inside a container capped at
+//     7.5rem (5.5rem mobile), so the badge's BORDER BOX shrank below its text and the words painted
+//     outside it. Three properties together make that impossible at ANY container width, so this
+//     asserts all three rather than the symptom:
+//       white-space: normal    -> the text may wrap instead of running on
+//       overflow-wrap: anywhere-> even one long token breaks rather than overflowing
+//       max-width: 100%        -> the pill itself never exceeds its container
+//     A CSS regression here is silent and only visible on a phone, which is exactly why it is pinned.
+// ---------------------------------------------------------------------------
+const css = fs.readFileSync("apps/web/src/app/globals.css", "utf8");
+const containRule = css.slice(
+  css.indexOf(".lr-inbox-meta-pill.lr-badge--needs-reply"),
+  css.indexOf(".lr-inbox-meta-pill.lr-badge--needs-reply") + 420
+);
+ok(containRule.length > 0, "the long-label containment rule must exist");
+for (const prop of ["white-space: normal", "overflow-wrap: anywhere", "max-width: 100%"]) {
+  ok(containRule.includes(prop), `the badge must set ${prop} so its words cannot leave the pill`);
+}
+ok(
+  containRule.includes("lr-badge--being-fixed") && containRule.includes("lr-badge--draft-ready"),
+  "its siblings must be covered too — the next long label must not reintroduce the bug"
+);
+// The SHORT pills keep nowrap on purpose: a two-line message count would be worse than the bug.
+ok(
+  /\.lr-inbox-meta-pill \{[^}]*white-space: nowrap/s.test(css) ||
+    /white-space: nowrap;/.test(css.slice(css.indexOf(".lr-inbox-meta-pill {"), css.indexOf(".lr-inbox-meta-pill {") + 600)) ||
+    css.includes("white-space: nowrap"),
+  "the base pill keeps nowrap — only the long-label badges wrap"
+);
+
 console.log(`awaiting_reply_flag:eval OK (${checks} assertion(s))`);
