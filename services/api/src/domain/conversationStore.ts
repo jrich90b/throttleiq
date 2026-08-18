@@ -9422,10 +9422,56 @@ export function recordFinanceCustomerUnreachable(
  *     and 2 — an empty Email tab is a human writing the reply; a stale one is a send that
  *     contradicts what staff told the customer an hour ago.
  *
+ *  4. THE DRAFT CANNOT BE DATED AT ALL AND WE HAVE SINCE REPLIED (2026-08-18, second pass).
+ *
+ *     Rule 3 shipped strictly forward-only and that turned out to cover almost nothing. Measured on
+ *     the live store 2026-08-18, hours after it deployed:
+ *
+ *       | convs carrying a live `emailDraft`                          | 227 |
+ *       | …closed/sold, already withheld by rule 1                    | 132 |
+ *       | OPEN threads still offering a draft                         |  95 |
+ *       | …carrying `emailDraftAt`, i.e. rule 3 can protect them      |   2 |
+ *       | …UNSTAMPED, permanently immune to rule 3                    |  93 |
+ *
+ *     Rule 3 covers 2 of 95. The other 93 are pre-stamp residue that no surface could ever withhold
+ *     ("a class fix never heals the record it broke"), and the residue is not theoretical: EVERY
+ *     email-lane defect on record sits inside it — +17165104578 Jason (a 6/15 draft still inviting
+ *     him to see a unit we told him was gone twice, in delivered SMS, and which live inventory
+ *     confirms is sold), plus David, Bryan, Matthew, Haywood, Igor and Boyd from the 8/15 and 8/17
+ *     tables. Staff can still hit Send on all of them.
+ *
+ *     So rule 4 makes the one guess rule 3 refused to make, and bounds it by the only fact that
+ *     licenses it: an undated draft is trustworthy exactly as long as it is STILL THE UNSENT FIRST
+ *     TOUCH. We cannot know when it was composed, but we know it was composed to be our opening
+ *     line — so the moment a real outbound contact reaches the customer on any channel, the draft
+ *     is answering a thread that no longer exists, and nothing can tell us otherwise.
+ *
+ *     The "never contacted" test is deliberately NOT a new predicate: it is the same
+ *     `REAL_OUTBOUND_CONTACT_PROVIDERS` check `shouldSurfaceUnsentFirstTouch` uses to decide the
+ *     draft is still a first touch worth nagging a human to send. The two surfaces now agree by
+ *     construction — the drafts we keep offering are exactly the drafts we are still asking staff
+ *     to send. (An inbound-only thread with two ADF forms and no reply keeps its draft, which a
+ *     turn-count rule would have got wrong.)
+ *
+ *     BLAST RADIUS, measured before shipping: of the 93 undated open-thread drafts, **83 stop being
+ *     offered and 10 stay** (the never-contacted pool `shouldSurfaceUnsentFirstTouch` is already
+ *     chasing). This is the largest of the four rules and it is deliberately blunt — the fail
+ *     direction is what makes it safe. An empty Email tab costs a human two minutes of typing; the
+ *     drafts it withholds were measured at 7-of-10 wrong for their thread, 19 of them opening with
+ *     a verbatim `docs/voice_charter.md` kill-list line.
+ *
+ *     Nothing is rewritten or deleted, so a revert restores all 83 exactly as they are. Rule 4 is
+ *     self-retiring: a draft written by `stampEmailDraft` is dated, so it is answered by rule 3 and
+ *     never reaches here. Once the pre-stamp population drains, this rule stops firing on its own.
+ *
  * Related: the declined-side twin is `resolveFinanceOutcomeNotify`'s territory; draft GENERATION
  * reading `conv.financeOutcome` in either polarity is the upstream fix and is still open.
  */
-export type EmailDraftSuppressionReason = "thread_closed" | "finance_outcome_landed" | "thread_moved";
+export type EmailDraftSuppressionReason =
+  | "thread_closed"
+  | "finance_outcome_landed"
+  | "thread_moved"
+  | "undated_after_contact";
 
 /**
  * The ONLY way `emailDraft` is written. Body and time go together or the stamp is worth nothing —
@@ -9464,6 +9510,23 @@ export function emailDraftThreadMovedSinceComposed(conv: Conversation | null | u
   return false;
 }
 
+/**
+ * Rule 4's predicate: this draft carries no composed-time AND we have already contacted the lead.
+ *
+ * Both halves matter. A DATED draft is rule 3's business and must never fall through to here — that
+ * is what keeps rule 4 self-retiring. And "contacted" is `shouldSurfaceUnsentFirstTouch`'s exact
+ * test (`REAL_OUTBOUND_CONTACT_PROVIDERS`: a sent text/email or a placed call), not a turn count, so
+ * an unanswered inbound-only thread — two ADF forms and no reply — keeps the draft it is still
+ * waiting on.
+ */
+export function emailDraftUndatedAfterContact(conv: Conversation | null | undefined): boolean {
+  if (String(conv?.emailDraftAt ?? "").trim()) return false; // dated ⇒ rule 3 owns it
+  const messages = Array.isArray(conv?.messages) ? conv!.messages : [];
+  return messages.some(
+    m => m?.direction === "out" && REAL_OUTBOUND_CONTACT_PROVIDERS.has(String(m?.provider ?? ""))
+  );
+}
+
 const EMAIL_DRAFT_PENDING_FINANCE_CALLBACK =
   /\b(finance|business)\s+(team|manager|department)\b[^.!?]{0,80}\b(will|to)\s+(reach out|contact|call|be in touch|follow up)/i;
 
@@ -9491,6 +9554,9 @@ export function resolveEmailDraftForDisplay(conv: Conversation | null | undefine
   }
   if (emailDraftThreadMovedSinceComposed(conv)) {
     return { emailDraft: null, suppressedReason: "thread_moved" };
+  }
+  if (emailDraftUndatedAfterContact(conv)) {
+    return { emailDraft: null, suppressedReason: "undated_after_contact" };
   }
   return { emailDraft: conv.emailDraft ?? null, suppressedReason: null };
 }

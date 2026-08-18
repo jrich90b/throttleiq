@@ -17,8 +17,23 @@
  *   2. the display referee withholds with `thread_moved` once a real turn postdates the stamp;
  *   3. the three ways a row is NOT a turn — a pending `draft_ai` row, a stale one, an outbound
  *      stamped `delivered: false`;
- *   4. forward-only: an unstamped (pre-2026-08-18) draft is never withheld on a guess;
- *   5. rule precedence — a closed thread still reads `thread_closed`.
+ *   4. forward-only: rule 3 itself never withholds an unstamped draft on a guess;
+ *   5. rule precedence — a closed thread still reads `thread_closed`;
+ *   6. RULE 4 (added the same day, second pass) — the undated draft, and the line that bounds it.
+ *
+ * WHY RULE 4 EXISTS. Rule 3 shipped strictly forward-only, and measuring the live store hours later
+ * showed what that cost: of 95 OPEN threads still offering a draft, exactly **2** carried the stamp
+ * rule 3 needs. The other 93 were permanently immune, and every email-lane defect on record sits in
+ * that 93 — including +17165104578, a 6/15 draft still inviting the customer to come see a unit we
+ * had twice told him was gone. Rule 4 makes the guess rule 3 refused to make and bounds it by the
+ * only fact that licenses it: an undated draft is trustworthy exactly while it is STILL THE UNSENT
+ * FIRST TOUCH. Measured blast radius: 83 of the 93 stop being offered, 10 stay.
+ *
+ * The negative cases in section 7 carry the weight. "Contacted" is `shouldSurfaceUnsentFirstTouch`'s
+ * own `REAL_OUTBOUND_CONTACT_PROVIDERS` test rather than a turn count — a pending `draft_ai` row and
+ * a second inbound lead form are BOTH non-events, and a turn count would have withheld both. And a
+ * DATED draft must never reach rule 4, or every mid-thread draft would be withheld the instant it
+ * was composed.
  *
  * FIXTURE PROVENANCE. Every message shape below is copied from the live store rows of the three
  * leads that exposed this (+17164233848, +17163686137, +17166977040): the real timestamps, the real
@@ -35,6 +50,7 @@ import assert from "node:assert/strict";
 import {
   resolveEmailDraftForDisplay,
   emailDraftThreadMovedSinceComposed,
+  emailDraftUndatedAfterContact,
   stampEmailDraft
 } from "../services/api/src/domain/conversationStore.js";
 
@@ -192,12 +208,14 @@ check("a turn at the exact composed time does not withhold", () => {
   assert.equal(emailDraftThreadMovedSinceComposed(c), false);
 });
 
-// 5. Forward-only. A draft written before the stamp existed is left exactly as it was.
-check("a pre-stamp draft is never withheld on a guess", () => {
+// 5. Rule 3 stays strictly forward-only — it never guesses about an undated draft. What happens to
+//    that draft is rule 4's answer, pinned in section 7. Keeping the two predicates separate is
+//    what makes rule 4 self-retiring: a draft written through `stampEmailDraft` is dated, so it is
+//    answered by rule 3 and can never reach rule 4.
+check("rule 3 never guesses about a pre-stamp draft", () => {
   const c = conv([MATTHEW_ADF, MATTHEW_DELIVERED_LATER, MATTHEW_INBOUND_LATER]);
   assert.equal((c as any).emailDraftAt, undefined);
   assert.equal(emailDraftThreadMovedSinceComposed(c), false);
-  assert.equal(resolveEmailDraftForDisplay(c).suppressedReason, null);
 });
 
 check("an unparseable stamp reads as pre-stamp, not as stale", () => {
@@ -220,8 +238,75 @@ check("no draft at all is not a suppression", () => {
   assert.equal(resolveEmailDraftForDisplay(c).suppressedReason, null);
 });
 
+// 7. RULE 4 — the undated draft. Rule 3 protects 2 of the 95 open-thread drafts on the live store;
+//    these cases pin what happens to the other 93. The line is "is this still the unsent FIRST
+//    TOUCH?", tested exactly as `shouldSurfaceUnsentFirstTouch` tests it, so the drafts we keep
+//    offering are the drafts we are still asking a human to send.
+check("an undated draft on a thread we have already replied to is withheld", () => {
+  const c = conv([MATTHEW_ADF, MATTHEW_DELIVERED_LATER, MATTHEW_INBOUND_LATER]);
+  assert.equal((c as any).emailDraftAt, undefined);
+  assert.equal(emailDraftUndatedAfterContact(c), true);
+  const resolved = resolveEmailDraftForDisplay(c);
+  assert.equal(resolved.emailDraft, null);
+  assert.equal(resolved.suppressedReason, "undated_after_contact");
+});
+
+check("a placed CALL counts as contact — any channel, not just SMS", () => {
+  const call: Row = { ...MATTHEW_DELIVERED_LATER, id: "v1", provider: "voice_call" };
+  const c = conv([MATTHEW_ADF, call]);
+  assert.equal(emailDraftUndatedAfterContact(c), true);
+  assert.equal(resolveEmailDraftForDisplay(c).suppressedReason, "undated_after_contact");
+});
+
+check("an undated draft on a NEVER-contacted lead is still offered", () => {
+  const c = conv([MATTHEW_ADF, MATTHEW_INBOUND_LATER]);
+  assert.equal(emailDraftUndatedAfterContact(c), false);
+  const resolved = resolveEmailDraftForDisplay(c);
+  assert.equal(resolved.suppressedReason, null);
+  assert.ok(String(resolved.emailDraft ?? "").length > 0, "the unsent first touch must survive");
+});
+
+check("a second inbound lead form is not contact — a turn count would get this wrong", () => {
+  const secondAdf: Row = { ...MATTHEW_ADF, id: "m1b", at: "2026-08-15T15:26:00.000Z" };
+  const c = conv([MATTHEW_ADF, secondAdf]);
+  assert.equal(emailDraftUndatedAfterContact(c), false);
+  assert.equal(resolveEmailDraftForDisplay(c).suppressedReason, null);
+});
+
+check("a pending draft_ai outbound is not contact — nobody sent it", () => {
+  const c = conv([MATTHEW_ADF, DAVID_PENDING_DRAFT, MATTHEW_STALE_DRAFT]);
+  assert.equal(emailDraftUndatedAfterContact(c), false);
+  assert.equal(resolveEmailDraftForDisplay(c).suppressedReason, null);
+});
+
+// The self-retiring property, and the single most important negative: once a draft is DATED, rule 4
+// must never see it — otherwise every freshly composed mid-thread draft would be withheld the
+// instant it was written, on a thread that by definition has already been replied to.
+check("a DATED draft composed after we replied is still offered — rule 4 cannot reach it", () => {
+  const c = conv([MATTHEW_ADF, MATTHEW_DELIVERED_LATER, MATTHEW_INBOUND_LATER], {
+    emailDraftAt: "2026-08-17T20:00:00.000Z"
+  });
+  assert.equal(emailDraftUndatedAfterContact(c), false);
+  assert.equal(resolveEmailDraftForDisplay(c).suppressedReason, null);
+});
+
+check("a freshly stamped draft on a contacted thread is offered", () => {
+  const c = conv([MATTHEW_ADF, MATTHEW_DELIVERED_LATER]);
+  stampEmailDraft(c, "Hi Matthew — the seal kit ships 8/21.");
+  assert.equal(emailDraftUndatedAfterContact(c), false);
+  assert.equal(resolveEmailDraftForDisplay(c).suppressedReason, null);
+});
+
+check("precedence: a closed contacted thread still reads thread_closed", () => {
+  const c = conv([MATTHEW_ADF, MATTHEW_DELIVERED_LATER], {
+    status: "closed",
+    closedAt: "2026-08-17T20:00:00.000Z"
+  });
+  assert.equal(resolveEmailDraftForDisplay(c).suppressedReason, "thread_closed");
+});
+
 if (failures) {
   console.error(`email_draft_thread_moved:eval FAILED (${failures} case(s))`);
   process.exit(1);
 }
-console.log("email_draft_thread_moved:eval OK (13 case(s))");
+console.log("email_draft_thread_moved:eval OK (21 case(s))");
