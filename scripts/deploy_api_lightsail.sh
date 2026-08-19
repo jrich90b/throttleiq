@@ -22,7 +22,8 @@ Common options:
   --allow-dirty-remote        Allow deploying over a dirty remote worktree.
   --replace-pm2               Replace the PM2 process so it runs from this repo path.
   --skip-local-checks         Skip local API typecheck before SSH deploy.
-  --backup-retention-count N  Keep only the newest N runtime backups after backup. Default: 12.
+  --backup-retention-days N   Keep ONE runtime backup per calendar day for N days. Default: 730
+                              (Joe's ruling 2026-08-19: two years of history, one snapshot a day).
   --health-attempts N         Number of post-restart health attempts. Default: 15.
   --dry-run                   Check local/remote readiness without changing server.
 
@@ -30,7 +31,7 @@ Environment variable equivalents:
   DEPLOY_HOST, DEPLOY_REPO, DEPLOY_BRANCH, DEPLOY_DATA_DIR,
   DEPLOY_REPO_URL, DEPLOY_ENV_FILE, DEPLOY_PM2_PROCESS, DEPLOY_HEALTH_URL,
   DEPLOY_API_PORT, DEPLOY_ALLOW_DIRTY_REMOTE, DEPLOY_REPLACE_PM2,
-  DEPLOY_SKIP_LOCAL_CHECKS, DEPLOY_BACKUP_RETENTION_COUNT, DEPLOY_HEALTH_ATTEMPTS,
+  DEPLOY_SKIP_LOCAL_CHECKS, DEPLOY_BACKUP_RETENTION_DAYS, DEPLOY_BACKUP_EXTRA_ROOTS, DEPLOY_HEALTH_ATTEMPTS,
   DEPLOY_EXPECTED_DATA_DIR, DEPLOY_MIN_CONVERSATIONS, DEPLOY_REQUIRED_CONVERSATION_TEXT,
   DEPLOY_DRY_RUN
 USAGE
@@ -93,8 +94,8 @@ while [[ $# -gt 0 ]]; do
       DEPLOY_SKIP_LOCAL_CHECKS=1
       shift
       ;;
-    --backup-retention-count)
-      DEPLOY_BACKUP_RETENTION_COUNT="${2:-}"
+    --backup-retention-days)
+      DEPLOY_BACKUP_RETENTION_DAYS="${2:-}"
       shift 2
       ;;
     --health-attempts)
@@ -140,7 +141,8 @@ DEPLOY_HEALTH_URL="${DEPLOY_HEALTH_URL:-https://api.leadrider.ai/health}"
 DEPLOY_ALLOW_DIRTY_REMOTE="${DEPLOY_ALLOW_DIRTY_REMOTE:-0}"
 DEPLOY_REPLACE_PM2="${DEPLOY_REPLACE_PM2:-0}"
 DEPLOY_SKIP_LOCAL_CHECKS="${DEPLOY_SKIP_LOCAL_CHECKS:-0}"
-DEPLOY_BACKUP_RETENTION_COUNT="${DEPLOY_BACKUP_RETENTION_COUNT:-12}"
+DEPLOY_BACKUP_RETENTION_DAYS="${DEPLOY_BACKUP_RETENTION_DAYS:-730}"
+DEPLOY_BACKUP_EXTRA_ROOTS="${DEPLOY_BACKUP_EXTRA_ROOTS:-}"
 DEPLOY_HEALTH_ATTEMPTS="${DEPLOY_HEALTH_ATTEMPTS:-15}"
 DEPLOY_EXPECTED_DATA_DIR="${DEPLOY_EXPECTED_DATA_DIR:-}"
 DEPLOY_MIN_CONVERSATIONS="${DEPLOY_MIN_CONVERSATIONS:-}"
@@ -221,7 +223,7 @@ fi
 echo "  health:     $DEPLOY_HEALTH_URL"
 echo "  attempts:   $DEPLOY_HEALTH_ATTEMPTS"
 echo "  replace pm2:$DEPLOY_REPLACE_PM2"
-echo "  backups:    keep newest $DEPLOY_BACKUP_RETENTION_COUNT"
+echo "  backups:    one per day for $DEPLOY_BACKUP_RETENTION_DAYS days"
 if [[ -n "$DEPLOY_EXPECTED_DATA_DIR" ]]; then
   echo "  expect dir: $DEPLOY_EXPECTED_DATA_DIR"
 fi
@@ -279,7 +281,8 @@ remote_env=(
   "DEPLOY_HEALTH_ATTEMPTS=$(shell_quote "$DEPLOY_HEALTH_ATTEMPTS")"
   "DEPLOY_ALLOW_DIRTY_REMOTE=$(shell_quote "$DEPLOY_ALLOW_DIRTY_REMOTE")"
   "DEPLOY_REPLACE_PM2=$(shell_quote "$DEPLOY_REPLACE_PM2")"
-  "DEPLOY_BACKUP_RETENTION_COUNT=$(shell_quote "$DEPLOY_BACKUP_RETENTION_COUNT")"
+  "DEPLOY_BACKUP_RETENTION_DAYS=$(shell_quote "$DEPLOY_BACKUP_RETENTION_DAYS")"
+  "DEPLOY_BACKUP_EXTRA_ROOTS=$(shell_quote "$DEPLOY_BACKUP_EXTRA_ROOTS")"
   "DEPLOY_EXPECTED_DATA_DIR=$(shell_quote "$DEPLOY_EXPECTED_DATA_DIR")"
   "DEPLOY_MIN_CONVERSATIONS=$(shell_quote "$DEPLOY_MIN_CONVERSATIONS")"
   "DEPLOY_REQUIRED_CONVERSATION_TEXT=$(shell_quote "$DEPLOY_REQUIRED_CONVERSATION_TEXT")"
@@ -448,19 +451,86 @@ else
   echo "Runtime data dir does not exist yet: $DEPLOY_DATA_DIR"
 fi
 
-if [[ "$DEPLOY_BACKUP_RETENTION_COUNT" =~ ^[0-9]+$ && "$DEPLOY_BACKUP_RETENTION_COUNT" -gt 0 ]]; then
-  echo "Pruning runtime backups; keeping newest $DEPLOY_BACKUP_RETENTION_COUNT in $backup_root"
-  mapfile -t backups_to_delete < <(
-    find "$backup_root" -maxdepth 1 -type f -name 'data-*.tgz' -printf '%T@ %p\n' \
-      | sort -nr \
-      | tail -n "+$((DEPLOY_BACKUP_RETENTION_COUNT + 1))" \
-      | cut -d' ' -f2-
-  )
-  for old_backup in "${backups_to_delete[@]}"; do
-    [[ -n "$old_backup" ]] || continue
-    rm -f "$old_backup"
-  done
-  echo "Pruned ${#backups_to_delete[@]} old runtime backup(s)."
+# ── Backup retention: ONE SNAPSHOT PER CALENDAR DAY, kept for DEPLOY_BACKUP_RETENTION_DAYS ──────
+#
+# JOE'S RULING, 2026-08-19: "2 years" of backup history. The obvious implementation — delete
+# anything older than 2 years — frees ZERO bytes, because nothing on the box is that old. Measured
+# the same day: all six americanharley tarballs were from that single afternoon, ~1.73 GB each.
+#
+# The waste is SAME-DAY DUPLICATES. This script snapshots before every deploy and the API deploys
+# 8-17x/day, so a keep-newest-N rule (N was 12) holds less than one day of history in ~20 GB and
+# throws away every earlier day. Both halves are backwards: too many copies of today, none of last
+# week. One-per-day-for-2-years keeps a restore point for EVERY day ever backed up — strictly more
+# history than the age rule alone — and freed ~9.9 GB when the policy was written.
+#
+# Why it matters beyond tidiness: a full disk fails the deploy, and a deploy that dies inside the
+# 08:50-08:55Z cron window kills the overnight detector sweeps, whose only symptom is a stale report
+# that reads exactly like a quiet store.
+#
+# FAIL DIRECTION IS KEEP. The day comes from the FILENAME (data-YYYYMMDDTHHMMSSZ.tgz), never mtime,
+# so a touched file cannot change which day it belongs to; a name that does not parse is KEPT; the
+# newest snapshot of each day is KEPT (it is the state closest to the deploy that followed it); and
+# the backup this run just wrote is never a deletion candidate.
+prune_backup_root() {
+  local root="$1"
+  [[ -d "$root" ]] || { echo "  (no backup root at $root - nothing to prune)"; return 0; }
+
+  # The cutoff as a YYYYMMDD stamp, so the comparison is plain string arithmetic on the filename's
+  # own day. GNU date first, BSD second - this function must run identically on the Linux box and
+  # in the eval on a Mac, or the eval proves nothing (SKILL trap 3).
+  local cutoff_day
+  cutoff_day="$(date -u -d "-${DEPLOY_BACKUP_RETENTION_DAYS} days" +%Y%m%d 2>/dev/null \
+    || date -u -v-"${DEPLOY_BACKUP_RETENTION_DAYS}"d +%Y%m%d 2>/dev/null || echo "")"
+  if [[ -z "$cutoff_day" ]]; then
+    echo "  WARN: could not compute a retention cutoff - keeping everything in $root." >&2
+    return 0
+  fi
+
+  # Names sort chronologically, so the LAST name of each day is that day's newest snapshot.
+  # awk's associative array keeps this working on bash 3.2 (macOS) as well as 5.x (the box).
+  local keepers
+  keepers="$(find "$root" -maxdepth 1 -type f -name 'data-*.tgz' -exec basename {} \; \
+    | grep -E '^data-[0-9]{8}T[0-9]{6}Z\.tgz$' \
+    | sort \
+    | awk '{ last[substr($0, 6, 8)] = $0 } END { for (d in last) print last[d] }' \
+    | sort)"
+
+  local deleted=0 kept=0 file base day
+  while IFS= read -r file; do
+    [[ -n "$file" ]] || continue
+    base="$(basename "$file")"
+    # An unparseable name is history we cannot reason about - KEEP it.
+    grep -qE '^data-[0-9]{8}T[0-9]{6}Z\.tgz$' <<< "$base" || continue
+    [[ "$file" == "${backup_path:-}" ]] && continue          # never the snapshot we just wrote
+    day="${base:5:8}"
+    if ! grep -qxF "$base" <<< "$keepers"; then
+      rm -f "$file"; deleted=$((deleted + 1))                # a same-day duplicate
+      continue
+    fi
+    if [[ "$day" < "$cutoff_day" ]]; then
+      rm -f "$file"; deleted=$((deleted + 1))                # past the retention horizon
+      continue
+    fi
+    kept=$((kept + 1))
+  done < <(find "$root" -maxdepth 1 -type f -name 'data-*.tgz')
+
+  echo "  $root: kept $kept daily snapshot(s), pruned $deleted."
+}
+
+if [[ "$DEPLOY_BACKUP_RETENTION_DAYS" =~ ^[0-9]+$ && "$DEPLOY_BACKUP_RETENTION_DAYS" -gt 0 ]]; then
+  echo "Pruning runtime backups; keeping ONE per day for $DEPLOY_BACKUP_RETENTION_DAYS days"
+  prune_backup_root "$backup_root"
+  # The base lane (throttleiq-runtime/backups) is never deployed to, so nothing else would ever
+  # prune it — three of its seven tarballs were 23 May and three more 4 June. Joe's ruling covers
+  # BOTH roots. Colon-separated; empty by default so a plain run touches only its own root.
+  # NOTE the decoy: <dataDir>/backups is a DIFFERENT, harmless directory — do not add it here.
+  if [[ -n "${DEPLOY_BACKUP_EXTRA_ROOTS:-}" ]]; then
+    while IFS= read -r extra_root; do
+      [[ -n "$extra_root" ]] || continue
+      [[ "$extra_root" == "$backup_root" ]] && continue
+      prune_backup_root "$extra_root"
+    done < <(tr ':' '\n' <<< "$DEPLOY_BACKUP_EXTRA_ROOTS")
+  fi
 fi
 
 echo "Updating code with fast-forward pull..."
