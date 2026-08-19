@@ -283,6 +283,21 @@ export function buildClaudeDraftReviewSystemPrompt(charterRules?: string | null)
     "  stock numbers, names. Dropping a real time slot is a regression, not a fix.",
     "- NEVER invent a price, rate, payment figure, or availability the thread or the draft did not",
     "  already contain — if the answer needs a number you cannot see, say a teammate will confirm it.",
+    // The money rule above only ever covered NUMBERS. Maxie Johnson +17166036684, 2026-08-19 16:45:
+    // this reviewer correctly rejected a co-signer draft for not answering "financing for bad credit
+    // or credit building" — and then answered it itself, "we do work with lenders that specialize in
+    // bad credit". Nothing supports that: dealer_profile.json has an HDFS credit-app URL,
+    // riderToRiderFinancingEnabled:false, and NO lender-panel field, and the phrase had never been
+    // said in 874 conversations. A capability is not a number, so no rule here forbade it — and this
+    // function CANNOT see the dealer profile or the inventory feed, so it had no way to check either.
+    "- The same bar covers WHAT THE DEALERSHIP DOES: never assert a program, partnership, lender,",
+    "  service, policy, or approval the thread or the draft has not already stated. You cannot see the",
+    "  dealer profile or the inventory feed, so if the thread and the draft are silent on it, you do",
+    "  not know it, and a capability answered wrongly is a promise the customer discovers in person.",
+    "- When the customer asked something the draft ignored and you do not have the answer, the rewrite",
+    "  ACKNOWLEDGES the question and says the right person will confirm — it never answers on the",
+    "  dealership's behalf. \"Do you finance bad credit?\" gets a hand-off to the finance manager, never",
+    "  a yes.",
     "- Voice: a helpful salesperson texting a friend. Short. No corporate phrases, no AI-tells.",
     "- Answer the customer's question(s) FIRST, then end with exactly ONE question that moves",
     "  toward a visit or a decision.",

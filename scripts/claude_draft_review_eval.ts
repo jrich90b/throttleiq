@@ -161,6 +161,45 @@ for (const [label, c] of NO_REVIEW) {
   assert.ok(prompt.includes("NEVER drop a concrete fact"), "the 41-deleted-times lesson is a hard rule");
   assert.ok(prompt.includes("Dropping a real time slot is a regression, not a fix"), "times are named explicitly");
   assert.ok(prompt.includes("NEVER invent a price, rate, payment figure"), "no invented money figures");
+  // --- the CAPABILITY bar (Maxie Johnson +17166036684, 2026-08-19 16:45) --------------------
+  // The money rule above only ever covered NUMBERS. This reviewer rejected a co-signer draft for
+  // not answering "financing for bad credit or credit building", then answered it itself: "we do
+  // work with lenders that specialize in bad credit". A capability is not a number, so nothing
+  // forbade it — and reviewDraftWithClaude cannot see dealer_profile.json or the inventory feed,
+  // so it had no way to check. On the money path the failure mode is a promise the customer
+  // discovers in person after being declined.
+  //
+  // MEASURED on the real turn before shipping, 5 runs each at temperature 0:
+  //   current prompt ....... 5/5 asserted a dealership credit capability
+  //                          ("our finance team works with all kinds of credit situations")
+  //   with these two rules . 0/5 — every run routed to the finance manager without
+  //                          characterising what the dealership can do
+  // That matches the reply Joe wrote by hand on the same thread at 16:54.
+  //
+  // ⚠️ The FIRST detector used to measure this scored the baseline 0/5, because it demanded the
+  // words "lender"/"bad credit"/"program" — the one phrasing seen once. Every baseline run was in
+  // fact making the same claim in softer words. Pinning the bug's TEXT instead of its CLASS is the
+  // recurring trap; if you re-measure, detect the claim, not the sentence.
+  assert.ok(
+    prompt.includes("The same bar covers WHAT THE DEALERSHIP DOES"),
+    "the no-invented-capability rule must stay — a program/lender/policy is not a number"
+  );
+  assert.ok(
+    prompt.includes("never assert a program, partnership, lender"),
+    "the rule must name what may not be asserted, not gesture at it"
+  );
+  assert.ok(
+    prompt.includes("You cannot see the") && prompt.includes("dealer profile or the inventory feed"),
+    "the reviewer must be told WHY it cannot know — it has neither source in context"
+  );
+  assert.ok(
+    /ACKNOWLEDGES the question and says the right person will confirm/.test(prompt),
+    "the prescribed repair is a hand-off; a reviewer may name a gap it cannot fill, never fill it"
+  );
+  assert.ok(
+    prompt.includes("gets a hand-off to the finance manager, never"),
+    "the bad-credit case is named outright — it is the production turn this rule exists for"
+  );
   assert.ok(prompt.includes("When unsure: verdict \"ok\""), "uncertainty keeps the pipeline's draft");
   assert.ok(prompt.includes("check EVERY question in their last message"), "multi-intent coverage is part of clearly-wrong");
   assert.ok(prompt.includes("Reply STOP to opt out"), "the compliance footer is preserved on rewrite");
