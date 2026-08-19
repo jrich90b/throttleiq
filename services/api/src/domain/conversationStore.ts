@@ -502,11 +502,29 @@ export function inferTodoTaskClass(
     /\b(today|tomorrow|tonight|this\s+(?:morning|afternoon|evening)|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?|\d{1,2}:\d{2}\s*(?:am|pm)?|\d{1,2}\s*(?:am|pm))\b/.test(
       text
     );
+  // OUR OWN generated intent label decides the class — never whether the customer's requested
+  // phrase happened to carry a day/am-pm token. The reschedule label was already exempted from
+  // needing a time signal; the plain "Appointment requested." label was simply forgotten, so
+  // 30 of 79 appointment-request todos in the live store classed as generic `todo` (measured
+  // 2026-08-19). That mis-class is load-bearing TWICE over: `isAutoCloseEligibleTask` exempts
+  // taskClass === "appointment" from the fulfillment judge (appointment tasks close via the
+  // OUTCOME flow), and decideManualConfirmPendingAppointment only looks up open todos with
+  // taskClass === "appointment". Paul Harrigan (+17169467451, operator-reported "This did not
+  // seem to book an appointment at 11 today"): "Appointment requested. Requested: 11 o'clock."
+  // classed `todo`, so the fulfillment judge closed it 27s BEFORE the rep typed "Ya 11 will
+  // work, see you then" — citing the rep's own EARLIER "what time are you thinking?" as the
+  // fulfilment. Anchored at ^ so it can only ever match a label WE composed, never customer text.
+  // Fail direction measured, not assumed: this newly exposes 4 historical turns to the booking
+  // referee, and parseRequestedDayTime already returns null for 3 of them ("15th or 16th",
+  // "around 4", "in about 45 minutes") — so the ambiguous ones still resolve to NO booking.
+  const hasOwnAppointmentRequestLabel =
+    /^appointment requested\b/i.test(summaryRaw.trim()) ||
+    /\b(?:appointment\s+)?reschedule requested\b/i.test(summaryRaw);
   const hasAppointmentSignals =
     !hasDepartmentSignals &&
     reason !== "note" &&
     hasAppointmentLanguage &&
-    (hasAppointmentTimeSignal || /\b(?:appointment\s+)?reschedule requested\b/i.test(summaryRaw));
+    (hasAppointmentTimeSignal || hasOwnAppointmentRequestLabel);
   if (reason === "call") {
     const hasCadenceFollowUpSignals =
       /^call customer \(follow-up\):/i.test(summaryRaw) ||

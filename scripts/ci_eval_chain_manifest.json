@@ -419,6 +419,7 @@
     "confirm_booking_decision:eval",
     "staff_availability_answer:eval",
     "manual_confirm_pending_appointment:eval",
+    "appointment_request_task_class:eval",
     "resume_followup_cadence:eval",
     "cadence_hold_ttl:eval",
     "conversation_outcome_audit:eval",
