@@ -31,11 +31,20 @@ const daysAgo = (n: number) => new Date(NOW - n * 24 * 60 * 60 * 1000).toISOStri
 const lead = (
   source: string,
   ageDays: number,
-  opts: { asks?: boolean; replied?: boolean; booked?: boolean; unreachable?: boolean } = {}
+  opts: {
+    asks?: boolean;
+    replied?: boolean;
+    booked?: boolean;
+    unreachable?: boolean;
+    /** Walk-in ladder step, as the route stores it. Omitted = the step-less shape (see LADDER_ASK_BANDS). */
+    walkInStep?: number;
+  } = {}
 ) => ({
   id: `c_${source}_${ageDays}_${Math.random()}`,
   createdAt: daysAgo(ageDays),
-  lead: opts.unreachable ? { source } : { source, phone: "+17165550101" },
+  lead: opts.unreachable
+    ? { source, walkInStep: opts.walkInStep }
+    : { source, phone: "+17165550101", walkInStep: opts.walkInStep },
   appointment: opts.booked ? { status: "confirmed", whenIso: daysAgo(-3) } : undefined,
   messages: [
     { direction: "out", at: daysAgo(ageDays), body: opts.asks ? "Thanks — want to stop in and check it out?" : "Thanks, I'll be in touch." },
@@ -266,14 +275,18 @@ async function main(): Promise<void> {
     );
   }
   // Not just the declaration: the lane genuinely reaches an alarm on the never-asks shape.
-  const walkInFamily = Array.from({ length: 12 }, (_, i) => lead("Traffic Log Pro", 3 + i * 2, { asks: false }));
+  const walkInFamily = Array.from({ length: 12 }, (_, i) =>
+    lead("Traffic Log Pro", 3 + i * 2, { asks: false, walkInStep: 2 })
+  );
   const familyLane = assessLadderHealth({ conversations: walkInFamily, now: NOW }).lanes.find(
     l => l.source === "Traffic Log Pro"
   )!;
   assert.equal(familyLane.alarm, "never_asks", "a walk-in lane nobody asks anything must surface as a build candidate");
   // FAIL DIRECTION: the ladder clears the alarm, never the suppression list. A walk-in lane that DOES
   // ask is silent, so the only way to quiet this row is to actually start asking.
-  const walkInAsking = Array.from({ length: 12 }, (_, i) => lead("Traffic Log Pro", 3 + i * 2, { asks: true }));
+  const walkInAsking = Array.from({ length: 12 }, (_, i) =>
+    lead("Traffic Log Pro", 3 + i * 2, { asks: true, walkInStep: 2 })
+  );
   assert.equal(
     assessLadderHealth({ conversations: walkInAsking, now: NOW }).alarms.length,
     0,
@@ -477,10 +490,13 @@ async function main(): Promise<void> {
   const FIX_AT = Date.parse(tlpBoundary!.shippedAt);
   const DAY = 24 * 60 * 60 * 1000;
   const SHIPPED_NOW = FIX_AT + 10 * DAY; // inside the 30d recent window, comfortably after the fix
-  const leadAt = (source: string, atMs: number, opts: { asks?: boolean } = {}) => ({
+  const leadAt = (source: string, atMs: number, opts: { asks?: boolean; walkInStep?: number } = {}) => ({
     id: `c_${source}_${atMs}_${Math.random()}`,
     createdAt: new Date(atMs).toISOString(),
-    lead: { source, phone: "+17165550101" },
+    // Default IN BAND (step 2). A fixture with no step is the `no_step_recorded` shape and is tested
+    // explicitly below — it must never be the accidental default, or these guards stop testing the
+    // branch they name.
+    lead: { source, phone: "+17165550101", walkInStep: opts.walkInStep ?? 2 },
     messages: [
       {
         direction: "out",
@@ -529,6 +545,97 @@ async function main(): Promise<void> {
     .lanes.find(l => l.source === "Traffic Log Pro")!;
   assert.equal(beforeFix.alarm, "never_asks", "a report generated before the fix shipped is untouched");
   assert.ok(beforeFix.why.includes("may have no ladder"), "…with the wording it had at the time");
+
+  // --- (8) THE ASK BAND: an INERT claim needs a denominator the ask could have reached ----------
+  // MEASURED 2026-08-19: the lane printed "the shipped ladder looks INERT" on a denominator of ONE,
+  // and executing appendWalkInFirstTouchAsk against that lead showed the ask was never in play — the
+  // lead arrived as a phone log with no `(Step N)`, so the route passed step 0 and the ask returned
+  // the reply untouched at its `step < 1` guard. These pin the split; (7d) above still pins the loud
+  // case, which is what must survive.
+  const { classifyLadderAskEligibility, laneAskBand, LADDER_ASK_BANDS } = await import(
+    "../services/api/src/domain/ladderHealth.ts"
+  );
+  const stepless = (atMs: number, opts: { asks?: boolean } = {}) => {
+    const c = leadAt("Traffic Log Pro", atMs, opts);
+    (c.lead as any).walkInStep = undefined;
+    return c;
+  };
+
+  // (8a) The classifier reads OUR OWN stored step, and an undeclared lane is always eligible.
+  const band = laneAskBand("Traffic Log Pro")!;
+  assert.ok(band && band.min === 1 && band.max === 4, "the declared band is the shipped 1-4 first-touch band");
+  assert.equal(classifyLadderAskEligibility({ lead: { walkInStep: 2 } }, band), "eligible");
+  assert.equal(classifyLadderAskEligibility({ lead: { walkInStep: 9 } }, band), "out_of_band", "step 9 is post-sale");
+  assert.equal(classifyLadderAskEligibility({ lead: {} }, band), "no_step_recorded", "a phone log carries no step");
+  assert.equal(
+    classifyLadderAskEligibility({ lead: {} }, null),
+    "eligible",
+    "FAIL DIRECTION: no band declared ⇒ every touch stays eligible, i.e. exactly today's reading"
+  );
+  assert.equal(laneAskBand("Lane Undeclared"), null, "and an undeclared lane has no band at all");
+  assert.ok(
+    LADDER_ASK_BANDS.every((b: { stepField: string }) => b.stepField === "walkInStep"),
+    "every band names the conversation field the route actually writes"
+  );
+
+  // (8b) POST-FIX TOUCHES THE ASK COULD NOT REACH ARE NOT EVIDENCE. Three post-fix leads — one step 9,
+  //      two step-less — must NOT read as an inert ladder.
+  const postFixIneligible = [
+    ...preFixOnly,
+    leadAt("Traffic Log Pro", FIX_AT + DAY, { walkInStep: 9 }),
+    stepless(FIX_AT + 2 * DAY),
+    stepless(FIX_AT + 3 * DAY)
+  ];
+  const notEvidence = assessLadderHealth({ conversations: postFixIneligible, now: SHIPPED_NOW })
+    .lanes.find(l => l.source === "Traffic Log Pro")!;
+  assert.equal(notEvidence.alarm, "ladder_shipped_unexercised", "touches outside the ask are not evidence about the ask");
+  assert.equal(notEvidence.recent.agentFirstTouchesSinceFix, 3, "…the raw post-fix count is still reported");
+  assert.equal(notEvidence.recent.askEligibleSinceFix, 0, "…but NONE of them was ask-eligible");
+  assert.equal(notEvidence.recent.askOutOfBandSinceFix, 1, "…one out of band");
+  assert.equal(notEvidence.recent.askNoStepSinceFix, 2, "…two with no step recorded");
+  assert.ok(!notEvidence.why.includes("INERT"), "…so the row must NOT accuse the shipped copy of being inert");
+  assert.ok(
+    notEvidence.why.includes("no step recorded"),
+    "…and it must say WHY the evidence does not count, or the next run re-derives it"
+  );
+
+  // (8c) THE LOUD CASE SURVIVES: ONE in-band post-fix touch that asks nothing still reads INERT.
+  //      This is the assertion that proves this change sharpened the count without erasing a finding.
+  const oneInBand = [...postFixIneligible, leadAt("Traffic Log Pro", FIX_AT + 4 * DAY, { walkInStep: 3 })];
+  const stillInert = assessLadderHealth({ conversations: oneInBand, now: SHIPPED_NOW })
+    .lanes.find(l => l.source === "Traffic Log Pro")!;
+  assert.equal(stillInert.alarm, "never_asks", "one in-band silent touch is enough to call the ladder inert again");
+  assert.equal(stillInert.recent.askEligibleSinceFix, 1, "…on the eligible denominator, not the raw one");
+  assert.ok(stillInert.why.includes("INERT"), "…and the loud wording is back");
+
+  // (8d) THE HOLE THE SPLIT WOULD OTHERWISE HIDE. A window where EVERY lead is step-less is not a
+  //      missing ladder and not an inert one — the shipped ask cannot fire for anyone. Measured on the
+  //      live store: 14 of 36 Traffic Log Pro leads in 90 days carry no step at all.
+  const allStepless = Array.from({ length: 10 }, (_, i) => stepless(FIX_AT - (5 + i) * 0.1 * DAY));
+  const askUnreachable = assessLadderHealth({ conversations: allStepless, now: SHIPPED_NOW })
+    .lanes.find(l => l.source === "Traffic Log Pro")!;
+  assert.equal(askUnreachable.alarm, "ladder_ask_unreachable", "a lane where nothing is ask-eligible gets its own class");
+  assert.equal(askUnreachable.recent.bandedLeadsWithNoStep, 10, "…and the step-less population is counted");
+  assert.ok(
+    askUnreachable.why.includes("UNREACHABLE") && askUnreachable.why.includes("decision"),
+    "…and the row asks for a decision about the step-less population, not new copy"
+  );
+  assert.ok(
+    !askUnreachable.why.includes("may have no ladder"),
+    "…and must not send the next run to write a ladder that already exists"
+  );
+  // (8e) ⚠️ THE PRE-FIX GUARD, and this eval caught the bug it pins. A window that ENDED BEFORE the
+  //      ask shipped must NOT be told its ask is unreachable — that is a claim about copy that did not
+  //      exist yet. The live 23-lead Traffic Log Pro fixture at (5) is exactly this shape (every lead
+  //      step-less, no fix yet) and it must keep reading `never_asks`, the diagnosis that was true then.
+  const steplessBeforeFix = assessLadderHealth({ conversations: allStepless, now: FIX_AT - DAY })
+    .lanes.find(l => l.source === "Traffic Log Pro")!;
+  assert.equal(
+    steplessBeforeFix.alarm,
+    "never_asks",
+    "before the ask shipped, a step-less lane is still a build candidate — never 'unreachable'"
+  );
+  assert.ok(steplessBeforeFix.why.includes("may have no ladder"), "…with exactly the wording it had at the time");
 
   // (7f) FAIL DIRECTION: an UNDECLARED lane is completely unchanged by any of this.
   const undeclared = assessLadderHealth({

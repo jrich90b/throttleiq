@@ -30,6 +30,9 @@
  *   `staff_owned_first_touch` — a salesperson gets the first word on most of this lane. Our copy is
  *                          not what these customers read, so writing more of it cannot move the
  *                          number. Added 2026-08-12; see "WHOSE FIRST TOUCH" below.
+ *   `ladder_ask_unreachable` — the copy EXISTS and shipped, but every lead in the window arrived
+ *                          without the step it bands on, so it could not fire for anyone. Neither a
+ *                          missing ladder nor an inert one. Added 2026-08-19; see LADDER_ASK_BANDS.
  *
  * ## WHOSE FIRST TOUCH, AND WAS IT EVER SENT (2026-08-12)
  *
@@ -112,6 +115,21 @@ export type LadderWindowCounts = {
    */
   agentFirstTouchesSinceFix: number;
   /**
+   * Of `agentFirstTouchesSinceFix`, the ones the shipped ask COULD have applied to — the lead sits
+   * inside the band the fix declares. This, not the raw count, is what makes an INERT claim sayable.
+   * See `LADDER_ASK_BANDS` for the measurement that forced the split.
+   */
+  askEligibleSinceFix: number;
+  /** Post-fix touches outside the declared band (e.g. Traffic Log Pro step 9 = post-sale). */
+  askOutOfBandSinceFix: number;
+  /** Post-fix touches whose lead carries NO step at all, so the band test can never pass. */
+  askNoStepSinceFix: number;
+  /**
+   * Recent leads on a banded lane carrying no step at all — the structural hole `askNoStepSinceFix`
+   * only sees one turn of. Reported on every banded lane, alarm or not.
+   */
+  bandedLeadsWithNoStep: number;
+  /**
    * Leads that never received a customer-facing message at all. NOT a ladder failure: a rung that was
    * never sent cannot ask anything, and the fix is upstream of the wording.
    */
@@ -132,6 +150,7 @@ export type LadderLaneHealth = {
     | "ask_rate_collapsed"
     | "never_asks"
     | "ladder_shipped_unexercised"
+    | "ladder_ask_unreachable"
     | "uncontactable"
     | "staff_owned_first_touch"
     | "relay_task_missing"
@@ -288,6 +307,84 @@ export function laneFixBoundary(source: string): { shippedAt: string; what: stri
 }
 
 /**
+ * THE BAND THE SHIPPED ASK ACTUALLY APPLIES TO — the denominator an INERT claim needs.
+ *
+ * ── WHAT WENT WRONG, MEASURED 2026-08-19 ──────────────────────────────────────────────────────
+ * The boundary above split "no post-fix traffic" from "post-fix traffic and still silent", and the
+ * second half printed *"the shipped ladder looks INERT"*. On Traffic Log Pro it printed exactly that
+ * on a denominator of ONE — and executing the fix's own path against that one lead showed the ask was
+ * never in play: Zack Busch (+17162489119, 2026-08-19) arrived as a PHONE LOG carrying no `(Step N)`,
+ * so `extractTrafficLogProStep` returned null, the route passed `step: trafficLogProStep ?? 0`, and
+ * `appendWalkInFirstTouchAsk` returned the reply untouched at its `step < 1` guard. A turn the ask
+ * could not have changed is not evidence about the ask. Same shape as the 9x-overstated latency count:
+ * ask what ELSE lands in the number before reading it as a defect.
+ *
+ * ── AND THE HOLE IT WAS HIDING, WHICH IS THE REAL FINDING ─────────────────────────────────────
+ * Measured across all 36 Traffic Log Pro leads in 90 days: **14 carry no step at all** (39%) — phone
+ * logs and free-text notes — 11 sit in the 1-4 ask band and 11 at step 5-9. For those 14 the shipped
+ * ask is not suppressed by policy, it is UNREACHABLE by construction. That is a genuine gap and it
+ * needs a decision, not a wording change: the ask copy is `buildWalkInSoftTimingAsk(true, …)` —
+ * "stop BACK in" — and a phone-log lead may never have been in the building. So this file REPORTS the
+ * hole (`bandedLeadsWithNoStep`, and `ladder_ask_unreachable` when it swallows the whole window)
+ * rather than quietly excusing it. Silencing it would be the #663 mistake again.
+ *
+ * ── FAIL DIRECTION ────────────────────────────────────────────────────────────────────────────
+ * Safe. A lane with NO band declared behaves exactly as it does today (everything post-fix counts as
+ * eligible). A band can only ever move a lane from the loud `never_asks` INERT text to the quieter
+ * `ladder_shipped_unexercised` one, and only when literally zero post-fix touches were in band — a
+ * window in which no claim about the copy was possible anyway. One in-band post-fix touch that asks
+ * nothing still alarms INERT, which is the case worth being loud about.
+ *
+ * ⚠️ An entry here is a claim about WHERE THE SHIPPED CODE READS ITS STEP. `stepField` names the
+ * conversation field the route stores (`conv.lead.walkInStep`, written by the walk-in branch of
+ * sendgridInbound). Re-check it against the route before adding a lane; a band pointed at a field
+ * nobody writes would read every touch as ineligible and silence the lane for good.
+ */
+export const LADDER_ASK_BANDS: {
+  pattern: RegExp;
+  min: number;
+  max: number;
+  stepField: "walkInStep";
+  what: string;
+}[] = [
+  {
+    pattern: /^traffic log pro/i,
+    min: 1,
+    max: 4,
+    stepField: "walkInStep",
+    what: "appendWalkInFirstTouchAsk asks only inside the 1-4 first-touch band (steps 5-8 are a live deal, 9 is post-sale)"
+  }
+];
+
+export function laneAskBand(
+  source: string
+): { min: number; max: number; stepField: "walkInStep"; what: string } | null {
+  const hit = LADDER_ASK_BANDS.find(l => l.pattern.test(source));
+  if (!hit) return null;
+  // A nonsense band must not silence a lane: fall back to "no band declared", i.e. today's reading.
+  if (!Number.isFinite(hit.min) || !Number.isFinite(hit.max) || hit.min > hit.max) return null;
+  return { min: hit.min, max: hit.max, stepField: hit.stepField, what: hit.what };
+}
+
+export type LadderAskEligibility = "eligible" | "out_of_band" | "no_step_recorded";
+
+/**
+ * Could the shipped ask have applied to this lead? Reads OUR OWN stored step (structured state the
+ * route wrote), never the customer's words. No band declared ⇒ `eligible`, so an undeclared lane is
+ * graded exactly as it is today.
+ */
+export function classifyLadderAskEligibility(
+  conv: any,
+  band: { min: number; max: number; stepField: "walkInStep" } | null
+): LadderAskEligibility {
+  if (!band) return "eligible";
+  const raw = conv?.lead?.[band.stepField];
+  const step = typeof raw === "number" ? raw : Number(raw);
+  if (!Number.isFinite(step) || step <= 0) return "no_step_recorded";
+  return step >= band.min && step <= band.max ? "eligible" : "out_of_band";
+}
+
+/**
  * RELAY LANES — the customer has NO SMS, email or phone channel BY DESIGN, and is answered by hand
  * off-channel. Not a lane we failed to write copy for, and not a broken feed.
  *
@@ -394,6 +491,10 @@ function emptyCounts(): LadderWindowCounts {
     agentFirstTouches: 0,
     staffFirstTouches: 0,
     agentFirstTouchesSinceFix: 0,
+    askEligibleSinceFix: 0,
+    askOutOfBandSinceFix: 0,
+    askNoStepSinceFix: 0,
+    bandedLeadsWithNoStep: 0,
     neverTexted: 0
   };
 }
@@ -479,8 +580,25 @@ export function assessLadderHealth(input: {
         const deliveredAt = Date.parse(String(firstOut?.at ?? ""));
         if (Number.isFinite(deliveredAt) && deliveredAt >= Date.parse(boundary.shippedAt)) {
           counts.agentFirstTouchesSinceFix += 1;
+          // A turn the shipped ask could not have applied to says nothing about whether it works.
+          switch (classifyLadderAskEligibility(conv, laneAskBand(source))) {
+            case "eligible":
+              counts.askEligibleSinceFix += 1;
+              break;
+            case "out_of_band":
+              counts.askOutOfBandSinceFix += 1;
+              break;
+            default:
+              counts.askNoStepSinceFix += 1;
+          }
         }
       }
+    }
+
+    // Counted on EVERY lead of a banded lane (not just post-fix first touches) so the structural
+    // hole is visible before it has swallowed a whole window.
+    if (laneAskBand(source) && classifyLadderAskEligibility(conv, laneAskBand(source)) === "no_step_recorded") {
+      counts.bandedLeadsWithNoStep += 1;
     }
 
     const firstOutAt = Date.parse(String(firstOut?.at ?? ""));
@@ -503,6 +621,7 @@ export function assessLadderHealth(input: {
     const byDesign = laneHasNoLadderByDesign(source);
     const relayWhy = laneIsRelayByDesign(source);
     const declaredFix = laneFixBoundary(source);
+    const askBand = laneAskBand(source);
     // A boundary only applies to a report generated AFTER the fix shipped. Re-running the sweep over
     // an older window (or replaying a past date) must read exactly as it read at the time — at that
     // moment the copy genuinely did not exist yet, so `never_asks` was the correct diagnosis and
@@ -577,8 +696,31 @@ export function assessLadderHealth(input: {
         w.recent.leads >= LADDER_MIN_NEVER_ASKS_LEADS &&
         w.recent.asked === 0 &&
         w.baseline.asked === 0 &&
+        askBand &&
         fixBoundary &&
-        w.recent.agentFirstTouchesSinceFix === 0
+        w.recent.bandedLeadsWithNoStep >= w.recent.leads
+      ) {
+        // ⚠️ `fixBoundary` is load-bearing, and this eval caught it: without it, a window that ENDED
+        // BEFORE the ask shipped got told its ask was "unreachable" — a claim about copy that did not
+        // exist yet. Same discipline as the retroactive-relabel guard above. Pre-fix, "no lead carries
+        // a step" is not a defect about a shipped ask; the correct reading there is still `never_asks`.
+        //
+        // NOT an inert ladder and not an unexercised one: on this lane, in this window, NOTHING was
+        // ask-eligible — every lead arrived without the step the shipped ask bands on, so the copy
+        // could not have fired for anyone. Checked before both fix-boundary branches because it is
+        // the deeper cause: whichever of the three runs first owns the diagnosis, and "the ask cannot
+        // reach this lane at all" makes the other two unanswerable rather than merely quiet.
+        alarm = "ladder_ask_unreachable";
+        why =
+          `not one of the ${w.recent.leads} leads on this lane carries a step, and ${askBand.what} — ` +
+          `the shipped ask is UNREACHABLE here by construction, not suppressed by policy. This needs a ` +
+          `decision about the step-less population, not a wording change`;
+      } else if (
+        w.recent.leads >= LADDER_MIN_NEVER_ASKS_LEADS &&
+        w.recent.asked === 0 &&
+        w.baseline.asked === 0 &&
+        fixBoundary &&
+        w.recent.askEligibleSinceFix === 0
       ) {
         // The ladder EXISTS and shipped; the window simply predates it. Checked BEFORE never_asks for
         // the same reason `uncontactable` and `staff_owned_first_touch` are: this lane obviously never
@@ -588,8 +730,18 @@ export function assessLadderHealth(input: {
         alarm = "ladder_shipped_unexercised";
         why =
           `the ladder for this lane already shipped — ${fixBoundary.what}, live ${fixBoundary.shippedAt} — and NOT ONE ` +
-          `agent-owned first touch has landed since. Every one of the ${w.recent.agentFirstTouches} graded touches in ` +
-          `this window predates the fix, so this number cannot say whether it works. Do not write new copy; wait for traffic`;
+          `ask-eligible agent-owned first touch has landed since` +
+          (w.recent.agentFirstTouchesSinceFix
+            ? ` (${w.recent.agentFirstTouchesSinceFix} landed, all outside the ask: ` +
+              `${w.recent.askOutOfBandSinceFix} out of band, ${w.recent.askNoStepSinceFix} with no step recorded)`
+            : "") +
+          `. Every one of the ${w.recent.agentFirstTouches} graded touches in ` +
+          `this window predates the fix or fell outside it, so this number cannot say whether it works. Do not write new ` +
+          `copy; wait for traffic` +
+          (w.recent.bandedLeadsWithNoStep
+            ? `. Worth a decision separately: ${w.recent.bandedLeadsWithNoStep} of ${w.recent.leads} recent leads carry no ` +
+              `step at all, and the ask can never fire for those`
+            : "");
       } else if (
         w.recent.leads >= LADDER_MIN_NEVER_ASKS_LEADS &&
         w.recent.asked === 0 &&
@@ -602,7 +754,7 @@ export function assessLadderHealth(input: {
             // loud case: the deployed ladder looks INERT (the #721 failure mode — shipped, wired, and
             // silently overridden downstream). Reproduce by executing the fix's own path before
             // writing anything new.
-            `${w.recent.agentFirstTouchesSinceFix} agent-owned first touches have landed since ${fixBoundary.what} ` +
+            `${w.recent.askEligibleSinceFix} ask-eligible agent-owned first touches have landed since ${fixBoundary.what} ` +
             `went live ${fixBoundary.shippedAt}, and not one asked anything — the shipped ladder looks INERT. ` +
             `Execute its path against a real lead before writing new copy`
           : `${w.recent.agentFirstTouches} agent-owned first touches and not one asked anything — this lane may have no ladder` +
