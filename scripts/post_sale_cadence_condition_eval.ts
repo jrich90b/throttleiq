@@ -65,6 +65,87 @@ assert.equal(
   "unparseable year => no year override (condition signal stands)"
 );
 
+// --- the year FIELD and the bike's own NAME disagree (Joe ruling 2026-08-19: "Only new
+// motorcycle does the custom coverage apply"). The lie detector used to read the first year
+// FIELD it found — which is the field that lies — so a decade-old bike stamped with a fresh
+// year walked straight through it. OLDEST-WINS: take the smallest year any source names.
+//
+// Measured on the live store 2026-08-19: 5 sold records the gate called NEW carry a label year
+// 3+ years older than their field year, worst case a 2008 Nightster stamped 2025 (gap 17). Six
+// records flip NEW -> pre-owned in total, every one a genuinely older bike, and ZERO of the 11
+// genuinely-new customers who have received the Custom Coverage line regress.
+assert.equal(
+  postSaleVehicleIsNew({
+    sale: { condition: "new", year: 2025, label: "2008 Harley-Davidson 1200 Nightster" },
+    closedAt: "2026-06-25T22:26:07.967Z"
+  }),
+  false,
+  "+17165503586: a 2008 bike stamped year 2025 is NOT new — the NAME outranks the lying field"
+);
+assert.equal(
+  postSaleVehicleIsNew({
+    sale: { condition: "new", year: 2026, label: "2021 Harley-Davidson FLTRXS Road Glide Special" },
+    closedAt: "2026-08-14T17:00:48.352Z"
+  }),
+  false,
+  "+17169400722: sold 5 days before the ruling; the operator independently confirmed a 2021"
+);
+assert.equal(
+  postSaleVehicleIsNew({
+    lead: { vehicle: { condition: "new", year: "2026", model: "2023 Harley-Davidson Road King Special" } },
+    closedAt: "2026-07-03T16:51:54.588Z"
+  }),
+  false,
+  "a 2023 sold in 2026 is gap 3 once the label is read — past MAX_NEW_MODEL_YEAR_GAP"
+);
+// The allowance Joe granted on 7/09 survives: genuine non-current new stock still reads NEW.
+assert.equal(
+  postSaleVehicleIsNew({
+    sale: { condition: "new", year: 2026, label: "2025 Harley-Davidson Tri Glide Ultra Black" },
+    closedAt: "2026-08-14T12:00:00.000Z"
+  }),
+  true,
+  "+17166795683 class: a 2025 sold in 2026 is gap 1 — non-current new stock STAYS new"
+);
+assert.equal(
+  postSaleVehicleIsNew({
+    sale: { condition: "new", year: 2026, label: "2024 Harley-Davidson Pan America Special" },
+    closedAt: "2026-08-01T12:00:00.000Z"
+  }),
+  true,
+  "gap 2 by label still stays NEW — the ruling narrowed the lie, not the allowance"
+);
+// FAIL DIRECTION: a label with no year must not resurrect a bike the field already condemned.
+assert.equal(
+  postSaleVehicleIsNew({
+    sale: { condition: "new", year: 2019, label: "Harley-Davidson Electra Glide Ultra" },
+    closedAt: "2026-05-04T00:00:00.000Z"
+  }),
+  false,
+  "an unlabelled year cannot rescue a field-condemned bike — oldest still wins"
+);
+// ⚠️ HARLEY NAMES BIKES AFTER NUMBERS — 883, 1200, FXDR, U900-21. The label year MUST be matched
+// as a 19xx/20xx token, never as "some digits". A loosened regex grabs "883" first, fails the
+// 1980-2100 range check, and returns NO year for that label — so the real 2004 sitting further
+// along the string is never seen and the bike reads NEW. Caught only by this fixture: the first
+// four sabotages missed it entirely.
+assert.equal(
+  postSaleVehicleIsNew({
+    sale: { condition: "new", year: 2026, label: "Harley-Davidson Sportster 883 Custom 2004" },
+    closedAt: "2026-06-09T12:00:00.000Z"
+  }),
+  false,
+  "+17246830020 class: a numeric MODEL name must not shadow the real year later in the label"
+);
+assert.equal(
+  postSaleVehicleIsNew({
+    sale: { condition: "new", year: 2025, label: "Harley-Davidson 1200 Nightster 2008" },
+    closedAt: "2026-06-25T12:00:00.000Z"
+  }),
+  false,
+  "same for the 1200: the year token wins, wherever it sits in the name"
+);
+
 // --- the condition-specific message (cadence step 2) ---
 const newMsg = postSaleAccessoryOrEnjoyMessage({
   firstName: "Marcy", repName: "Giovanni", dealerName: "American Harley-Davidson", bikeModel: "Street Glide", isNewBike: true

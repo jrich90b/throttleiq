@@ -30,6 +30,25 @@ function yearNum(value: unknown): number | null {
   return Number.isInteger(n) && n >= 1980 && n <= 2100 ? n : null;
 }
 
+/**
+ * The model year written into the bike's own NAME ("2021 Harley-Davidson Road Glide Special").
+ *
+ * The numeric `year` field is the one that lies, so a lie detector that only reads it can be fed
+ * a fresh year beside a decade-old bike and wave it through. Measured on the live store
+ * 2026-08-19: 5 sold conversations the gate called NEW carry a label year 3+ years older than
+ * their year field — worst case a **2008** 1200 Nightster stamped 2025 (gap 17), and a 2012
+ * Softail Deluxe stamped 2025 (gap 13). One is +17169400722, sold five days earlier, a 2021 Road
+ * Glide Special the operator independently confirmed as a 2021.
+ */
+function labelYear(...labels: unknown[]): number | null {
+  for (const label of labels) {
+    const match = String(label ?? "").match(/\b(?:19|20)\d{2}\b/);
+    const parsed = match ? yearNum(match[0]) : null;
+    if (parsed != null) return parsed;
+  }
+  return null;
+}
+
 /** True only when the sold unit is confidently NEW (fail-safe: unknown => pre-owned). */
 export function postSaleVehicleIsNew(conv: any): boolean {
   const label = [
@@ -52,8 +71,24 @@ export function postSaleVehicleIsNew(conv: any): boolean {
   // Model-year sanity: the ADF condition field routinely lies; a bike whose model year is
   // more than MAX_NEW_MODEL_YEAR_GAP years older than the sale can't be new inventory.
   // Fails SAFE — flipping to pre-owned only softens the touch (no factory-warranty claim).
-  const modelYear =
-    yearNum(conv?.sale?.year) ?? yearNum(conv?.lead?.vehicle?.year) ?? yearNum(conv?.inventoryContext?.year);
+  //
+  // Take the OLDEST year we can see, not the first one we find. The `year` FIELD and the bike's
+  // own NAME disagree on 5 live sold records, always with the field claiming the newer year — so
+  // reading the field alone lets a 2008 Nightster stamped 2025 through the detector wearing a
+  // fresh year. The label is what the customer would read back to us. Oldest-wins keeps the fail
+  // direction pointing the only safe way: toward pre-owned, toward NOT claiming a warranty.
+  const candidateYears = [
+    yearNum(conv?.sale?.year),
+    yearNum(conv?.lead?.vehicle?.year),
+    yearNum(conv?.inventoryContext?.year),
+    labelYear(
+      conv?.sale?.label,
+      conv?.sale?.model,
+      conv?.lead?.vehicle?.model,
+      conv?.lead?.vehicle?.description
+    )
+  ].filter((y): y is number => y != null);
+  const modelYear = candidateYears.length ? Math.min(...candidateYears) : null;
   if (modelYear != null) {
     const soldAtMs = Date.parse(String(conv?.sale?.soldAt ?? conv?.closedAt ?? ""));
     const saleYear = Number.isFinite(soldAtMs) ? new Date(soldAtMs).getUTCFullYear() : new Date().getUTCFullYear();
