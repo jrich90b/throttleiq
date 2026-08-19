@@ -491,6 +491,50 @@ function emailBodyOpensByAddressing(body: string, name: string): boolean {
   return new RegExp(`^${escaped}\\s*(?:,|[—-])\\s`, "i").test(body);
 }
 
+/**
+ * A line that is a salutation and NOTHING else: "Hi Lucas," / "Hey Pedro," / "Hello," / "Hi there,".
+ *
+ * Deliberately requires the line to END right after the (optional) name and terminator. That is what
+ * separates a content-free opener from a greeting that carries the message —
+ * *"Hi, this is Brooke at American Harley-Davidson!"* is a greeting but NOT bare, because dropping
+ * it would delete a sentence.
+ */
+const BARE_SALUTATION_LINE = /^(hi|hey|hello|hiya)(?:\s+[^\n,]{1,40})?\s*[,!.—-]?$/i;
+
+/**
+ * Drop a BARE leading salutation when the body's next line greets the customer all over again.
+ *
+ * The 2026-08-07 fix (see `EMAIL_BODY_OPENS_WITH_GREETING` above) stopped this function CREATING a
+ * doubled greeting: hand it a bare body and it prepends exactly one. It never stopped this function
+ * PASSING ONE THROUGH. Given a body that already arrives doubled it sees the greeting on line 1,
+ * correctly declines to prepend, and never looks at line 2.
+ *
+ * That gap re-opened the class 11 days later. The Claude draft reviewer is told to "keep its
+ * greeting" when it rewrites an email; on 2026-08-18T21:03:48Z it rewrote a template that already
+ * greeted and stored *"Hi Lucas,\n\nHi, this is Brooke at American Harley-Davidson!…"* for
+ * +17168610158 — a `mode: "human"` thread the draft-sanity backstop is barred from reading, so
+ * nothing downstream would have caught it either.
+ *
+ * Removing the BARE line is the only safe repair: it is the one of the two that carries no
+ * information, so this can never drop a fact, a name the body still uses, or a line of copy. Fail
+ * direction is unchanged — any shape not recognised as *both* bare and re-greeted is left exactly
+ * as it is today, and an email that reads slightly abrupt is a far smaller failure than one that
+ * greets the customer twice in two lines.
+ */
+function dropDuplicateLeadingSalutation(body: string, greetingName: string): string {
+  const lines = body.split("\n");
+  const firstIdx = lines.findIndex(l => l.trim());
+  if (firstIdx < 0) return body;
+  if (!BARE_SALUTATION_LINE.test(lines[firstIdx].trim())) return body;
+  const restIdx = lines.findIndex((l, i) => i > firstIdx && l.trim());
+  if (restIdx < 0) return body;
+  const rest = lines.slice(restIdx).join("\n");
+  if (!EMAIL_BODY_OPENS_WITH_GREETING.test(rest) && !emailBodyOpensByAddressing(rest, greetingName)) {
+    return body;
+  }
+  return rest;
+}
+
 export function formatEmailLayout(
   text: string,
   opts?: {
@@ -504,6 +548,9 @@ export function formatEmailLayout(
   const fallbackName = firstToken(opts?.fallbackName ?? "there");
   const greetingName = preferredName !== "there" ? preferredName : fallbackName;
   out = out.replace(/^Hi\s+([^—,\n]+)\s*[—-]\s*/i, (_m, name) => `Hi ${String(name).trim()},\n\n`);
+  // Collapse an already-doubled opening BEFORE deciding whether to prepend, so the prepend test
+  // below reads the greeting that actually carries the message.
+  out = dropDuplicateLeadingSalutation(out, greetingName);
   if (
     !EMAIL_BODY_OPENS_WITH_GREETING.test(out) &&
     !emailBodyOpensByAddressing(out, greetingName)
