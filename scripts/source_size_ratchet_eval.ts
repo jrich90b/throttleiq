@@ -483,7 +483,17 @@ const CEILINGS: Ceiling[] = [
     // its two new referee inputs by folding the applyInventoryWatchPendingClearForIntentHints call
     // — five lines of one argument each, in the very function being edited — back onto one line.
     // The RULE the two inputs buy lives in routeStateReducer, where an eval can reach it.
-    max: 70_122,
+    // 70_122 -> 70_120. The established-stock gate on the pending-incoming ACK arm (Joe,
+    // +17162489119). index.ts was sitting EXACTLY on the ceiling again, so the slice funded itself:
+    // customerNameForPendingIncomingInventory and incomingInventoryPurposeConfidenceMin — pure
+    // helpers for a state domain/pendingIncomingInventory.ts already owns — moved there verbatim.
+    // Net -2 WITH the gate, its route-outcome exit and the two caller rewrites included.
+    //
+    // REBASE NOTE (ROUTINE_CONTRACT rule 3, the #418 trap): this branch proposed 70_122, derived
+    // against a 70_124 main. #768 landed its own 70_124 -> 70_122 underneath it from the same base,
+    // so 70_122 still MERGED CLEANLY and still PASSED — while silently handing back the 2 lines
+    // #768 had just recovered. Re-derived against the integrated tree, which measures 70_120.
+    max: 70_120,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

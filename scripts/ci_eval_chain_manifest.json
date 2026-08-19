@@ -97,6 +97,7 @@
     "pending_incoming_inventory:eval",
     "incoming_unit_purpose:eval",
     "incoming_unit_arrival:eval",
+    "established_stock_blocks_incoming_arm:eval",
     "pending_incoming_todo_dedup:eval",
     "parts_turn_precedence:eval",
     "inventory_watch_snapshot_guard:eval",

@@ -1189,8 +1189,11 @@ import {
   hasPendingIncomingInventorySignal,
   hasPartsInquirySignal,
   partsTurnPrecedenceEnabled,
-  shouldHandlePendingIncomingInventoryTurn
+  shouldHandlePendingIncomingInventoryTurn,
+  customerNameForPendingIncomingInventory,
+  incomingInventoryPurposeConfidenceMin
 } from "./domain/pendingIncomingInventory.js";
+import { pendingIncomingArmBlockedByEstablishedStock } from "./domain/incomingUnitArrival.js";
 import { buildCustomerReceivedHistory, buildEffectiveHistory } from "./domain/effectiveContext.js";
 import { buildOpenTurnInquiry, getLastInboundBody, getLastInboundMessage, hasMultiMessageOpenTurn } from "./domain/openCustomerTurn.js";
 import { decideRepCallQuietWindow } from "./domain/repCallQuietWindow.js";
@@ -30020,24 +30023,6 @@ function applyInventoryWatchConfirmation(
   }
 }
 
-function customerNameForPendingIncomingInventory(conv: Conversation): string {
-  return (
-    String((conv.lead as any)?.name ?? "").trim() ||
-    [String((conv.lead as any)?.firstName ?? "").trim(), String((conv.lead as any)?.lastName ?? "").trim()]
-      .filter(Boolean)
-      .join(" ")
-      .trim() ||
-    String((conv as any)?.contact?.name ?? "").trim() ||
-    String((conv as any)?.name ?? "").trim() ||
-    "customer"
-  );
-}
-
-function incomingInventoryPurposeConfidenceMin(): number {
-  const v = Number(process.env.INCOMING_INVENTORY_PURPOSE_CONFIDENCE_MIN);
-  return Number.isFinite(v) && v > 0 ? v : 0.7;
-}
-
 async function applyPendingIncomingInventoryState(
   conv: Conversation,
   opts?: {
@@ -30056,6 +30041,15 @@ async function applyPendingIncomingInventoryState(
     nowIso: nowIsoValue
   });
   if (!pending) return false;
+  // Does the lead's OWN note say this unit is already on the property? Both paths call this applier,
+  // so asking here keeps live and regenerate in sync (Joe, Zackary Busch +17162489119 — a trade-in
+  // sitting in the service department was announced to him as "coming in"). incomingUnitArrival.ts.
+  const establishedStock = await pendingIncomingArmBlockedByEstablishedStock(conv);
+  if (establishedStock.block) {
+    recordRouteOutcome("live", "pending_incoming_arm_blocked_established_stock",
+      { convId: conv.id, leadKey: conv.leadKey, reason: establishedStock.reason });
+    return false;
+  }
   // WHY is it coming in? Comprehended once, then carried forward — so we never call a bike the
   // customer is BUYING "your trade" (Joe 2026-07-16). A prior confident read wins (no re-parse on
   // every ack turn); otherwise classify from the establishing context. Fail-safe: parser off/null or
@@ -55782,13 +55776,15 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
           lastOutboundText: regenLastOutboundForActionText,
           partsInquiry: regenPartsTurnDefer
         })));
-  if (regenPendingIncomingAcknowledgement) {
-    await applyPendingIncomingInventoryState(conv, {
+  if (
+    regenPendingIncomingAcknowledgement &&
+    (await applyPendingIncomingInventoryState(conv, {
       sourceText: `${regenLastOutboundForActionText}\n${String(event.body ?? "")}`,
       sourceMessageId: event.providerMessageId,
       source: "customer",
       acknowledged: true
-    });
+    }))
+  ) {
     const reply = buildPendingIncomingInventoryCustomerAck(conv.pendingIncomingInventory);
     recordRouteOutcome("regen", "pending_incoming_inventory_acknowledgement", {
       convId: conv.id,
@@ -59557,13 +59553,15 @@ if (authToken && signature) {
           lastOutboundText: pendingIncomingLastOutboundText,
           partsInquiry: partsTurnDefer
         })));
-  if (pendingIncomingAcknowledgement) {
-    await applyPendingIncomingInventoryState(conv, {
+  if (
+    pendingIncomingAcknowledgement &&
+    (await applyPendingIncomingInventoryState(conv, {
       sourceText: `${pendingIncomingLastOutboundText}\n${String(event.body ?? "")}`,
       sourceMessageId: event.providerMessageId,
       source: "customer",
       acknowledged: true
-    });
+    }))
+  ) {
     const reply = buildPendingIncomingInventoryCustomerAck(conv.pendingIncomingInventory);
     recordRouteOutcome("live", "pending_incoming_inventory_acknowledgement", {
       convId: conv.id,
