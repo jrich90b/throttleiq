@@ -607,6 +607,7 @@ import {
   getInventoryFeed,
   hasInventoryForModelYear,
   modelMatches,
+  normalizeModelName,
   unitIsDistinctModelFromWatch,
   distinct883ModelConflict,
   distinctSportsterModelConflict,
@@ -6852,8 +6853,11 @@ function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
   // (Jason, 6/26: a "Street Glide Special" watch matched a base 2013 "Street Glide"; "Electra Glide Ultra
   // Classic" matched an "Ultra Limited"). A base/family watch still matches a specific unit (unit includes
   // watch); a specific watch only matches a unit that includes that specificity. Family watches
-  // (e.g. "Sportster") are handled separately by familyMatch below. Mirrors modelMatches (inventoryFeed).
-  const directMatch = itemModel.includes(watchModel);
+  // (e.g. "Sportster") are handled separately by familyMatch below. CALL the shared matcher, never a
+  // private copy (Mike Wolf +17164323990): while this was `itemModel.includes(watchModel)`, #617's
+  // leading-DMS-code retry reached only the DETECTOR and the engine stayed blind to "FLHD Deadwood"
+  // vs the feed's "Deadwood". Strict superset; guards below still run. See watch_model_match_eval.
+  const directMatch = modelMatches(item.model, watch.model);
   const catalogCodeMatch = modelsShareCatalogCodes(itemModel, watchModel);
   const familyMatch = (() => {
     // The 883 arm is the same umbrella in disguise: it let ANY 883-token watch collect ANY 883-token
@@ -29484,10 +29488,6 @@ async function buildTradeFollowupReply(args: {
     return `${correctionLine}I can set up a trade appraisal. I have ${suggested.slots[0].startLocal} or ${suggested.slots[1].startLocal} — do any of these times work?`;
   }
   return `${correctionLine}I can set up a trade appraisal. What day and time works for you?`;
-}
-
-function normalizeModelName(s: string): string {
-  return s.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
 function extractYearRange(text: string): { min: number; max: number } | null {

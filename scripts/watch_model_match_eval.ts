@@ -167,8 +167,15 @@ assert.match(engineSrc, /return canonicalizeWatchModelLabel\(fallback\) \|\| fal
 // matcher here — a family-umbrella misclassification can no longer slip a trim-specific
 // watch onto a base unit.
 const idx = fs.readFileSync("services/api/src/index.ts", "utf8");
-assert.match(idx, /const directMatch = itemModel\.includes\(watchModel\);/, "engine directMatch must be directional (unit includes watch)");
-assert.ok(!/itemModel\.includes\(watchModel\) \|\| watchModel\.includes\(itemModel\)/.test(idx), "the bidirectional matcher (the bug) must be gone");
+// The engine must DELEGATE its directional test to the shared modelMatches, not re-implement it.
+// It used to hold a private copy (`itemModel.includes(watchModel)`), and a copy drifts: when the
+// leading-DMS-code retry was added to modelMatches on 2026-08-08 (#617 `cb97b0ab`), only the
+// DETECTOR — which calls modelMatches — picked it up. The engine kept its copy and stayed blind to
+// "FLHD Deadwood", so Mike Wolf's watch never fired on the 2026 Deadwood (S28-26) that arrived
+// 2026-08-17T21:20Z. Delegating is what makes Layer 1's execution binding on the live fire path;
+// the old assertion pinned the copy's TEXT, which is why it passed all the way through the miss.
+assert.match(idx, /const directMatch = modelMatches\(item\.model, watch\.model\);/, "engine directMatch must DELEGATE to the shared modelMatches (a private copy drifts)");
+assert.ok(!/const directMatch = itemModel\.includes\(watchModel\)/.test(idx), "the engine's private copy of the directional test must stay gone");
 assert.match(idx, /unitIsDistinctModelFromWatch\(item\.model, watch\.model\)/, "engine matcher must apply the forward distinct-model guard");
 // The forward guard must apply on the FAMILY-LABEL path too (Cory, 7/23): gated on !familyMatch
 // only — NOT on !genericWatchFamily, which let "Low Rider S" (family low_rider_s) skip it and
@@ -213,5 +220,23 @@ assert.equal(modelMatches("Road Glide 114", "Fxdr 114"), false, "so an FXDR ask 
 assert.equal(stripLeadingHarleyModelCode("FLHD"), "", "a bare code alone strips to nothing");
 assert.equal(stripLeadingHarleyModelCode("Street Glide"), "", "a plain model name has no leading code to drop");
 assert.equal(stripLeadingHarleyModelCode("FLHD Deadwood"), "deadwood", "the surviving name is what we search on");
+
+// THE MISS ITSELF, through the WHOLE matcher (not just modelMatches). Every assertion above this
+// block tested the shared primitive; the live fire engine held its own copy of the directional test
+// and none of them bound it. These run the full matcher stack — code-strip retry, then the CVO /
+// distinct-model / family guards on the result — which is the path a real watch takes.
+assert.equal(m("Deadwood", "FLHD Deadwood"), true, "THE MISS: Mike Wolf's ADF 'FLHD Deadwood' watch must match the feed's 'Deadwood' (S28-26, arrived 2026-08-17)");
+assert.equal(m("Street Glide", "FLHX Street Glide"), true, "the other 12 measured CODE+NAME labels match too (FLHX -> 9 units on 2026-08-08)");
+assert.equal(m("Road Glide", "FLTRX Road Glide"), true, "FLTRX Road Glide -> the base Road Glides (17 units on 2026-08-08)");
+// …and the code-strip retry must not become a back door through the guards it runs before.
+// MEASURED 2026-08-19 by sabotage: deleting the CVO guard inside modelMatches does NOT flip this
+// line. The pair is already rejected by the directional include ("street glide" does not contain
+// "cvo street glide") and, in the detector, again by the distinct-model guard. So this assertion is
+// carried by directionality, not by the CVO guard — it is a real behaviour pin, but do NOT read a
+// green run here as evidence the CVO guard still exists. Left in place deliberately: it is the
+// shape a future widening of the strip rule would break first.
+assert.equal(m("Street Glide", "FLHXSE CVO Street Glide"), false, "a CVO ask must not collect a base unit just because its label carried a code");
+assert.equal(m("Street Glide", "FLHXS Street Glide Special"), false, "a trim-specific coded ask must not collapse onto the base model");
+assert.equal(m("Road Glide", "Road Glide FLTRXS"), false, "a TRAILING code still carries specificity — never dropped");
 
 console.log("PASS watch model-match eval — directional (unit⊇watch): trim-specific watches no longer fire on base units (forward + reverse guards); base/exact matches preserved; a leading DMS platform code no longer hides the whole floor; engine matcher guarded.");
