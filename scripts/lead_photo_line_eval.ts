@@ -213,6 +213,81 @@ ok(
   );
 }
 
+// ---------------------------------------------------------------------------
+// PART 1b — a greeting the layout did not CREATE, but passed straight through
+// ---------------------------------------------------------------------------
+// Part 1 stopped formatEmailLayout STACKING a second greeting. It never stopped it forwarding a
+// body that arrives already doubled: it sees the greeting on line 1, correctly declines to prepend,
+// and never looks at line 2. That gap re-opened the class 11 days later, on 2026-08-18T21:03:48Z —
+// the Claude draft reviewer is told to "keep its greeting" when it rewrites an email, rewrote a
+// template that already greeted, and stored a doubled opening for +17168610158 on a `mode: "human"`
+// thread the draft-sanity backstop is barred from reading.
+//
+// Measured against the live store the day this shipped: of 227 standing email drafts exactly 9
+// change and 0 lose content; of 7,314 outbound bodies exactly 1 changes and 0 lose content.
+
+// Lucas's exact stored body (+17168610158). The bare line goes; the greeting that carries the
+// sentence — and the sign-off — stay.
+const lucas = formatEmailLayout(
+  "Hi Lucas,\n\nHi, this is Brooke at American Harley-Davidson! I saw you submitted a test ride request for the 2013 Street Glide.\n\nBrooke\nAmerican Harley-Davidson",
+  { firstName: "Lucas", fallbackName: "there" }
+);
+ok(greetingCount(lucas) === 1, "a body that ARRIVES doubled is collapsed to one greeting");
+ok(lucas.startsWith("Hi, this is Brooke"), "the greeting that carries the message is the one kept");
+ok(lucas.includes("test ride request for the 2013 Street Glide"), "the message survives the collapse");
+ok(lucas.includes("Brooke\nAmerican Harley-Davidson"), "and so does the sign-off");
+
+// The pipeline residue shape (+17164442120, +17165340608, +19189848896 and five more).
+const igor = formatEmailLayout(
+  "Hi igor,\n\nHey igor, it's Alexandra over at American Harley-Davidson. I saw you want to do the Jumpstart experience.",
+  { firstName: "igor", fallbackName: "there" }
+);
+ok(greetingCount(igor) === 1, "the 'Hi <name>,' + 'Hey <name>,' residue collapses too");
+ok(igor.startsWith("Hey igor,"), "the composer's own voice is what survives");
+ok(igor.includes("Jumpstart experience"), "content preserved");
+
+// FAIL DIRECTION — only a line that is a greeting and NOTHING ELSE may be dropped.
+// A greeting that carries a sentence is content: leaving a doubled greeting is a far smaller
+// failure than deleting a sentence, so these must all come through untouched.
+for (const [body, why] of [
+  [
+    "Hi, this is Brooke at American Harley-Davidson.\n\nHey Lucas, the bike is ready.",
+    "line 1 carries a sentence — never dropped, even though line 2 also greets"
+  ],
+  [
+    "Hi Lucas,\n\nYour bike is ready for pickup Thursday at 9am.",
+    "line 2 does not greet — the ordinary email keeps its greeting"
+  ],
+  [
+    "Hi Lucas,\n\nHey — quick question about Thursday.",
+    "a dash-form opener is not a recognised greeting, so nothing is dropped"
+  ]
+] as const) {
+  const before = body.split("\n").filter(l => l.trim()).length;
+  const out = formatEmailLayout(body, { firstName: "Lucas", fallbackName: "there" });
+  ok(out.split("\n").filter(l => l.trim()).length === before, why);
+}
+
+// The collapse must never strip the ONLY greeting and leave the email opening cold.
+const single = formatEmailLayout("Hi Lucas,\n\nThanks for stopping in.", { firstName: "Lucas", fallbackName: "there" });
+ok(single.startsWith("Hi Lucas,"), "a lone greeting is not a duplicate and stays");
+ok(greetingCount(single) === 1, "exactly one greeting on the ordinary path");
+
+// A lone greeting must survive VERBATIM, not be dropped and re-prepended.
+// Counting lines cannot see this: drop "Hey Lucas," from a body whose second line does not greet
+// and the prepend below puts "Hi Lucas," back, so the line count is identical and the customer is
+// greeted in a word the composer did not choose. tone.ts is layout, not voice — pin the word.
+const heyKept = formatEmailLayout("Hey Lucas,\n\nYour bike is ready Thursday at 9am.", {
+  firstName: "Lucas",
+  fallbackName: "there"
+});
+ok(heyKept.startsWith("Hey Lucas,"), "a lone 'Hey' greeting is never rewritten into 'Hi'");
+ok(heyKept.includes("Thursday at 9am"), "and the message is untouched");
+
+// Same trap with the fallback: a body greeting "there" must not acquire the lead's first name.
+const thereKept = formatEmailLayout("Hi there,\n\nYour parts came in.", { firstName: "Lucas", fallbackName: "there" });
+ok(thereKept.startsWith("Hi there,"), "a lone 'Hi there,' is not swapped for the lead's first name");
+
 const tone = fs.readFileSync(path.join(here, "../services/api/src/domain/tone.ts"), "utf8");
 ok(
   /EMAIL_BODY_OPENS_WITH_GREETING\s*=\s*\/\^\(hi\|hey\|hello\|hiya\)/i.test(tone),
@@ -222,6 +297,14 @@ ok(
   tone.includes("EMAIL_BODY_OPENS_WITH_GREETING.test(out)") &&
     tone.includes("emailBodyOpensByAddressing(out, greetingName)"),
   "and formatEmailLayout consults BOTH openings before prepending"
+);
+// The collapse has to run BEFORE the prepend test, or the prepend reads the bare line we are
+// about to discard and decides against greeting a body that then has no greeting left.
+ok(
+  tone.indexOf("dropDuplicateLeadingSalutation(out, greetingName)") > 0 &&
+    tone.indexOf("dropDuplicateLeadingSalutation(out, greetingName)") <
+      tone.indexOf("EMAIL_BODY_OPENS_WITH_GREETING.test(out)"),
+  "the duplicate-greeting collapse runs before the prepend decision"
 );
 
 console.log(`lead_photo_line_eval: PASS (${n} assertions)`);
