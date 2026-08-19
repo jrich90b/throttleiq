@@ -32,8 +32,22 @@
  * ── FAIL DIRECTION ────────────────────────────────────────────────────────────────────────────
  * Two directions, deliberately opposite:
  *  - DETECTING a complaint fails toward `none` (today's behaviour). A disabled LLM, no key, an
- *    error, or a low confidence all leave the existing routing alone — this arm can never invent a
- *    complaint out of an ordinary sales lead and start asking people to prove they bought a bike.
+ *    error, or a low confidence all leave the existing routing alone.
+ *
+ *    ⚠️ THE MECHANICAL fail-safes above held; the READ did not. 2026-08-19, measured over the
+ *    arm's entire life: 2 live fires, and 1 of them was a false positive. `+14805441825` was
+ *    mid-TRADE-IN — mileage, "never seen rain", the original seat, a rep asking for his VIN — and
+ *    wrote "I bought the bike new in Arizona... I got over $8-9k in extras". The parser called
+ *    that a complaint 3/3 (0.85, 0.55, 0.78), so a hot sales lead was told "I'm sorry to hear the
+ *    bike gave you trouble after you took it home" and pushed into `manual_handoff`.
+ *
+ *    A complaint and an appraisal are the SAME SENTENCES. Both list mileage, condition, service
+ *    history, where the bike came from and money spent on it; the only difference is whether the
+ *    customer is aggrieved. The old prompt asked for "what they had to spend after taking it
+ *    home", which is exactly what a proud owner says about accessories. So the read now turns on
+ *    the GRIEVANCE and names the trade-in frame as the trap, and the parser eval pins the two
+ *    directions against each other — Tom must stay a complaint, the trade-in owner must not
+ *    become one. Neither may be fixed by breaking the other.
  *  - Once detected, the arm fails toward `unverified` (ask, concede nothing). `verified` requires
  *    POSITIVE evidence on both sides — the customer says it was us AND we can see it. Anything
  *    short of that asks the question, because the cost of asking a real customer one extra
@@ -49,10 +63,18 @@ export const PastPurchaseComplaintSchema = z.object({
   is_past_purchase_complaint: z
     .boolean()
     .describe(
-      "True when the customer is describing a PROBLEM with a motorcycle they already bought — " +
-        "condition, prep, service, a repair they had to pay for, or how the sale was handled. " +
+      "True only when the customer is AGGRIEVED about a motorcycle they already bought — " +
+        "something was wrong with how it was prepped or serviced, something broke, they had to " +
+        "pay unexpectedly to put it right, or the deal itself was handled badly. There has to be " +
+        "a grievance: owning a bike and talking about it is not a complaint. " +
         "False for anything a shopper says before buying: price haggling, availability, a bike " +
-        "they are considering, or a complaint about a service appointment they have not had yet."
+        "they are considering, or a complaint about a service appointment they have not had yet. " +
+        "ALSO FALSE when the customer is describing their OWN bike so we can value it — a trade-in " +
+        "or a bike they want to sell us. Those messages carry exactly the same surface details as " +
+        "a complaint (mileage, condition, service records, where and when they bought it, money " +
+        "spent on it) and mean the opposite. Money the customer CHOSE to spend — accessories, " +
+        "extras, upgrades, a custom seat — is a selling point they are proud of, never a repair " +
+        "bill they resent."
     ),
   purchase_attribution: z
     .enum(["this_dealer", "another_dealer", "unclear"])
@@ -274,8 +296,18 @@ export async function parsePastPurchaseComplaintWithLLM(args: {
     "",
     "Someone shopping for a bike is not this, however unhappy they are — a bad price, a bike that",
     "sold before they got there, a rude experience on the floor. This is specifically a bike that",
-    "is already theirs: how it was prepped, what broke, what they had to spend after taking it",
-    "home, or how the deal was handled.",
+    "is already theirs, AND something about it has aggrieved them: how it was prepped, what broke,",
+    "what they had to spend UNEXPECTEDLY to put it right after taking it home, or how the deal was",
+    "handled. No grievance, no complaint.",
+    "",
+    "THE TRAP: a customer describing their own bike so we can VALUE it — a trade-in, or a bike they",
+    "want to sell us — writes almost exactly the same sentences as a complaint. Mileage, condition,",
+    "the original seat, service records, where and when they bought it, how much money is in it.",
+    "Those are a seller talking their bike UP, and they mean the opposite of a complaint. Money the",
+    "customer chose to spend — extras, accessories, upgrades, chrome, a stage kit — is something",
+    "they are proud of and want credit for, not a repair bill they resent. Read for the grievance,",
+    "not for the details, and when the surrounding messages are about a trade or an appraisal,",
+    "assume the details are there to make the bike look good.",
     "",
     "WHOSE SALE IT IS MATTERS MORE THAN THE COMPLAINT. Read the pronouns literally. People write",
     'to a dealership about ANOTHER dealership all the time, and they give it away: the seller is',
@@ -292,6 +324,12 @@ export async function parsePastPurchaseComplaintWithLLM(args: {
     'input: "The tires on the Low Rider I am looking at look old. Would you put new ones on before I pick it up?" output: {"is_past_purchase_complaint":false,"purchase_attribution":"unclear","bought_as_is":false,"confidence":0.9}',
     'input: "Second bike I have bought from you and the service has always been great. Just need a part number for the rear brake pads." output: {"is_past_purchase_complaint":false,"purchase_attribution":"this_dealer","bought_as_is":false,"confidence":0.9}',
     'input: "WEB LEAD (ADF) Source: Room58 - Standard Inquiry: Looking for pricing on a 2026 Street Glide" output: {"is_past_purchase_complaint":false,"purchase_attribution":"unclear","bought_as_is":false,"confidence":0.95}',
+    // The trade-in trap, verbatim from +14805441825 (2026-08-17 14:30Z). He is talking his bike UP
+    // for an appraisal — "$8-9k in extras" is money he chose to spend and wants credit for. The
+    // live parser read this as a complaint and the arm sent him an apology for trouble he never
+    // had, then put a hot sales lead into manual handoff.
+    'input: "I bought the bike new in Arizona,were I live in the winter. I got over $8-9k in extras" output: {"is_past_purchase_complaint":false,"purchase_attribution":"another_dealer","bought_as_is":false,"confidence":0.9}',
+    'input: "Bike has never seen rain, just over 20,000 miles, still on the original seat and I have every service record. Bought it new in 2022. What can you give me for it on a trade?" output: {"is_past_purchase_complaint":false,"purchase_attribution":"unclear","bought_as_is":false,"confidence":0.93}',
     "",
     history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
     `Message: ${text}`

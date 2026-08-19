@@ -15,6 +15,15 @@
  * Getting the second one wrong in the confident direction is what produced a written apology on an
  * unverified deal, so `unclear` is the assertion, not a nicety.
  *
+ * THE OTHER ONE THAT MATTERS is +14805441825 (2026-08-17 14:30Z) — the arm's own FALSE POSITIVE,
+ * and the reason this file guards both directions. The module's stated fail direction is that
+ * detection "can never invent a complaint out of an ordinary sales lead"; production falsified
+ * that on the arm's second-ever fire. A trade-in customer talking his bike up for an appraisal
+ * ("$8-9k in extras") was read as a complaint and answered with an apology for trouble he never
+ * had. A complaint and an appraisal share every surface detail — mileage, condition, records,
+ * money spent — and differ only in whether there is a GRIEVANCE, so both are pinned here together
+ * and neither may be fixed by breaking the other.
+ *
  * Sampled 3x with a 2/3 majority so one unlucky sample cannot red-line main for everyone (the trap
  * that burned `incoming_unit_arrival:eval`).
  *
@@ -38,9 +47,30 @@ const MAJORITY = 2;
 const TOM =
   "I ve done business in the past I was trading a bike in I wanted a road king and there was one they advertised for 9999 is probably worth four grand. I had to put $2000 into it once I took it home. The tires were 12 years old. There was nothing serviced on it. I thought you guys kind of prided yourself on at least changing the oils and checking things. The brake handle snapped right off. I bought it as it so it s my fault and thank God I like the bike, but it just surprised me that they would do something like this. I wouldn t expect to get a $10,000 bike and have all that wrong with it. I ve sent people there in the past because I had a good experience with them last year, but maybe Sales are down or something. Thanks for your time Thomas Leo 216-217-1070.";
 
+// Verbatim store text, +14805441825 2026-08-17 14:30:46Z — the FALSE POSITIVE this file now also
+// guards. He is mid-appraisal: the turns before it are his own bike's mileage and condition and a
+// rep asking for the VIN. "$8-9k in extras" is money he CHOSE to spend and wants credit for. The
+// live parser called it a complaint 3/3 (0.85, 0.55, 0.78), so the arm answered a trade-in lead
+// with "I'm sorry to hear the bike gave you trouble after you took it home" and moved a hot thread
+// to manual_handoff. 1 of the arm's 2 lifetime live fires, i.e. a 50% false-positive rate.
+const TRADE_IN_OWNER = "I bought the bike new in Arizona,were I live in the winter. I got over $8-9k in extras";
+
+const TRADE_IN_OWNER_HISTORY: { direction: "in" | "out"; body: string }[] = [
+  { direction: "in", body: "Bikes never seen rain above 20,000 miles plus the original seat" },
+  {
+    direction: "out",
+    body:
+      "That's awesome — 20k miles, never seen rain, and still on the original seat is a great sign this bike " +
+      "has been well taken care of! Are you looking to trade it in, or are you in the market for something new?"
+  },
+  { direction: "out", body: "Got em. Thanks. Can you send me over the vin number on the bike?" }
+];
+
 type Case = {
   label: string;
   text: string;
+  /** Passed to the parser exactly as the live lanes pass it — the appraisal frame lives here. */
+  history?: { direction: "in" | "out"; body: string }[];
   expectComplaint: boolean;
   /** Attributions that are ACCEPTABLE — more than one where the text genuinely permits it. */
   allowAttribution?: string[];
@@ -82,6 +112,21 @@ const CASES: Case[] = [
       "I bought a bike at a dealer downstate back in March and they still have not sent me the title. I am getting nowhere with them. Can you help me get Harley corporate involved in this?",
     expectComplaint: true,
     allowAttribution: ["another_dealer"]
+  },
+  {
+    // THE REPORTED FALSE POSITIVE (+14805441825). Every surface feature of a complaint — a bike he
+    // owns, where he bought it, thousands of dollars spent on it — and no grievance anywhere in it.
+    label: "trade-in owner talking his bike UP for an appraisal (the reported false positive)",
+    text: TRADE_IN_OWNER,
+    history: TRADE_IN_OWNER_HISTORY,
+    expectComplaint: false
+  },
+  {
+    // The same shape without the store's exact words, so the guard is the SHAPE and not one string.
+    label: "seller listing mileage, records and money spent — a valuation ask, not a grievance",
+    text:
+      "Bike has never seen rain, just over 20,000 miles, still on the original seat and I have every service record for it. Bought it new in 2022 and I have put close to $9,000 of extras on it. What can you give me for it on a trade?",
+    expectComplaint: false
   }
 ];
 
@@ -89,7 +134,7 @@ let failures = 0;
 for (const c of CASES) {
   const reads = [] as Array<{ complaint: boolean; attribution: string; confidence: number }>;
   for (let i = 0; i < SAMPLES; i++) {
-    const parse = await parsePastPurchaseComplaintWithLLM({ text: c.text });
+    const parse = await parsePastPurchaseComplaintWithLLM({ text: c.text, history: c.history });
     reads.push({
       complaint: !!parse?.is_past_purchase_complaint,
       attribution: String(parse?.purchase_attribution ?? "none"),
@@ -130,6 +175,32 @@ for (let i = 0; i < SAMPLES; i++) {
 const asks = tomReads.filter(a => a === "service_recovery_unverified").length;
 console.log(`ok   Tom end-to-end — ${asks}/${SAMPLES} resolve to ask-first (${tomReads.join(", ")})`);
 assert.ok(asks >= MAJORITY, `Tom's turn must resolve to the ask-first arm by majority, got ${tomReads.join(", ")}`);
+
+// End to end on the reported FALSE POSITIVE: the arm the trade-in owner gets must be `none`, which
+// is the assertion that would have stopped the apology AND the manual_handoff. Asserted on the ARM
+// rather than on the parser's label because that is what the system actually branches on — a
+// sub-floor confidence would also land on `none`, and that is a pass, not a different bug.
+const tradeInArms = [] as string[];
+for (let i = 0; i < SAMPLES; i++) {
+  const parse = await parsePastPurchaseComplaintWithLLM({
+    text: TRADE_IN_OWNER,
+    history: TRADE_IN_OWNER_HISTORY
+  });
+  tradeInArms.push(
+    decidePastPurchaseComplaintTurn({
+      parse,
+      confidenceMin: pastPurchaseComplaintConfidenceMin(),
+      // Measured on the live thread: no sold unit on our books for this lead.
+      purchaseOnRecord: false
+    }).arm
+  );
+}
+const stoodDown = tradeInArms.filter(a => a === "none").length;
+console.log(`ok   trade-in owner end-to-end — ${stoodDown}/${SAMPLES} stand down (${tradeInArms.join(", ")})`);
+assert.ok(
+  stoodDown >= MAJORITY,
+  `the trade-in owner's turn must leave routing alone (arm "none") by majority, got ${tradeInArms.join(", ")}`
+);
 
 assert.equal(failures, 0, `${failures} case(s) failed`);
 console.log("PASS past_purchase_complaint_parser_eval — the complaint is read, the seller is not assumed");
