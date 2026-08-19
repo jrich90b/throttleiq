@@ -48,6 +48,9 @@ type Ceiling = {
 const CEILINGS: Ceiling[] = [
   {
     file: "services/api/src/index.ts",
+    // 70_242 -> 70_242 held while the watch-fire matcher stopped re-implementing modelMatches
+    // (Mike Wolf +17164323990): the engine's private directional test became a call to the shared
+    // matcher, and normalizeModelName moved out to domain/inventoryFeed.ts to pay for the comment.
     // 71_671 -> 71_667. First ratchet DOWN: the followUpCadence quiet-window un-stacking replaced
     // four copies of the "hush the cadence after we just reached out" block with calls to
     // applyCadenceQuietWindow (conversationStore) / decideCadenceQuietWindow (routeStateReducer).

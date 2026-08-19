@@ -318,6 +318,13 @@ function extractColor(item: Record<string, any>): string | undefined {
   );
 }
 
+/** Whitespace/case-only model-text normalizer (moved out of index.ts 2026-08-19 to fund its size
+ * ceiling). Deliberately does NOT do normalizeModel's word cleanup — callers that compare a raw
+ * label against another raw label rely on it being lossless apart from case and spacing. */
+export function normalizeModelName(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
 export function normalizeModel(s: string): string {
   const raw = s
     .toLowerCase()
