@@ -468,7 +468,13 @@ const CEILINGS: Ceiling[] = [
     // which had been carrying leadOwner alone.
     // 70_243 -> 70_242. The returning-customer fact reaches the draft context in one line, funded
     // by folding a three-line memorySummary guard whose every neighbour was already a one-liner.
-    max: 70_242,
+    // 70_242 -> 70_132. The "Rescheduled" appointment outcome (Joe, 2026-08-18, +17165230421).
+    // index.ts was sitting EXACTLY on the ceiling again, so the slice funded itself twice over: the
+    // whole appointment-outcome VOCABULARY — the three types, APPOINTMENT_SECONDARY_OPTIONS, both
+    // normalizers and both legacy mappings, 120 lines of pure functions with no IO — moved verbatim
+    // to domain/appointmentOutcome.ts, where the new answer could be added with an eval able to
+    // reach it. Net -110 after the import block and the two dropdown options.
+    max: 70_132,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

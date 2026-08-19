@@ -1514,8 +1514,12 @@ function getInboxDealFilterButtonClass(active: boolean) {
   }`;
 }
 
+// The appointment MOVED — see services/api/src/domain/appointmentOutcome.ts for why this is its own
+// answer and not "cancelled" (a wrong pick here also drafts a "sorry we missed you" text).
+type AppointmentPrimaryOutcome = "showed" | "did_not_show" | "cancelled" | "rescheduled";
+
 const APPOINTMENT_SECONDARY_OPTIONS_BY_PRIMARY: Record<
-  "showed" | "did_not_show" | "cancelled",
+  AppointmentPrimaryOutcome,
   Array<{ value: string; label: string }>
 > = {
   showed: [
@@ -1539,13 +1543,18 @@ const APPOINTMENT_SECONDARY_OPTIONS_BY_PRIMARY: Record<
     { value: "lost", label: "Lost / bought elsewhere" },
     { value: "not_ready", label: "Not ready" },
     { value: "other", label: "Other" }
+  ],
+  rescheduled: [
+    { value: "needs_follow_up", label: "Needs follow up" },
+    { value: "other", label: "Other" }
   ]
 };
 
-const APPOINTMENT_PRIMARY_LABELS: Record<"showed" | "did_not_show" | "cancelled", string> = {
+const APPOINTMENT_PRIMARY_LABELS: Record<AppointmentPrimaryOutcome, string> = {
   showed: "Showed",
   did_not_show: "Did not show",
-  cancelled: "Cancelled"
+  cancelled: "Cancelled",
+  rescheduled: "Rescheduled"
 };
 
 const DEALER_RIDE_SECONDARY_OPTIONS: Array<{ value: string; label: string }> = [
@@ -3782,16 +3791,13 @@ export default function Home() {
   const [todoResolution, setTodoResolution] = useState("resume");
   const [appointmentCloseOpen, setAppointmentCloseOpen] = useState(false);
   const [appointmentCloseTarget, setAppointmentCloseTarget] = useState<TodoItem | null>(null);
-  const [appointmentClosePrimaryOutcome, setAppointmentClosePrimaryOutcome] = useState<
-    "showed" | "did_not_show" | "cancelled"
-  >("showed");
+  const [appointmentClosePrimaryOutcome, setAppointmentClosePrimaryOutcome] =
+    useState<AppointmentPrimaryOutcome>("showed");
   const [appointmentCloseSecondaryOutcome, setAppointmentCloseSecondaryOutcome] = useState("needs_follow_up");
   const [appointmentCloseNote, setAppointmentCloseNote] = useState("");
   const [appointmentCloseSaving, setAppointmentCloseSaving] = useState(false);
   const [appointmentOutcomeOpen, setAppointmentOutcomeOpen] = useState(false);
-  const [appointmentOutcomePrimary, setAppointmentOutcomePrimary] = useState<"showed" | "did_not_show" | "cancelled">(
-    "showed"
-  );
+  const [appointmentOutcomePrimary, setAppointmentOutcomePrimary] = useState<AppointmentPrimaryOutcome>("showed");
   const [appointmentOutcomeSecondary, setAppointmentOutcomeSecondary] = useState("needs_follow_up");
   const [appointmentOutcomeNote, setAppointmentOutcomeNote] = useState("");
   const [appointmentOutcomeSaving, setAppointmentOutcomeSaving] = useState(false);
@@ -15297,7 +15303,7 @@ export default function Home() {
                       className="mt-1 w-full border rounded px-3 py-2 text-sm"
                       value={appointmentClosePrimaryOutcome}
                       onChange={e => {
-                        const nextPrimary = (e.target.value as "showed" | "did_not_show" | "cancelled") || "showed";
+                        const nextPrimary = (e.target.value as AppointmentPrimaryOutcome) || "showed";
                         setAppointmentClosePrimaryOutcome(nextPrimary);
                         const options = APPOINTMENT_SECONDARY_OPTIONS_BY_PRIMARY[nextPrimary] ?? [];
                         const hasCurrent = options.some(opt => opt.value === appointmentCloseSecondaryOutcome);
@@ -15307,6 +15313,7 @@ export default function Home() {
                       <option value="showed">Showed</option>
                       <option value="did_not_show">Did not show</option>
                       <option value="cancelled">Cancelled</option>
+                      <option value="rescheduled">Rescheduled</option>
                     </select>
                   </label>
                 )}
@@ -15454,7 +15461,7 @@ export default function Home() {
                     className="mt-1 w-full border rounded px-3 py-2 text-sm"
                     value={appointmentOutcomePrimary}
                     onChange={e => {
-                      const nextPrimary = (e.target.value as "showed" | "did_not_show" | "cancelled") || "showed";
+                      const nextPrimary = (e.target.value as AppointmentPrimaryOutcome) || "showed";
                       setAppointmentOutcomePrimary(nextPrimary);
                       const options = APPOINTMENT_SECONDARY_OPTIONS_BY_PRIMARY[nextPrimary] ?? [];
                       const hasCurrent = options.some(opt => opt.value === appointmentOutcomeSecondary);
@@ -15464,6 +15471,7 @@ export default function Home() {
                     <option value="showed">Showed</option>
                     <option value="did_not_show">Did not show</option>
                     <option value="cancelled">Cancelled</option>
+                    <option value="rescheduled">Rescheduled</option>
                   </select>
                 </label>
                 <label className="text-xs text-gray-600">

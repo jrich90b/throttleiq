@@ -1220,6 +1220,11 @@ import {
 import { isFinanceOutcomeContext, shouldPromptBusinessManagerFinanceOutcome } from "./domain/financeOutcomeGates.js";
 import { composeManualOutboundRequestedPhrase } from "./domain/manualOutboundAppointment.js";
 import {
+  APPOINTMENT_SECONDARY_OPTIONS, mapLegacyAppointmentOutcome, mapPrimarySecondaryToLegacy,
+  normalizeAppointmentPrimaryOutcome, normalizeAppointmentSecondaryOutcome,
+  type AppointmentPrimaryOutcome, type AppointmentSecondaryOutcome, type LegacyAppointmentOutcomeStatus
+} from "./domain/appointmentOutcome.js";
+import {
   buildGateBlockerDigestMessage,
   collectGateBlockers,
   shouldSendGateBlockerDigest
@@ -19549,126 +19554,6 @@ function escapeHtml(input: string): string {
   });
 }
 
-type AppointmentPrimaryOutcome = "showed" | "did_not_show" | "cancelled";
-type AppointmentSecondaryOutcome =
-  | "sold"
-  | "hold"
-  | "needs_follow_up"
-  | "lost"
-  | "finance_not_approved"
-  | "finance_needs_info"
-  | "not_ready"
-  | "no_change"
-  | "other";
-type LegacyAppointmentOutcomeStatus =
-  | "showed_up"
-  | "no_show"
-  | "cancelled"
-  | "sold"
-  | "hold"
-  | "financing_declined"
-  | "financing_needs_info"
-  | "bought_elsewhere"
-  | "lost"
-  | "follow_up"
-  | "no_change"
-  | "other";
-
-const APPOINTMENT_SECONDARY_OPTIONS: Record<AppointmentPrimaryOutcome, Set<AppointmentSecondaryOutcome>> = {
-  showed: new Set([
-    "sold",
-    "hold",
-    "needs_follow_up",
-    "lost",
-    "finance_not_approved",
-    "finance_needs_info",
-    "not_ready",
-    "no_change",
-    "other"
-  ]),
-  did_not_show: new Set(["needs_follow_up", "lost", "not_ready", "other"]),
-  cancelled: new Set(["needs_follow_up", "lost", "not_ready", "other"])
-};
-
-function normalizeAppointmentPrimaryOutcome(raw: string): AppointmentPrimaryOutcome | null {
-  const value = String(raw ?? "").trim().toLowerCase();
-  if (!value) return null;
-  if (value === "showed" || value === "showed_up") return "showed";
-  if (value === "did_not_show" || value === "no_show") return "did_not_show";
-  if (value === "cancelled" || value === "canceled") return "cancelled";
-  return null;
-}
-
-function normalizeAppointmentSecondaryOutcome(raw: string): AppointmentSecondaryOutcome | null {
-  const value = String(raw ?? "").trim().toLowerCase();
-  if (!value) return null;
-  if (value === "sold") return "sold";
-  if (value === "hold") return "hold";
-  if (value === "needs_follow_up" || value === "follow_up") return "needs_follow_up";
-  if (value === "lost" || value === "bought_elsewhere") return "lost";
-  if (value === "finance_not_approved" || value === "financing_declined") return "finance_not_approved";
-  if (value === "finance_needs_info" || value === "financing_needs_info") return "finance_needs_info";
-  if (value === "not_ready") return "not_ready";
-  if (value === "no_change" || value === "already_on_hold" || value === "already hold" || value === "already on hold") {
-    return "no_change";
-  }
-  if (value === "other") return "other";
-  return null;
-}
-
-function mapLegacyAppointmentOutcome(
-  statusRaw: string
-): { primaryStatus: AppointmentPrimaryOutcome; secondaryStatus: AppointmentSecondaryOutcome; legacyStatus: LegacyAppointmentOutcomeStatus } {
-  const status = String(statusRaw ?? "").trim().toLowerCase();
-  if (status === "sold") {
-    return { primaryStatus: "showed", secondaryStatus: "sold", legacyStatus: "sold" };
-  }
-  if (status === "hold") {
-    return { primaryStatus: "showed", secondaryStatus: "hold", legacyStatus: "hold" };
-  }
-  if (status === "financing_declined") {
-    return { primaryStatus: "showed", secondaryStatus: "finance_not_approved", legacyStatus: "financing_declined" };
-  }
-  if (status === "financing_needs_info") {
-    return { primaryStatus: "showed", secondaryStatus: "finance_needs_info", legacyStatus: "financing_needs_info" };
-  }
-  if (status === "bought_elsewhere" || status === "lost") {
-    return { primaryStatus: "showed", secondaryStatus: "lost", legacyStatus: status === "lost" ? "lost" : "bought_elsewhere" };
-  }
-  if (status === "other") {
-    return { primaryStatus: "showed", secondaryStatus: "other", legacyStatus: "other" };
-  }
-  if (status === "no_change" || status === "already_on_hold") {
-    return { primaryStatus: "showed", secondaryStatus: "no_change", legacyStatus: "no_change" };
-  }
-  if (status === "cancelled" || status === "canceled") {
-    return { primaryStatus: "cancelled", secondaryStatus: "needs_follow_up", legacyStatus: "cancelled" };
-  }
-  if (status === "no_show") {
-    return { primaryStatus: "did_not_show", secondaryStatus: "needs_follow_up", legacyStatus: "no_show" };
-  }
-  if (status === "showed_up") {
-    return { primaryStatus: "showed", secondaryStatus: "needs_follow_up", legacyStatus: "showed_up" };
-  }
-  return { primaryStatus: "showed", secondaryStatus: "needs_follow_up", legacyStatus: "follow_up" };
-}
-
-function mapPrimarySecondaryToLegacy(
-  primaryStatus: AppointmentPrimaryOutcome,
-  secondaryStatus: AppointmentSecondaryOutcome
-): LegacyAppointmentOutcomeStatus {
-  if (primaryStatus === "did_not_show") return "no_show";
-  if (primaryStatus === "cancelled") return "cancelled";
-  if (secondaryStatus === "sold") return "sold";
-  if (secondaryStatus === "hold") return "hold";
-  if (secondaryStatus === "finance_not_approved") return "financing_declined";
-  if (secondaryStatus === "finance_needs_info") return "financing_needs_info";
-  if (secondaryStatus === "lost") return "bought_elsewhere";
-  if (secondaryStatus === "no_change") return "no_change";
-  if (secondaryStatus === "other") return "other";
-  return "follow_up";
-}
-
 function normalizeAppointmentOutcomeInput(args: {
   legacyOutcome?: string;
   primaryOutcome?: string;
@@ -37894,6 +37779,7 @@ app.get("/public/appointment/outcome", async (req, res) => {
           <option value="showed">Showed</option>
           <option value="did_not_show">Did not show</option>
           <option value="cancelled">Cancelled</option>
+          <option value="rescheduled">Rescheduled</option>
         </select>
         <label>Disposition</label>
         <select name="secondaryOutcome" id="secondary-outcome"></select>
@@ -37976,6 +37862,10 @@ app.get("/public/appointment/outcome", async (req, res) => {
             { value: "needs_follow_up", label: "Needs follow up" },
             { value: "lost", label: "Lost / bought elsewhere" },
             { value: "not_ready", label: "Not ready" },
+            { value: "other", label: "Other" }
+          ],
+          rescheduled: [
+            { value: "needs_follow_up", label: "Needs follow up" },
             { value: "other", label: "Other" }
           ]
         };
