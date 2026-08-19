@@ -27,6 +27,15 @@
  * Sampled 3x with a 2/3 majority so one unlucky sample cannot red-line main for everyone (the trap
  * that burned `incoming_unit_arrival:eval`).
  *
+ * SABOTAGE-MEASURED 2026-08-19, and one result is worth keeping: the appraisal guard lives in TWO
+ * places in the parser — the "THE TRAP" prose and the two trade-in few-shots — and deleting EITHER
+ * one alone still passes this file 3/3. They are redundant, not duplicated. Only reverting the
+ * parser wholesale fails it (0/3 on the trade-in case). So if you are tidying that prompt: removing
+ * one of the pair is safe and this eval will not stop you, removing both puts the false positive
+ * straight back. The over-narrow direction bites too — rewriting the read to demand that the
+ * customer explicitly blame the dealership pushes Tom's attribution to `this_dealer`, the exact
+ * read that licenses an apology, and the attribution assertion catches it.
+ *
  * Requires OPENAI_API_KEY + LLM_ENABLED=1 (the ci:eval chain supplies both).
  * Run: LLM_ENABLED=1 npx tsx scripts/past_purchase_complaint_parser_eval.ts
  */
