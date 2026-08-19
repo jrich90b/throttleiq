@@ -1100,6 +1100,8 @@ import {
   inferTodoTaskClass,
   isCadenceGeneratedFollowUpTodoSummary,
   listOpenTodos,
+  findPendingAppointmentRequestTodo,
+  readPendingAppointmentRequestPhrase,
   CONTEXT_FIDELITY_HELD_TODO_MARKER,
   shouldNudgeStaleHandoffLead,
   buildStaleHandoffNudge,
@@ -51887,22 +51889,10 @@ app.post("/conversations/:id/send", async (req, res) => {
     }
 
     const looksAppointmentLike = hasScheduleKeyword || hasDayToken || hasTimeToken || hasAppointmentContext;
-    const pendingAppointmentRequestTodo = listOpenTodos()
-      .filter(
-        todo =>
-          todo.convId === conv.id &&
-          todo.status === "open" &&
-          todo.taskClass === "appointment" &&
-          /^Appointment requested\./i.test(String(todo.summary ?? ""))
-      )
-      .sort(
-        (a, b) =>
-          new Date(String(b.createdAt ?? "")).getTime() -
-          new Date(String(a.createdAt ?? "")).getTime()
-      )[0];
-    const pendingAppointmentRequestText = String(pendingAppointmentRequestTodo?.summary ?? "")
-      .match(/\bRequested(?: time)?:\s*(.+?)(?:\.|$)/i)?.[1]
-      ?.trim() ?? "";
+    const pendingAppointmentRequestTodo = findPendingAppointmentRequestTodo(conv.id);
+    const pendingAppointmentRequestText = readPendingAppointmentRequestPhrase(
+      pendingAppointmentRequestTodo?.summary
+    );
     // Pure decision (routeStateReducer, pinned by manual_confirm_pending_appointment:eval). The old
     // inline gate required existingBookedAppointmentIsPast, so a FIRST booking (no appointment at
     // all) never confirmed — William +17163591526: "thursday 9a" requested, staff "Sounds good! See
@@ -52006,11 +51996,13 @@ app.post("/conversations/:id/send", async (req, res) => {
       : "";
     // The staff text is the primary day/time source, but an affirmative confirm usually names NO
     // time ("Sounds good! See you then") — the time lives in the PENDING request. Fall through to
-    // it instead of letting an unparseable explicit-confirm text null out the whole booking.
+    // it instead of letting an unparseable explicit-confirm text null out the whole booking. The
+    // pending phrase is STORED, so its relative day counts from when the customer said it, not now
+    // (conversationStore/resolveRelativeDayReference) — a 5-day-old "tomorrow" is not tomorrow.
     const manualOutboundRequested =
       (explicitBookingStatement ? parseRequestedDayTime(text, schedulerTimezone) : null) ??
       (confirmsPendingAppointmentRequest
-        ? parseRequestedDayTime(pendingAppointmentRequestText, schedulerTimezone)
+        ? parseRequestedDayTime(pendingAppointmentRequestText, schedulerTimezone, pendingAppointmentRequestTodo?.createdAt)
         : null);
     // Same composition for the booking parser's fields — it was a hand-inlined copy of the helper.
     const normalizedText = String(

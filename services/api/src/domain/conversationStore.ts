@@ -7237,9 +7237,32 @@ function parseOrdinalDateInCurrentWindow(
   return { year, month, day };
 }
 
+/**
+ * Which instant a RELATIVE day word ("today", "tomorrow", a bare weekday, "same time") is measured
+ * from. Defaults to now, which is correct when the phrase is being read off a message as it lands.
+ *
+ * It is WRONG whenever the phrase was STORED and is re-read later. An open
+ * `"Appointment requested. Requested: tomorrow morning."` todo minted on 8/14 still says
+ * "tomorrow": resolved against the wall clock on 8/19 it books 8/20, five days off what the
+ * customer asked for. Measured on the live store 2026-08-19: 11 of 75 pending appointment requests
+ * carry a relative day word, and one (+17165233086, William Higgins) had been open five days.
+ *
+ * Pass the moment the phrase was CAPTURED and the day means what the customer meant. Fail direction
+ * is unchanged and stays safe: a stale "today" then resolves into the PAST, where the caller's
+ * past-slot invariant guard (`contextDayResolvedInThePast`) refuses the booking — the same "no
+ * booking" this path already produced, never a new wrong-day one.
+ */
+function resolveRelativeDayReference(reference?: string | Date | null): Date {
+  if (!reference) return new Date();
+  const parsed = reference instanceof Date ? reference : new Date(String(reference));
+  return Number.isFinite(parsed.getTime()) ? parsed : new Date();
+}
+
 export function parseRequestedDayTime(
   text: string,
-  timeZone: string
+  timeZone: string,
+  /** See resolveRelativeDayReference — the instant "today"/"tomorrow"/a weekday counts from. */
+  relativeDayReference?: string | Date | null
 ): { year: number; month: number; day: number; hour24: number; minute: number; dayOfWeek: string } | null {
   const t = text.toLowerCase();
   const dayToken = parseDayToken(t);
@@ -7310,7 +7333,7 @@ export function parseRequestedDayTime(
     }
   }
   if (!time && dayToken && /(this time|same time|same time tomorrow|this time tomorrow)/.test(t)) {
-    const now = new Date();
+    const now = resolveRelativeDayReference(relativeDayReference);
     const nowParts = getZonedParts(now, timeZone);
     const rounded = Math.round(nowParts.minute / 30) * 30;
     let hour24 = nowParts.hour;
@@ -7336,7 +7359,7 @@ export function parseRequestedDayTime(
   }
   if (!dayToken) return null;
 
-  const now = new Date();
+  const now = resolveRelativeDayReference(relativeDayReference);
   const nowParts = getZonedParts(now, timeZone);
   const todayIdx = weekdayIndex((nowParts.weekday ?? "").slice(0, 3));
   let base = new Date(Date.UTC(nowParts.year, nowParts.month - 1, nowParts.day, 12, 0));
@@ -8445,6 +8468,40 @@ export function shouldNudgeInProcessDeal(
 
 export function listOpenTodos(): TodoTask[] {
   return todos.filter(t => t.status === "open");
+}
+
+/**
+ * The still-open "Appointment requested." todo a staff confirmation would be confirming — newest
+ * first. Lifted out of index.ts so it sits beside the todo store it reads and beside
+ * `parseRequestedDayTime`, which consumes the phrase below and needs this record's `createdAt` as
+ * the instant a relative day counts from.
+ *
+ * `taskClass === "appointment"` is load-bearing, not decoration: the class is what makes the todo
+ * visible to this booking path at all, and until 2026-08-19 (#759) it was decided by whether the
+ * CUSTOMER's own phrasing happened to carry a day token, so 30 of 79 were mis-classed out of view.
+ */
+export function findPendingAppointmentRequestTodo(convId: string): TodoTask | undefined {
+  return listOpenTodos()
+    .filter(
+      todo =>
+        todo.convId === convId &&
+        todo.status === "open" &&
+        todo.taskClass === "appointment" &&
+        /^Appointment requested\./i.test(String(todo.summary ?? ""))
+    )
+    .sort(
+      (a, b) =>
+        new Date(String(b.createdAt ?? "")).getTime() - new Date(String(a.createdAt ?? "")).getTime()
+    )[0];
+}
+
+/** The day/time phrase inside an "Appointment requested. Requested: <phrase>." summary. */
+export function readPendingAppointmentRequestPhrase(summary: string | null | undefined): string {
+  return (
+    String(summary ?? "")
+      .match(/\bRequested(?: time)?:\s*(.+?)(?:\.|$)/i)?.[1]
+      ?.trim() ?? ""
+  );
 }
 
 export function markTodoEscalated(todoId: string, atIso: string = nowIso()): boolean {

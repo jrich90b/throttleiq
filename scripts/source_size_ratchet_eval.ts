@@ -474,7 +474,11 @@ const CEILINGS: Ceiling[] = [
     // normalizers and both legacy mappings, 120 lines of pure functions with no IO — moved verbatim
     // to domain/appointmentOutcome.ts, where the new answer could be added with an eval able to
     // reach it. Net -110 after the import block and the two dropdown options.
-    max: 70_132,
+    // 70_132 -> 70_124. A stored appointment request keeps the day it was made on (Paul Harrigan
+    // +17169467451): the pending-request lookup and its phrase reader moved to conversationStore
+    // beside the todo store they read and the parseRequestedDayTime they feed, which paid for the
+    // reference-instant argument and the comment explaining it.
+    max: 70_124,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
@@ -552,7 +556,11 @@ const CEILINGS: Ceiling[] = [
     // post-rebase count.
     // 16_088 -> 16_086. The priorJourney draft fact: the reasoning lives in domain/priorJourney.ts,
     // so llmDraft carries only the field, the import and the prompt line.
-    max: 16_086,
+    // 16_086 -> 16_049. The booking-intent parser's guidelines and 28 few-shots moved to
+    // domain/bookingIntentParser.ts, the way its staff-side sibling already lives in
+    // domain/manualOutboundAppointment.ts — the day-from-context rule is now written once per
+    // parser, in a file an eval can import instead of a hand-copy that drifts.
+    max: 16_049,
     note: "every parser prompt + JSON schema; second-largest and on the same trajectory"
   }
 ];

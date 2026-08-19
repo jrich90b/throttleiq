@@ -15,7 +15,8 @@
  *      seconds before the rep confirmed at 13:58:06Z — citing the rep's own EARLIER question
  *      ("Hey Paul, what time are you thinking?") as the fulfilment.
  *   2. decideManualConfirmPendingAppointment is only reached via a lookup that requires
- *      taskClass === "appointment" (index.ts), so the booking referee never sees it.
+ *      taskClass === "appointment" (findPendingAppointmentRequestTodo, conversationStore — it
+ *      lived inline in index.ts until 2026-08-19), so the booking referee never sees it.
  *
  * Measured on the live store 2026-08-19: 30 of 79 "Appointment requested." todos classed `todo`.
  *
@@ -134,12 +135,25 @@ assert.ok(
 );
 
 // The booking referee's lookup still keys on taskClass === "appointment" — if that ever changes,
-// this eval's whole premise moves and the author must revisit it.
+// this eval's whole premise moves and the author must revisit it. The lookup moved out of index.ts
+// into conversationStore on 2026-08-19 (findPendingAppointmentRequestTodo), so BOTH the class test
+// and the fact index.ts still goes through that selector are pinned — a class test nobody calls is
+// as inert as no class test at all.
+const storeSrc = fs.readFileSync(
+  new URL("../services/api/src/domain/conversationStore.ts", import.meta.url),
+  "utf8"
+);
+const selectorAt = storeSrc.indexOf("export function findPendingAppointmentRequestTodo");
+checks += 1;
+assert.ok(
+  selectorAt >= 0 && storeSrc.slice(selectorAt, selectorAt + 800).includes('todo.taskClass === "appointment"'),
+  "the pending-appointment-request lookup must still select taskClass === appointment todos"
+);
 const indexSrc = fs.readFileSync(new URL("../services/api/src/index.ts", import.meta.url), "utf8");
 checks += 1;
 assert.ok(
-  indexSrc.includes('todo.taskClass === "appointment"'),
-  "the pending-appointment-request lookup must still select taskClass === appointment todos"
+  indexSrc.includes("findPendingAppointmentRequestTodo(conv.id)"),
+  "the staff-send path must still reach the pending request through that selector"
 );
 
 console.log(`appointment_request_task_class:eval PASS — ${checks} assertions`);

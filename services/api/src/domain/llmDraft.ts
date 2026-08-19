@@ -16,6 +16,7 @@ import { dataPath } from "./dataDir.js";
 import { buildSelfHealSteering, deterministicHealTriggers, stillTriggered } from "./selfHealSteering.js";
 import { FINANCE_OUTCOME_UNREACHABLE_EXAMPLES, FINANCE_OUTCOME_UNREACHABLE_MAPPING, FINANCE_OUTCOME_UNREACHABLE_RULE } from "./financeOutcomePrompt.js";
 import { MANUAL_OUTBOUND_APPOINTMENT_EXAMPLES, MANUAL_OUTBOUND_APPOINTMENT_PROMPT_RULES } from "./manualOutboundAppointment.js";
+import { BOOKING_INTENT_EXAMPLES, BOOKING_INTENT_PROMPT_RULES } from "./bookingIntentParser.js";
 import { buildChannelRules, advanceEveryReplyEnabled, advanceEveryReplySuppressed } from "./draftChannelRules.js";
 export { advanceEveryReplyEnabled, advanceEveryReplySuppressed };
 import { isFabricatedGratitudeLeadIn } from "./leadInGuards.js";
@@ -5032,36 +5033,6 @@ export async function parseBookingIntentWithLLM(args: {
     .slice(0, 2)
     .join(" | ");
   const apptStatus = args.appointment?.status ?? "none";
-  const voiceExamples = [
-    'input: "Customer: can we do Tuesday around 4?" output: {"intent":"schedule","explicit_request":true,"requested":{"day":"tuesday","time_text":"around 4","time_window":"range"},"reference":"none","normalized_text":"tuesday around 4","confidence":0.96}',
-    'input: "Customer: i can come in next week sometime afternoon" output: {"intent":"schedule","explicit_request":true,"requested":{"day":"next week","time_text":"afternoon","time_window":"range"},"reference":"none","normalized_text":"next week afternoon","confidence":0.92}',
-    'input: "Customer: i work m-f 7/4... does sat morning work 4 u" output: {"intent":"schedule","explicit_request":true,"requested":{"day":"saturday","time_text":"morning","time_window":"range"},"reference":"none","normalized_text":"saturday morning","confidence":0.95}',
-    'input: "Customer: how about a tri glide instead. can it be saturday morning?" output: {"intent":"schedule","explicit_request":true,"requested":{"day":"saturday","time_text":"morning","time_window":"range"},"reference":"none","normalized_text":"saturday morning","confidence":0.96}',
-    'input: "Customer: how about a triglycerides instead. it has to be on a saturday." output: {"intent":"schedule","explicit_request":true,"requested":{"day":"saturday","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"saturday","confidence":0.92}',
-    'input: "Customer: can i come in saturday at 9:30?" output: {"intent":"schedule","explicit_request":true,"requested":{"day":"saturday","time_text":"9:30","time_window":"exact"},"reference":"none","normalized_text":"saturday 9:30","confidence":0.97}',
-    'input: "Customer: Either the 9th after 1:30 or any time on the 16th" output: {"intent":"availability","explicit_request":true,"requested":{"day":"9th","time_text":"after 1:30","time_window":"range"},"reference":"none","normalized_text":"9th after 1:30 or 16th any time","confidence":0.95}',
-    'input: "Customer: tomorrow around 11/12 would work best for me" output: {"intent":"schedule","explicit_request":true,"requested":{"day":"tomorrow","time_text":"around 11/12","time_window":"range"},"reference":"last_suggested","normalized_text":"tomorrow around 11/12","confidence":0.95}',
-    'input: "Customer: yes saturday at 930 works" output: {"intent":"schedule","explicit_request":true,"requested":{"day":"saturday","time_text":"9:30","time_window":"exact"},"reference":"last_suggested","normalized_text":"saturday 9:30","confidence":0.96}',
-    'input: "Customer: saturday works for me" output: {"intent":"schedule","explicit_request":true,"requested":{"day":"saturday","time_text":"","time_window":"unknown"},"reference":"last_suggested","normalized_text":"saturday","confidence":0.93}',
-    'input: "Customer: 11am can you send photos of street glide limited" output: {"intent":"none","explicit_request":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.96}',
-    'input: "Customer: never mind photo. test ride street glide limited 3. thanks" output: {"intent":"none","explicit_request":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.95}',
-    'input: "Customer: 9ish works" output: {"intent":"schedule","explicit_request":true,"requested":{"day":"","time_text":"9ish","time_window":"range"},"reference":"last_suggested","normalized_text":"9ish","confidence":0.9}',
-    'input: "Customer: after 4 is best" output: {"intent":"schedule","explicit_request":true,"requested":{"day":"","time_text":"after 4","time_window":"range"},"reference":"last_suggested","normalized_text":"after 4","confidence":0.91}',
-    'input: "Customer: Thanks for info. And any appointments later this month same time." output: {"intent":"availability","explicit_request":true,"requested":{"day":"later this month","time_text":"same time","time_window":"range"},"reference":"last_suggested","normalized_text":"later this month same time","confidence":0.92}',
-    'input: "Customer: can we move that to saturday morning?" output: {"intent":"reschedule","explicit_request":true,"requested":{"day":"saturday","time_text":"morning","time_window":"range"},"reference":"last_appointment","normalized_text":"saturday morning","confidence":0.94}',
-    'input: "Customer: I will have to reschedule unfortunately" output: {"intent":"reschedule","explicit_request":true,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"last_appointment","normalized_text":"","confidence":0.94}',
-    'input: "Customer: Hey Scott I’m not going to be able to make the test ride this morning. I have a family matter that needs attention. I apologize" output: {"intent":"reschedule","explicit_request":true,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"last_appointment","normalized_text":"","confidence":0.94}',
-    'input: "Customer: I couldn’t make it yesterday. How does half an hour sound? I can get there before the weather gets bad." output: {"intent":"schedule","explicit_request":true,"requested":{"day":"","time_text":"in half an hour","time_window":"range"},"reference":"none","normalized_text":"in half an hour","confidence":0.93}',
-    'input: "Customer: wrong place actually. Supposed to be Cartersville, Georgia" output: {"intent":"cancel","explicit_request":true,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"last_appointment","normalized_text":"wrong location","confidence":0.95}',
-    'input: "Customer: that appointment is for the wrong dealership" output: {"intent":"cancel","explicit_request":true,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"last_appointment","normalized_text":"wrong dealership","confidence":0.95}',
-    'input: "Customer: hey! Could we do 9:30-10" output: {"intent":"reschedule","explicit_request":true,"requested":{"day":"","time_text":"9:30-10","time_window":"range"},"reference":"last_appointment","normalized_text":"9:30-10","confidence":0.94}',
-    'input: "Customer: can you move me later than that time?" output: {"intent":"reschedule","explicit_request":true,"requested":{"day":"","time_text":"later","time_window":"range"},"reference":"last_suggested","normalized_text":"later than last suggested","confidence":0.9}',
-    'input: "Customer: what openings do you have friday?" output: {"intent":"availability","explicit_request":true,"requested":{"day":"friday","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"friday","confidence":0.95}',
-    'input: "Customer: Ooh that looks sharp! Friday morning, early afternoon, or anytime Saturday I can come out and take a look" output: {"intent":"schedule","explicit_request":true,"requested":{"day":"friday","time_text":"morning","time_window":"range"},"reference":"none","normalized_text":"friday morning or saturday any time","confidence":0.94}',
-    'input: "Customer: i will let you know a time later today" output: {"intent":"none","explicit_request":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.95}',
-    'input: "Customer: I just filled out the paperwork to get the free hat. Talked to Scott the other day, told him I would probably come in shortly with a couple friends they can ride, but I can’t. I had my hip replaced last Thursday." output: {"intent":"none","explicit_request":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.96}',
-    'input: "Customer: payments are too high right now" output: {"intent":"none","explicit_request":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.93}'
-  ];
 
   const prompt = [
     "You are a scheduling parser for dealership SMS.",
@@ -5069,21 +5040,13 @@ export async function parseBookingIntentWithLLM(args: {
     "Do not invent dates.",
     "",
     "Guidelines:",
-    "- explicit_request is true only if the customer is asking to schedule/stop in/reschedule/cancel.",
-    "- If an appointment exists and the customer says it is the wrong place, wrong dealer, wrong dealership, wrong store, or meant for another location, classify as cancel with reference last_appointment.",
-    "- If the customer gives a day without a time, set requested.day and set time_text to an empty string.",
-    "- If the customer gives multiple acceptable windows, use the first acceptable window in requested and keep the other option in normalized_text.",
-    "- Ordinal dates like 'the 9th' or '16th' are real date requests; keep requested.day as '9th' / '16th'.",
-    "- If the customer references a prior offer (e.g., 'that time', 'earlier', 'later'), set reference to last_suggested.",
-    "- normalized_text should be a compact day/time phrase when possible; otherwise empty string.",
-    "- Use empty strings for unknown requested.day and requested.time_text.",
-    "- confidence is a number from 0 to 1.",
+    ...BOOKING_INTENT_PROMPT_RULES,
     "",
     `Appointment status: ${apptStatus}`,
     history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
     lastSlots ? `Last suggested slots: ${lastSlots}` : "Last suggested slots: (none)",
     "Voice-style examples:",
-    ...voiceExamples,
+    ...BOOKING_INTENT_EXAMPLES,
     `Message: ${text}`
   ].join("\n");
 
