@@ -1,0 +1,55 @@
+[
+  {
+    "id": "paul_11_oclock_day_settled_two_turns_earlier",
+    "note": "+17169467451 2026-08-17, operator-reported 'This did not seem to book an appointment at 11 today'. The customer settled the day at 12:49Z; the clock time arrived at 13:56Z with no day on it.",
+    "text": "would 11 o'clock be OK?",
+    "history": [
+      { "direction": "in", "body": "I'm off today, can I come out this morning to test ride the 2021 again?" },
+      { "direction": "out", "body": "Hey Paul, what time are you thinking?" }
+    ],
+    "expected": { "intent": "schedule", "explicit_request": true, "day_contains": "today" }
+  },
+  {
+    "id": "william_pickup_same_day_clock_time",
+    "note": "+17165233086 2026-08-18. The rep asked WHEN, the customer answered with a clock time inside business hours, the rep confirmed 60s later. conv.appointment was absent entirely.",
+    "text": "Oh great, I could get there about 3pm if that works",
+    "history": [
+      { "direction": "out", "body": "we just finished the title and registration paperwork. When did you want to pick up your new bike?" }
+    ],
+    "expected": { "intent": "schedule", "explicit_request": true, "day_contains": "today" }
+  },
+  {
+    "id": "weekday_settled_by_the_thread_not_today",
+    "note": "The day the thread settled is not always today. Carrying 'today' here would book the wrong day — the bounded half of the rule.",
+    "text": "yeah 10 works",
+    "history": [
+      { "direction": "in", "body": "I'd like to come see the Road Glide" },
+      { "direction": "out", "body": "Does Saturday work for you?" }
+    ],
+    "expected": { "intent": "schedule", "explicit_request": true, "day_contains": "saturday" }
+  },
+  {
+    "id": "no_day_settled_anywhere_stays_dayless",
+    "note": "FAIL DIRECTION. The thread was about inventory; nothing named a day. An empty day means no booking, which is the safe outcome. This is the shape the pre-existing '3:45 works' few-shot pins.",
+    "text": "3:45 works",
+    "history": [
+      { "direction": "in", "body": "Do you have that Road Glide in stock?" },
+      { "direction": "out", "body": "We do — it's on the floor now." }
+    ],
+    "expected": { "intent": "schedule", "explicit_request": true, "day_contains": null }
+  },
+  {
+    "id": "bare_time_with_no_thread_at_all",
+    "note": "FAIL DIRECTION. No history to settle anything, so nothing may be carried.",
+    "text": "after 4 is best",
+    "history": [],
+    "expected": { "intent": "schedule", "explicit_request": true, "day_contains": null }
+  },
+  {
+    "id": "day_named_outright_is_untouched",
+    "note": "The ordinary case must not regress: a day the customer names themselves is used as-is.",
+    "text": "can i come in saturday at 9:30?",
+    "history": [],
+    "expected": { "intent": "schedule", "explicit_request": true, "day_contains": "saturday" }
+  }
+]
