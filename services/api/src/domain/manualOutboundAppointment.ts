@@ -83,3 +83,41 @@ export function composeManualOutboundRequestedPhrase(parsed: ManualOutboundReque
   if (day && normalized && !DAY_WORDS.test(normalized)) return `${day} ${normalized}`.trim();
   return normalized || [day, time].filter(Boolean).join(" ").trim();
 }
+
+// ── The lexical cue set that guards this parser ──────────────────────────────────────────────────
+// Moved verbatim out of the `reconcileManualOutboundState` body in index.ts (2026-08-18). These are
+// NOT comprehension — the typed parser above owns what a staff message MEANS. They are the fail-safe
+// gates AROUND it (AGENTS.md: a gate whose removal makes us fail toward doing the side-effect is a
+// KEEP), and they belong beside the parser they guard, where an eval can reach them. Every one is
+// byte-identical to the inline regex it replaces; renaming them would have been a behaviour change.
+
+/** Staff explicitly asked to MOVE an existing appointment. */
+export function manualOutboundHasRescheduleWording(lower: string): boolean {
+  return /\b(reschedule|re-?schedule|change (?:the )?time|move (?:it|me)?|another time|different time|push (?:it )?back|later time|earlier time)\b/i.test(lower);
+}
+
+/** Appointment-ish vocabulary of any kind. */
+export function manualOutboundHasScheduleKeyword(text: string): boolean {
+  return /\b(schedule|book|appointment|appt|reschedule|availability|available|stop by|stop in|come in|see you|works)\b/i.test(text);
+}
+
+/** A day is named somewhere in the message. */
+export function manualOutboundHasDayToken(text: string): boolean {
+  return /\b(today|tomorrow|monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat|sunday|sun|next week|this week|this weekend|weekend)\b/i.test(text);
+}
+
+/** A clock time or a part of the day is named somewhere in the message. */
+export function manualOutboundHasTimeToken(text: string): boolean {
+  return /\b(\d{1,2}(:\d{2})?\s*(am|pm)\b|morning|afternoon|evening|night|noon|midnight)\b/i.test(text);
+}
+
+/** Two or more explicit clock times joined by or/either — staff offered a choice of slots. */
+export function manualOutboundOffersMultipleTimeChoices(text: string, lower: string): boolean {
+  const explicitTimeMentions = text.match(/\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/gi) ?? [];
+  return explicitTimeMentions.length >= 2 && /\b(or|either)\b/i.test(lower);
+}
+
+/** The message asks something rather than states it. */
+export function manualOutboundAsksScheduleQuestion(text: string, lower: string): boolean {
+  return /\?/.test(text) || /\b(would|could|can|do|does|are|is|what|which|when)\b/i.test(lower);
+}

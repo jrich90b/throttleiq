@@ -307,6 +307,24 @@ export function buildDecisionRegistry(reducer: any): SampledDecision[] {
     });
   }, ["decideManualConfirmPendingAppointment"]);
 
+  // Added 2026-08-18 with the staff-proposal-supersedes-booking arm (Joe, +17165230421). PROBE: hold
+  // the PROPOSAL fixed at "the day after the booked visit" — the row where the arbitration actually
+  // happens — and let the stored appointment vary. A conversation with no booking, or one whose
+  // booked day IS the proposed day, must answer false; that is the whole decision.
+  add("manualProposalSupersedesBooking", (conv, clock) => {
+    if (typeof reducer.decideManualProposalSupersedesBooking !== "function") return undefined;
+    const whenIso = str(conv?.appointment?.whenIso);
+    const whenMs = whenIso ? Date.parse(whenIso) : NaN;
+    return reducer.decideManualProposalSupersedesBooking({
+      hasBookedEvent: !!str(conv?.appointment?.bookedEventId),
+      bookedWhenIso: whenIso || null,
+      // PROBE: the day after the booking, so a real booking always reads as superseded and the
+      // sample tracks the STATE, not the clock.
+      proposedWhenIso: Number.isFinite(whenMs) ? new Date(whenMs + 86_400_000).toISOString() : null,
+      timeZone: "America/New_York"
+    });
+  }, ["decideManualProposalSupersedesBooking"]);
+
   // Added 2026-08-01 with the appointment-outcome-record un-stacking (nine writers, one referee).
   // PROBE: hold the INCOMING write fixed at the bare-shape lane that actually causes the collision
   // — a finance-declined signal, no primary/secondary pair, no note — and vary only the outcome

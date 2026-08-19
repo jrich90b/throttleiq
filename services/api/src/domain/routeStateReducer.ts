@@ -753,6 +753,80 @@ export function tentativeWindowNeedsOwnerFollowUp(input: {
 // day (Intl, timezone-aware) so a late-evening UTC appointment isn't mis-bucketed. FAIL DIRECTION:
 // when unsure (unparseable/absent whenIso) return false — keep the existing status reply rather than
 // suppress a real upcoming appointment.
+/**
+ * The dealer-local calendar day of an instant, as `YYYY-MM-DD` (en-CA, so it is lexicographically
+ * comparable). Extracted from `isStaleBookedAppointmentDay` below, which had it inline, so the
+ * "same day or a different day?" question is asked exactly one way everywhere.
+ */
+export function dealerLocalDayKey(at: Date, timeZone: string): string {
+  const tz = String(timeZone ?? "").trim() || "America/New_York";
+  const opts: Intl.DateTimeFormatOptions = { year: "numeric", month: "2-digit", day: "2-digit" };
+  try {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: tz, ...opts }).format(at);
+  } catch {
+    return new Intl.DateTimeFormat("en-CA", opts).format(at);
+  }
+}
+
+// ── A staff PROPOSAL that lands on a different day than the booked visit IS a reschedule ─────────
+//
+// Joe, 2026-08-18, Jason Marshall +17165230421 (CVO Road Glide ST): "The conversation should have
+// picked up that he is going to come in tomorrow."
+//
+// Jason had a Tue 4:30 PM visit booked. That morning he wrote he was free "today and tomorrow";
+// staff answered "if you have availability for tomorrow, let's shoot for then". The parser read that
+// correctly — `proposed_time` at 0.9, which is exactly what the prompt's own rule says "let's shoot
+// for" means — and `reconcileManualOutboundState` then RETURNED at its offer-only guard, several
+// statements before the reschedule branch that would have written the right task. The Tuesday
+// appointment stayed `confirmed`, the calendar event stayed put, and at 5:45 PM the outcome nag
+// asked staff to grade a visit both sides had agreed that morning to move.
+//
+// Nothing was wrong with the parse. The reconciler simply never asked the question that turns a
+// proposal into a MOVE, because the answer is not in the message: **is a visit already booked, on a
+// different day?** From the text alone "let's shoot for tomorrow" is a proposal; only the existing
+// booking makes it a reschedule.
+//
+// PURE ON PURPOSE. This module has no imports and this function keeps it that way — it takes the
+// already-resolved instant, never a day label, so the caller owns resolving "tomorrow" (and only the
+// caller can, since that needs the clock). It reads two timestamps we wrote ourselves, so it is a
+// state comparison, not comprehension of customer language (AGENTS.md rule 2).
+//
+// FAIL DIRECTION: toward doing NOTHING. Every unknown — no booking, an unresolvable day, an
+// unparseable stamp — returns false and preserves today's exact behaviour. Firing only ever routes
+// the turn into the EXISTING reschedule branch, which adds a staff task and sets `schedule_request`;
+// it does not touch the Google event, does not message the customer, and does not latch
+// `reschedulePending`. So a false positive costs one task a human dismisses, and a false negative is
+// the silently-dropped move this exists to stop.
+//
+// The same-day case is deliberately NOT a move: staff confirming a time on the day already booked is
+// a confirmation, and routing it to the reschedule branch would re-open a settled appointment.
+export type ManualProposalSupersedesBookingInput = {
+  /** A real calendar event holds this lead's time. */
+  hasBookedEvent: boolean;
+  /** When that booked visit is (`conv.appointment.whenIso`). */
+  bookedWhenIso: string | null | undefined;
+  /** The instant the staff proposal's DAY resolves to; null when it could not be resolved. */
+  proposedWhenIso: string | null | undefined;
+  timeZone: string;
+};
+export type ManualProposalSupersedesBookingDecision = { supersedes: boolean; why: string };
+
+export function decideManualProposalSupersedesBooking(
+  input: ManualProposalSupersedesBookingInput
+): ManualProposalSupersedesBookingDecision {
+  if (!input.hasBookedEvent) return { supersedes: false, why: "no_booked_event" };
+  const booked = new Date(String(input.bookedWhenIso ?? ""));
+  if (Number.isNaN(booked.getTime())) return { supersedes: false, why: "booked_when_unparseable" };
+  const proposedIso = String(input.proposedWhenIso ?? "").trim();
+  if (!proposedIso) return { supersedes: false, why: "proposed_day_unresolved" };
+  const proposed = new Date(proposedIso);
+  if (Number.isNaN(proposed.getTime())) return { supersedes: false, why: "proposed_day_unparseable" };
+  const bookedDay = dealerLocalDayKey(booked, input.timeZone);
+  const proposedDay = dealerLocalDayKey(proposed, input.timeZone);
+  if (bookedDay === proposedDay) return { supersedes: false, why: `same_day:${bookedDay}` };
+  return { supersedes: true, why: `booked_${bookedDay}_proposed_${proposedDay}` };
+}
+
 export function isStaleBookedAppointmentDay(input: {
   whenIso: string | null | undefined;
   nowMs: number;
@@ -762,25 +836,8 @@ export function isStaleBookedAppointmentDay(input: {
   if (!iso) return false;
   const start = new Date(iso);
   if (Number.isNaN(start.getTime())) return false;
-  const tz = String(input.timeZone ?? "").trim() || "America/New_York";
-  const dayKey = (d: Date): string => {
-    try {
-      // en-CA yields YYYY-MM-DD, which is lexicographically comparable.
-      return new Intl.DateTimeFormat("en-CA", {
-        timeZone: tz,
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit"
-      }).format(d);
-    } catch {
-      return new Intl.DateTimeFormat("en-CA", {
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit"
-      }).format(d);
-    }
-  };
-  return dayKey(start) < dayKey(new Date(input.nowMs));
+  const tz = input.timeZone;
+  return dealerLocalDayKey(start, tz) < dealerLocalDayKey(new Date(input.nowMs), tz);
 }
 
 // A booked appointment that is SETTLED: its day is already past AND staff recorded that the

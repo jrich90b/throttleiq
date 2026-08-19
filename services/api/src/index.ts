@@ -485,6 +485,7 @@ import type { DailyForecast } from "./domain/weather.js";
 import {
   decideScheduleInviteBudget,
   decideDepartmentRequestTurn,
+  decideManualProposalSupersedesBooking,
   type AppointmentOutcomeSource,
   type ManualCadenceRestartContext
 } from "./domain/routeStateReducer.js";
@@ -1218,7 +1219,11 @@ import {
   buildStaffPingRecord
 } from "./domain/staffPing.js";
 import { isFinanceOutcomeContext, shouldPromptBusinessManagerFinanceOutcome } from "./domain/financeOutcomeGates.js";
-import { composeManualOutboundRequestedPhrase } from "./domain/manualOutboundAppointment.js";
+import {
+  composeManualOutboundRequestedPhrase, manualOutboundAsksScheduleQuestion, manualOutboundHasDayToken,
+  manualOutboundHasRescheduleWording, manualOutboundHasScheduleKeyword, manualOutboundHasTimeToken,
+  manualOutboundOffersMultipleTimeChoices
+} from "./domain/manualOutboundAppointment.js";
 import {
   APPOINTMENT_SECONDARY_OPTIONS, mapLegacyAppointmentOutcome, mapPrimarySecondaryToLegacy,
   normalizeAppointmentPrimaryOutcome, normalizeAppointmentSecondaryOutcome,
@@ -51846,29 +51851,24 @@ app.post("/conversations/:id/send", async (req, res) => {
       hasBookedEvent &&
       Number.isFinite(existingAppointmentWhenMs) &&
       existingAppointmentWhenMs < Date.now() - 60 * 60_000;
+    // A staff proposal landing on a DIFFERENT day than the booked visit is a reschedule, even
+    // though nothing in the words says so (Joe, +17165230421 — see decideManualProposalSupersedesBooking).
+    const manualProposedDay = resolveUpcomingDateFromDayLabel(
+      String(manualOutboundAppointmentParse?.requested?.day ?? "")
+    );
+    const proposalSupersedesBooking = decideManualProposalSupersedesBooking({
+      hasBookedEvent,
+      bookedWhenIso: conv.appointment?.whenIso ?? null,
+      proposedWhenIso: manualProposedDay ? manualProposedDay.toISOString() : null,
+      timeZone: schedulerTimezone
+    }).supersedes;
     const explicitRescheduleCue =
-      parserRescheduleCue ||
-      /\b(reschedule|re-?schedule|change (?:the )?time|move (?:it|me)?|another time|different time|push (?:it )?back|later time|earlier time)\b/i.test(
-        lower
-      );
-    const hasScheduleKeyword =
-      /\b(schedule|book|appointment|appt|reschedule|availability|available|stop by|stop in|come in|see you|works)\b/i.test(
-        text
-      );
-    const hasDayToken =
-      /\b(today|tomorrow|monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat|sunday|sun|next week|this week|this weekend|weekend)\b/i.test(
-        text
-      );
-    const hasTimeToken =
-      /\b(\d{1,2}(:\d{2})?\s*(am|pm)\b|morning|afternoon|evening|night|noon|midnight)\b/i.test(
-        text
-      );
-    const explicitTimeMentions = text.match(/\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/gi) ?? [];
-    const offersMultipleTimeChoices =
-      explicitTimeMentions.length >= 2 && /\b(or|either)\b/i.test(lower);
-    const asksScheduleQuestion =
-      /\?/.test(text) ||
-      /\b(would|could|can|do|does|are|is|what|which|when)\b/i.test(lower);
+      parserRescheduleCue || proposalSupersedesBooking || manualOutboundHasRescheduleWording(lower);
+    const hasScheduleKeyword = manualOutboundHasScheduleKeyword(text);
+    const hasDayToken = manualOutboundHasDayToken(text);
+    const hasTimeToken = manualOutboundHasTimeToken(text);
+    const offersMultipleTimeChoices = manualOutboundOffersMultipleTimeChoices(text, lower);
+    const asksScheduleQuestion = manualOutboundAsksScheduleQuestion(text, lower);
     const scheduleOfferOnly =
       (hasScheduleKeyword || hasDayToken || hasTimeToken) &&
       (asksScheduleQuestion || offersMultipleTimeChoices);
@@ -51877,7 +51877,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       parserProposedTime || isManualOutboundTentativeScheduleOfferText(text);
 
     // Manual outbound schedule offers/questions should not auto-confirm bookings.
-    if ((scheduleOfferOnly || tentativeScheduleOffer) && !explicitBookingStatement) {
+    if ((scheduleOfferOnly || tentativeScheduleOffer) && !explicitBookingStatement && !explicitRescheduleCue) {
       recordRouteOutcome("live", "manual_outbound_schedule_offer_only", {
         convId: conv.id,
         leadKey: conv.leadKey,
