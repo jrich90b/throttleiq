@@ -60,6 +60,13 @@ export type DepartmentCollaborator = {
   /** Set when the department hands the thread back; an entry with this set is no longer active. */
   handedBackAt?: string;
   handedBackByName?: string;
+  /**
+   * DELIVERY state of the staff notification, recorded by the caller after it tries to send.
+   * `notifiedCount: 0` means the invite reached NOBODY — the state a repeat invite must be allowed
+   * to retry. Absent on entries written before 2026-08-20 (treated as "never attempted").
+   */
+  notifiedAt?: string;
+  notifiedCount?: number;
 };
 
 export function isCollaboratorDepartment(value: unknown): value is CollaboratorDepartment {
@@ -98,8 +105,22 @@ export function listActiveCollaboratorDepartments(collaborators: unknown): Colla
 
 export type BringInResult = {
   collaborators: DepartmentCollaborator[];
-  /** False when that department was ALREADY sitting in the thread — the caller must not re-notify. */
+  /** A NEW collaborator entry was appended (the department was not already in the thread). */
   added: boolean;
+  /**
+   * The caller MUST attempt the staff notification. True for a new invite, and ALSO true when the
+   * department is already active but its last attempt reached nobody.
+   *
+   * WHY THIS IS SEPARATE FROM `added` (live defect, 2026-08-20, first real use of this feature):
+   * the guard used to return on `added === false` ABOVE the notify block, so a notification that
+   * failed could never be retried by clicking again — permanently. Joe invited Parts for Christopher
+   * Szczesny (+17169400722) seconds after a deploy restart; both texts died on a transient Twilio
+   * module error, `notified: 0` was recorded, and his second click was silently a no-op. The task
+   * and the shared thread are the parts that ARE already durable; the TEXT is the part a repeat
+   * click can never recover. An idempotency guard must key on the side effect that can FAIL, not on
+   * the state that already succeeded.
+   */
+  shouldNotify: boolean;
 };
 
 /**
@@ -119,9 +140,13 @@ export function bringInDepartment(
 ): BringInResult {
   const list = normalizeList(collaborators);
   const department = String(input.department).trim().toLowerCase() as CollaboratorDepartment;
-  if (!isCollaboratorDepartment(department)) return { collaborators: list, added: false };
+  if (!isCollaboratorDepartment(department)) return { collaborators: list, added: false, shouldNotify: false };
   if (listActiveCollaboratorDepartments(list).includes(department)) {
-    return { collaborators: list, added: false };
+    // Already in the thread: never append a second entry or a second task. But if the last attempt
+    // reached NOBODY, the notification is still owed — let the caller retry it.
+    const active = list.filter(e => isCollaboratorActive(e) && e.department === department);
+    const everReached = active.some(e => Number(e.notifiedCount ?? 0) > 0);
+    return { collaborators: list, added: false, shouldNotify: !everReached };
   }
   const entry: DepartmentCollaborator = {
     department,
@@ -130,7 +155,26 @@ export function bringInDepartment(
     invitedByName: String(input.invitedByName ?? "").trim() || undefined,
     note: String(input.note ?? "").trim() || undefined
   };
-  return { collaborators: [...list, entry], added: true };
+  return { collaborators: [...list, entry], added: true, shouldNotify: true };
+}
+
+/**
+ * Record what the notification attempt actually achieved, on every ACTIVE entry for that department.
+ * Pure. `notified` is the number of staff who were successfully texted; 0 is a meaningful value and
+ * is exactly what makes the next invite retry instead of no-op.
+ */
+export function recordDepartmentNotification(
+  collaborators: unknown,
+  input: { department: CollaboratorDepartment; notified: number; at: string }
+): DepartmentCollaborator[] {
+  const list = normalizeList(collaborators);
+  const department = String(input.department).trim().toLowerCase() as CollaboratorDepartment;
+  const notified = Number.isFinite(input.notified) ? Math.max(0, Math.trunc(input.notified)) : 0;
+  return list.map(entry =>
+    isCollaboratorActive(entry) && entry.department === department
+      ? { ...entry, notifiedAt: String(input.at), notifiedCount: notified }
+      : entry
+  );
 }
 
 export type HandBackResult = {

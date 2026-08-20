@@ -20,6 +20,7 @@ import path from "node:path";
 const {
   bringInDepartment,
   handBackDepartment,
+  recordDepartmentNotification,
   listActiveCollaboratorDepartments,
   isCollaboratorDepartment,
   buildDepartmentCollaborationPromptBlock
@@ -49,10 +50,43 @@ eq(listActiveCollaboratorDepartments(invited.collaborators), ["parts"], "parts i
 eq(invited.collaborators[0].note, "taillights between saddlebags and fender", "the ask is carried");
 eq(invited.collaborators[0].invitedByName, "Scott Hartrich", "who brought them in is carried");
 
-// Idempotent: a second click must not mint a second task or re-text the department.
+ok(invited.shouldNotify, "a fresh invite owes a notification");
+
+// ── DELIVERY-AWARE IDEMPOTENCY (live defect, 2026-08-20 — see the header) ────
+// Joe invited Parts for Christopher Szczesny seconds after a deploy restart; both texts died on a
+// transient Twilio module error and `notified: 0` was recorded. His SECOND click was silently a
+// no-op, so the text could never be retried. The guard must key on the side effect that can FAIL.
+const delivered = recordDepartmentNotification(invited.collaborators, { department: "parts", notified: 2, at: T1 });
+eq(delivered[0].notifiedCount, 2, "delivery count is recorded on the active entry");
+const againDelivered = bringInDepartment(delivered, { department: "parts", at: T2 });
+ok(!againDelivered.added, "re-inviting an ALREADY ACTIVE department never appends a second entry");
+ok(!againDelivered.shouldNotify, "…and when the first attempt REACHED someone, it must not re-text");
+eq(againDelivered.collaborators.length, 1, "…and does not append a second entry");
+
+const reachedNobody = recordDepartmentNotification(invited.collaborators, { department: "parts", notified: 0, at: T1 });
+eq(reachedNobody[0].notifiedCount, 0, "a zero-delivery attempt is recorded as zero, not dropped");
+const retry = bringInDepartment(reachedNobody, { department: "parts", at: T2 });
+ok(!retry.added, "the RETRY path still appends no second entry and mints no second task");
+ok(retry.shouldNotify, "THE FIX: an invite that reached NOBODY must be retryable by clicking again");
+eq(retry.collaborators.length, 1, "…still exactly one entry");
+
+// An entry written before this fix carries no notifiedCount at all — treat it as never attempted
+// (retryable) rather than silently delivered.
+const legacy = bringInDepartment([{ department: "parts", invitedAt: T1 }], { department: "parts", at: T2 });
+ok(legacy.shouldNotify, "a pre-fix entry with no delivery record is retryable, not assumed delivered");
+
+// Handing back and re-inviting is a genuinely new request: it notifies again regardless.
+const afterHandBack = handBackDepartment(delivered, { department: "parts", at: T3 });
+const freshAfterHandBack = bringInDepartment(afterHandBack.collaborators, { department: "parts", at: T3 });
+ok(freshAfterHandBack.added && freshAfterHandBack.shouldNotify, "re-invite AFTER a hand-back always notifies");
+
+// Recording delivery must not touch a handed-back entry or another department.
+const twoDepts = bringInDepartment(delivered, { department: "service", at: T2 }).collaborators;
+const scoped = recordDepartmentNotification(twoDepts, { department: "service", notified: 1, at: T3 });
+eq(scoped.find((c: any) => c.department === "parts").notifiedCount, 2, "recording SERVICE delivery leaves PARTS alone");
+
 const again = bringInDepartment(invited.collaborators, { department: "parts", at: T2 });
-ok(!again.added, "re-inviting an ALREADY ACTIVE department is a no-op (no duplicate notify)");
-eq(again.collaborators.length, 1, "…and does not append a second entry");
+ok(!again.added, "re-inviting an ALREADY ACTIVE department is a no-op for the entry list");
 
 // A second, different department can sit in the thread at the same time.
 const two = bringInDepartment(invited.collaborators, { department: "service", at: T2 });
@@ -141,6 +175,20 @@ assert.match(
   "bring-in must pass allowSoldLead — a sold customer asking about accessories is the whole use case"
 );
 n++;
+
+// Wiring pin 2b: the endpoint must ACT on shouldNotify, not on `added` — the early return may only
+// fire when BOTH are false, and delivery must be recorded so a zero stays retryable.
+assert.match(
+  bringInBody,
+  /if \(!result\.added && !result\.shouldNotify\)/,
+  "the no-op early return must require BOTH already-present AND already-delivered"
+);
+assert.match(
+  bringInBody,
+  /recordDepartmentNotification\(/,
+  "the endpoint must record what delivery achieved, or a failed text is unretryable forever"
+);
+n += 2;
 
 // Wiring pin 3: two-path parity. The fence has to reach the composer from BOTH the live webhook and
 // regenerate, or a regenerated draft would freelance on parts pricing where a live one would not.
