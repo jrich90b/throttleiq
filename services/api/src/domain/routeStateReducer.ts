@@ -152,6 +152,8 @@ export type StaleStateCleanupInput = {
   hasSchedulingIntent?: boolean;
   hasAvailabilityIntent?: boolean;
   hasDepartmentIntent?: boolean;
+  appointmentStatus?: string | null;
+  appointmentReschedulePending?: boolean;
 };
 
 export type StaleStateCleanupDecision = {
@@ -3010,6 +3012,8 @@ export function reduceStaleStateForInbound(input: StaleStateCleanupInput): Stale
   const hasSchedulingIntent = !!input.hasSchedulingIntent;
   const hasAvailabilityIntent = !!input.hasAvailabilityIntent;
   const hasDepartmentIntent = !!input.hasDepartmentIntent;
+  const appointmentStatus = normalizeLower(input.appointmentStatus);
+  const appointmentReschedulePending = !!input.appointmentReschedulePending;
   const pendingAgeHoursRaw =
     typeof input.inventoryWatchPendingAgeHours === "number" ? input.inventoryWatchPendingAgeHours : NaN;
   const pendingAgeHours = Number.isFinite(pendingAgeHoursRaw) ? pendingAgeHoursRaw : null;
@@ -3030,6 +3034,38 @@ export function reduceStaleStateForInbound(input: StaleStateCleanupInput): Stale
   if (mode === "manual_handoff" && stickyDialogStates.has(dialogState)) {
     setDialogStateToNone = true;
     reasons.push(`clear_sticky_dialog_state:${dialogState}`);
+  }
+
+  // Paul Harrigan +17169467451 (2026-08-17): he rode the bike, the visit was booked and SHOWED, then
+  // he wrote "sounds great thanks again for everything I'll keep you posted when that loan check
+  // comes in!" — and the next draft asked "Sounds good, what time Friday works best?". The parser was
+  // right (intent=none, explicit_request=false, 4/4); the STATE was stale. dialogState had been
+  // pinned to schedule_request two days earlier and nothing un-pins it, so the draft kept steering at
+  // a scheduling question the customer had not asked and the rep had already deferred.
+  //
+  // schedule_request is deliberately NOT added to stickyDialogStates above. That set is cleared on
+  // manual_handoff wholesale, and isSchedulingLeakConversation (domain/conversationStore.ts) reads
+  // exactly {schedule_soft, schedule_request, schedule_offer_sent} to find "was mid-scheduling, never
+  // booked" leads — the booking-funnel leak detector, on the metric that binds. Blanking the state on
+  // every manual_handoff thread would make that population invisible to it.
+  //
+  // A CONFIRMED appointment is the one carve-out that is provably invisible to that detector, because
+  // the detector's own early return already drops any conversation whose appointment is `confirmed`.
+  // So nothing it can currently see is cleared here. Measured on the live store 2026-08-20: 58
+  // manual_handoff threads carry a sticky schedule_request, 7 of them with a confirmed appointment;
+  // the detector flags 8 conversations store-wide and NONE of those 7 — its population stays 8.
+  //
+  // reschedulePending / hasSchedulingIntent keep a LIVE scheduling exchange out of it: if the visit is
+  // being moved, or the customer raised scheduling this very turn, the state is current, not stale.
+  if (
+    mode === "manual_handoff" &&
+    dialogState === "schedule_request" &&
+    appointmentStatus === "confirmed" &&
+    !appointmentReschedulePending &&
+    !hasSchedulingIntent
+  ) {
+    setDialogStateToNone = true;
+    reasons.push("clear_schedule_request_appointment_confirmed");
   }
 
   // The pending-watch question has ONE referee; this used to inline the rule.

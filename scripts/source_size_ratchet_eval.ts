@@ -478,7 +478,12 @@ const CEILINGS: Ceiling[] = [
     // +17169467451): the pending-request lookup and its phrase reader moved to conversationStore
     // beside the todo store they read and the parseRequestedDayTime they feed, which paid for the
     // reference-instant argument and the comment explaining it.
-    max: 70_124,
+    // 70_124 -> 70_122. The sticky schedule_request carve-out (Paul Harrigan +17169467451 again).
+    // index.ts was sitting EXACTLY on the ceiling for the third slice running, so this one paid for
+    // its two new referee inputs by folding the applyInventoryWatchPendingClearForIntentHints call
+    // — five lines of one argument each, in the very function being edited — back onto one line.
+    // The RULE the two inputs buy lives in routeStateReducer, where an eval can reach it.
+    max: 70_122,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
