@@ -639,6 +639,7 @@ import {
   humanThreadNudgeMaxCount,
   humanThreadNudgeSpacingDays,
   resolveHumanThreadNudgeComposeGate,
+  isHumanThreadNudgeRestatement,
   selectHumanThreadNudgeThread,
   hasOpenFutureDatedTodo
 } from "./domain/humanThreadNudge.js";
@@ -31424,8 +31425,21 @@ async function processDueFollowUpsUnlocked() {
         })
       )
         continue;
+      // ...and the pair that guard cannot reach: bump #2 restating bump #1 five days later
+      // (isHumanThreadNudgeRestatement owns the reasoning). The attempt is CONSUMED rather than
+      // retried — this tick runs every minute and the composer's only input is a thread that has
+      // not moved, so re-rolling buys the same sentence at LLM prices. It falls through to the
+      // single ledger write below, so that field keeps exactly one writer.
+      const nudgeRestates = isHumanThreadNudgeRestatement({
+        candidate: nudgeMessage,
+        messages: conv.messages,
+        toE164: nudgeTo,
+        lastNudgeAtMs: Date.parse(String(conv.humanThreadNudge?.lastAt ?? ""))
+      });
       let nudgeDelivery: "draft" | "sent" = "draft";
-      if (isHumanThreadNudgeAutosendEnabled()) {
+      if (nudgeRestates) {
+        // dropped: no send, no draft, nothing for staff to read twice
+      } else if (isHumanThreadNudgeAutosendEnabled()) {
         const accountSid = process.env.TWILIO_ACCOUNT_SID;
         const authToken = process.env.TWILIO_AUTH_TOKEN;
         const fromNumber = process.env.TWILIO_FROM_NUMBER;
@@ -31450,6 +31464,14 @@ async function processDueFollowUpsUnlocked() {
       };
       conv.updatedAt = nowIso();
       saveConversation(conv);
+      if (nudgeRestates) {
+        recordRouteOutcome("manual", "human_thread_nudge_restatement_suppressed", {
+          convId: conv.id,
+          leadKey: conv.leadKey,
+          count: conv.humanThreadNudge.count
+        });
+        continue;
+      }
       humanNudges += 1;
       recordRouteOutcome("manual", "human_thread_nudge", {
         convId: conv.id,

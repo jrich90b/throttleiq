@@ -16,6 +16,10 @@
  * 3. Source pins: the tick lane is flag-gated and widened to the handoff class, drafts land as
  *    draft_ai (suggest queue), autosend is behind the SECOND flag only, the ledger records
  *    count+lastAt, and the composer refuses persona intros (voice continuity).
+ * 4. isHumanThreadNudgeRestatement, EXECUTED against the reported pair: bump #2 may not be bump #1
+ *    reworded (Joe, +17169467745, 2026-08-19), it is compared against the previous bump the ledger
+ *    dates rather than a time window, a bump that ADVANCES still ships (Igor +17164442120), and a
+ *    suppressed bump CONSUMES its attempt instead of re-composing every minute.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -28,6 +32,7 @@ import {
   humanThreadNudgeSpacingDays,
   HUMAN_THREAD_NUDGE_MAX_QUIET_DAYS_DEFAULT,
   resolveHumanThreadNudgeComposeGate,
+  isHumanThreadNudgeRestatement,
   selectHumanThreadNudgeThread,
   hasOpenFutureDatedTodo,
   anchorsHaveSomethingToContinue,
@@ -321,6 +326,133 @@ eq("ledger_records_count_and_lastAt", /conv\.humanThreadNudge = \{\s*\n\s*count:
 eq("duplicate_guard_present", /isRecentDuplicateOutbound\(conv, nudgeTo, nudgeMessage/.test(lane), true);
 
 // ---------------------------------------------------------------------------
+// THE RESTATEMENT GUARD (Joe, operator report 2026-08-19, Warren Gardner +17169467745: "The last
+// nudge is too similar to the nudge previously sent").
+//
+// The lane ALREADY called isRecentDuplicateOutbound with nearDuplicate:true and it could not catch
+// the pair, for two independent reasons — fixing either alone ships INERT:
+//   (1) its window was 24h while the decision layer guarantees the two bumps are >= spacingDays (5)
+//       apart, so it could never reach the message it exists to compare against (measured: 120.0h);
+//   (2) nearDuplicate:true only enables similarity matching for INVENTORY-UNAVAILABLE cadence text,
+//       which a bump never is, so it silently degraded to exact-match — and a reworded ask is not
+//       an exact match (executed on five live bump bodies: false on all five).
+// So these are EXECUTED against the real pair, not read out of the source.
+// ---------------------------------------------------------------------------
+
+// Warren's two bumps, verbatim from the store (8/14 sent, 8/19 drafted 120.0h later).
+const WARREN_1 = "Warren — want to come by to take a look, or would you rather I send more photos/details first?";
+const WARREN_2 =
+  "Warren — did you want to come by to take a look, or would you prefer I send a few more photos/details first?";
+const NUDGE_1_AT = "2026-08-14T21:59:00.000Z";
+const warrenRows = [
+  { direction: "out", provider: "twilio", to: "+17169467745", at: NUDGE_1_AT, body: WARREN_1 }
+];
+const restates = (over: Record<string, unknown> = {}) =>
+  isHumanThreadNudgeRestatement({
+    candidate: WARREN_2,
+    messages: warrenRows,
+    toE164: "+17169467745",
+    lastNudgeAtMs: Date.parse(NUDGE_1_AT),
+    ...over
+  });
+
+eq("restatement_catches_the_reported_pair", restates(), true);
+// The defect itself: a 24h window cannot see a 120h-old bump. The ledger stamp is the anchor, so
+// distance in time must not matter at all.
+eq(
+  "restatement_reaches_past_any_24h_window",
+  isHumanThreadNudgeRestatement({
+    candidate: WARREN_2,
+    messages: [{ ...warrenRows[0], at: "2026-07-20T21:59:00.000Z" }],
+    toE164: "+17169467745",
+    lastNudgeAtMs: Date.parse("2026-07-20T21:59:00.000Z")
+  }),
+  true
+);
+// No previous bump ⇒ nothing to restate. Bump #1 is never suppressed by this guard.
+eq("restatement_needs_a_previous_bump", restates({ lastNudgeAtMs: null }), false);
+eq("restatement_ignores_unparseable_ledger", restates({ lastNudgeAtMs: Number.NaN }), false);
+// Anything we said BEFORE bump #1 is out of scope — that is the cadence guard's job, not this one.
+eq(
+  "restatement_ignores_messages_before_the_previous_bump",
+  isHumanThreadNudgeRestatement({
+    candidate: WARREN_2,
+    messages: warrenRows,
+    toE164: "+17169467745",
+    lastNudgeAtMs: Date.parse("2026-08-19T21:58:00.000Z")
+  }),
+  false
+);
+// A bump that genuinely ADVANCES is not a restatement. Igor +17164442120 is the live counter-case:
+// staff texted him in between, the composer had new input, token overlap measured 0.25.
+eq(
+  "restatement_allows_a_bump_that_advanced",
+  isHumanThreadNudgeRestatement({
+    candidate: "Think you might be able to make this weekend if that spot opens up, Igor?",
+    messages: [
+      {
+        direction: "out",
+        provider: "draft_ai",
+        to: "+17164442120",
+        at: NUDGE_1_AT,
+        body: "Just circling back on the Riding Academy wait list — still want me to keep you posted as soon as a spot opens?"
+      }
+    ],
+    toE164: "+17164442120",
+    lastNudgeAtMs: Date.parse(NUDGE_1_AT)
+  }),
+  false
+);
+// Structural guards: another lead's thread, an inbound, a provider we never send on.
+eq("restatement_scoped_to_this_number", restates({ toE164: "+17165551234" }), false);
+eq(
+  "restatement_ignores_inbound",
+  restates({ messages: [{ ...warrenRows[0], direction: "in" }] }),
+  false
+);
+eq(
+  "restatement_ignores_internal_providers",
+  restates({ messages: [{ ...warrenRows[0], provider: "voice_summary" }] }),
+  false
+);
+// draft_ai counts ON PURPOSE: Joe read the repeat in the approval queue, not on his phone.
+eq(
+  "restatement_counts_an_unapproved_draft",
+  restates({ messages: [{ ...warrenRows[0], provider: "draft_ai", draftStatus: "stale" }] }),
+  true
+);
+
+// Wiring: a suppressed bump must CONSUME its attempt, not retry. The tick runs every minute and the
+// composer's only input is a thread that has not moved, so a retry buys the same sentence at LLM
+// prices — the 2026-07-31 incident in miniature. It reaches the ledger write, then returns.
+const restateIdx = lane.indexOf("isHumanThreadNudgeRestatement({");
+const ledgerIdx = lane.indexOf("conv.humanThreadNudge = {");
+eq("lane_calls_the_restatement_guard", restateIdx > 0, true);
+eq("lane_checks_restatement_after_compose", restateIdx > lane.indexOf("await composeHumanThreadNudgeWithLLM("), true);
+// NOT just "the write comes later in the file" — that stays true when an early `continue` skips it,
+// which is exactly the shape this pin was written to catch (it passed a sabotage that inserted one).
+// Nothing between the guard and the ledger may leave the iteration.
+const consumeSlice = restateIdx > 0 && ledgerIdx > restateIdx ? lane.slice(restateIdx, ledgerIdx) : "MISSING";
+eq("restatement_consumes_the_attempt", consumeSlice !== "MISSING" && !consumeSlice.includes("continue;"), true);
+// ...and a suppressed bump writes nothing to the thread on its way there.
+const suppressedBranch = lane.slice(
+  lane.indexOf("if (nudgeRestates) {"),
+  lane.indexOf("} else if (isHumanThreadNudgeAutosendEnabled()) {")
+);
+eq("restatement_branch_sends_nothing", suppressedBranch.includes("appendOutbound"), false);
+eq(
+  "restatement_suppression_is_recorded",
+  lane.includes('recordRouteOutcome("manual", "human_thread_nudge_restatement_suppressed"'),
+  true
+);
+// The ledger keeps ONE writer: the suppressed path falls THROUGH to the same write, it does not
+// grow a second copy beside it.
+eq("ledger_still_has_exactly_one_writer", lane.split("conv.humanThreadNudge = {").length - 1, 1);
+// A suppressed bump is not a bump — it must not be counted or logged as one.
+eq("restatement_not_counted_as_a_nudge", lane.split("humanNudges += 1").length - 1, 1);
+eq("autosend_reached_only_when_not_a_restatement", lane.includes("} else if (isHumanThreadNudgeAutosendEnabled()) {"), true);
+
+// ---------------------------------------------------------------------------
 // THE COST BOUND (incident 2026-07-31). Enabling this feature took the one-minute follow-up tick
 // from ~13s to 150-220s: the per-tick cap counted only nudges that fully SUCCEEDED, so every
 // rejected composition was a free, uncounted LLM call and one tick could compose across the whole
@@ -451,5 +583,5 @@ if (failures.length) {
   process.exit(1);
 }
 console.log(
-  "PASS human_thread_nudge eval — decision table incl. manual-handoff widening + Zackary/Spence production pins, env defaults (LIVE draft mode, kill switch =0; autosend dark), tick-lane + composer voice-continuity pins"
+  "PASS human_thread_nudge eval — decision table incl. manual-handoff widening + Zackary/Spence production pins, env defaults (LIVE draft mode, kill switch =0; autosend dark), tick-lane + composer voice-continuity pins, restatement guard executed on the Warren/Igor pairs"
 );

@@ -493,7 +493,12 @@ const CEILINGS: Ceiling[] = [
     // against a 70_124 main. #768 landed its own 70_124 -> 70_122 underneath it from the same base,
     // so 70_122 still MERGED CLEANLY and still PASSED — while silently handing back the 2 lines
     // #768 had just recovered. Re-derived against the integrated tree, which measures 70_120.
-    max: 70_120,
+    // 70_120 -> 70_106. The quiet-nudge restatement guard (Joe, +17169467745). Main had drifted 36
+    // lines BELOW its own ceiling, so this slice spends 22 of that slack rather than raising
+    // anything: the comparison itself lives in domain/humanThreadNudge.ts (a module index.ts
+    // already imports from, so the import costs nothing) and index.ts pays only for the call, the
+    // suppressed-path branch and its route outcome. Re-derived against the integrated tree.
+    max: 70_106,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
