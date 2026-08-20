@@ -31,6 +31,7 @@ import {
   bringInDepartment,
   handBackDepartment,
   isCollaboratorDepartment,
+  recordDepartmentNotification,
   type CollaboratorDepartment
 } from "../domain/departmentCollaboration.js";
 
@@ -150,12 +151,15 @@ export function registerDepartmentCollaborationRoutes(app: Express, deps: Depart
       note,
       at: new Date().toISOString()
     });
-    if (!result.added) {
-      // Already in the thread. Idempotent on purpose: a second click must not mint a second task or
-      // text the department again.
+    // Already in the thread AND already reached somebody: a true no-op. Never a second task, never a
+    // duplicate text.
+    if (!result.added && !result.shouldNotify) {
       deps.recordRouteOutcome("manual", "bring_in_department_already_active", { convId: conv.id, department });
-      return res.json({ ok: true, added: false, conversation: conv });
+      return res.json({ ok: true, added: false, retried: false, conversation: conv });
     }
+    // Falling through with `added === false` is the RETRY path: the department is already in the
+    // thread but the last attempt reached nobody, so the notification below is still owed. The
+    // collaborator entry and the task are already there and are deliberately left alone.
     (conv as any).departmentCollaborators = result.collaborators;
 
     // The department's route in is this task. `allowSoldLead` is REQUIRED: addTodo drops every
@@ -195,8 +199,20 @@ export function registerDepartmentCollaborationRoutes(app: Express, deps: Depart
       // shared, which is the part a second click cannot recover.
       console.warn("[bring-in-department] notify failed", err);
     }
-    deps.recordRouteOutcome("manual", "bring_in_department", { convId: conv.id, department, notified });
-    return res.json({ ok: true, added: true, notified, conversation: conv });
+    // Record what delivery ACHIEVED, so a `notified: 0` invite stays retryable and a delivered one
+    // does not re-text. Persisted before the response so a crash cannot lose the fact.
+    (conv as any).departmentCollaborators = recordDepartmentNotification((conv as any).departmentCollaborators, {
+      department,
+      notified,
+      at: new Date().toISOString()
+    });
+    saveConversation(conv);
+    deps.recordRouteOutcome("manual", result.added ? "bring_in_department" : "bring_in_department_notify_retry", {
+      convId: conv.id,
+      department,
+      notified
+    });
+    return res.json({ ok: true, added: result.added, retried: !result.added, notified, conversation: conv });
   });
 
   /** Hand back to the lead owner — closes the department's open task and revokes their access. */
