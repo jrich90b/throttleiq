@@ -25247,15 +25247,13 @@ function reduceStaleWorkflowStateForInbound(
     hasFinanceIntent,
     hasSchedulingIntent,
     hasAvailabilityIntent,
-    hasDepartmentIntent
+    hasDepartmentIntent,
+    appointmentStatus: conv.appointment?.status ?? null,
+    appointmentReschedulePending: !!conv.appointment?.reschedulePending
   });
   // Same single writer as the conversation-state path above.
-  let changed = applyInventoryWatchPendingClearForIntentHints(
-    conv,
-    getDialogState(conv),
-    intentHints,
-    inboundAtIso
-  ).cleared;
+  let changed = applyInventoryWatchPendingClearForIntentHints(conv, getDialogState(conv), intentHints, inboundAtIso)
+    .cleared;
   if (decision.setDialogStateToNone && getDialogState(conv) !== "none") {
     setDialogState(conv, "none");
     changed = true;
