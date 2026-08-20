@@ -11,6 +11,7 @@ import {
   isExplicitNoReplyRequest,
   isAutomatedSenderInbound,
   isBareEmoticonReaction,
+  isAppointmentOutcomeSettledBySale,
   isBareReactionOnlyInbound,
   isCadenceHeldByIndefiniteDeferral,
   isCampaignBroadcastSend,
@@ -434,7 +435,13 @@ const wiring: Array<[string, RegExp[]]> = [
   // deferral predicate — if either side re-inlines its own copy they drift and
   // the John Miller class (correct hold flagged "stalled" daily) comes back.
   ["services/api/src/index.ts", [/isIndefiniteFollowUpDeferralText\(t\)/]],
-  ["scripts/agent_actions_audit.ts", [/isCadenceHeldByIndefiniteDeferral\(conv\)/]]
+  [
+    "scripts/agent_actions_audit.ts",
+    [
+      /isCadenceHeldByIndefiniteDeferral\(conv\)/,
+      /isAppointmentOutcomeSettledBySale\(conv, startMs\)/
+    ]
+  ]
 ];
 for (const [file, patterns] of wiring) {
   const src = await fs.readFile(path.resolve(file), "utf8");
@@ -495,6 +502,45 @@ assert.equal(
   false
 );
 assert.equal(isCampaignBroadcastSend({ at: "", direction: "out" }, broadcastThread), false);
+
+// Appointment settled by a sale — Brent Marshall +17169941544 (2026-08-15): the
+// appointment carried no outcome pill, but the thread closed SOLD the same day
+// (2026 Road Glide, stock T54-26). The sale IS the outcome. That one lead was
+// the SOLE release-gate failure on 2026-08-19 and 2026-08-20, resetting a 4-day
+// clean streak to 0/7.
+const brentApptStartMs = Date.parse("2026-08-15T13:30:00.000Z");
+assert.equal(
+  isAppointmentOutcomeSettledBySale({ sale: { soldAt: "2026-08-15T18:14:45.131Z" } }, brentApptStartMs),
+  true
+); // sold ~5h after the appointment started
+assert.equal(
+  isAppointmentOutcomeSettledBySale({ sale: { soldAt: "2026-08-15T13:30:00.000Z" } }, brentApptStartMs),
+  true
+); // sold exactly at the appointment start
+// A sale that PREDATES the appointment does not settle it — that visit is a
+// delivery/pickup and still wants its own recorded outcome.
+assert.equal(
+  isAppointmentOutcomeSettledBySale({ sale: { soldAt: "2026-08-01T18:00:00.000Z" } }, brentApptStartMs),
+  false
+);
+// No sale at all: Damon Fountain +17164247009 stays flagged, which is the check
+// doing its job — the exclusion must never swallow a no-show or a lost visit.
+assert.equal(isAppointmentOutcomeSettledBySale({ sale: null }, brentApptStartMs), false);
+assert.equal(isAppointmentOutcomeSettledBySale({}, brentApptStartMs), false);
+assert.equal(isAppointmentOutcomeSettledBySale(null, brentApptStartMs), false);
+assert.equal(
+  isAppointmentOutcomeSettledBySale({ sale: { soldAt: "not-a-date" } }, brentApptStartMs),
+  false
+);
+// An unparseable/absent appointment start can never be settled.
+assert.equal(
+  isAppointmentOutcomeSettledBySale({ sale: { soldAt: "2026-08-15T18:14:45.131Z" } }, NaN),
+  false
+);
+assert.equal(
+  isAppointmentOutcomeSettledBySale({ sale: { soldAt: "2026-08-15T18:14:45.131Z" } }, null),
+  false
+);
 
 // iOS/Twilio tapback echoes quote a prior outbound and carry no new ask — a pure
 // no-reply signal. The reply-quality scorers' old inline matcher only caught the

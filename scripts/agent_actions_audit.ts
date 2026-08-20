@@ -28,6 +28,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  isAppointmentOutcomeSettledBySale,
   isCadenceHeldByIndefiniteDeferral,
   isJustifiedLongTermCadencePark
 } from "../services/api/src/domain/scoringExclusions.ts";
@@ -168,7 +169,14 @@ export function auditConversations(
     const apptStatus = String(appt?.status ?? "");
     if ((apptStatus === "booked" || apptStatus === "confirmed") && !appointmentOutcomeRecorded(appt)) {
       const startMs = parseMs(appt?.matchedSlot?.start ?? appt?.start);
-      if (startMs != null && nowMs - startMs > 3 * DAY_MS) {
+      // A sale recorded at/after the appointment IS the outcome — the customer
+      // showed and bought. Shared predicate, never re-inlined here (Brent
+      // Marshall +17169941544 was the sole gate failure on 8/19 and 8/20).
+      if (
+        startMs != null &&
+        nowMs - startMs > 3 * DAY_MS &&
+        !isAppointmentOutcomeSettledBySale(conv, startMs)
+      ) {
         apptMissing.push({
           convId: String(conv.id),
           name: leadName(conv),
@@ -303,6 +311,27 @@ function selfTest() {
         matchedSlot: { start: "2026-06-07T15:00:00.000Z" },
         staffNotify: { outcome: { status: "no_show", primaryStatus: "did_not_show", secondaryStatus: "needs_follow_up" } }
       }
+    },
+    // Appointment 5 days past, no outcome pill — but the thread SOLD the bike
+    // the same day (the Brent Marshall +17169941544 class, 2026-08-15). The sale
+    // IS the outcome, so this must NOT be flagged.
+    {
+      id: "+5c",
+      status: "closed",
+      closedReason: "sold",
+      lead: { firstName: "Brent" },
+      appointment: { status: "confirmed", matchedSlot: { start: "2026-06-07T13:30:00.000Z" } },
+      sale: { soldAt: "2026-06-07T18:14:45.131Z", label: "2026 Road Glide", stockId: "T54-26" }
+    },
+    // Sale recorded BEFORE the appointment: a delivery/pickup visit still wants
+    // its own outcome, so the exclusion must NOT swallow it.
+    {
+      id: "+5d",
+      status: "closed",
+      closedReason: "sold",
+      lead: { firstName: "Pryor" },
+      appointment: { status: "confirmed", matchedSlot: { start: "2026-06-07T15:00:00.000Z" } },
+      sale: { soldAt: "2026-05-30T18:00:00.000Z", label: "2025 Low Rider S" }
     },
     // Unactioned draft, 3 days old.
     {
@@ -464,8 +493,21 @@ function selfTest() {
   if (byCheck.watch_orphaned.total !== 1 || byCheck.watch_orphaned.offenders[0].convId !== "+4") {
     fail("watch_orphaned flags the closed conv watch");
   }
-  if (byCheck.appointment_outcome_missing.total !== 1 || byCheck.appointment_outcome_missing.offenders[0].convId !== "+5") {
-    fail("appointment_outcome_missing flags the past appointment");
+  const apptIds = byCheck.appointment_outcome_missing.offenders.map((o: Offender) => o.convId);
+  if (!apptIds.includes("+5")) fail("appointment_outcome_missing flags the past appointment");
+  if (apptIds.includes("+5b")) {
+    fail("appointment_outcome_missing must exclude a status-only recorded outcome (+5b)");
+  }
+  // The Brent Marshall class: sold on the appointment day, so the sale IS the
+  // outcome. Excluding it is what returns the release gate to a clean streak.
+  if (apptIds.includes("+5c")) {
+    fail("appointment_outcome_missing must exclude an appointment settled by a same-day sale (+5c)");
+  }
+  if (!apptIds.includes("+5d")) {
+    fail("appointment_outcome_missing must still flag a visit whose sale PREDATES it (+5d)");
+  }
+  if (byCheck.appointment_outcome_missing.total !== 2) {
+    fail(`appointment_outcome_missing expected exactly +5 and +5d, got ${apptIds.join(",")}`);
   }
   if (
     byCheck.draft_unactioned.total !== 2 ||

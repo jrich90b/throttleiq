@@ -822,6 +822,48 @@ export function isCadenceHeldByIndefiniteDeferral(conv: {
 }
 
 /**
+ * An appointment whose conversation SOLD the bike at/after the appointment
+ * started already has its outcome recorded — in the strongest form the store
+ * can hold. The `sale` record carries soldAt + soldByName + stockId + VIN: the
+ * customer showed, and bought. Nagging staff to also click an outcome pill on
+ * that visit asks them to restate what the sale already proves.
+ *
+ * Same class as the 2026-06-29 status-only fix in `appointmentOutcomeRecorded`
+ * (Saul Torres no_show / Louis Magnano showed-hold): the check keyed on the
+ * wrong field and called a recorded outcome missing. Measured on the live store
+ * 2026-08-20 — 6 of the 7 `appointment_outcome_missing` offenders carry a sale
+ * at/after their appointment, INCLUDING the only recent one: Brent Marshall
+ * +17169941544, appointment Sat 2026-08-15 9:30 AM, sold the same day 18:14 by
+ * Scott Hartrich (2026 Road Glide, stock T54-26). That single lead was the SOLE
+ * release-gate failure on BOTH 2026-08-19 and 2026-08-20, resetting a 4-day
+ * clean streak to 0/7 over a deal that closed.
+ *
+ * Scope is deliberately narrow: the sale must land at or after the appointment
+ * start, so a lead who bought BEFORE the visit (a delivery or pickup
+ * appointment) still wants its own outcome. Damon Fountain +17164247009 — an
+ * appointment with no sale at all — stays flagged, which is the check working.
+ *
+ * Fail-direction: REPORT-ONLY. This predicate can never change a customer-facing
+ * send, close, route, cadence, or task; the worst case is that staff are not
+ * reminded to record a visit outcome for a customer who already bought the bike.
+ * It cannot hide a no-show or a lost appointment, because those threads carry no
+ * sale.
+ */
+export function isAppointmentOutcomeSettledBySale(
+  conv: { sale?: { soldAt?: string | null } | null } | null | undefined,
+  appointmentStartMs: number | null | undefined
+): boolean {
+  // Guard the value, not its Number() cast: Number(null) is 0, which is finite,
+  // so a missing appointment start would read as the epoch and let ANY sale
+  // settle it.
+  if (typeof appointmentStartMs !== "number" || !Number.isFinite(appointmentStartMs)) return false;
+  const startMs = appointmentStartMs;
+  const soldMs = Date.parse(String(conv?.sale?.soldAt ?? "").trim());
+  if (!Number.isFinite(soldMs)) return false;
+  return soldMs >= startMs;
+}
+
+/**
  * A campaign-broadcast send is a staff-composed mass-marketing SMS/email blast
  * fired from Campaign Studio (`POST /contacts/broadcast`), NOT the agent's 1:1
  * conversational voice. The broadcast handler tags the conversation with a
