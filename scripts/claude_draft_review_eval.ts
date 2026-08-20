@@ -23,10 +23,17 @@ import {
   CLAUDE_DRAFT_REVIEW_MAX_PER_TICK_DEFAULT,
   CLAUDE_DRAFT_REVIEW_TOOL_SCHEMA,
   CLAUDE_EMAIL_DRAFT_REVIEW_MAX_PER_TICK_DEFAULT,
+  CLAUDE_REVIEW_BREAKER_COOLDOWN_MS_DEFAULT,
+  CLAUDE_REVIEW_BREAKER_TRIP_AFTER_DEFAULT,
   buildClaudeDraftReviewSystemPrompt,
   claudeDraftReviewEnabled,
+  claudeReviewBreakerIsOpen,
+  claudeReviewBreakerSnapshot,
   draftIsMachineAuthored,
   emailDraftReviewHash,
+  recordClaudeReviewSuccess,
+  recordClaudeReviewTransportFailure,
+  resetClaudeReviewBreaker,
   selectDraftsForClaudeReview,
   selectEmailDraftsForClaudeReview
 } from "../services/api/src/domain/claudeDraftReview.ts";
@@ -218,7 +225,12 @@ for (const [label, c] of NO_REVIEW) {
   assert.ok(src0.includes('"claude_draft_review_unavailable"'), "API failure records its own outcome — a dead net must be loudly visible");
   const unavailBlock = src0.slice(src0.indexOf('verdict.reason === "review_unavailable"'), src0.indexOf('verdict.verdict === "rewrite"'));
   assert.ok(unavailBlock.includes("continue;"), "an unavailable review NEVER stamps the draft — it stays eligible for retry when the service recovers");
-  assert.ok(src0.includes("if (!parsed) return keep;"), "an unparseable reply is not a verdict — it must never read as ok");
+  // The no-verdict path still returns the `keep` sentinel and still stops there. (It also counts a
+  // transport failure toward the breaker now, so the shape is a block rather than a one-liner —
+  // what matters is that it RETURNS before the verdict is read, never that it is one line.)
+  const noVerdict = src0.slice(src0.indexOf("if (!parsed)"), src0.indexOf("const verdict = String(parsed?.verdict"));
+  assert.ok(noVerdict.includes("return keep;"), "an unparseable reply is not a verdict — it must never read as ok");
+  assert.ok(!noVerdict.includes('"ok"'), "and it must not manufacture an ok verdict on the way out");
 }
 
 // --- The continuous-improvement wiring: every rewrite files a work order ---------------------
@@ -316,10 +328,97 @@ for (const [label, c] of NO_REVIEW) {
   assert.ok(emailBlock.includes("emailDraftReviewHash(verdict.fixedDraft)"), "the receipt stamps the STORED text, not the reviewed text");
 }
 
+// --- THE BREAKER (measured 2026-08-20: 587 doomed calls in one day) --------------------------
+// The account ran dry at ~11:34Z and this per-minute lane retried regardless: 446 SMS attempts over
+// 15 drafts (135 on ONE draft) + 141 email attempts over 3. No backoff, no cap, no give-up. The
+// expensive half is not the noise — it is that every queued retry becomes a REAL PAID CALL the
+// moment the balance is topped up. Executed, not read.
+{
+  const T0 = Date.parse("2026-08-20T11:34:00.000Z");
+  const MIN = 60_000;
+  resetClaudeReviewBreaker();
+
+  assert.equal(claudeReviewBreakerIsOpen(T0), false, "a healthy lane is never held");
+  // Below the trip point the lane keeps trying — a one-minute blip must not silence the reviewer.
+  for (let i = 1; i < CLAUDE_REVIEW_BREAKER_TRIP_AFTER_DEFAULT; i += 1) {
+    recordClaudeReviewTransportFailure(T0 + i * MIN);
+    assert.equal(claudeReviewBreakerIsOpen(T0 + i * MIN), false, `still trying after ${i} failure(s)`);
+  }
+  // The Nth consecutive transport failure trips it.
+  recordClaudeReviewTransportFailure(T0 + CLAUDE_REVIEW_BREAKER_TRIP_AFTER_DEFAULT * MIN);
+  const tripAtMs = T0 + CLAUDE_REVIEW_BREAKER_TRIP_AFTER_DEFAULT * MIN;
+  assert.equal(claudeReviewBreakerIsOpen(tripAtMs), true, "the Nth consecutive transport failure holds the lane");
+  assert.equal(claudeReviewBreakerIsOpen(tripAtMs + MIN), true, "and it stays held a minute later");
+
+  // THE MEASUREMENT THAT MOTIVATED IT: 135 retries on one draft over the real outage window becomes
+  // one probe per cooldown. Replay the actual 7h35m (11:34Z -> 19:09Z) minute by minute.
+  resetClaudeReviewBreaker();
+  let paidCalls = 0;
+  for (let m = 0; m <= 455; m += 1) {
+    const now = T0 + m * MIN;
+    if (claudeReviewBreakerIsOpen(now)) continue; // held: no request is built, nothing is spent
+    paidCalls += 1;
+    recordClaudeReviewTransportFailure(now); // the account is dry — every attempt fails
+  }
+  // 456 minutes of dead service. Before: 456 attempts on this lane (the live log recorded 446).
+  console.log(`   breaker: a 456-minute outage costs ${paidCalls} calls instead of 456`);
+  assert.ok(paidCalls <= 40, `a 7h35m outage must cost tens of calls, not hundreds — got ${paidCalls}`);
+  assert.ok(paidCalls >= 5, `it must keep probing, not go silent forever — got ${paidCalls}`);
+
+  // Recovery: a real verdict proves the service is alive and clears everything, so the very next
+  // draft is reviewed normally. Without this the top-up would not un-stick the lane until a deploy.
+  resetClaudeReviewBreaker();
+  let openedAt = T0;
+  for (let i = 0; i < CLAUDE_REVIEW_BREAKER_TRIP_AFTER_DEFAULT; i += 1) {
+    openedAt = T0 + i * MIN; // the LAST of these is the failure that trips it
+    recordClaudeReviewTransportFailure(openedAt);
+  }
+  assert.equal(claudeReviewBreakerIsOpen(openedAt), true, "held after the trip");
+  // Cooldown elapses -> exactly one probe is let through...
+  const afterCooldown = openedAt + CLAUDE_REVIEW_BREAKER_COOLDOWN_MS_DEFAULT + MIN;
+  assert.equal(claudeReviewBreakerIsOpen(afterCooldown), false, "the cooldown lets one probe through");
+  // ...and if THAT probe fails, it re-opens immediately rather than letting a storm back in.
+  recordClaudeReviewTransportFailure(afterCooldown);
+  assert.equal(claudeReviewBreakerIsOpen(afterCooldown), true, "a failed probe re-holds the lane at once");
+  // ...whereas a verdict closes it for good.
+  recordClaudeReviewSuccess();
+  assert.equal(claudeReviewBreakerIsOpen(afterCooldown), false, "a verdict re-opens the lane");
+  assert.equal(claudeReviewBreakerSnapshot().consecutiveFailures, 0, "a verdict clears the failure run");
+  resetClaudeReviewBreaker();
+}
+{
+  const src = fs.readFileSync(path.join(process.cwd(), "services/api/src/domain/claudeDraftReview.ts"), "utf8");
+  const fn = src.slice(src.indexOf("export async function reviewDraftWithClaude"), src.indexOf("export async function processClaudeDraftReview"));
+  // The breaker must answer BEFORE the request is built — a check after the call saves nothing.
+  const breakerIdx = fn.indexOf("claudeReviewBreakerIsOpen(");
+  assert.ok(breakerIdx > 0, "reviewDraftWithClaude consults the breaker");
+  assert.ok(breakerIdx < fn.indexOf("anthropicMessagesRequest("), "the breaker answers before the paid request is built");
+  // Only TRANSPORT failures count. A reviewer that answers "ok" is a live service, not a failure —
+  // counting verdicts would hold the lane during perfectly healthy quiet periods.
+  assert.ok(fn.includes("recordClaudeReviewSuccess()"), "a verdict clears the breaker");
+  assert.ok(
+    fn.indexOf("recordClaudeReviewSuccess()") < fn.indexOf('const verdict = String(parsed?.verdict'),
+    "the reset happens as soon as the service ANSWERS, before the verdict is even read"
+  );
+  // THE PROPERTY THIS MUST NOT BREAK (PR #711): a held call returns the same `keep` every other
+  // failure returns, so the caller still records *_unavailable and leaves the draft UNSTAMPED for
+  // the 4-hourly human backstop. Cutting the call must never cut the visibility.
+  assert.ok(
+    fn.includes("if (claudeReviewBreakerIsOpen(args.nowMs ?? Date.now())) return keep;"),
+    "a held call returns the SAME keep sentinel — it must stay unstamped and still be reported unavailable"
+  );
+  const proc = src.slice(src.indexOf("export async function processClaudeDraftReview"));
+  assert.equal(
+    (proc.match(/deps\.recordOutcome\("claude_(?:email_)?draft_review_unavailable"/g) ?? []).length,
+    2,
+    "both channels still report unavailable — a held lane must read as DOWN, never as quiet"
+  );
+}
+
 // --- Three-point lane registration (a task missing anywhere silently never runs) -------------
 assert.ok((WORKER_TICK_TASKS as readonly string[]).includes("claude-draft-review"), "registered tick task");
 assert.ok((WORKER_MINUTE_LANE_TASKS as readonly string[]).includes("claude-draft-review"), "on the API minute lane");
 const minuteSchedule = WORKER_SCHEDULES.find(s => s.cron === "* * * * *");
 assert.ok(minuteSchedule && minuteSchedule.tasks.includes("claude-draft-review"), "on the worker minute schedule");
 
-console.log("PASS claude_draft_review:eval — SMS selection table (4 review-cases incl. sold/closed + 9 holds + cap) + EMAIL selection table, executed loop guard + cross-channel guard, kill switch, prompt rules, work-order wiring, 3-point lane registration");
+console.log("PASS claude_draft_review:eval — SMS selection table (4 review-cases incl. sold/closed + 9 holds + cap) + EMAIL selection table, executed loop guard + cross-channel guard, kill switch, prompt rules, work-order wiring, 3-point lane registration, breaker replayed over the real 2026-08-20 outage");
