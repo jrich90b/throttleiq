@@ -436,6 +436,7 @@
     "loop_pr_ledger_suppression:eval",
     "merge_freeze:eval",
     "backup_retention_daily:eval",
+    "deploy_health_budget:eval",
     "canary_small_denominator:eval",
     "reproduce_confirm_suppression:eval",
     "owner_thread_step_back:eval",
