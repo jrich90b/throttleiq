@@ -58,6 +58,7 @@ export const HUMAN_THREAD_NUDGE_SPACING_DAYS_DEFAULT = 5;
 export const HUMAN_THREAD_NUDGE_MAX_QUIET_DAYS_DEFAULT = 30;
 
 import { referencesPastDatedEvent } from "./pastEventGuard.js";
+import { isCadenceNearDuplicateText } from "./cadenceRepeatSimilarity.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -194,6 +195,88 @@ export function resolveHumanThreadNudgeComposeGate(input: {
     return { compose: false, reason: "nothing_to_continue" };
   }
   return { compose: true };
+}
+
+/**
+ * Providers that count as "we already said this" — a sent text, a rep's own send, or a draft the
+ * console is showing staff. `draft_ai` belongs here precisely BECAUSE it may never be approved:
+ * Joe's report was about what he saw in the approval queue, not about what the customer received.
+ */
+const NUDGE_RESTATEMENT_PROVIDERS = new Set(["twilio", "human", "draft_ai"]);
+
+/** Ledger stamp and message stamp are written a beat apart; five minutes covers the gap. */
+const NUDGE_LEDGER_GRACE_MS = 5 * 60 * 1000;
+
+/** Same shape as the tick's own outbound-target normaliser: compare numbers, not formatting. */
+function nudgeTargetDigits(target: unknown): string {
+  const raw = String(target ?? "").trim().toLowerCase();
+  if (!raw) return "";
+  const digits = raw.replace(/\D/g, "");
+  return digits || raw;
+}
+
+/**
+ * Would this bump just say bump #1 over again?
+ *
+ * WHY THIS EXISTS AND WHY THE EXISTING GUARD COULD NOT DO IT (Joe, operator report 2026-08-19 on
+ * Warren Gardner +17169467745: *"The last nudge is too similar to the nudge previously sent."*):
+ *
+ * ```
+ * 8/14 21:59 SENT   Warren — want to come by to take a look, or would you rather I send more photos/details first?
+ * 8/19 21:58 DRAFT  Warren — did you want to come by to take a look, or would you prefer I send a few more photos/details first?
+ * ```
+ *
+ * The tick already called `isRecentDuplicateOutbound(..., windowMs: 24h, nearDuplicate: true)` and
+ * it was structurally unable to catch that pair, for TWO independent reasons — either one alone
+ * makes a fix of the other inert, which is why both are answered here:
+ *
+ * 1. **The window could not reach.** The decision layer GUARANTEES the two bumps are at least
+ *    `spacingDays` (5) apart, so a 24-hour lookback can never see the one message it exists to
+ *    compare against. Measured on the live pair: 120.0h back.
+ * 2. **The near-duplicate half never engaged.** `nearDuplicate: true` only turns similarity
+ *    matching on for INVENTORY-UNAVAILABLE cadence text ("that bike sold — want me to keep an eye
+ *    out?"). A bump is never that, so the guard silently degraded to exact-match — and a reworded
+ *    ask is not an exact match. Executed against the five live bump bodies: `false` on all five.
+ *
+ * So this is not a time window at all. The ledger (`conv.humanThreadNudge.lastAt`) already dates
+ * bump #1, so the comparison set is exactly "bump #1 and everything we have said since" — no
+ * arbitrary number to get wrong, and it shrinks to nothing when there is no previous bump.
+ *
+ * SCOPE, measured before it was written (2026-08-20, 879 live conversations): 13 threads have
+ * reached bump #2; 8 of those can be positively identified from the ledger stamp; **exactly one
+ * fires** — Warren, at 0.92 token overlap. The next-closest pair scores 0.67, well under the 0.82
+ * bar. That is the honest claim: this stops the literal repeat, it does NOT make bump #2 *advance*
+ * the thread (the other seven read as reworded to a human but are genuinely different sentences).
+ * Teaching the composer to advance is a separate, copy-authoring change.
+ *
+ * FAIL DIRECTION: a match suppresses a message ⇒ we fail toward NOT messaging, the lane's rule.
+ */
+export function isHumanThreadNudgeRestatement(input: {
+  /** The composed bump, footer and all — compared as it would be delivered. */
+  candidate: string;
+  /** conv.messages. */
+  messages?: unknown;
+  /** Already E.164-normalised; only rows addressed to this number count. */
+  toE164?: string | null;
+  /** conv.humanThreadNudge.lastAt as ms — no previous bump ⇒ nothing to restate ⇒ false. */
+  lastNudgeAtMs?: number | null;
+}): boolean {
+  const candidate = String(input.candidate ?? "").trim();
+  if (!candidate) return false;
+  const sinceMs = Number(input.lastNudgeAtMs);
+  if (!Number.isFinite(sinceMs) || sinceMs <= 0) return false;
+  const to = nudgeTargetDigits(input.toE164);
+  if (!to) return false;
+  const rows = Array.isArray(input.messages) ? (input.messages as any[]) : [];
+  const floorMs = sinceMs - NUDGE_LEDGER_GRACE_MS;
+  return rows.some(m => {
+    if (m?.direction !== "out") return false;
+    if (!NUDGE_RESTATEMENT_PROVIDERS.has(String(m?.provider ?? "").trim())) return false;
+    if (nudgeTargetDigits(m?.to) !== to) return false;
+    const atMs = Date.parse(String(m?.at ?? ""));
+    if (!Number.isFinite(atMs) || atMs < floorMs) return false;
+    return isCadenceNearDuplicateText(String(m?.body ?? ""), candidate);
+  });
 }
 
 export function isHumanThreadNudgeEnabled(): boolean {
