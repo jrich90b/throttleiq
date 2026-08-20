@@ -23,6 +23,22 @@
  * Sample size: 6 fixtures, every one an all-or-nothing assertion (any mismatch exits 1). Measured
  * before wiring: 4 consecutive runs, 6/6 each.
  *
+ * ⚠️ THAT 4-RUN MEASUREMENT WAS LUCKY, AND THIS GATE WAS A COIN FLIP FOR A DAY (2026-08-20).
+ * `weekday_settled_by_the_thread_not_today` — WE propose a weekday, the customer accepts with only a
+ * clock time — passed **4 of 8** runs against an untouched origin/main `9afeed2e`. With the retry
+ * wrapper that is a red ci:eval for every routine and every human roughly ONE RUN IN FOUR, and it was
+ * worse than a flaky test: the LIVE parser was dropping the day half the time on the most common
+ * booking shape we have (we offer a day, they answer with a time), which is lost bookings on the
+ * metric that binds. Fixed by naming the outbound side explicitly in BOOKING_INTENT_PROMPT_RULES —
+ * 8 of 8 after, on the re-cut fixture below.
+ *
+ * ⚠️ THE FIXTURE IS DELIBERATELY NOT THE FEW-SHOT, AND MUST STAY THAT WAY. The first attempt at the
+ * fix added a few-shot of this fixture verbatim. That would have gone green while proving nothing, so
+ * the fixture was re-cut to a different instance of the same shape (Wednesday / "yep 4:30 is good" /
+ * Fat Bob, against the rule's own Saturday / "yeah 10 works" wording). Measured against the re-cut
+ * fixture, that few-shot alone scored **2 of 8** — it had not generalised at all, and the identical
+ * fixture would have hidden exactly that. Keep them different or this eval measures recitation.
+ *
  * ⚠️ THE PROMPT PROSE AND THE FEW-SHOTS ARE BOTH LOAD-BEARING — do not delete either as "duplicate
  * of the other". Measured 2026-08-19 against this exact fixture set:
  *   rule + few-shots (shipped) .... 6/6
