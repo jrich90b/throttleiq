@@ -171,3 +171,86 @@ export function decideInitialAdfPendingIncomingArm(args: {
   if (confidence < args.confidenceFloor) return { arm: false, reason: "arrival_below_confidence_floor" };
   return { arm: true, reason: "arrival_comprehended" };
 }
+
+/**
+ * ── THE SECOND DOOR (Joe, 2026-08-19, Zackary Busch +17162489119) ───────────────────────────────
+ *
+ * The Robert Myers gate above gets asked on the initial-ADF branch only. Zack came in through the
+ * OTHER one, and it had no gate at all.
+ *
+ * His Traffic Log Pro note, in the dealer's own words: *"I showed him the 2008 FLHTCU that i just
+ * took in on trade. I told him we are going to get it through the service department to get
+ * serviced before it is ready to sell and we are waiting for the title."* The bike is on the
+ * property. Nothing is coming in.
+ *
+ * Two minutes later staff texted "I'll get a hold of you when that 08 Ultra is ready to look at",
+ * Zack answered "Perfect, thank you. I'll be waiting", and the inbound-reply parser read THAT
+ * exchange as a pending-incoming-inventory acknowledgement at 0.96. It was not wrong about the
+ * exchange — a promise plus a thank-you reads the same whether the bike is on a truck or on a lift.
+ * It simply never saw the note. The result: `dialogState: pending_incoming_inventory`, the cadence
+ * stopped, a manual handoff, a task reading "notify when the 2008 Flhtcu ARRIVES", and a draft
+ * telling the customer about "the 2008 Flhtcu we've got coming in … as soon as it's here".
+ *
+ * ⚠️ MEASURED, AND IT KILLED THE OBVIOUS FIX. The plan was "run the existing arrival parser on the
+ * same seed the ADF path uses". Executed against Zack's real record, that seed — which is
+ * `[effectiveInquiry, lead.inquiry, comment, inquiryRaw, event.body].join("\n")`, i.e. the prose
+ * wrapped in the raw `PHONE LOG (ADF) … Year: 2008 / Vehicle: Flhtcu` header — is UNSTABLE:
+ *
+ *     full ADF block   arriving, already_here, already_here, already_here, already_here, arriving
+ *                      -> 2 of 6 wrong
+ *     inquiry prose    already_here x10, confidence 0.85-0.90
+ *                      -> 0 of 10 wrong
+ *
+ * The comprehension was never the problem; the SEED was. `Year: 2008 / Vehicle: Flhtcu` reads like
+ * an inbound-unit spec and drags the answer toward "arriving". So this gate is seeded with the
+ * establishing PROSE and nothing else. (The ADF path still uses the noisy seed — that is a separate,
+ * measured finding, deliberately not changed here.)
+ *
+ * FAIL DIRECTION, and why this can only ever arm LESS: today this arm has no gate, so every
+ * acknowledgement arms. This blocks ONLY on a confident `already_here`. Parser off, no key, a throw,
+ * `arriving`, `none`, a hedged read below the floor, or no establishing note at all — every one of
+ * those keeps today's exact behaviour. Blocking wrongly costs a lead the incoming-unit framing that
+ * staff can re-add; arming wrongly tells a customer a bike he has already stood next to is on its
+ * way, stops his cadence and hands the thread off, which nothing downstream corrects.
+ */
+export function decideEstablishedStockBlocksArm(args: {
+  parse: IncomingUnitArrivalParse | null | undefined;
+  confidenceFloor: number;
+}): { block: boolean; reason: string } {
+  if (!args.parse) return { block: false, reason: "arrival_parse_unavailable" };
+  if (args.parse.status !== "already_here") return { block: false, reason: `arrival_${args.parse.status}` };
+  const confidence = typeof args.parse.confidence === "number" ? args.parse.confidence : 0;
+  if (confidence < args.confidenceFloor) return { block: false, reason: "already_here_below_floor" };
+  return { block: true, reason: "established_stock_comprehended" };
+}
+
+/**
+ * The establishing PROSE for a lead — the staff note or customer inquiry that says what this thread
+ * is actually about — with the ADF field header deliberately left out (see the measurement above).
+ * Structured extraction of our OWN record, not comprehension: it only picks a field.
+ */
+export function establishingNoteForArrivalCheck(conv: any): string {
+  for (const candidate of [conv?.lead?.inquiry, conv?.lead?.comment, conv?.lead?.notes]) {
+    const text = String(candidate ?? "").trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+/**
+ * Is this acknowledgement about a unit the lead's own note says is already on the property?
+ * Resolves to false on every uncertainty, including a parser throw — see the fail direction above.
+ */
+export async function pendingIncomingArmBlockedByEstablishedStock(
+  conv: any
+): Promise<{ block: boolean; reason: string }> {
+  const seedText = establishingNoteForArrivalCheck(conv);
+  if (!seedText) return { block: false, reason: "no_establishing_note" };
+  let parse: IncomingUnitArrivalParse | null = null;
+  try {
+    parse = await parseIncomingUnitArrivalWithLLM({ seedText });
+  } catch {
+    parse = null;
+  }
+  return decideEstablishedStockBlocksArm({ parse, confidenceFloor: incomingUnitArrivalConfidenceFloor() });
+}

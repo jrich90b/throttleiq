@@ -583,3 +583,26 @@ export function applyIncomingInventoryPurposeDecision(
     pending.allocation = decision.allocation as any;
   }
 }
+
+/**
+ * Moved verbatim out of index.ts (2026-08-19) — pure helpers for a state this module already owns,
+ * sitting in the 70k-line file for no reason. Behaviour identical; the move funded the establishing-
+ * stock gate's own lines rather than raising the size ceiling.
+ */
+export function customerNameForPendingIncomingInventory(conv: Conversation): string {
+  return (
+    String((conv.lead as any)?.name ?? "").trim() ||
+    [String((conv.lead as any)?.firstName ?? "").trim(), String((conv.lead as any)?.lastName ?? "").trim()]
+      .filter(Boolean)
+      .join(" ")
+      .trim() ||
+    String((conv as any)?.contact?.name ?? "").trim() ||
+    String((conv as any)?.name ?? "").trim() ||
+    "customer"
+  );
+}
+
+export function incomingInventoryPurposeConfidenceMin(): number {
+  const v = Number(process.env.INCOMING_INVENTORY_PURPOSE_CONFIDENCE_MIN);
+  return Number.isFinite(v) && v > 0 ? v : 0.7;
+}
