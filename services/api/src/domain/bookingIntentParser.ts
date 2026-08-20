@@ -39,6 +39,11 @@ export const BOOKING_INTENT_PROMPT_RULES: string[] = [
   // +17169467451: "would 11 o'clock be OK?" two turns after "I'm off today... can I come out this
   // morning". The day was settled; only the clock time was new.
   "- If the customer names only a clock time and the recent messages already settle which day it is (they said 'today', 'this morning', 'tomorrow', 'on my way', or a weekday that is now being answered), put that day in requested.day and start normalized_text with it.",
+  // The half the rule above kept losing: the day is settled by OUR outbound offer, not by anything
+  // the customer typed. Measured 2026-08-20 — with only the sentence above, an unseen instance of
+  // this shape carried the weekday 2 of 8 runs; a few-shot of one instance did not generalise to a
+  // different weekday. Naming the outbound side explicitly is what moved it.
+  "- A weekday WE named in a recent outbound message counts as settled the moment the customer accepts it. If an outbound message asked about a weekday (e.g. 'Does Saturday work for you?', 'Could you do Wednesday?') and the customer's reply is an acceptance carrying only a clock time ('yeah 10 works', 'yep 4:30 is good', 'that works, 2pm'), put THAT weekday in requested.day — do not leave the day empty just because the customer did not retype it.",
   "- Only carry a day the recent messages actually settle. If nothing in them names a day, leave requested.day empty rather than guessing.",
 ];
 
@@ -75,4 +80,9 @@ export const BOOKING_INTENT_EXAMPLES: string[] = [
   'input: "Recent messages:\\nin: I\u2019m off today, can I come out this morning to test ride the 2021 again?\\nout: Hey Paul, what time are you thinking?\\nCustomer: would 11 o\u2019clock be OK?" output: {"intent":"schedule","explicit_request":true,"requested":{"day":"today","time_text":"11 o\u2019clock","time_window":"exact"},"reference":"none","normalized_text":"today 11 o\u2019clock","confidence":0.93}',
   'input: "Recent messages:\\nout: When did you want to pick up your new bike?\\nCustomer: Oh great, I could get there about 3pm if that works" output: {"intent":"schedule","explicit_request":true,"requested":{"day":"today","time_text":"about 3pm","time_window":"range"},"reference":"none","normalized_text":"today about 3pm","confidence":0.9}',
   'input: "Recent messages:\\nin: Do you have that Road Glide in stock?\\nCustomer: 3:45 works" output: {"intent":"schedule","explicit_request":true,"requested":{"day":"","time_text":"3:45","time_window":"exact"},"reference":"last_suggested","normalized_text":"3:45","confidence":0.85}'
+  // NO few-shot was added for the proposed-weekday shape, deliberately. One was written and then
+  // MEASURED OUT: with the rule line above present, removing the few-shot still scored 6/6 across 6
+  // consecutive runs, and the few-shot ALONE (before the rule was strengthened) did not generalise —
+  // 2 of 8 on an unseen weekday. The rule carries this shape; a few-shot would only have added
+  // prompt weight to every turn and given the fixture something to recite.
 ];

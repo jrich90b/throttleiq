@@ -20,13 +20,13 @@
   },
   {
     "id": "weekday_settled_by_the_thread_not_today",
-    "note": "The day the thread settled is not always today. Carrying 'today' here would book the wrong day — the bounded half of the rule.",
-    "text": "yeah 10 works",
+    "note": "The day the thread settled is not always today — here WE proposed it and the customer accepted with only a clock time. Carrying 'today' would book the wrong day; dropping the day books nothing. Tokens are deliberately DIFFERENT from the example inside the prompt rule (Wednesday/4:30/Fat Bob vs the rule's Saturday/'yeah 10 works') so this measures the rule GENERALISING, not the model reciting its own answer key — the verbatim version scored 2/8 against a few-shot that had memorised it.",
+    "text": "yep 4:30 is good",
     "history": [
-      { "direction": "in", "body": "I'd like to come see the Road Glide" },
-      { "direction": "out", "body": "Does Saturday work for you?" }
+      { "direction": "in", "body": "Interested in that Fat Bob you have" },
+      { "direction": "out", "body": "Could you do Wednesday?" }
     ],
-    "expected": { "intent": "schedule", "explicit_request": true, "day_contains": "saturday" }
+    "expected": { "intent": "schedule", "explicit_request": true, "day_contains": "wednesday" }
   },
   {
     "id": "no_day_settled_anywhere_stays_dayless",
