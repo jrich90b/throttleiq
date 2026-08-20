@@ -19,7 +19,8 @@ const base = {
   isLeadOwner: false,
   hasOwner: false,
   department: null as string | null,
-  hasOpenTodo: false
+  hasOpenTodo: false,
+  activeCollaboratorDepartments: [] as string[]
 };
 const can = (over: Partial<typeof base>) => decideConversationAccess({ ...base, ...over });
 let n = 0;
@@ -57,6 +58,31 @@ eq(can({ role: "salesperson", department: "service", hasOwner: false }), false,
 eq(can({ role: "salesperson", isLeadOwner: true, department: "service" }), true,
   "owner sees their lead regardless of department");
 
+// ── INVITED DEPARTMENTS (Joe, 2026-08-20): a SALES lead a department was brought into.
+// Christopher Szczesny (+17169400722): Scott's sold sales lead, Parts invited for a taillight ask.
+eq(can({ role: "parts", department: null, hasOwner: true, activeCollaboratorDepartments: ["parts"] }), true,
+  "invited parts staff SEE the sales thread they were brought into");
+eq(can({ role: "parts", department: null, hasOwner: true, activeCollaboratorDepartments: [] }), false,
+  "parts staff do NOT see a sales thread they were not invited to (unchanged)");
+eq(can({ role: "service", department: null, hasOwner: true, activeCollaboratorDepartments: ["parts"] }), false,
+  "an invite for PARTS does not let SERVICE in");
+eq(can({ role: "parts", department: null, hasOwner: true, activeCollaboratorDepartments: ["PARTS"] }), true,
+  "collaborator matching is case-insensitive");
+
+// The invite must not leak into any OTHER branch — this is a widening of an authorization gate.
+eq(can({ role: "salesperson", hasOwner: true, isLeadOwner: false, activeCollaboratorDepartments: ["parts"] }), false,
+  "a parts invite does NOT expose another rep's lead to a salesperson");
+eq(can({ role: "salesperson", department: "service", hasOwner: false, activeCollaboratorDepartments: ["parts"] }), false,
+  "a parts invite does NOT give a salesperson a departmental lead");
+
+// Handing back revokes it: an inactive collaborator is absent from the list the caller passes.
+eq(can({ role: "parts", department: null, hasOwner: true, activeCollaboratorDepartments: [] }), false,
+  "after hand-back (no active collaborators) parts loses access again");
+
+// Omitting the field entirely must reproduce the pre-invite matrix exactly.
+eq(decideConversationAccess({ ...base, role: "parts", department: "parts" }), true,
+  "field omitted: departmental staff still see their own department's leads");
+
 // ── Source pin: the HTTP gate delegates to the pure decision.
 const idx = await fs.readFile(path.resolve("services/api/src/index.ts"), "utf8");
 assert.match(
@@ -66,5 +92,11 @@ assert.match(
 );
 // And the old blanket salesperson grant must be gone.
 assert.doesNotMatch(idx, /if \(role === "salesperson"\) return !dept;/, "the old blanket salesperson grant must be removed");
+// The gate must actually FEED the collaborator list — a widened rule nobody passes inputs to is inert.
+assert.match(
+  idx,
+  /return decideConversationAccess\(\{[\s\S]{0,400}activeCollaboratorDepartments: listActiveCollaboratorDepartments\(/,
+  "canUserAccessConversation must pass the conversation's active collaborator departments"
+);
 
 console.log(`PASS conversation access eval (${n} assertions)`);

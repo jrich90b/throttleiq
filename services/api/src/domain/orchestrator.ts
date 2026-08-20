@@ -13,6 +13,7 @@ import {
   isDisengagedDisposition
 } from "./proactiveVisitInvite.js";
 import { prependHardshipAck, shouldPrependHardshipAck } from "./hardshipEmpathyAck.js";
+import type { CollaboratorDepartment } from "./departmentCollaboration.js";
 import {
   classifySmallTalkWithLLM,
   parseDealershipFaqTopicWithLLM,
@@ -2270,6 +2271,13 @@ export async function orchestrateInbound(
     dealerProfile?: any;
     agentNameOverride?: string | null;
     needsEmpathy?: boolean | null;
+    /**
+     * Departments brought INTO this thread (domain/departmentCollaboration.ts). Fences the composer
+     * off their subject — prices, stock, fitment, ETAs — while it keeps the rest of the reply.
+     * Passed from BOTH /webhooks/twilio and /conversations/:id/regenerate, so live and regenerate
+     * carry the same fence.
+     */
+    activeDepartments?: CollaboratorDepartment[] | null;
     /** Customer is closing the lead out this turn — suppresses the salesperson arm. */
     dispositionClosing?: boolean | null;
     /** Lead already bought — suppresses the salesperson arm. */
@@ -5284,6 +5292,7 @@ export async function orchestrateInbound(
         voiceSummary: ctx?.voiceSummary ?? null,
         memorySummary: ambiguousFlow ? ctx?.memorySummary ?? null : null,
         needsEmpathy: ctx?.needsEmpathy ?? null,
+        activeDepartments: ctx?.activeDepartments ?? null,
         dispositionClosing: ctx?.dispositionClosing ?? null,
         alreadyPurchased: !!ctx?.sale,
         // A returning customer opening a NEW deal — so the composer stops greeting them as a stranger.

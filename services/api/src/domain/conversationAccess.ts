@@ -10,6 +10,16 @@
  * never a lead already owned by ANOTHER salesperson. canViewAllLeads restores full visibility. The
  * unassigned pool stays visible to everyone so a brand-new/unclaimed lead is never hidden from the whole
  * sales floor (no lead black hole).
+ *
+ * Invited departments (Joe, 2026-08-20): a SALES lead can have a department brought INTO it without
+ * being handed over — a sold customer asking Parts about taillights on the thread his salesperson
+ * owns (`domain/departmentCollaboration.ts`). The invited department must be able to read that
+ * thread, so `activeCollaboratorDepartments` widens the departmental branch ONLY. It is deliberately
+ * the narrowest widening that works: it grants a user whose ROLE is that department access to a
+ * thread a console user explicitly invited them to, and it is reachable from no other branch — a
+ * salesperson, a manager-less unknown role, and an uninvited department are all decided exactly as
+ * before. The lead's own `department` is NOT set by an invite, which is what keeps the lead a sales
+ * lead everywhere else in the system.
  */
 
 export type ConversationAccessInput = {
@@ -20,6 +30,12 @@ export type ConversationAccessInput = {
   hasOwner: boolean; // the lead has SOME owner assigned (vs the unassigned shared pool)
   department: string | null; // "service" | "parts" | "apparel" for departmental leads; null/"" = sales
   hasOpenTodo: boolean; // used only with canViewAllTasks
+  /**
+   * Departments currently brought into this conversation as collaborators (never set by classification
+   * — only by an explicit console invite). Absent/empty on every thread that has not been invited to,
+   * which is why omitting it reproduces the pre-2026-08-20 matrix exactly.
+   */
+  activeCollaboratorDepartments?: readonly string[] | null;
 };
 
 export function decideConversationAccess(input: ConversationAccessInput): boolean {
@@ -31,9 +47,12 @@ export function decideConversationAccess(input: ConversationAccessInput): boolea
   if (input.canViewAllTasks && input.hasOpenTodo) return true;
   if (input.isLeadOwner) return true;
 
-  // Departmental staff see only their own department's leads.
+  // Departmental staff see their own department's leads, plus any thread their department was
+  // explicitly invited into. Both are "this is your department's work"; only the second one leaves
+  // the lead itself in sales.
   if (role === "service" || role === "parts" || role === "apparel") {
-    return dept === role;
+    if (dept === role) return true;
+    return (input.activeCollaboratorDepartments ?? []).some(d => String(d ?? "").toLowerCase() === role);
   }
 
   // Salesperson (not the owner — owner already returned above): department leads belong to that

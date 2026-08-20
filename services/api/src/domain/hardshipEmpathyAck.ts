@@ -126,3 +126,19 @@ export function applyHardshipAckToHandoffTemplate(args: {
   }
   return intro ? `${intro.trimEnd()} ${prependHardshipAck(body)}` : prependHardshipAck(body);
 }
+
+/**
+ * The composer's HARDSHIP rule block, moved out of llmDraft.ts (2026-08-20) to pay for the
+ * department-collaboration wiring under the source-size ratchet. Same text, same behaviour — it
+ * simply lives next to the deterministic backstop (`prependHardshipAck`) that enforces the same
+ * rule at finalize, so the prompt-side and the finalize-side of "lead with the acknowledgment"
+ * are readable together.
+ */
+export const HARDSHIP_DRAFT_PROMPT_RULES = `
+HARDSHIP (the customer disclosed a personal hardship or serious situation — illness, injury, hospitalization, grief/loss, a family or financial emergency):
+- OPEN with one short, genuine line acknowledging THAT specific hardship before anything else.
+- Be human and warm; never minimize it and never sound scripted.
+- Drop ALL scarcity/urgency/sales pressure ("moves quick", "won't last", "limited", "act now") — this is not the moment.
+- You may still answer their actual request (e.g. how to leave a deposit / hold a bike), but gently, with no push to come in.
+- Reassure there's no rush and you're there when they're ready.
+`;
