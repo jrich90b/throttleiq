@@ -88,6 +88,7 @@
     "bare_acknowledgement_disposition:eval",
     "bare_ack_courtesy:eval",
     "courtesy_closer:eval",
+    "courtesy_intensifier:eval",
     "lost_sale_closeout_ack:eval",
     "feature_flag_wiring:eval",
     "report_path_convention:eval",

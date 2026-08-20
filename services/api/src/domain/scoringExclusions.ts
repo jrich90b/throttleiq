@@ -129,6 +129,22 @@ const CLOSING_ACK_PHRASE =
 // "thanks man call me" is unaffected (it trips the cue guard before this runs).
 const CLOSING_ACK_VOCATIVE =
   "(?:man|bud(?:dy|y)?|bro(?:ther|tha)?|dude|sir|ma'?am|boss|pal|friend|champ|chief|mate|fam|homie|hun|hon|partner|amigo|guys?|battle bud(?:dy|y)|my (?:friend|man|guy))";
+// Emphasis that may trail a closer and adds nothing to it — "no problem at all", "thanks a
+// lot", "no trouble whatsoever". Like the vocative it is never an ask on its own, so a closer
+// wearing one is still a closer. Slotted BESIDE the vocative rather than added to
+// CLOSING_ACK_PHRASE so every existing phrase inherits it: the defect below was one phrase's
+// near-miss, and a phrase list grows one live string at a time, so the next intensified closer
+// would have cost another page.
+//
+// (Jason Roorda +17165104578, 2026-08-19: the agent had just signed off — "I'll pause my
+// check-ins here so I'm not crowding your phone" — he replied "No problem at all", and the
+// agent was correctly silent. Graded `missing_response`, score 0, one of the two failures in a
+// five-turn day. `at all` is neither a vocative nor a separator, so the anchored match failed
+// outright; plain "no problem" matched fine.)
+//
+// The `?` guard and the actionable-cue guard still run first, so "No problem at all — can you
+// send the price?" is graded exactly as it is today.
+const CLOSING_ACK_INTENSIFIER = "(?:at all|whatsoever|a lot|a ton|a bunch|a million)";
 // Separator between stacked closers: punctuation/whitespace, optional "and"/"&".
 const CLOSING_ACK_SEP = "(?:[\\s.!,]+(?:and |& )?)";
 // A polite DECLINE may OPEN the closer chain — "No, thanks", "Nope, thank you",
@@ -146,7 +162,7 @@ const CLOSING_ACK_SEP = "(?:[\\s.!,]+(?:and |& )?)";
 const CLOSING_ACK_DECLINE_OPENER =
   "(?:no|nope|nah|not right now|not at (?:this|the) time|i'?m good|we'?re good)";
 const CLOSING_ACK_FULL_RE = new RegExp(
-  `^${CLOSING_ACK_SEP}?(?:${CLOSING_ACK_DECLINE_OPENER}${CLOSING_ACK_SEP})?(?:${CLOSING_ACK_PHRASE}(?:\\s+${CLOSING_ACK_VOCATIVE})?${CLOSING_ACK_SEP}?)+$`,
+  `^${CLOSING_ACK_SEP}?(?:${CLOSING_ACK_DECLINE_OPENER}${CLOSING_ACK_SEP})?(?:${CLOSING_ACK_PHRASE}(?:\\s+${CLOSING_ACK_INTENSIFIER})?(?:\\s+${CLOSING_ACK_VOCATIVE})?${CLOSING_ACK_SEP}?)+$`,
   "i"
 );
 // Requires at least one substantive gratitude/acknowledgment, so a bare "ok" /

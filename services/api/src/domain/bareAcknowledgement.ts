@@ -63,6 +63,25 @@ const BARE_ONLY_COURTESY_TOKENS = /\b(awesome|thank u|ur welcome)\b/;
 const FILLER_TOKENS =
   /\b(i|we|you|your|hi|hey|hello|yes|no|so|for|the|a|an|it|that|this|now|man|dude|bro|sir|maam|much|very|again|too|thank|guys|everything|help|info|update|time)\b/g;
 
+/**
+ * Emphasis that trails a courtesy word and adds nothing to it — "no problem AT ALL",
+ * "thanks A LOT", "no trouble WHATSOEVER". Stripped as a UNIT, never token by token.
+ *
+ * Joe's staff, 2026-08-19 (Jason Roorda +17165104578): the agent signed off, Jason replied
+ * "No problem at all", and because `at` and `all` survive the filler pass as TWO content
+ * words the turn read as substantive. It was not bare, so the awaiting-reply flag lit
+ * ("courtesy_closer" never fired) and the per-message tripwire minted a "needs a reply"
+ * task, which paged the manager phone at 18:36Z. Two operator complaints, 46 seconds
+ * apart. Plain "no problem" was bare all along — three words of emphasis were the whole
+ * defect. Single-word intensifiers ("whatsoever", "a lot") already passed by luck: they
+ * leave ONE residual word, under the two-word bar.
+ *
+ * Stripping the PHRASE rather than adding `at` and `all` to FILLER_TOKENS is the point:
+ * loose tokens would also empty "Thanks at 3" (a customer confirming a time), which stays
+ * substantive here — measured, both ways, in `courtesy_intensifier:eval`.
+ */
+const INTENSIFIER_TOKENS = /\b(at all|whatsoever|a lot|a ton|a bunch|a million)\b/g;
+
 export function isEmojiOnlyText(text: string): boolean {
   const t = String(text ?? "").trim();
   return t.length > 0 && /^[\p{Extended_Pictographic}\s]+$/u.test(t);
@@ -98,6 +117,7 @@ export function isBareAcknowledgementText(text: string): boolean {
     .replace(/[‘’]/g, "'")
     .replace(new RegExp(ACK_TOKENS.source, "g"), " ")
     .replace(new RegExp(BARE_ONLY_COURTESY_TOKENS.source, "g"), " ")
+    .replace(INTENSIFIER_TOKENS, " ")
     .replace(FILLER_TOKENS, " ")
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
