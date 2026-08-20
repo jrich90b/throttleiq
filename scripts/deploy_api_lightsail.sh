@@ -143,7 +143,15 @@ DEPLOY_REPLACE_PM2="${DEPLOY_REPLACE_PM2:-0}"
 DEPLOY_SKIP_LOCAL_CHECKS="${DEPLOY_SKIP_LOCAL_CHECKS:-0}"
 DEPLOY_BACKUP_RETENTION_DAYS="${DEPLOY_BACKUP_RETENTION_DAYS:-730}"
 DEPLOY_BACKUP_EXTRA_ROOTS="${DEPLOY_BACKUP_EXTRA_ROOTS:-}"
-DEPLOY_HEALTH_ATTEMPTS="${DEPLOY_HEALTH_ATTEMPTS:-15}"
+# Post-restart health budget. MEASURED 2026-08-20: this API takes ~65s to serve after a restart
+# (it loads 879 conversations from a 13.5 MB store before it listens), and the old budget was 15
+# attempts x 3s = 45s. So BOTH deploys that day printed "API health check failed after deploy" and
+# exited 23 on a deploy that was healthy seconds later. A false failure is worse than a slow true
+# one: it invites someone to revert a good deploy, and it trains everyone to stop reading deploy
+# output. 80 x 3s = a ~4 minute window, ~3.7x the measured boot. A genuinely dead build still fails,
+# just four minutes later.
+DEPLOY_HEALTH_ATTEMPTS="${DEPLOY_HEALTH_ATTEMPTS:-80}"
+DEPLOY_HEALTH_RETRY_SLEEP_SECONDS="${DEPLOY_HEALTH_RETRY_SLEEP_SECONDS:-3}"
 DEPLOY_EXPECTED_DATA_DIR="${DEPLOY_EXPECTED_DATA_DIR:-}"
 DEPLOY_MIN_CONVERSATIONS="${DEPLOY_MIN_CONVERSATIONS:-}"
 DEPLOY_REQUIRED_CONVERSATION_TEXT="${DEPLOY_REQUIRED_CONVERSATION_TEXT:-}"
@@ -221,7 +229,7 @@ if [[ -n "$DEPLOY_API_PORT" ]]; then
   echo "  api port:   $DEPLOY_API_PORT"
 fi
 echo "  health:     $DEPLOY_HEALTH_URL"
-echo "  attempts:   $DEPLOY_HEALTH_ATTEMPTS"
+echo "  attempts:   $DEPLOY_HEALTH_ATTEMPTS (~$((DEPLOY_HEALTH_ATTEMPTS * DEPLOY_HEALTH_RETRY_SLEEP_SECONDS))s window)"
 echo "  replace pm2:$DEPLOY_REPLACE_PM2"
 echo "  backups:    one per day for $DEPLOY_BACKUP_RETENTION_DAYS days"
 if [[ -n "$DEPLOY_EXPECTED_DATA_DIR" ]]; then
@@ -279,6 +287,7 @@ remote_env=(
   "DEPLOY_API_PORT=$(shell_quote "$DEPLOY_API_PORT")"
   "DEPLOY_HEALTH_URL=$(shell_quote "$DEPLOY_HEALTH_URL")"
   "DEPLOY_HEALTH_ATTEMPTS=$(shell_quote "$DEPLOY_HEALTH_ATTEMPTS")"
+  "DEPLOY_HEALTH_RETRY_SLEEP_SECONDS=$(shell_quote "$DEPLOY_HEALTH_RETRY_SLEEP_SECONDS")"
   "DEPLOY_ALLOW_DIRTY_REMOTE=$(shell_quote "$DEPLOY_ALLOW_DIRTY_REMOTE")"
   "DEPLOY_REPLACE_PM2=$(shell_quote "$DEPLOY_REPLACE_PM2")"
   "DEPLOY_BACKUP_RETENTION_DAYS=$(shell_quote "$DEPLOY_BACKUP_RETENTION_DAYS")"
@@ -618,7 +627,10 @@ pm2 save >/dev/null
 
 echo "Checking API health..."
 if [[ ! "$DEPLOY_HEALTH_ATTEMPTS" =~ ^[0-9]+$ || "$DEPLOY_HEALTH_ATTEMPTS" -lt 1 ]]; then
-  DEPLOY_HEALTH_ATTEMPTS=15
+  DEPLOY_HEALTH_ATTEMPTS=80
+fi
+if [[ ! "$DEPLOY_HEALTH_RETRY_SLEEP_SECONDS" =~ ^[0-9]+$ || "$DEPLOY_HEALTH_RETRY_SLEEP_SECONDS" -lt 1 ]]; then
+  DEPLOY_HEALTH_RETRY_SLEEP_SECONDS=3
 fi
 for ((attempt = 1; attempt <= DEPLOY_HEALTH_ATTEMPTS; attempt += 1)); do
   if curl -fsS "$DEPLOY_HEALTH_URL" >/tmp/leadrider-api-health.json; then
@@ -634,10 +646,12 @@ for ((attempt = 1; attempt <= DEPLOY_HEALTH_ATTEMPTS; attempt += 1)); do
     exit 0
   fi
   echo "Health check attempt $attempt failed; retrying..."
-  sleep 3
+  sleep "$DEPLOY_HEALTH_RETRY_SLEEP_SECONDS"
 done
 
-echo "API health check failed after deploy." >&2
+echo "API health check failed after deploy — waited ~$((DEPLOY_HEALTH_ATTEMPTS * DEPLOY_HEALTH_RETRY_SLEEP_SECONDS))s." >&2
+echo "Before treating this as a bad build, CHECK THE PUBLIC HEALTH URL yourself ($DEPLOY_HEALTH_URL):" >&2
+echo "a slow boot has produced this message on a deploy that was serving moments later." >&2
 pm2 status "$DEPLOY_PM2_PROCESS" --no-color || true
 pm2 logs "$DEPLOY_PM2_PROCESS" --lines 80 --nostream --no-color || true
 exit 23
