@@ -3584,6 +3584,12 @@ export default function Home() {
   const [reassignInlineTarget, setReassignInlineTarget] = useState<string>("department:service");
   const [reassignInlineSummary, setReassignInlineSummary] = useState("");
   const [reassignInlineSaving, setReassignInlineSaving] = useState(false);
+  // "Bring in a department" — an INVITE, not the Reassign handoff above it. Adds Parts/Service/
+  // Apparel to the thread while the lead, its owner, and the agent's follow-up all stay put.
+  const [bringInOpen, setBringInOpen] = useState(false);
+  const [bringInDept, setBringInDept] = useState<"service" | "parts" | "apparel">("parts");
+  const [bringInNote, setBringInNote] = useState("");
+  const [bringInSaving, setBringInSaving] = useState(false);
   const sendBoxRef = useRef<HTMLTextAreaElement | null>(null);
   const streamRef = useRef<EventSource | null>(null);
   const lastStreamRefreshRef = useRef(0);
@@ -12035,6 +12041,47 @@ export default function Home() {
     if (selectedId === conv.id) {
       await loadConversation(conv.id);
     }
+    await load();
+  }
+
+  /**
+   * Bring a department INTO this conversation. Distinct from `reassignLeadInline`'s department
+   * option, which hands the lead over: this leaves the owner, the lead's classification, and the
+   * agent's follow-up alone and simply adds a teammate who can reply.
+   */
+  async function bringInDepartmentForConv(convId: string) {
+    const note = bringInNote.trim();
+    setBringInSaving(true);
+    const resp = await fetch(`/api/conversations/${encodeURIComponent(convId)}/bring-in-department`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ department: bringInDept, note })
+    });
+    const data = await resp.json().catch(() => null);
+    setBringInSaving(false);
+    if (!resp.ok || data?.ok === false) {
+      window.alert(data?.error ?? "Failed to bring in the department");
+      return;
+    }
+    setBringInOpen(false);
+    setBringInNote("");
+    await loadConversation(convId);
+    await load();
+  }
+
+  /** Hand the thread back to the lead owner — closes the department's task and revokes their access. */
+  async function handBackDepartmentForConv(convId: string, department: string) {
+    const resp = await fetch(`/api/conversations/${encodeURIComponent(convId)}/hand-back-department`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ department })
+    });
+    const data = await resp.json().catch(() => null);
+    if (!resp.ok || data?.ok === false) {
+      window.alert(data?.error ?? "Failed to hand back");
+      return;
+    }
+    await loadConversation(convId);
     await load();
   }
 
@@ -21504,6 +21551,17 @@ export default function Home() {
                       Payment received
                     </span>
                   ) : null}
+                  {((selectedConv as any).departmentCollaborators ?? [])
+                    .filter((c: any) => c && !c.handedBackAt)
+                    .map((c: any) => (
+                      <span
+                        key={`dept-collab-${c.department}-${c.invitedAt}`}
+                        className="text-xs px-2 py-0.5 rounded-full bg-violet-100 text-violet-800 border border-violet-300"
+                        title={`Brought in by ${c.invitedByName || "a teammate"}${c.note ? ` — ${c.note}` : ""}`}
+                      >
+                        {String(c.department).charAt(0).toUpperCase() + String(c.department).slice(1)} brought in
+                      </span>
+                    ))}
                 </div>
                 {(selectedConv.lead?.name ||
                   [selectedConv.lead?.firstName, selectedConv.lead?.lastName].filter(Boolean).join(" ")) ? (
@@ -21514,6 +21572,79 @@ export default function Home() {
                     Lead Ref: {selectedConv.originalLead?.leadRef || selectedConv.lead?.leadRef}
                   </div>
                 ) : null}
+                {/*
+                  BRING IN A DEPARTMENT (Joe, 2026-08-20). The customer asks one question that
+                  belongs to Parts/Service/Apparel on a lead that is otherwise sales — Christopher
+                  Szczesny asking his salesperson about taillights days after buying a Road Glide.
+                  This ADDS that department to the thread; it does not hand the lead over, does not
+                  re-label it, and does not stop the agent. "Reassign lead" in the list menu is still
+                  the handoff for a lead that genuinely belongs to another department.
+                */}
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                  {((selectedConv as any).departmentCollaborators ?? [])
+                    .filter((c: any) => c && !c.handedBackAt)
+                    .map((c: any) => (
+                      <button
+                        key={`dept-handback-${c.department}`}
+                        type="button"
+                        className="rounded border px-2 py-0.5 text-[11px] font-semibold text-gray-700 hover:bg-gray-50"
+                        onClick={() => {
+                          void handBackDepartmentForConv(selectedConv.id, String(c.department));
+                        }}
+                        title={`Close out ${c.department} and hand this thread back to the lead owner`}
+                      >
+                        Hand back from {c.department}
+                      </button>
+                    ))}
+                  {bringInOpen ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <select
+                        className="border rounded px-2 py-1 text-xs"
+                        value={bringInDept}
+                        onChange={e => setBringInDept(e.target.value as "service" | "parts" | "apparel")}
+                      >
+                        <option value="parts">Parts</option>
+                        <option value="service">Service</option>
+                        <option value="apparel">Apparel</option>
+                      </select>
+                      <input
+                        className="border rounded px-2 py-1 text-xs min-w-[16rem]"
+                        value={bringInNote}
+                        onChange={e => setBringInNote(e.target.value)}
+                        placeholder="What do they need? (e.g. taillights between saddlebags and fender)"
+                      />
+                      <button
+                        type="button"
+                        className="rounded border px-2 py-1 text-[11px] font-semibold"
+                        disabled={bringInSaving}
+                        onClick={() => {
+                          void bringInDepartmentForConv(selectedConv.id);
+                        }}
+                      >
+                        {bringInSaving ? "Bringing in..." : "Bring them in"}
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded border px-2 py-1 text-[11px]"
+                        onClick={() => {
+                          setBringInOpen(false);
+                          setBringInNote("");
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      className="rounded border px-2 py-0.5 text-[11px] font-semibold text-gray-700 hover:bg-gray-50"
+                      onClick={() => setBringInOpen(true)}
+                      title="Add another department to this conversation without handing the lead over"
+                    >
+                      Bring in a department
+                    </button>
+                  )}
+                </div>
                 {headerAppointment ? (
                   <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-600">
                     <span>

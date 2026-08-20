@@ -18,6 +18,8 @@ import { FINANCE_OUTCOME_UNREACHABLE_EXAMPLES, FINANCE_OUTCOME_UNREACHABLE_MAPPI
 import { MANUAL_OUTBOUND_APPOINTMENT_EXAMPLES, MANUAL_OUTBOUND_APPOINTMENT_PROMPT_RULES } from "./manualOutboundAppointment.js";
 import { BOOKING_INTENT_EXAMPLES, BOOKING_INTENT_PROMPT_RULES } from "./bookingIntentParser.js";
 import { buildChannelRules, advanceEveryReplyEnabled, advanceEveryReplySuppressed } from "./draftChannelRules.js";
+import { buildDepartmentCollaborationPromptBlock, type CollaboratorDepartment } from "./departmentCollaboration.js";
+import { HARDSHIP_DRAFT_PROMPT_RULES } from "./hardshipEmpathyAck.js";
 export { advanceEveryReplyEnabled, advanceEveryReplySuppressed };
 import { isFabricatedGratitudeLeadIn } from "./leadInGuards.js";
 import { CUSTOMER_ACK_ACTION_EXEMPLARS } from "./customerAckActionExemplars.js";
@@ -364,6 +366,10 @@ export type DraftContext = {
   // the draft must lead with a brief, genuine acknowledgment and drop any scarcity/urgency push.
   // A deterministic backstop (hardshipEmpathyAck.ts) also prepends an acknowledgment at finalize.
   needsEmpathy?: boolean | null;
+
+  // Departments brought INTO this thread — fences the composer off their subject while it keeps the
+  // rest of the reply. Empty/absent on every uninvited thread. See domain/departmentCollaboration.ts.
+  activeDepartments?: CollaboratorDepartment[] | null;
 
   // Turns the salesperson arm must never see — closing the lead out, and already bought.
   // Why each, with the measured over-fire, is in advanceEveryReplySuppressed.
@@ -15529,16 +15535,7 @@ export async function generateDraftWithLLM(ctx: DraftContext): Promise<string> {
   const manualReplyExamplesBlock = buildManualReplyExamplesPromptBlock(manualIntentHint);
 
   const channelRules = buildChannelRules(ctx);
-  const hardshipRules = ctx.needsEmpathy
-    ? `
-HARDSHIP (the customer disclosed a personal hardship or serious situation — illness, injury, hospitalization, grief/loss, a family or financial emergency):
-- OPEN with one short, genuine line acknowledging THAT specific hardship before anything else.
-- Be human and warm; never minimize it and never sound scripted.
-- Drop ALL scarcity/urgency/sales pressure ("moves quick", "won't last", "limited", "act now") — this is not the moment.
-- You may still answer their actual request (e.g. how to leave a deposit / hold a bike), but gently, with no push to come in.
-- Reassure there's no rush and you're there when they're ready.
-`
-    : "";
+  const hardshipRules = ctx.needsEmpathy ? HARDSHIP_DRAFT_PROMPT_RULES : "";
 
 
   const steeringHint = String(ctx.steering ?? "").trim();
@@ -15588,7 +15585,7 @@ ANSWER, DON'T HEDGE (strict):
 - If they asked a spec/general question you can answer from what's known or common Harley knowledge, answer it directly.
 - ONLY defer to a person/follow-up when you GENUINELY need something you don't have: a finance/credit decision, a trade appraisal, a parts or backorder lookup, service records, or physically checking a specific bike. When you do defer, name exactly what you're checking — don't be vague. (Never invent a price, rate, stock number, or availability just to avoid deferring — that rule still wins.)
 ${channelRules}
-${hardshipRules}
+${hardshipRules}${buildDepartmentCollaborationPromptBlock(ctx.activeDepartments)}
 - Never OPEN by repeating the customer's own words back to them — acknowledge in your OWN words. If they wrote "might be able to swing tomorrow after work," reply like "Tomorrow after work works great —", NOT "might be able to swing tomorrow after work can work." Parroting their sentence reads robotic (and often starts mid-thought/lowercase).
 CONTROLLED VARIATIONS (use these to sound human):
 - Use ONE variant per response section. Do not repeat the same variant if it already appeared in the thread.

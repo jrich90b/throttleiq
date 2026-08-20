@@ -55,6 +55,8 @@ import {
   buildDeptWidgetAcquisitionReply
 } from "./domain/webWidgetDeptBikeClarify.js";
 import { decideConversationAccess } from "./domain/conversationAccess.js";
+import { listActiveCollaboratorDepartments } from "./domain/departmentCollaboration.js";
+import { registerDepartmentCollaborationRoutes } from "./routes/departmentCollaboration.js";
 import { removeUploadedFileFromPacket } from "./domain/mdfClaimFileRemoval.js";
 import { buildMacInstallerScript, externalApiBase, shellSingleQuote } from "./domain/mdfRunnerMacInstaller.js";
 import { isProactiveContactPaused } from "./domain/proactiveContactPause.js";
@@ -5199,7 +5201,8 @@ function canUserAccessConversation(user: any, conv: any): boolean {
     isLeadOwner,
     hasOwner,
     department: getConversationDepartment(conv),
-    hasOpenTodo
+    hasOpenTodo,
+    activeCollaboratorDepartments: listActiveCollaboratorDepartments((conv as any)?.departmentCollaborators)
   });
 }
 
@@ -39329,6 +39332,11 @@ app.get("/analytics/kpi", async (req, res) => {
 });
 
 registerCopilotRoutes(app);
+// All three department endpoints (the handoff + "bring in"/"hand back") live in routes/departmentCollaboration.ts.
+registerDepartmentCollaborationRoutes(app, {
+  requirePermission, canUserAccessConversation, recordRouteOutcome, sendInternalSms, pickUserSmsPhone,
+  normalizePhone, getDialogState, setDialogState, stopRelatedCadences, maybeMarkCampaignThreadPassed
+});
 
 app.post("/conversations/compose", (req, res) => {
   const rawPhone = String(req.body?.phone ?? "").trim();
@@ -39829,57 +39837,6 @@ function maybeMarkCampaignThreadPassed(
   };
   return true;
 }
-
-app.post("/conversations/:id/department", requirePermission("canAccessTodos"), (req, res) => {
-  const conv = getConversation(req.params.id);
-  if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
-  const user = (req as any).user ?? null;
-  if (!canUserAccessConversation(user, conv)) {
-    return res.status(403).json({ ok: false, error: "forbidden" });
-  }
-
-  const department = String(req.body?.department ?? "")
-    .trim()
-    .toLowerCase() as DepartmentRole;
-  if (!["service", "parts", "apparel"].includes(department)) {
-    return res.status(400).json({ ok: false, error: "Invalid department" });
-  }
-
-  const summaryRaw = String(req.body?.summary ?? "").trim();
-  const summary = summaryRaw || `${department} request`;
-
-  const ownerIdRaw = String(req.body?.ownerId ?? "").trim();
-  const ownerNameRaw = String(req.body?.ownerName ?? "").trim();
-  if ((ownerIdRaw || ownerNameRaw) && user?.role !== "manager") {
-    return res.status(403).json({ ok: false, error: "manager required to assign owner" });
-  }
-  const owner =
-    ownerIdRaw || ownerNameRaw ? { id: ownerIdRaw || undefined, name: ownerNameRaw || undefined } : undefined;
-
-  conv.classification = {
-    ...(conv.classification ?? {}),
-    bucket: department,
-    cta: `${department}_request`
-  };
-  if (department === "service") {
-    if (getDialogState(conv) === "none") {
-      setDialogState(conv, "service_request");
-    }
-    setDialogState(conv, "service_handoff");
-  }
-
-  const hasDepartmentTodo = listOpenTodos().some(t => t.convId === conv.id && t.reason === department);
-  if (!hasDepartmentTodo) {
-    addTodo(conv, department, summary, undefined, owner);
-  }
-
-  setFollowUpMode(conv, "manual_handoff", `${department}_request`);
-  stopFollowUpCadence(conv, "manual_handoff");
-  stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
-  maybeMarkCampaignThreadPassed(conv, department);
-  saveConversation(conv);
-  return res.json({ ok: true, conversation: conv });
-});
 
 app.post("/conversations/:id/lead-owner", requirePermission("canAccessTodos"), async (req, res) => {
   const conv = getConversation(req.params.id);
@@ -58158,6 +58115,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     agentNameOverride: resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile)),
     needsEmpathy: regenAcceptedAffect?.needsEmpathy ?? null,
     dispositionClosing: (regenResponseControlAccepted && regenResponseControlParse?.intent === "not_interested") || isNotInterested(event.body ?? ""),
+    // REGENERATE half of the department fence; the live half is the twilio webhook's identical line.
+    // Kept BELOW the closing-disposition field, whose adjacency to needsEmpathy is pinned by
+    // advance_every_reply:eval — and worded to avoid that field's literal name, which the same
+    // eval COUNTS (a mention in a comment reads as a third call site).
+    activeDepartments: listActiveCollaboratorDepartments((conv as any).departmentCollaborators),
     customerReceivedOutbound: hasCustomerReceivedOutbound(conv.messages)
   });
 
@@ -68145,6 +68107,8 @@ if (authToken && signature) {
     agentNameOverride: resolveConversationAgentName(conv, resolveDealerAgentName(weatherProfile)),
     needsEmpathy: acceptedAffect?.needsEmpathy ?? null,
     dispositionClosing: llmNotInterested || isNotInterested(event.body ?? ""),
+    // LIVE half of the department fence — mirrors the regenerate call site exactly.
+    activeDepartments: listActiveCollaboratorDepartments((conv as any).departmentCollaborators),
     customerReceivedOutbound: hasCustomerReceivedOutbound(conv.messages)
   });
   logRouteTiming("orchestrator", orchestratorStartedAt, {

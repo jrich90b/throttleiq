@@ -5,6 +5,7 @@ import { maybeMarkEngagedFromInbound } from "./engagement.js";
 import { setInventoryWatchOptOut } from "./inventoryWatchOptOut.js";
 import { decideAwaitingReplyFlag } from "./awaitingReply.js";
 import { selectPriorJourneyBackfills, type PriorJourneyRecord } from "./priorJourney.js";
+import type { DepartmentCollaborator } from "./departmentCollaboration.js";
 import {
   decideUnansweredWatchAlertPause,
   hasSentWatchCloseOut,
@@ -1019,6 +1020,15 @@ export type Conversation = {
    */
   priorJourney?: PriorJourneyRecord | null;
   leadOwner?: LeadOwner;
+  /**
+   * Departments BROUGHT INTO this conversation without taking it over (Joe, 2026-08-20) — the
+   * "invite Parts in" case, as distinct from `POST /conversations/:id/department`, which is a
+   * HANDOFF that re-labels the lead (`classification.bucket`) and stops the follow-up cadence.
+   * Purely additive: an invite leaves `leadOwner`, `classification`, and the cadence untouched.
+   * Lifecycle, access semantics, and the fail-direction notes live in
+   * `domain/departmentCollaboration.ts`.
+   */
+  departmentCollaborators?: DepartmentCollaborator[];
   // Audit trail for the manager "Ping" button (newest last, capped at STAFF_PING_HISTORY_LIMIT):
   // who poked whom, when, about which tasks. Internal staff SMS only — never a customer send.
   // Also the cooldown source of truth, so a rep can't be pinged five times in a row.

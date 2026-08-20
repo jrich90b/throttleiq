@@ -252,6 +252,7 @@
     "tlp_launch_timeout_guard:eval",
     "internal_outbound_guard:eval",
     "conversation_access:eval",
+    "bring_in_department:eval",
     "promotion_audience:eval",
     "unified_slots_merged_shadow:eval",
     "email_lane_unified_slot:eval",
