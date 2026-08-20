@@ -39,6 +39,96 @@ import {
 export const CLAUDE_DRAFT_REVIEW_MAX_PER_TICK_DEFAULT = 3;
 export const CLAUDE_DRAFT_REVIEW_MAX_AGE_MS_DEFAULT = 24 * 60 * 60 * 1000;
 
+/**
+ * THE BREAKER — stop paying to ask a service that is answering "no" every time.
+ *
+ * MEASURED 2026-08-20. The Anthropic account ran dry at ~11:34Z. This lane runs EVERY MINUTE and
+ * retried regardless, with no backoff, no cap and no give-up: by 19:09Z that was **446 SMS attempts
+ * across 15 drafts (135 on one draft alone) plus 141 email attempts across 3** — 587 calls in a day
+ * that could not possibly succeed. Two costs, and the second is the dangerous one:
+ *
+ *  - the route audit reads as ~587 distinct problems when it is ONE problem (a dead vendor account);
+ *  - **every queued retry converts to a real, paid API call the instant the balance is topped up.**
+ *    The bill for an outage is charged after it ends. That is what this exists to stop.
+ *
+ * A closed-loop breaker rather than a per-draft counter, because the failure is not per draft — the
+ * SERVICE is down, and a per-draft cap still pays once per draft per minute forever. Consecutive
+ * TRANSPORT failures only (no key, HTTP failure, unparseable reply); a real verdict of any kind
+ * resets it, because a verdict proves the service is alive.
+ *
+ * WHAT IT DELIBERATELY DOES NOT CHANGE: the draft still goes UNREVIEWED and still records
+ * `*_unavailable`, so it stays UNSTAMPED and the 4-hourly human backstop still looks at it. That
+ * property (PR #711) is the whole fail-direction of this lane and the breaker must not touch it —
+ * we are cutting the wasted CALL, never the visibility. A lane that went quiet here would be the
+ * "instrument reports fine while measuring nothing" failure this file's siblings keep repeating.
+ *
+ * In-process state, and that is correct here rather than a bug: the API deploys 8-17x a day, so a
+ * restart costs at most one extra probe per deploy — which is exactly when you WOULD want to
+ * re-probe. Compare the email lane's 150/day cap, where in-process state is a real defect because a
+ * deploy RAISES the ceiling; here a reset only ever re-tests a service we want re-tested.
+ */
+export const CLAUDE_REVIEW_BREAKER_TRIP_AFTER_DEFAULT = 5;
+export const CLAUDE_REVIEW_BREAKER_COOLDOWN_MS_DEFAULT = 15 * 60 * 1000;
+
+type ClaudeReviewBreakerState = { consecutiveFailures: number; openedAtMs: number | null };
+const breaker: ClaudeReviewBreakerState = { consecutiveFailures: 0, openedAtMs: null };
+
+function breakerTripAfter(): number {
+  const raw = Number(String(process.env.CLAUDE_DRAFT_REVIEW_BREAKER_TRIP_AFTER ?? "").trim());
+  return Number.isFinite(raw) && raw > 0 ? raw : CLAUDE_REVIEW_BREAKER_TRIP_AFTER_DEFAULT;
+}
+
+function breakerCooldownMs(): number {
+  const raw = Number(String(process.env.CLAUDE_DRAFT_REVIEW_BREAKER_COOLDOWN_MS ?? "").trim());
+  return Number.isFinite(raw) && raw > 0 ? raw : CLAUDE_REVIEW_BREAKER_COOLDOWN_MS_DEFAULT;
+}
+
+/** Test seam — the breaker is process state, so a test that cannot clear it cannot test it. */
+export function resetClaudeReviewBreaker(): void {
+  breaker.consecutiveFailures = 0;
+  breaker.openedAtMs = null;
+}
+
+export function claudeReviewBreakerSnapshot(): Readonly<ClaudeReviewBreakerState> {
+  return { ...breaker };
+}
+
+/**
+ * Is the breaker holding calls right now? Open ⇒ skip the call and report unavailable WITHOUT
+ * paying. The cooldown lets exactly one probe through, and that probe's own result re-opens or
+ * closes it — so a recovered service is picked up within one cooldown with a single call.
+ */
+export function claudeReviewBreakerIsOpen(nowMs: number): boolean {
+  if (breaker.openedAtMs === null) return false;
+  if (nowMs - breaker.openedAtMs >= breakerCooldownMs()) {
+    // Cooldown elapsed: let ONE call through (half-open). It closes the breaker on a verdict, or
+    // re-opens it on another failure via recordClaudeReviewTransportFailure.
+    breaker.openedAtMs = null;
+    breaker.consecutiveFailures = breakerTripAfter() - 1;
+    return false;
+  }
+  return true;
+}
+
+export function recordClaudeReviewTransportFailure(nowMs: number): void {
+  breaker.consecutiveFailures += 1;
+  if (breaker.openedAtMs === null && breaker.consecutiveFailures >= breakerTripAfter()) {
+    breaker.openedAtMs = nowMs;
+    console.warn(
+      `[claude-draft-review] breaker OPEN after ${breaker.consecutiveFailures} consecutive transport failures — ` +
+        `holding calls for ${Math.round(breakerCooldownMs() / 60000)}m. Drafts stay UNSTAMPED, so the human backstop still reads them.`
+    );
+  }
+}
+
+/** A real verdict proves the service is alive — clear everything. */
+export function recordClaudeReviewSuccess(): void {
+  if (breaker.openedAtMs !== null || breaker.consecutiveFailures > 0) {
+    console.warn("[claude-draft-review] breaker CLOSED — a verdict came back, the lane is live again.");
+  }
+  resetClaudeReviewBreaker();
+}
+
 export function claudeDraftReviewEnabled(): boolean {
   return (
     String(process.env.CLAUDE_DRAFT_REVIEW_ENABLED ?? "1") !== "0" &&
@@ -328,10 +418,15 @@ export async function reviewDraftWithClaude(args: {
   thread: Array<{ direction: string; body: string }>;
   leadLine: string;
   channel?: "sms" | "email";
+  nowMs?: number;
 }): Promise<ClaudeDraftReviewVerdict> {
   const keep: ClaudeDraftReviewVerdict = { verdict: "ok", reason: "review_unavailable", fixedDraft: "" };
   const apiKey = String(process.env.ANTHROPIC_API_KEY ?? "").trim();
   if (!apiKey) return keep;
+  // The breaker answers BEFORE the request is built — the point is not to spend. It returns the
+  // same `keep` every other failure returns, so the caller still records *_unavailable and still
+  // leaves the draft unstamped for the human backstop.
+  if (claudeReviewBreakerIsOpen(args.nowMs ?? Date.now())) return keep;
   try {
     const thread = args.thread
       .slice(-14)
@@ -378,13 +473,20 @@ export async function reviewDraftWithClaude(args: {
     // A failed call or unparseable reply is NOT a verdict — it must never masquerade as "ok"
     // (the 2026-08-15 fire drill caught exactly this: an empty-credit API key stamped obvious
     // nonsense "reviewed-ok" and the dead net looked alive).
-    if (!parsed) return keep;
+    if (!parsed) {
+      recordClaudeReviewTransportFailure(args.nowMs ?? Date.now());
+      return keep;
+    }
+    // Past here the service ANSWERED. Everything below is a verdict, including the two degenerate
+    // ones — they are the reviewer disagreeing with itself, not the transport being down.
+    recordClaudeReviewSuccess();
     const verdict = String(parsed?.verdict ?? "").trim();
     if (verdict !== "rewrite") return { verdict: "ok", reason: String(parsed?.reason ?? "ok"), fixedDraft: "" };
     const fixed = String(parsed?.fixed_draft ?? "").trim();
     if (!fixed) return { verdict: "ok", reason: "rewrite_without_text", fixedDraft: "" };
     return { verdict: "rewrite", reason: String(parsed?.reason ?? "").slice(0, 300), fixedDraft: fixed };
   } catch {
+    recordClaudeReviewTransportFailure(args.nowMs ?? Date.now());
     return keep;
   }
 }
@@ -424,7 +526,7 @@ export async function processClaudeDraftReview(deps: {
       .filter(m => (m.direction === "in" || m.direction === "out") && String(m.body ?? "").trim())
       .filter(m => m.id !== draft.id && String((m as any).draftStatus ?? "") !== "stale")
       .map(m => ({ direction: String(m.direction), body: String(m.body ?? "") }));
-    const verdict = await reviewDraftWithClaude({ draftBody: String(draft.body ?? ""), thread, leadLine });
+    const verdict = await reviewDraftWithClaude({ draftBody: String(draft.body ?? ""), thread, leadLine, nowMs });
     // Review UNAVAILABLE (API failure, no credits, malformed reply) ⇒ no stamp — the draft stays
     // eligible and is retried when the service recovers — and a DISTINCT outcome so a dead net is
     // loudly visible in the route audit instead of dressed up as a stream of "ok"s.
@@ -487,7 +589,7 @@ export async function processClaudeDraftReview(deps: {
       .filter(m => (m.direction === "in" || m.direction === "out") && String(m.body ?? "").trim())
       .filter(m => String((m as any).draftStatus ?? "") !== "stale")
       .map(m => ({ direction: String(m.direction), body: String(m.body ?? "") }));
-    const verdict = await reviewDraftWithClaude({ draftBody: draft, thread, leadLine, channel: "email" });
+    const verdict = await reviewDraftWithClaude({ draftBody: draft, thread, leadLine, channel: "email", nowMs });
     if (verdict.reason === "review_unavailable") {
       deps.recordOutcome("claude_email_draft_review_unavailable", {
         convId: conv.id, leadKey: conv.leadKey ?? null, draftHash: hash
