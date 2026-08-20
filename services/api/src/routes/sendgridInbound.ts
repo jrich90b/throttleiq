@@ -9117,7 +9117,20 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       classificationBucket: conv.classification?.bucket,
       classificationCta: conv.classification?.cta
     }).kind,
-    leadSource: conv.lead?.source,
+    // THE RECORD BEING ANSWERED DECIDES — the source of THIS ADF, not the form the customer
+    // arrived on. `inquiry` is already the event's own body (`effectiveInquiry`); pairing it with
+    // `conv.lead?.source` made a mismatched pair, and that stayed invisible for as long as every
+    // record carried its own `Enrollment Status:` field. A `Riding Academy - Complete` record does
+    // NOT — it reports `Overall Result : Pass` — so the status read falls back to the SOURCE, and
+    // the source it fell back to was the FIRST form. On 2026-08-19 Maya Iversen (+15854782032) was
+    // told "you're on the wait list right now" and Wendy Kiszewski (+17168702067) "thanks for
+    // signing up", twelve minutes apart, on records saying each of them had PASSED the course.
+    // Staff rewrote both by hand within twenty minutes. This is PR #744's lesson on the other path:
+    // sharing a resolver is not enough — both paths have to feed it the same FACTS.
+    // MEASURED on the live store: 980 ADF rows, exactly 2 decisions change, both falsehood -> truth.
+    // FAIL DIRECTION: an event with no parsed source (0 of those 980 rows) falls back to the stored
+    // form, i.e. byte-identical to today.
+    leadSource: leadSource ?? conv.lead?.source,
     inquiry: effectiveInquiry
   });
   if (initialAdfRiderCourseDecision && !academyAdfClaim.liveReplyKind) {

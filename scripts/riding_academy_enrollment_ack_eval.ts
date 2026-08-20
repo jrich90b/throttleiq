@@ -300,9 +300,15 @@ const liveClaimCall = sendgrid.slice(
   sendgrid.indexOf("if (initialAdfRiderCourseDecision && !academyAdfClaim.liveReplyKind) {")
 );
 assert.ok(liveClaimCall.length > 0, "the claim must be resolved before the branch it guards");
+// RE-PINNED 2026-08-20 — the requirement is unchanged (a lead source AND the record), but the
+// source is now the EVENT's own, not the first form the customer arrived on. A COMPLETE record
+// carries no `Enrollment Status:` field, so the stale source WAS the whole decision, and two
+// graduates were answered as signups on 2026-08-19. Behaviour is pinned by
+// `riding_academy_status_lane:eval` PART 1b/PART 4; this stays a shape pin on the call.
 assert.ok(
-  liveClaimCall.includes("leadSource: conv.lead?.source,") && liveClaimCall.includes("inquiry: effectiveInquiry"),
-  "live intake must decide from the lead source AND the enrollment record"
+  liveClaimCall.includes("leadSource: leadSource ?? conv.lead?.source,") &&
+    liveClaimCall.includes("inquiry: effectiveInquiry"),
+  "live intake must decide from the ANSWERED record's lead source AND the enrollment record"
 );
 assert.ok(
   liveClaimCall.includes("excludeProviderMessageId: event.providerMessageId"),

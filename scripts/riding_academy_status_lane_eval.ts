@@ -68,6 +68,45 @@ ok(
   R.decideRidingAcademyTurn({ leadSource: "HD.com Request a Quote", inquiry: "" }).kind === "none",
   "an unrelated ADF is still `none`"
 );
+// ---------------------------------------------------------------------------
+// PART 1b — what a REAL completion record actually looks like (2026-08-20)
+//
+// The `CO` fixture above is INVENTED, and the invention hid a live defect for twelve days. On
+// 2026-08-19 the school filed the first three `Riding Academy - Complete` records it has ever
+// filed — Savannah Niver 15:18Z, Maya Iversen (+15854782032) 15:42Z, Wendy Kiszewski
+// (+17168702067) 15:54Z — and NONE of them carries an `Enrollment Status:` field at all. A
+// completion reports `Overall Result : Pass`. So `readRidingAcademyStatus` finds no record status
+// and falls through to the SOURCE SUFFIX, which makes the completion arm reachable through the
+// lead source and nothing else. Written from the real store rows, verbatim.
+// ---------------------------------------------------------------------------
+const REAL_CO =
+  "Overall Result : Pass-Course: New Rider Course - eCourse + Range-Class Start Date: 8/15/2026-" +
+  "Gender: Female-Motivation: Obtain a license-Motorcycle Riding History: I have never been on a " +
+  "motorcycle (even as a passenger)-Training Experience: No-Future Motorcycle Purchase " +
+  "Expectation: Not sure-Future Motorcycle Purchase Brand: None-Accepted Terms and Conditions: " +
+  "true-Brand of Bike Owned:Honda";
+
+ok(
+  !/enrollment status:/i.test(REAL_CO),
+  "a real COMPLETE record carries NO status field — the CO fixture above is an invented wording"
+);
+ok(/overall result/i.test(REAL_CO), "what it carries instead is the course result");
+ok(
+  kind(REAL_CO, null, "Riding Academy - Complete") === "riding_academy_completion_ack",
+  "the REAL completion record, answered with its OWN source, congratulates"
+);
+// The two lines below ARE the defect, pinned. Same record, same customer, same turn — only the
+// lead source differs, and the answer flips to a falsehood. This is why the live path must pass
+// the source of the record it is ANSWERING (PART 4), not the form the customer arrived on.
+ok(
+  kind(REAL_CO, null, "Riding Academy - Wait List") === "riding_academy_waitlist_ack",
+  "with a STALE wait-list source it tells a graduate she is still waiting (Maya's real 8/19 turn)"
+);
+ok(
+  kind(REAL_CO, null, "Riding Academy - Enrolled") === "riding_academy_enrollment_ack",
+  "with a stale enrolled source it thanks a graduate for signing up (Wendy's real 8/19 turn)"
+);
+
 // The source suffix works when the body carries no record (2843/2844 arrive upper-case).
 ok(
   kind("", null, "RIDING ACADEMY - COMPLETE") === "riding_academy_completion_ack",
@@ -205,6 +244,59 @@ ok(
     .laneOpen === false,
   "once the CUSTOMER texts back, normal routing answers"
 );
+// ---------------------------------------------------------------------------
+// THE RECORD BEING ANSWERED DECIDES (2026-08-20) — the live half of PR #744.
+//
+// #744 fixed REGEN, which was reading the first of a thread's two lead forms, and its notes said
+// "the LIVE path never had this bug". That was true only for as long as every school record carried
+// its own `Enrollment Status:` (PART 1b). Live pairs the event's own body with a lead source, and
+// the source it passed was `conv.lead?.source` — the form the customer ARRIVED on. On a COMPLETE
+// record, which has no status of its own, that stale source is the entire decision.
+//
+// The fixtures below are the same thread and the same record, differing ONLY in the source given.
+// If the two answers ever stop differing, this pin has stopped measuring anything.
+// ---------------------------------------------------------------------------
+const realCompleteRow = (id: string) => ({
+  direction: "in",
+  provider: "sendgrid_adf",
+  providerMessageId: id,
+  body: `WEB LEAD (ADF)\nSource: Riding Academy - Complete\nRef: 11811\n\nInquiry:\n${REAL_CO}`
+});
+const completionClaim = (leadSource: string) =>
+  RA.resolveRidingAcademyAdfLaneClaim({
+    provider: "sendgrid_adf",
+    messages: [adfRecord("Wait List", "adf_1"), realCompleteRow("adf_2")],
+    excludeProviderMessageId: "adf_2",
+    eventPromoKind: null,
+    leadSource,
+    inquiry: REAL_CO
+  });
+ok(
+  completionClaim("Riding Academy - Complete").liveReplyKind === "riding_academy_completion_ack",
+  "given the source of the record it is answering, the lane composes the completion ack"
+);
+ok(
+  completionClaim("Riding Academy - Wait List").liveReplyKind === "riding_academy_waitlist_ack",
+  "given the FIRST form's stale source it composes the wait-list ack — the reply Maya actually got"
+);
+ok(
+  completionClaim("Riding Academy - Complete").liveReplyKind !==
+    completionClaim("Riding Academy - Wait List").liveReplyKind,
+  "the source is what decides this turn — if these ever agree, the fixtures stopped discriminating"
+);
+// And the call site has to hand it the event's source. There is no way to execute this branch —
+// it lives ~4,700 lines inside one request handler — so the argument itself is read. `leadSource`
+// is the ADF's own parsed `Source:` (0 of 980 live rows failed to parse one); the `??` keeps the
+// stored form as the fail-safe, i.e. unchanged behaviour when an event carries no source.
+ok(
+  live.includes("leadSource: leadSource ?? conv.lead?.source"),
+  "LIVE passes the source of the ADF it is answering, falling back to the stored lead form"
+);
+ok(
+  !/leadSource: conv\.lead\?\.source,\n\s*inquiry: effectiveInquiry/.test(live),
+  "and no longer pairs the event's own inquiry with the FIRST form's source"
+);
+
 // The thread's PRIOR status is read, and the record being answered is excluded from it — otherwise
 // a second record reads its own status as the prior one and the transition disappears.
 ok(
