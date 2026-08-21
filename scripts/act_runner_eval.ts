@@ -10,12 +10,13 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   findingKeyMarker,
   findOpenPrForFindingKey,
   isMeaningfulFindingKey
 } from "../services/api/src/domain/loopPrDedup.ts";
+import { unknownFlags } from "./actRunnerCliArgs.ts";
 
 const src = fs.readFileSync("scripts/act_runner.ts", "utf8");
 
@@ -403,4 +404,136 @@ assert.match(src, /process\.exit\(3\)/, "a duplicate-skip uses a distinct exit c
   );
 }
 
-console.log("PASS act runner eval — PR-only (never merges), refuses main, gate-enforced; prep brief carries the parser-first contract; cross-routine PR dedup (marker + skip, and an unverifiable ledger reports UNKNOWN instead of a false NONE); NS citation resolves the bounded North-star section and buys no gate relief; list/prep run.");
+// --- THE FEED YOU ASKED FOR IS THE FEED YOU GET (2026-08-21). ------------------------------------
+// The loop's SKILL downloads the box's work order to /tmp, filters it, then reads the selection with
+// `act_runner list --in /tmp/next.json`. `act_runner` had no `--in`, and `flag()` is an argv.indexOf
+// lookup, so the flag was silently DROPPED and `list` served this checkout's own
+// reports/anomaly_loop/next.json — last written 2026-08-09. For twelve days that printed a frozen
+// selection of 14 work orders while the live queue held 60. Nothing errored, nothing was broken, and
+// nothing ever said which file it was reading.
+//
+// EXECUTED, not source-pinned (SKILL trap 3): every assertion below runs the CLI, because the whole
+// defect was a code path that ran perfectly and read the wrong file. Clock-safe: fixture stamps are
+// built relative to `now`.
+{
+  const NOW = Date.now();
+  const isoDaysAgo = (d: number) => new Date(NOW - d * 24 * 60 * 60 * 1000).toISOString();
+  const isoHoursAgo = (h: number) => new Date(NOW - h * 60 * 60 * 1000).toISOString();
+  const order = (convId: string, detail: string) => ({
+    convId,
+    leadKey: convId,
+    dimension: "open_critic_finding",
+    category: "discovery",
+    severity: "P2",
+    tier: 2,
+    action: "escalate",
+    detail
+  });
+
+  const feedTmp = fs.mkdtempSync(path.join(os.tmpdir(), "act-feed-"));
+  // The frozen local report root — the 8/09 file, twelve days old.
+  const frozenRoot = path.join(feedTmp, "report-root");
+  fs.mkdirSync(path.join(frozenRoot, "anomaly_loop"), { recursive: true });
+  const frozenPath = path.join(frozenRoot, "anomaly_loop", "next.json");
+  fs.writeFileSync(
+    frozenPath,
+    JSON.stringify({ generatedAt: isoDaysAgo(12), workOrders: [order("+19990000001", "STALE — the frozen local feed")] })
+  );
+  // The fresh feed the run just downloaded from the box.
+  const freshPath = path.join(feedTmp, "fresh-next.json");
+  fs.writeFileSync(
+    freshPath,
+    JSON.stringify({ generatedAt: isoHoursAgo(1), workOrders: [order("+19990000002", "FRESH — downloaded from the box")] })
+  );
+
+  const run = (args: string[]) =>
+    spawnSync("npx", ["tsx", "scripts/act_runner.ts", ...args], {
+      encoding: "utf8",
+      env: { ...process.env, REPORT_ROOT: frozenRoot, CONVERSATIONS_DB_PATH: "" }
+    });
+
+  // 1. THE FINDING ITSELF: --in is honoured, and does NOT fall back to the report root.
+  const withIn = run(["list", "--in", freshPath]);
+  assert.equal(withIn.status, 0, "list --in exits clean");
+  assert.ok(withIn.stdout.includes("+19990000002::open_critic_finding"), "list --in reads the file it was handed");
+  assert.ok(
+    !withIn.stdout.includes("+19990000001"),
+    "list --in must NOT serve the report root's frozen feed — this is the twelve-day defect"
+  );
+  assert.ok(withIn.stdout.includes(freshPath), "list NAMES the file it read, so a wrong one is visible");
+  assert.ok(
+    !`${withIn.stdout}${withIn.stderr}`.includes("THIS WORK ORDER FILE IS STALE"),
+    "a fresh feed stays quiet — the banner appearing must always mean something"
+  );
+
+  // 2. No --in: behaviour is exactly as before (the report root), and the age is now STATED.
+  const noIn = run(["list"]);
+  assert.equal(noIn.status, 0, "list with no --in still exits clean");
+  assert.ok(noIn.stdout.includes("+19990000001"), "with no --in the report root is still the source");
+  assert.ok(noIn.stderr.includes("THIS WORK ORDER FILE IS STALE"), "a twelve-day-old feed says so, loudly");
+  assert.ok(noIn.stderr.includes("12 DAYS ago"), "the banner states the age in days, not a bare timestamp");
+  assert.ok(noIn.stderr.includes(frozenPath), "the banner names the exact file, so the reader can check it");
+  assert.ok(
+    noIn.stdout.includes("open_critic_finding"),
+    "staleness WARNS and never suppresses — an old feed is still the best evidence available"
+  );
+
+  // 2b. An UNDATABLE feed reports stale, not fresh — the fail direction this module claims. A file
+  //     whose age cannot be established is exactly the file that turns out to be from last week,
+  //     and every work order written before the provenance stamp existed lands in this branch.
+  const undatablePath = path.join(feedTmp, "undatable-next.json");
+  fs.writeFileSync(undatablePath, JSON.stringify({ workOrders: [order("+19990000003", "no generatedAt at all")] }));
+  const undatable = run(["list", "--in", undatablePath]);
+  assert.equal(undatable.status, 0, "an undatable feed still lists its work orders");
+  assert.ok(
+    undatable.stderr.includes("age cannot be established"),
+    "a feed with no usable generatedAt reads STALE, never fresh"
+  );
+  assert.ok(undatable.stdout.includes("+19990000003"), "an undatable feed is warned about, never suppressed");
+
+  // 3. An unknown flag is REFUSED, never ignored. This is the root cause, not the symptom.
+  const bogus = run(["list", "--nope", "x"]);
+  assert.equal(bogus.status, 2, "an unknown flag exits non-zero instead of running on");
+  assert.ok(bogus.stderr.includes("UNKNOWN FLAG"), "the refusal says what is wrong");
+  assert.ok(bogus.stderr.includes("--nope"), "the refusal names the offending flag");
+  assert.ok(bogus.stderr.includes("--in <value>"), "the refusal lists what the subcommand does accept");
+
+  // A subcommand that does not read the feed says so rather than accepting a meaningless --in.
+  const disposeWithIn = run(["dispose", "--key", "+1555::x", "--as", "fixed", "--in", freshPath]);
+  assert.equal(disposeWithIn.status, 2, "dispose refuses --in");
+  assert.ok(
+    disposeWithIn.stderr.includes("only list and prep read the work order feed"),
+    "the refusal explains which subcommands accept --in"
+  );
+  assert.ok(
+    !fs.existsSync(path.join(frozenRoot, "anomaly_loop", "dispositions.json")),
+    "the flag check runs BEFORE any subcommand side effect — a refused dispose writes nothing"
+  );
+
+  // 4. prep honours --in too (it reads the same feed and briefs off it).
+  const prepIn = run(["prep", "--top", "--in", freshPath]);
+  assert.equal(prepIn.status, 0, "prep --in exits clean");
+  assert.ok(prepIn.stdout.includes(freshPath), "prep names the file it read");
+  assert.ok(
+    fs.existsSync(path.join(frozenRoot, "act", "brief-_19990000002_open_critic_finding.md")),
+    "prep briefs the FRESH feed's work order, not the frozen root's"
+  );
+
+  // 5. The pure matcher: a flag VALUE that looks like a flag is not misread as one.
+  assert.deepEqual(unknownFlags(["dispose", "--note", "--not-a-flag", "--as", "fixed"], "dispose"), [], "a value is never read as a flag");
+  assert.deepEqual(unknownFlags(["list", "--in", "/tmp/f.json"], "list"), [], "a known flag with a value is accepted");
+  assert.deepEqual(unknownFlags(["list", "--in", "/tmp/f.json", "--bogus"], "list"), ["--bogus"], "one unknown flag reports once");
+  assert.deepEqual(unknownFlags(["list", "--bogus", "--in", "/tmp/f.json"], "list"), ["--bogus"], "an unknown flag does not swallow the next real one");
+  assert.deepEqual(
+    unknownFlags(["list", "--bogus", "--alsobogus"], "list"),
+    ["--bogus", "--alsobogus"],
+    "an unknown flag never hides a SECOND one — the arity guard only skips a token that is not itself a flag"
+  );
+  assert.deepEqual(unknownFlags(["review", "--ship", "--title", "t", "--charter", "C1.2"], "review"), [], "every real review flag is declared");
+  assert.deepEqual(unknownFlags(["open-pr", "--title", "t", "--finding-key", "a::b", "--eval-verified"], "open-pr"), [], "every real open-pr flag is declared");
+  assert.deepEqual(unknownFlags(["nonsense", "--whatever"], "nonsense"), [], "an unknown SUBCOMMAND falls through to the usage banner, not a flag error");
+
+  fs.rmSync(feedTmp, { recursive: true, force: true });
+}
+
+console.log("PASS act runner eval — PR-only (never merges), refuses main, gate-enforced; prep brief carries the parser-first contract; cross-routine PR dedup (marker + skip, and an unverifiable ledger reports UNKNOWN instead of a false NONE); NS citation resolves the bounded North-star section and buys no gate relief; list/prep run; --in is honoured, an unknown flag is refused, and the feed's own age is stated.");

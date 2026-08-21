@@ -8,7 +8,12 @@
  * script can't supply. Nothing auto-merges: you approve by reviewing + merging the PR; reject = close it.
  *
  * Subcommands:
- *   list                         — print the current work orders (id = convId::dimension)
+ *   list [--in <path>]           — print the current work orders (id = convId::dimension). `--in`
+ *                                  reads a work order file you downloaded (e.g. the box's, filtered
+ *                                  through loop_pr_ledger_filter) instead of this checkout's under
+ *                                  REPORT_ROOT. `list` and `prep` always NAME the file they read and
+ *                                  its age; an unknown flag is REFUSED, never ignored — see
+ *                                  scripts/actRunnerCliArgs.ts for why both of those are load-bearing.
  *   dispose --key <k> --as <d>   — record a finding as dealt with (fixed | stale-echo | no-action |
  *                                  joe-ruled) in reports/anomaly_loop/dispositions.json, so
  *                                  anomaly_loop_detect suppresses that key permanently. The single
@@ -44,6 +49,12 @@ import {
 import { isReportGradeStale, refreshSupersededGrades } from "../services/api/src/domain/anomalyClassifier.ts";
 import { readLoopPrLedger } from "./loopPrLedger.ts";
 import { formatStaleDetectorFeedBanner, type DetectorFeedSource } from "./detectorFeedFreshness.ts";
+import {
+  formatStaleWorkOrderBanner,
+  formatUnknownFlagError,
+  resolveWorkOrderPath,
+  unknownFlags
+} from "./actRunnerCliArgs.ts";
 import os from "node:os";
 import {
   DEFAULT_MERGE_FREEZE_MAX_AGE_MINUTES,
@@ -95,8 +106,22 @@ const flag = (name: string): string | undefined => {
 };
 const has = (name: string) => argv.includes(`--${name}`);
 
+// REFUSE AN UNKNOWN FLAG (2026-08-21). `flag()` is an argv.indexOf lookup: a flag this script does
+// not implement is neither honoured nor refused, it just vanishes. The SKILL's prescribed read —
+// `act_runner list --in /tmp/next.json` — vanished that way for twelve days while `list` served a
+// frozen 8/09 file from the report root. See scripts/actRunnerCliArgs.ts for the full account.
+const unrecognised = unknownFlags(argv, sub);
+if (unrecognised.length) {
+  console.error(formatUnknownFlagError(String(sub), unrecognised));
+  process.exit(2);
+}
+
 const reportRoot = process.env.REPORT_ROOT || path.resolve("reports");
-const nextPath = path.join(reportRoot, "anomaly_loop", "next.json");
+const defaultNextPath = path.join(reportRoot, "anomaly_loop", "next.json");
+// `--in <path>` reads a work order file the caller downloaded (the box's, filtered through
+// loop_pr_ledger_filter) instead of this checkout's. Absent, behaviour is exactly as before.
+const resolvedFeed = resolveWorkOrderPath({ inFlag: flag("in"), defaultPath: defaultNextPath });
+const nextPath = resolvedFeed.path;
 const keyOf = (w: any) => `${w?.convId ?? ""}::${w?.dimension ?? ""}`;
 
 // READ-TIME GRADE STALENESS (2026-07-31). next.json is generated once and read for hours by four
@@ -171,6 +196,22 @@ function loadReport(): {
 // primary one, were a day stale because the 08:50-08:54 crons died inside a deploy's npm install —
 // and `list` printed a clean queue). This must run BEFORE the empty-queue early exit, or the one
 // case it exists for prints "the loop is healthy" and returns. Warn only; never suppress or reorder.
+// WHICH FILE, AND HOW OLD (2026-08-21). `warnIfDetectorFeedsStale` asks whether the DETECTORS ran;
+// this asks whether the file in front of you is from today, and names it. Both are needed and they
+// fail independently: on 8/21 the detector feeds were healthy and the work order file being read
+// was twelve days old, so the detector banner stayed quiet and correct while the queue was fiction.
+// Must run BEFORE the empty-queue early exit, for the same reason the detector banner does.
+function announceWorkOrderFeed(report: { payload: any }): void {
+  const banner = formatStaleWorkOrderBanner({
+    path: nextPath,
+    source: resolvedFeed.source,
+    generatedAt: report?.payload?.generatedAt,
+    nowMs: Date.now()
+  });
+  if (banner) console.warn(banner);
+  else console.log(`feed: ${nextPath} (generated ${report?.payload?.generatedAt ?? "?"})`);
+}
+
 function warnIfDetectorFeedsStale(report: { payload: any }): void {
   const sources: DetectorFeedSource[] = Array.isArray(report?.payload?.feedSources) ? report.payload.feedSources : [];
   if (!sources.length) return; // a feed written before this provenance existed — nothing to claim
@@ -345,6 +386,7 @@ if (sub === "dispose") {
 if (sub === "list") {
   const report = loadReport();
   const orders = report.orders;
+  announceWorkOrderFeed(report);
   warnIfDetectorFeedsStale(report);
   if (!orders.length) {
     console.log("No work orders — the loop is healthy (stop:true).");
@@ -364,6 +406,7 @@ if (sub === "list") {
 if (sub === "prep") {
   const report = loadReport();
   const orders = report.orders;
+  announceWorkOrderFeed(report);
   warnIfDetectorFeedsStale(report);
   warnIfReportStale(report);
   const id = flag("id");
@@ -741,5 +784,5 @@ function cleanForNotify(text: string | null | undefined): string {
   return String(text ?? "").replace(/[`*_]/g, "").trim().slice(0, 600);
 }
 
-console.error("Usage: act_runner.ts <list | prep --id <key>|--top | check-open-pr --key <convId::dimension> | dispose --key <convId::dimension> --as <fixed|stale-echo|no-action|joe-ruled> [--by <routine>] [--deploy-ts <iso>] [--note <s>] | open-pr --title <t> [--finding-key <k>] [--eval-verified] | review [--ship --title <t>] [--finding-key <k>] [--eval-verified] [--finding <s>] [--charter <rule-id, e.g. C3.2, or NS for the North star when no rule covers it — Tier-2a: auto-merge only if the reviewer confirms the citation covers the change; notify-after>]>");
+console.error("Usage: act_runner.ts <list [--in <work-order.json>] | prep --id <key>|--top [--in <work-order.json>] | check-open-pr --key <convId::dimension> | dispose --key <convId::dimension> --as <fixed|stale-echo|no-action|joe-ruled> [--by <routine>] [--deploy-ts <iso>] [--note <s>] | open-pr --title <t> [--finding-key <k>] [--eval-verified] | review [--ship --title <t>] [--finding-key <k>] [--eval-verified] [--finding <s>] [--charter <rule-id, e.g. C3.2, or NS for the North star when no rule covers it — Tier-2a: auto-merge only if the reviewer confirms the citation covers the change; notify-after>]>");
 process.exit(2);
