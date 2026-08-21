@@ -1120,7 +1120,12 @@ export function stripReintroductionOpener(body: string, dealerName: string): str
   }
   const punct = match.groups?.endPunct ?? match.groups?.greetPunct ?? ",";
   const joiner = punct === "—" || punct === "–" ? ` ${punct} ` : `${punct} `;
-  return `${greetCore}${joiner}${rest}`.trim();
+  // A sentence terminator ends the greeting, so what follows STARTS a sentence: "Hi Aaron — this is
+  // Alexandra at <dealer>. thanks for your interest" must not come back as "Hi Aaron. thanks for
+  // your interest". A comma or dash keeps the clause running, so it is left exactly as written.
+  const startsSentence = punct === "." || punct === "!" || punct === "?";
+  const tail = startsSentence ? `${rest.trimStart().charAt(0).toUpperCase()}${rest.trimStart().slice(1)}` : rest;
+  return `${greetCore}${joiner}${tail}`.trim();
 }
 
 /**
