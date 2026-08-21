@@ -56,8 +56,33 @@ const ACK_TOKENS =
  * "Awesome let's do it" is not, and keeps every arm it has today. Measured, not guessed:
  * `awesome` (7 short turns), `thank u` (4 — a spelling ACK_TOKENS' `thank you` misses),
  * `ur welcome` (2).
+ *
+ * `absolutely` joins them on the same evidence, 2026-08-21, and it is the THIRD report of one
+ * shape (after `awesome` 08-13 and the `at all` intensifier 08-19). Joe, on Brent Marshall
+ * +17169941544: "no need to show a awaiting your reply for 'absolutley'". Brent replied
+ * "Absolutely!" to a heads-up, and because `absolutely` is on neither list the turn read as
+ * substantive: the inbox lit "Awaiting your reply" for a thread with nothing pending.
+ * REPRODUCED BY EXECUTION against this file on `d526942f`: isBareAcknowledgementText("Absolutely!")
+ * === false.
+ *
+ * MEASURED on the live store, 3,296 inbound turns, BOTH directions:
+ *   flips to bare   "Absolutely!"                            <- the reported turn
+ *                   "Absolutely love it!!!!"                 <- one residual word, nothing pending
+ *   stays substantive
+ *                   "Yes absolutely Tuesday 5pm works"       <- a booking; 3 residual words
+ *                   "Absolutely! let me know any details..." <- an open loop; 7 residual words
+ *
+ * Two turns of 3,296 change behaviour, and the two that must not are the two that carry a
+ * commitment. That is the whole reason the token lives HERE and not in ACK_TOKENS: the residual
+ * bar, not the word, is what keeps "Yes absolutely Tuesday 5pm works" a real turn.
+ *
+ * `awaiting_reply_flag_eval.ts` says DO NOT WIDEN THIS PREDICATE, and that ruling still stands as
+ * written — it is about the residual-content BAR, and about loose tokens in ACK_TOKENS, which
+ * `isShortAckText` reads at eighteen reply-or-not decision points. Neither moves here. #769 drew
+ * the same line two days after that comment landed. The exit it protects
+ * ("Found a better offer. Thanks", Curran Terblanche +13105956498) is unaffected and still pinned.
  */
-const BARE_ONLY_COURTESY_TOKENS = /\b(awesome|thank u|ur welcome)\b/;
+const BARE_ONLY_COURTESY_TOKENS = /\b(awesome|absolutely|thank u|ur welcome)\b/;
 
 /** Connective/filler that carries no standalone content once the courtesy word is gone. */
 const FILLER_TOKENS =
