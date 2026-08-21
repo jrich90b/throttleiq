@@ -107,6 +107,55 @@ function selfTest(): void {
   // A reassurance opener with NO customer request/question is still a fabricated frame.
   assert.equal(detectFabricatedFrame("No problem at all.", "I absolutely love my bike").fabricated, true, "reassurance with no request/question -> still flagged");
 
+  // Reassurance-waves-off-an-APOLOGY must NOT flag. Measured 2026-08-21 over the whole store:
+  // six of the twelve all-time findings were exactly this, so the detector's phantom rate was
+  // ~50% and each phantom minted a work order. Every customer string below is the REAL store
+  // text, not an invented wording — a plausible-looking paraphrase would have passed while
+  // shipping nothing.
+  const apologyCases: Array<[string, string, string]> = [
+    ["No worries. see you around 2:00 PM.", "Sorry for the delay ", "+17167506588 R Gurajala"],
+    [
+      "No worries — unfortunately the test ride event is over but you are still more than welcome to come in and test ride.",
+      "Hey Scott I'm not going to be able to make the test ride this morning. I have a family matter they needs attention. I apologize",
+      "+17165259267 Wayne Hopkins"
+    ],
+    [
+      "No worries! Thanks for giving us the chance and if there is anything you need for your current bikes, just let us know",
+      "Yeah I can't fit it in my budget sorry",
+      "+17165706490 James Moore II"
+    ],
+    [
+      "No worries — I get why you'd be frustrated, that sounds really aggravating.",
+      "SORRY for the slow response.  \nI am thinking about contacting the local news station to do a story about this situation.",
+      "+18568899602 Lester Brown"
+    ],
+    ["No worries! We are here to help", "Didn't mean to inquire about it was just looking boss ", "+17166033199 Adam Sharpe"],
+    [
+      "No problem, Michael — you can reschedule here: https://americanharley.leadrider.ai/book?token=64cd5973",
+      "I will have to reschedule unfortunately ",
+      "+17166099177 Michael Youngman"
+    ]
+  ];
+  for (const [reply, customer, who] of apologyCases) {
+    assert.equal(
+      detectFabricatedFrame(reply, customer).fabricated,
+      false,
+      `reassurance waving off an apology is a real reply, not a fabricated frame (${who})`
+    );
+  }
+  // The carve-out is scoped to reassurance openers ONLY — it must not launder "you're welcome"
+  // / "my pleasure", which answer thanks and nothing else.
+  assert.deepEqual(
+    detectFabricatedFrame("You're welcome. Want me to hold it?", "Sorry for the delay"),
+    { fabricated: true, type: "gratitude" },
+    "an apology does not license a you're-welcome -> still flagged"
+  );
+  assert.deepEqual(
+    detectFabricatedFrame("My pleasure — I'll get that over.", "Sorry, I meant the black one"),
+    { fabricated: true, type: "gratitude" },
+    "an apology does not license a my-pleasure -> still flagged"
+  );
+
   // Conversation scan + pairing.
   const conv = {
     id: "+17163350819", lead: { firstName: "mike", lastName: "jaglowski" },

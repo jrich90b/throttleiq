@@ -163,17 +163,36 @@ export type FabricatedFrame = { fabricated: boolean; type: "gratitude" | "questi
 const REASSURANCE_AFFIRMATION =
   /\b(no\s+problem|no\s+worries|happy\s+to\s+help|glad\s+to\s+help|any\s?time)\b/i;
 
+// An APOLOGY is the OTHER thing a reassurance affirmation legitimately answers, and on this store
+// it is by far the commonest one. Measured 2026-08-21 over the whole conversation history: of the
+// 12 all-time fabricated-frame findings, SIX were the agent answering a customer apology —
+// "Sorry for the delay" → "No worries. see you around 2:00 PM.", "…I apologize" → "No worries —",
+// "Yeah I can't fit it in my budget sorry" → "No worries!", "SORRY for the slow response." →
+// "No worries — I get why you'd be frustrated", "Didn't mean to inquire about it was just looking
+// boss" → "No worries! We are here to help", "I will have to reschedule unfortunately" → "No
+// problem, Michael". Every one of those is the correct human reply, so the detector was reporting
+// good replies as misses at a ~50% phantom rate and minting work orders for them. "You're welcome"
+// / "my pleasure" still cannot answer an apology, so they stay flagged exactly as before.
+// Same AUDIT-ONLY scope as the request/question exemption above: this predicate is reachable only
+// from detectFabricatedFrame, which only scripts/fabricated_frame_audit.ts calls. The live
+// blended-lead-in guard stays strict.
+const CUSTOMER_APOLOGY =
+  /\b(sorry|apolog(?:y|ies|ize|ise|izing|ized)|my\s+bad|did\s?n'?t\s+mean\s+to|unfortunately)\b/i;
+
 // Inspect ONLY the opening sentence of a reply — the fabricated frame is always the opener.
 // Used by the nightly fabricated_frame audit to surface replies that invent a conversational
 // frame (you thanked me / you asked a question) the customer's turn doesn't warrant.
 export function detectFabricatedFrame(reply: string, customerText: string): FabricatedFrame {
   const opener = String(reply ?? "").split(/(?<=[.!?])\s+/)[0] ?? "";
   if (isFabricatedGratitudeLeadIn(opener, customerText)) {
-    // Audit refinement: a reassurance affirmation answering a customer request/question is
-    // a real answer, not a fabricated gratitude frame. CUSTOMER_IS_QUESTION is the generous
-    // request/question detector (also covers "can I drop off …?").
+    // Audit refinement: a reassurance affirmation answering a customer request/question — or
+    // waving off a customer APOLOGY — is a real answer, not a fabricated gratitude frame.
+    // CUSTOMER_IS_QUESTION is the generous request/question detector (also covers "can I drop
+    // off …?"); CUSTOMER_APOLOGY covers "sorry for the delay" / "I apologize" / "unfortunately".
+    const customer = String(customerText ?? "");
     const reassuranceAnswer =
-      REASSURANCE_AFFIRMATION.test(opener) && CUSTOMER_IS_QUESTION.test(String(customerText ?? ""));
+      REASSURANCE_AFFIRMATION.test(opener) &&
+      (CUSTOMER_IS_QUESTION.test(customer) || CUSTOMER_APOLOGY.test(customer));
     if (!reassuranceAnswer) return { fabricated: true, type: "gratitude" };
   }
   if (isFabricatedQuestionFrame(opener, customerText)) return { fabricated: true, type: "question" };
