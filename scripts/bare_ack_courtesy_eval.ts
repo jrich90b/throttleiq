@@ -114,4 +114,34 @@ for (const turn of ["Ok thanks", "Awesome", "Thanks!", "\u{1F44D}", "sounds good
   check(`owner_is_not_told::${turn}`, isBareAcknowledgementText(turn), true);
 }
 
+// ---------------------------------------------------------------------------
+// 6. "ABSOLUTELY" — the same shape, reported a third time (Joe, 2026-08-21, on Brent
+//    Marshall +17169941544: "no need to show a awaiting your reply for 'absolutley'").
+//    All four turns below are VERBATIM from the live store: they are every short,
+//    non-question inbound turn carrying an `absolute*` word in 3,296 inbound turns.
+//    Two flip to bare and two must not, and the two that must not are the two that
+//    carry a commitment — which is the residual bar doing the work, not the token.
+// ---------------------------------------------------------------------------
+check("reported_absolutely_turn_is_bare", isBareAcknowledgementText("Absolutely!"), true);
+check("absolutely_alone_is_bare", isBareAcknowledgementText("Absolutely"), true);
+check("absolutely_love_it_is_bare", isBareAcknowledgementText("Absolutely love it!!!!"), true);
+
+// The two live turns that MUST survive. A token in ACK_TOKENS would have silenced both.
+check(
+  "absolutely_plus_a_booking_is_not_bare",
+  isBareAcknowledgementText("Yes absolutely Tuesday 5pm works"),
+  false
+);
+check(
+  "absolutely_plus_an_open_loop_is_not_bare",
+  isBareAcknowledgementText("Absolutely! let me know any details you get on it."),
+  false
+);
+check("absolutely_with_a_question_is_not_bare", isBareAcknowledgementText("Absolutely, when can I pick it up?"), false);
+
+// THE INVARIANT, same as check 3: the wide gate did not move. `absolutely` must stay
+// invisible to isShortAckText, which decides whether we reply at all at eighteen sites.
+check("wide_gate_unchanged_for_absolutely", isShortAckText("Absolutely"), false);
+check("wide_gate_unchanged_for_absolutely_booking", isShortAckText("Yes absolutely Tuesday 5pm works"), false);
+
 console.log(`\nAll ${checks} bare-ack courtesy checks passed.`);

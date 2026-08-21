@@ -200,6 +200,16 @@ for (const real of ["Found a better offer. Thanks", "Awesome let's do it", "ok w
 // the disposition-parser cost gate, and its own header records the customer
 // (Curran Terblanche +13105956498, "Found a better offer. Thanks") whose exit was swallowed the
 // last time a courtesy word was allowed to end a turn. A quieter flag is not worth a missed exit.
+//
+// WHAT "WIDENING" MEANS HERE, because two later PRs read this line and had to work it out
+// (#769 `at all`, 2026-08-20; `absolutely`, 2026-08-21). It forbids moving the RESIDUAL-CONTENT
+// BAR, and it forbids new tokens in ACK_TOKENS — the wide list `isShortAckText` reads at eighteen
+// reply-or-not sites. It does NOT forbid adding a MEASURED courtesy word to
+// BARE_ONLY_COURTESY_TOKENS, which can only ever fire when the bar already says nothing is left:
+// every one of the three turns above keeps its content words and keeps flagging, whatever token
+// is added — which is why they are asserted here rather than argued about. The test a new token
+// has to pass is the one both PRs ran: execute it against the live store in BOTH directions and
+// show that the commitment-bearing turns still flag.
 for (const edge of [
   "No worries Joe, I understand. Thank you.",
   "No problem Scott, I'll wait to hear from you, thanks",
