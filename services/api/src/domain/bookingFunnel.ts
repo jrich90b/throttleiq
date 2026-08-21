@@ -47,10 +47,10 @@ export type BookingFunnelClass = {
 // Is this lead actually shopping for a bike (so "answer -> offer a time" applies), or a
 // non-sales contact that must NEVER be asked to book a sales appointment? Non-sales =
 // Ride Challenge entry, event RSVP, rental, hiring/careers, rider-course question,
-// SERVICE or PARTS request, a non-sales text-widget inquiry (which classifies as
-// service/parts), or a Dealer Lead App demo-ride that ended in NO PURCHASE
-// (followUp.reason "dealer_ride_no_purchase"/"dealer_ride_lost" — they already came in
-// and passed, so don't push another sales appointment).
+// SERVICE, PARTS or APPAREL request, a non-sales text-widget inquiry (which classifies as
+// service/parts/apparel), a RIDING ACADEMY lead, or a Dealer Lead App demo-ride that ended
+// in NO PURCHASE (followUp.reason "dealer_ride_no_purchase"/"dealer_ride_lost" — they
+// already came in and passed, so don't push another sales appointment).
 //
 // Keyed on the system's OWN structured classification (classification.bucket/cta), the
 // handler-set followUp.reason, and the structured ADF lead source — NOT free customer text
@@ -58,11 +58,27 @@ export type BookingFunnelClass = {
 // a misclassification only drops a lead from the metric (under-count), never a customer reply.
 // Caveat: an RSVP/challenge/no-purchase lead who later genuinely shops may stay tagged
 // non-sales and be undercounted — acceptable for a metric; revisit if the volume matters.
-const NON_SALES_BUCKET = /^(event_promo|service|parts)$/i;
+//
+// ⚠️ TRADE-IN / SELL-SIDE LEADS STAY IN — Joe, 2026-08-21, asked directly and answered "Yes keep
+// them in". A customer bringing their bike for an appraisal IS a real visit and a real
+// acquisition opportunity, so `trade_in_sell` / `value_my_trade` / `sell_my_bike` count as
+// sales intent and their appointments count as bookings. Measured the same day: 7 of the 120
+// counted leads were sell-side, 6 of the 7 were offered a time and 1 booked — they behave like
+// sales leads, they are not denominator padding. **Do not "tidy" them out of this predicate.**
+//
+// The two entries added 2026-08-21 were MISCOUNTS, not judgement calls:
+//   - `apparel`: four other modules already treat the non-deal set as
+//     ["service", "parts", "apparel"] (conversationStore x2, draftStateInvariants x2,
+//     inboundPipeline, kpiAnalytics). This predicate listed the first two and dropped the third.
+//   - Riding Academy: NON_SALES_FOLLOWUP_REASON already meant to exclude a rider course, but
+//     these arrive as `Source: Riding Academy - Enrolled` with bucket `general_inquiry`, and
+//     "riding academy" does not match /rider_course/. Joe's 2026-08-19 ruling is that we do not
+//     SELL to Riding Academy customers at all, so they cannot belong in a booking denominator.
+const NON_SALES_BUCKET = /^(event_promo|service|parts|apparel)$/i;
 const NON_SALES_FOLLOWUP_REASON =
   /ride_challenge|hiring_manager|rider_course|eagle.?rider|rental|service_request|service_dept|parts_request|parts_dept|dealer_ride_no_purchase|dealer_ride_lost/i;
 const NON_SALES_SOURCE =
-  /ride challenge|event rsvp|national event|rolling rsvp|eagle.?rider|careers|hiring|service department|parts department/i;
+  /ride challenge|event rsvp|national event|rolling rsvp|eagle.?rider|careers|hiring|service department|parts department|riding academy/i;
 
 export function isSalesIntentLead(conv: any): boolean {
   const cls = conv?.classification ?? {};
