@@ -75,6 +75,20 @@ function selfTest(): void {
   const rentalSource: any = { id: "rental", status: "open", messages: [custIn], lead: { source: "Eagle Rider" } };
   const serviceAdf: any = { id: "service", status: "open", messages: [custIn], classification: { bucket: "service", cta: "service_request" } };
   const partsAdf: any = { id: "parts", status: "open", messages: [custIn], classification: { bucket: "parts", cta: "parts_request" } };
+  // Apparel/merch — the SAME non-deal set as service+parts everywhere else in the codebase
+  // (conversationStore, draftStateInvariants, inboundPipeline, kpiAnalytics all use
+  // ["service","parts","apparel"]); this predicate listed two of the three until 2026-08-21.
+  // Shape is the real one: all three live rows arrived via the Website Text Widget.
+  const apparelWidget: any = { id: "apparel", status: "open", messages: [custIn], classification: { bucket: "apparel", cta: "apparel_request" }, lead: { source: "Website Text Widget" } };
+  // Riding Academy — real live shape: bucket general_inquiry, so ONLY lead.source identifies it,
+  // and "riding academy" does not match the /rider_course/ followUp reason. Joe ruled 2026-08-19
+  // that we do not sell to Riding Academy customers, so they cannot sit in a booking denominator.
+  const ridingAcademy: any = { id: "academy", status: "open", messages: [custIn], classification: { bucket: "general_inquiry", cta: "contact_us" }, lead: { source: "Riding Academy - Enrolled" } };
+  // SELL-SIDE / trade-in — Joe, 2026-08-21, asked directly: "Yes keep them in". An appraisal
+  // visit is a real appointment. These MUST stay sales-intent; the assertions below are the guard
+  // against a future tidy-up quietly dropping them.
+  const tradeAccelerator: any = { id: "trade", status: "open", messages: [custIn], classification: { bucket: "trade_in_sell", cta: "value_my_trade" }, lead: { source: "Trade Accelerator - Trade In" } };
+  const sellMyBike: any = { id: "sell", status: "open", messages: [custIn], classification: { bucket: "trade_in_sell", cta: "sell_my_bike" }, lead: { source: "Room58 - Sell your vehicle" }, appointment: { status: "confirmed", bookedEventId: "evt_sell" } };
   // DLA demo-ride that ended in no purchase — looks like a sales bucket, but they already came in and passed.
   const dlaNoPurchase: any = { id: "dla", status: "open", messages: [custIn], classification: { bucket: "test_ride", cta: "schedule_test_ride" }, followUp: { mode: "manual_handoff", reason: "dealer_ride_no_purchase" } };
   // The offered_no_book split: deferred (not a miss) vs soft-visit (coming in) vs the real watch bucket.
@@ -111,22 +125,41 @@ function selfTest(): void {
   assert.equal(c(partsAdf).leak, "not_sales", "parts ADF -> not_sales");
   assert.equal(c(dlaNoPurchase).leak, "not_sales", "DLA demo-ride with no purchase -> not_sales (already came in, don't re-push)");
   assert.equal(c(dlaNoPurchase).salesIntent, false);
+  assert.equal(c(apparelWidget).leak, "not_sales", "apparel/merch -> not_sales (same non-deal set as service+parts)");
+  assert.equal(c(apparelWidget).salesIntent, false);
+  assert.equal(c(ridingAcademy).leak, "not_sales", "Riding Academy lead -> not_sales (Joe 2026-08-19: we do not sell to them)");
+  assert.equal(c(ridingAcademy).salesIntent, false);
 
-  const rows = [booked, offeredNoBook, offeredViaSlots, notOffered, manualHandoff, holding, notEngaged, won, lost, rideChallenge, eventRsvp, serviceAdf, partsAdf, dlaNoPurchase, customerNotReady, softVisitPending].map(x => c(x));
+  // SELL-SIDE STAYS IN — Joe, 2026-08-21, asked and answered "Yes keep them in". A customer
+  // bringing their bike for an appraisal is a real visit and a real acquisition opportunity, so
+  // trade_in_sell counts as sales intent and its appointment counts as a booking. Measured that
+  // day: 7 of the 120 counted leads were sell-side, 6 offered a time and 1 booked — they behave
+  // like sales leads. These two assertions exist so a later "cleanup" cannot silently reverse it.
+  assert.equal(c(tradeAccelerator).salesIntent, true, "Joe 8/21: a trade-in appraisal lead IS sales intent — keep it in");
+  assert.notEqual(c(tradeAccelerator).leak, "not_sales", "trade-in lead must never be bucketed not_sales");
+  assert.equal(c(sellMyBike).salesIntent, true, "Joe 8/21: a sell-my-bike lead IS sales intent — keep it in");
+  assert.equal(c(sellMyBike).booked, true, "an appraisal appointment counts as a booking");
+  assert.equal(c(sellMyBike).leak, "booked", "sell-side lead with a confirmed appt lands in the booked bucket");
+
+  const rows = [booked, offeredNoBook, offeredViaSlots, notOffered, manualHandoff, holding, notEngaged, won, lost, rideChallenge, eventRsvp, serviceAdf, partsAdf, dlaNoPurchase, customerNotReady, softVisitPending, apparelWidget, ridingAcademy, sellMyBike].map(x => c(x));
   rows.push(c(financePending, financeTodos));
   const s = buildBookingFunnelSummary(rows);
-  assert.equal(s.population, 17, "summary covers all rows");
-  assert.equal(s.notSales, 5, "five non-sales rows excluded (rsvp, ride-challenge, service, parts, dla-no-purchase)");
-  assert.equal(s.salesPopulation, 12, "sales population = population - notSales");
+  assert.equal(s.population, 20, "summary covers all rows");
+  assert.equal(
+    s.notSales,
+    7,
+    "seven non-sales rows excluded (rsvp, ride-challenge, service, parts, dla-no-purchase, APPAREL, RIDING ACADEMY)"
+  );
+  assert.equal(s.salesPopulation, 13, "sales population = population - notSales; the sell-side row is IN it (Joe 8/21)");
   assert.equal(s.leaks.accepted_no_time, 2, "offered_no_book split: 2 real watch-bucket leads");
   assert.equal(s.leaks.customer_not_ready, 1, "1 deferred lead pulled out of the leak");
   assert.equal(s.leaks.soft_visit_pending, 1, "1 soft-visit lead pulled out of the leak");
   const bucketSum = Object.values(s.leaks).reduce((a, b) => a + b, 0);
-  assert.equal(bucketSum, 17, "buckets are mutually exclusive + exhaustive (incl. not_sales)");
-  // engaged = SALES leads where the customer replied = all sales rows except the ADF-only one (11)
-  assert.equal(s.engaged, 11, "engaged excludes the ADF-only lead AND all non-sales leads");
-  assert.equal(s.offered, 5, "offered among sales-engaged: booked + 2 offered + won + soft-visit");
-  assert.equal(s.booked, 2, "booked: confirmed appt + won-with-event");
+  assert.equal(bucketSum, 20, "buckets are mutually exclusive + exhaustive (incl. not_sales)");
+  // engaged = SALES leads where the customer replied = all sales rows except the ADF-only one (12)
+  assert.equal(s.engaged, 12, "engaged excludes the ADF-only lead AND all non-sales leads");
+  assert.equal(s.offered, 6, "offered among sales-engaged: booked + 2 offered + won + soft-visit + sell-side booking");
+  assert.equal(s.booked, 3, "booked: confirmed appt + won-with-event + the sell-side appraisal appointment");
   assert.ok(s.offerToBookPct > 0 && s.offerToBookPct <= 100, "offer->book conversion is a sane %");
 
   console.log("PASS booking-funnel audit self-test (classification + summary buckets + rates)");
