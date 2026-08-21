@@ -124,7 +124,12 @@ import {
 } from "./draftStateInvariants.js";
 import { isPhoneLogConversation } from "./phoneLogLead.js";
 import type { StaffPingRecord } from "./staffPing.js";
-import { buildPersonaSelfIntroPattern, buildUnansweredWatchCloseOutReply } from "./agentVoice.js";
+import {
+  buildPersonaSelfIntroPattern,
+  buildUnansweredWatchCloseOutReply,
+  enforceNoReintroduction,
+  GENERIC_DEALER_DISPLAY_NAME
+} from "./agentVoice.js";
 import { getCachedDealerProfile } from "./dealerProfile.js";
 import { findComputerLikePhrases } from "./voiceBannedPhrases.js";
 import {
@@ -2807,6 +2812,23 @@ export function appendOutbound(
   if (salesToneProvider) {
     tonedBody = applyDeterministicToneOverrides(tonedBody);
     tonedBody = limitEmDashStyle(tonedBody);
+  }
+  // Charter C1.2a: the full self-intro belongs on a FIRST touch only. The reviewer lane has been
+  // held to this since #785, but the pipeline's own composer never was — measured 2026-08-21 against
+  // the live store, 24 of the 198 standing drafts on threads that had ALREADY heard from us opened
+  // by re-introducing us, every one of them on the email lane. C1.2a is an invariant about OUR OWN
+  // OUTPUT, so it needs a check on the output, not another prompt rule — that is the lesson of #785,
+  // where the rule was already in the reviewer's prompt and did not stop it. This is the universal
+  // draft sink, so one call covers inbound replies, the follow-up cadence and both channels, and it
+  // runs BEFORE the layout formatters so a stripped intro leaves `formatEmailLayout` free to write
+  // the greeting. Byte-identical on a genuine first touch — `hasCustomerReceivedOutbound` is the
+  // whole gate, and charter C1.2 (keep the intro) still owns that turn.
+  if (provider === "draft_ai") {
+    tonedBody = enforceNoReintroduction({
+      body: tonedBody,
+      dealerName: String(getCachedDealerProfile()?.dealerName ?? "").trim() || GENERIC_DEALER_DISPLAY_NAME,
+      messages: conv.messages
+    });
   }
   if (!isEmailThread) {
     tonedBody = formatSmsLayout(tonedBody);
