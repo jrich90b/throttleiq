@@ -502,7 +502,13 @@ const CEILINGS: Ceiling[] = [
     // sitting EXACTLY on its ceiling, so the slice paid for itself: maybeApplyLeadUnitAvailability
     // Disclosure (56 lines of plumbing around an already-centralized decision) moved out to
     // domain/leadUnitAvailabilityDisclosure.ts and came back as a 16-line injected wrapper.
-    max: 70_101,
+    // 70_101 -> 70_044. The Appointments report (Joe, 2026-08-21). The file was sitting EXACTLY on
+    // its ceiling again, so a 39-line endpoint could not land — and the guard was right. Both
+    // manager analytics endpoints moved out to routes/analytics.ts, which is where they belonged:
+    // `/analytics/kpi` was a verbatim relocation and `/analytics/appointments` never touched
+    // index.ts at all. index.ts pays for one import and one register call and comes out 57 lines
+    // lighter, so the ceiling takes the whole gain rather than leaving it as spendable slack.
+    max: 70_044,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

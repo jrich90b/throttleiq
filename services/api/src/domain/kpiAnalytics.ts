@@ -678,7 +678,7 @@ function motorcycleLabel(conv: Conversation): string {
   return "Unknown motorcycle";
 }
 
-function leadDisplayName(conv: Conversation): string {
+export function leadDisplayName(conv: Conversation): string {
   const lead = activeKpiLeadCycle(conv).lead;
   const first = String(lead?.firstName ?? "").trim();
   const last = String(lead?.lastName ?? "").trim();
@@ -729,7 +729,88 @@ function messageMatchesSourceId(message: Message, sourceId: string): boolean {
   );
 }
 
-function inferAppointmentSetter(conv: Conversation): { key: string; label: string } {
+/**
+ * ONE reading of "did they show up?", shared by the KPI Overview and the Appointments report.
+ *
+ * WHY IT IS SHARED AND NOT COPIED (Joe, 2026-08-21). The commission question — "who set it and did
+ * the customer show?" — is the same question the KPI tab already answers, and the watch engine
+ * taught us what happens when a second reader keeps a private copy of a matcher: the eval pins the
+ * copy, both drift, and the gate stays green while the two disagree. So there is one function here
+ * and both callers read it.
+ *
+ * IT RETURNS TWO ANSWERS ON PURPOSE, because the two callers are asking different things:
+ *
+ *  - `showedForKpi` reproduces the long-standing OR **exactly** — appointment status `showed_up`,
+ *    OR `primaryStatus === "showed"`, OR an outcome status that implies attendance (`follow_up`,
+ *    `sold`, `hold`, `financing_*`, `other`, …). Extracting this must not move a single number on a
+ *    report Joe already reads, so the legacy expression is preserved verbatim.
+ *
+ *  - `state` is the STRICT answer, and it is the one money hangs on. An explicit `did_not_show` or
+ *    `cancelled` WINS over an implying outcome status, and an appointment nobody has graded is
+ *    `not_logged` — never `showed`. Fail direction: an unrecorded outcome must read as MISSING, so
+ *    it shows up as a gap somebody has to fill, rather than quietly paying for a visit that may
+ *    never have happened.
+ *
+ * The two can only disagree on a record that is internally contradictory (a rep marked
+ * `did_not_show` AND left an outcome status implying attendance). Measured 2026-08-21 across all 74
+ * appointments in the store: ZERO such records. When one appears, `conflict` is set so the row is
+ * visible in the report instead of being silently resolved one way or the other.
+ *
+ * `nowMs` exists so a FUTURE appointment reads as `upcoming` rather than as a missing outcome — on
+ * 2026-08-21 one of the thirteen August appointments had not happened yet, and grading it as an
+ * unlogged gap would have invented a chore.
+ */
+export type AppointmentAttendance = {
+  state: "showed" | "no_show" | "cancelled" | "not_logged" | "upcoming";
+  showedForKpi: boolean;
+  outcomeStatus: string;
+  primaryStatus: string;
+  hasOutcome: boolean;
+  conflict: boolean;
+};
+
+export function resolveAppointmentAttendance(
+  conv: Conversation,
+  nowMs: number = Date.now()
+): AppointmentAttendance {
+  const appointment = conv.appointment as any;
+  const appointmentStatus = String(appointment?.status ?? "").trim().toLowerCase();
+  const outcome = appointment?.staffNotify?.outcome;
+  const outcomeStatus = String(outcome?.status ?? "").trim().toLowerCase();
+  const primaryStatus = String(outcome?.primaryStatus ?? "").trim().toLowerCase();
+  const hasOutcome = Boolean(outcome);
+
+  // Preserved verbatim from the original inline expression in `toLeadStats`.
+  const showedForKpi =
+    appointmentStatus === "showed_up" ||
+    primaryStatus === "showed" ||
+    SHOWED_APPOINTMENT_OUTCOME_STATUSES.has(outcomeStatus);
+
+  const explicitlyAbsent = primaryStatus === "did_not_show" || outcomeStatus === "no_show";
+  const explicitlyCancelled = primaryStatus === "cancelled" || outcomeStatus === "cancelled";
+  const explicitlyPresent = appointmentStatus === "showed_up" || primaryStatus === "showed";
+
+  let state: AppointmentAttendance["state"];
+  if (explicitlyAbsent) state = "no_show";
+  else if (explicitlyCancelled) state = "cancelled";
+  else if (explicitlyPresent) state = "showed";
+  else if (hasOutcome && SHOWED_APPOINTMENT_OUTCOME_STATUSES.has(outcomeStatus)) state = "showed";
+  else {
+    const whenMs = toMs(appointment?.whenIso);
+    state = whenMs != null && whenMs > nowMs ? "upcoming" : "not_logged";
+  }
+
+  return {
+    state,
+    showedForKpi,
+    outcomeStatus,
+    primaryStatus,
+    hasOutcome,
+    conflict: showedForKpi && (state === "no_show" || state === "cancelled")
+  };
+}
+
+export function inferAppointmentSetter(conv: Conversation): { key: string; label: string } {
   const appointment = conv.appointment as any;
   const bookedBy = appointment?.bookedBy;
   if (bookedBy?.actor || bookedBy?.channel) {
@@ -838,13 +919,7 @@ function toLeadStats(conv: Conversation, filters: KpiFilters, opts: KpiOverviewO
   const appointmentStatus = String(conv.appointment?.status ?? "").trim().toLowerCase();
   const appointmentConfirmed = appointmentStatus === "confirmed";
   const appointmentSetter = inferAppointmentSetter(conv);
-  const appointmentOutcome = conv.appointment?.staffNotify?.outcome;
-  const attendanceStatus = String(appointmentOutcome?.status ?? "").trim().toLowerCase();
-  const primaryStatus = String(appointmentOutcome?.primaryStatus ?? "").trim().toLowerCase();
-  const appointmentShowed =
-    appointmentStatus === "showed_up" ||
-    primaryStatus === "showed" ||
-    SHOWED_APPOINTMENT_OUTCOME_STATUSES.has(attendanceStatus);
+  const appointmentShowed = resolveAppointmentAttendance(conv).showedForKpi;
 
   return {
     convId: String(conv.id ?? ""),
