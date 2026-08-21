@@ -97,7 +97,22 @@ export function findMergedPrsForFindingKey(
 }
 
 /** A work-order / anomaly row — anything carrying a convId + dimension we can key on. */
-export type LoopWorkOrder = { convId?: string | null; dimension?: string | null; [k: string]: unknown };
+export type LoopWorkOrder = {
+  convId?: string | null;
+  dimension?: string | null;
+  /**
+   * Set by the BOX when a disposed key recurred AFTER its `--deploy-ts` boundary: the fix we already
+   * claimed did not hold. See `regressionKept` in `partitionWorkOrdersByLoopPr` for why it can never
+   * be suppressed by PR coverage.
+   */
+  regressionOfDisposed?: boolean;
+  [k: string]: unknown;
+};
+
+/**
+ * A finding the box tagged `regressionOfDisposed` — kept unconditionally, whatever the PR ledger says.
+ */
+export type LoopPrRegressionKept = { workOrder: LoopWorkOrder; key: string; prNumbers: number[] };
 
 export type LoopPrSuppression = {
   workOrder: LoopWorkOrder;
@@ -142,6 +157,16 @@ export type LoopPrAmbiguousCoverage = {
  * carrying the key: when more findings share a key than PRs cover it, every one of them is KEPT and
  * listed in `ambiguous` for manual triage. Same fail-direction as the rest of this module — we drop
  * a finding only when we can prove coverage, and "some PR covers one of these three" is not proof.
+ *
+ * REGRESSION-OF-DISPOSED IS NEVER SUPPRESSED (2026-08-21). The box's dispositions ledger tags a work
+ * order `regressionOfDisposed` when a key it already disposed `fixed`/`stale-echo` RECURRED after the
+ * `--deploy-ts` boundary — i.e. the very claim "a PR covers this" is the claim the recurrence refutes.
+ * This filter runs LOCALLY, after the box has restored those rows, and it was silently re-eating them:
+ * measured 2026-08-21, `+17169467451::corpus_replay_judge_fail` (Paul Harrigan) was dropped as
+ * "covered by PR #681 (merged)" while carrying `regressionOfDisposed: true`. The agent-loop SKILL
+ * carried a hand-diff workaround for exactly this ("PUT BACK any dropped row tagged
+ * regressionOfDisposed") — that step is now a no-op. Same fail-direction as everything else here: we
+ * only ever drop what we can PROVE is covered, and a post-boundary recurrence is proof of the opposite.
  */
 export function partitionWorkOrdersByLoopPr(
   workOrders: LoopWorkOrder[] | null | undefined,
@@ -151,10 +176,16 @@ export function partitionWorkOrdersByLoopPr(
     nowMs?: number;
     windowDays?: number;
   }
-): { kept: LoopWorkOrder[]; suppressed: LoopPrSuppression[]; ambiguous: LoopPrAmbiguousCoverage[] } {
+): {
+  kept: LoopWorkOrder[];
+  suppressed: LoopPrSuppression[];
+  ambiguous: LoopPrAmbiguousCoverage[];
+  regressionKept: LoopPrRegressionKept[];
+} {
   const kept: LoopWorkOrder[] = [];
   const suppressed: LoopPrSuppression[] = [];
   const ambiguous: LoopPrAmbiguousCoverage[] = [];
+  const regressionKept: LoopPrRegressionKept[] = [];
 
   const findingCounts = new Map<string, number>();
   for (const wo of workOrders ?? []) {
@@ -179,6 +210,12 @@ export function partitionWorkOrdersByLoopPr(
       kept.push(wo);
       continue;
     }
+    if (wo?.regressionOfDisposed === true) {
+      // The fix we already claimed did not hold. PR coverage cannot dispose of that.
+      regressionKept.push({ workOrder: wo, key, prNumbers });
+      kept.push(wo);
+      continue;
+    }
     const findingCount = findingCounts.get(key) ?? 1;
     if (prNumbers.length < findingCount) {
       // More distinct findings than filed PRs: we cannot tell which one is covered → keep them all.
@@ -194,7 +231,7 @@ export function partitionWorkOrdersByLoopPr(
     const merged = mergeds[0];
     suppressed.push({ workOrder: wo, key, prNumber: merged.number, state: "merged", mergedAt: merged.mergedAt ?? null });
   }
-  return { kept, suppressed, ambiguous };
+  return { kept, suppressed, ambiguous, regressionKept };
 }
 
 

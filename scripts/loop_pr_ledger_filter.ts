@@ -28,6 +28,8 @@ export type LedgerFilterResult = {
   payload: Record<string, unknown>;
   suppressed: Array<{ convId: string; dimension: string; prNumber: number; state: string; mergedAt?: string | null }>;
   ambiguous: Array<{ convId: string; dimension: string; findingCount: number; prCount: number; prNumbers: number[] }>;
+  /** Work orders the box tagged `regressionOfDisposed` that a PR match WOULD have dropped. */
+  regressionKept: Array<{ convId: string; dimension: string; prNumbers: number[] }>;
 };
 
 /**
@@ -42,7 +44,7 @@ export function applyLedgerToPayload(
   args: { openPrs?: OpenPrSummary[] | null; mergedPrs?: MergedPrSummary[] | null; nowMs?: number; windowDays?: number }
 ): LedgerFilterResult {
   const workOrders: LoopWorkOrder[] = Array.isArray((payload as any)?.workOrders) ? (payload as any).workOrders : [];
-  const { kept, suppressed, ambiguous } = partitionWorkOrdersByLoopPr(workOrders, args);
+  const { kept, suppressed, ambiguous, regressionKept } = partitionWorkOrdersByLoopPr(workOrders, args);
 
   const byTier: Record<string, number> = { "0": 0, "1": 0, "2": 0 };
   const byAction: Record<string, number> = {};
@@ -74,6 +76,12 @@ export function applyLedgerToPayload(
     prNumbers: a.prNumbers
   }));
 
+  const regressionKeptRows = regressionKept.map(r => ({
+    convId: String(r.workOrder.convId ?? ""),
+    dimension: String(r.workOrder.dimension ?? ""),
+    prNumbers: r.prNumbers
+  }));
+
   const outPayload: Record<string, unknown> = {
     ...payload,
     workOrders: kept,
@@ -85,9 +93,16 @@ export function applyLedgerToPayload(
     suppressedByOpenPr,
     ambiguousPrCoverageCount: ambiguousPrCoverage.length,
     ambiguousPrCoverage,
+    regressionKeptCount: regressionKeptRows.length,
+    regressionKept: regressionKeptRows,
     stop: kept.length === 0
   };
-  return { payload: outPayload, suppressed: newlySuppressed, ambiguous: ambiguousPrCoverage };
+  return {
+    payload: outPayload,
+    suppressed: newlySuppressed,
+    ambiguous: ambiguousPrCoverage,
+    regressionKept: regressionKeptRows
+  };
 }
 
 function arg(name: string, fallback = ""): string {
@@ -105,13 +120,19 @@ function main(): void {
   }
   const payload = JSON.parse(fs.readFileSync(inPath, "utf8"));
   const before = Array.isArray(payload?.workOrders) ? payload.workOrders.length : 0;
-  const { payload: out, suppressed, ambiguous } = applyLedgerToPayload(payload, {
+  const { payload: out, suppressed, ambiguous, regressionKept } = applyLedgerToPayload(payload, {
     openPrs: listOpenLoopPrs(),
     mergedPrs: listRecentlyMergedLoopPrs()
   });
   fs.writeFileSync(outPath, JSON.stringify(out, null, 2));
   console.log(`loop_pr_ledger_filter — ${before} → ${(out as any).workOrderCount} work order(s); dropped ${suppressed.length} already covered by a loop PR.`);
   for (const s of suppressed.slice(0, 30)) console.log(`   - ${s.convId}::${s.dimension} → PR #${s.prNumber} (${s.state})`);
+  if (regressionKept.length) {
+    console.log(`   ${regressionKept.length} REGRESSION-OF-DISPOSED finding(s) KEPT despite PR coverage — the fix did not hold:`);
+    for (const r of regressionKept.slice(0, 30)) {
+      console.log(`   ! ${r.convId}::${r.dimension} — PR ${r.prNumbers.map(n => `#${n}`).join(", ")} claimed this key`);
+    }
+  }
   if (ambiguous.length) {
     console.log(`   ${ambiguous.length} finding(s) KEPT on ambiguous coverage (more findings than PRs share the key) — triage by hand:`);
     for (const a of ambiguous.slice(0, 30)) {
