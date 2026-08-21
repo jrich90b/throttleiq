@@ -1,3 +1,5 @@
+import { decideLeadUnitAvailabilityDisclosure } from "./routeStateReducer.js";
+
 // Lead-unit hold/sold disclosure for the LIVE reply paths (the Ryan Tower class,
 // +15857278545, LEA-238, 2026-07-04): the customer's lead names an EXACT unit
 // (stock#/VIN), that unit goes on hold for a DIFFERENT customer, and the reply
@@ -72,4 +74,75 @@ export function appendLeadUnitAvailabilityDisclosure(
   if (textAlreadyDisclosesUnavailability(base)) return { text, appended: false };
   const disclosure = composeLeadUnitAvailabilityDisclosure(ctx);
   return { text: `${base}\n\n${disclosure}`, appended: true };
+}
+
+/**
+ * Weave the one-time hold/sold disclosure into an outgoing customer reply.
+ *
+ * MOVED here from `index.ts` on 2026-08-20 (behaviour byte-identical) to fund the
+ * credit-application offer's wiring under the source-size ratchet — index.ts was sitting exactly on
+ * its ceiling, and the ratchet is a cap, never a budget to spend. The decision itself was already
+ * centralized in `decideLeadUnitAvailabilityDisclosure` (routeStateReducer); what lived in the
+ * router was only the plumbing around it, which is precisely what the de-tangle program wants out.
+ *
+ * `resolveAvailability` and `onDisclosed` are INJECTED because both are index.ts-local (the
+ * resolver reads the inventory stores; the recorder is the route-audit writer). Injecting them
+ * keeps this module pure enough to test and leaves the two publish funnels calling one function.
+ *
+ * Dedup is persisted on the conversation (`leadUnitAvailabilityDisclosed`) and re-arms when the
+ * unit key or kind changes. FAIL-SAFE: any resolver error returns the reply unchanged — never
+ * block or mangle a reply over a disclosure lookup.
+ */
+export async function applyLeadUnitAvailabilityDisclosure(args: {
+  conv: any;
+  text: string;
+  protectedReply?: boolean;
+  resolveAvailability: (
+    conv: any
+  ) => Promise<{ kind: "hold" | "sold"; key: string; unitLabel: string; ownedByThisConv: boolean } | null>;
+  onDisclosed?: (detail: Record<string, unknown>) => void;
+  nowIso?: string;
+}): Promise<string> {
+  const { conv, text } = args;
+  try {
+    const body = String(text ?? "").trim();
+    if (!body || !conv) return text;
+    const availability = await args.resolveAvailability(conv);
+    const marker = (conv as any)?.leadUnitAvailabilityDisclosed as { key?: string; kind?: string } | undefined;
+    const decision = decideLeadUnitAvailabilityDisclosure({
+      unavailableKind: availability?.kind ?? null,
+      unitOwnedByThisConv: !!availability?.ownedByThisConv,
+      alreadyDisclosedForThisUnit: !!(
+        availability &&
+        marker &&
+        marker.key === availability.key &&
+        marker.kind === availability.kind
+      ),
+      isProtectedReplyKind: !!args.protectedReply
+    });
+    if (decision.kind === "none" || !availability) return text;
+    const applied = appendLeadUnitAvailabilityDisclosure(text, {
+      kind: availability.kind,
+      unitLabel: availability.unitLabel
+    });
+    // Mark disclosed either way — if the text already carried the disclosure (e.g. the cadence
+    // override composed it), repeating it on the next turn is exactly what the marker prevents.
+    (conv as any).leadUnitAvailabilityDisclosed = {
+      key: availability.key,
+      kind: availability.kind,
+      at: args.nowIso ?? new Date().toISOString()
+    };
+    if (applied.appended) {
+      args.onDisclosed?.({
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        kind: availability.kind,
+        unitKey: availability.key
+      });
+    }
+    return applied.text;
+  } catch (e: any) {
+    console.warn("[lead-unit-disclosure] failed:", e?.message ?? e);
+    return text;
+  }
 }

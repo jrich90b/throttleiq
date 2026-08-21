@@ -498,7 +498,11 @@ const CEILINGS: Ceiling[] = [
     // anything: the comparison itself lives in domain/humanThreadNudge.ts (a module index.ts
     // already imports from, so the import costs nothing) and index.ts pays only for the call, the
     // suppressed-path branch and its route outcome. Re-derived against the integrated tree.
-    max: 70_106,
+    // 70_106 -> 70_101. The credit-application offer needed 33 lines of wiring and the file was
+    // sitting EXACTLY on its ceiling, so the slice paid for itself: maybeApplyLeadUnitAvailability
+    // Disclosure (56 lines of plumbing around an already-centralized decision) moved out to
+    // domain/leadUnitAvailabilityDisclosure.ts and came back as a 16-line injected wrapper.
+    max: 70_101,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {

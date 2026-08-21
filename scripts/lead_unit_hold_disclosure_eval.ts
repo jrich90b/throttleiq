@@ -143,13 +143,23 @@ assert.equal(textAlreadyDisclosesUnavailability(ryanReply), false);
 const indexSrc = fs.readFileSync("services/api/src/index.ts", "utf8");
 
 // The injector exists and consults the centralized decision.
+const sharedSrc = fs.readFileSync("services/api/src/domain/leadUnitAvailabilityDisclosure.ts", "utf8");
 assert.ok(
   /async function maybeApplyLeadUnitAvailabilityDisclosure\(/.test(indexSrc),
   "index.ts defines maybeApplyLeadUnitAvailabilityDisclosure"
 );
+// RE-PINNED 2026-08-20 — the requirement is unchanged (the injector reaches the CENTRALIZED
+// reducer decision, never a local re-implementation), but the plumbing moved out of index.ts into
+// domain/leadUnitAvailabilityDisclosure.ts to fund the credit-application offer under the source
+// ratchet. Behaviour is byte-identical; index.ts kept a thin injected wrapper. Reading the reducer
+// call where it now lives is the same guarantee, in the file that now holds it.
 assert.ok(
-  /decideLeadUnitAvailabilityDisclosure\(\{/.test(indexSrc),
+  /decideLeadUnitAvailabilityDisclosure\(\{/.test(sharedSrc),
   "the injector uses the centralized routeStateReducer decision"
+);
+assert.ok(
+  /applyLeadUnitAvailabilityDisclosure\(\{/.test(indexSrc),
+  "and index.ts reaches it through the domain module rather than re-implementing the plumbing"
 );
 
 // Funnel 1: publishCustomerReplyDraft (main pipeline + regenerate) applies it.
@@ -193,7 +203,7 @@ assert.ok(
   "neither branch hardcodes ownership"
 );
 assert.ok(
-  /unitOwnedByThisConv:\s*!!availability\?\.ownedByThisConv/.test(indexSrc),
+  /unitOwnedByThisConv:\s*!!availability\?\.ownedByThisConv/.test(sharedSrc),
   "the injector passes the resolved ownership into the centralized decision"
 );
 
@@ -214,7 +224,7 @@ assert.ok(
 
 // The dedup marker is persisted on the conversation.
 assert.ok(
-  indexSrc.includes("leadUnitAvailabilityDisclosed"),
+  indexSrc.includes("leadUnitAvailabilityDisclosed") || sharedSrc.includes("leadUnitAvailabilityDisclosed"),
   "the once-per-unit dedup marker is persisted on the conversation"
 );
 

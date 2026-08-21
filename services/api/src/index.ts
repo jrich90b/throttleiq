@@ -712,6 +712,8 @@ import {
   type EquipmentQuery
 } from "./domain/inventoryEquipmentVision.js";
 import { buildFinanceAppInviteLine } from "./domain/financeAppInvite.js";
+import { applyFinanceApplicationOfferToReply } from "./domain/financeApplicationOffer.js";
+import { applyLeadUnitAvailabilityDisclosure } from "./domain/leadUnitAvailabilityDisclosure.js";
 import { buildRecommendedUnitsPaymentEstimateReply, buildRecommendationWithEstimateReply } from "./domain/paymentEstimate.js";
 import {
   buildInventoryBackedVehicleFactAnswer,
@@ -5856,6 +5858,15 @@ async function publishCustomerReplyDraft(args: {
     protectedReply: contextFidelityEnforced,
     scope: args.routeScope === "regen" ? "regen" : args.routeScope === "manual" ? "manual" : "live"
   });
+  // Credit-application offer when the customer ASKED whether they can finance (Joe, 2026-08-20).
+  // Here, beside the disclosure, because this is the chokepoint BOTH the live and regenerate paths
+  // publish through — route parity by construction rather than by two call sites kept in step.
+  publishText = await maybeApplyFinanceApplicationOffer(
+    args.conv,
+    publishText,
+    contextFidelityEnforced,
+    args.routeScope === "regen" ? "regen" : args.routeScope === "manual" ? "manual" : "live"
+  );
   if (contextFidelityEnforced) {
     // Legacy enforcement (surfacing flag off / future autopilot): substitute the safe handoff ack + task.
     addTodo(
@@ -13573,60 +13584,41 @@ async function resolveLeadUnitAvailabilityForReply(
   };
 }
 
-// Weave the one-time hold/sold disclosure into an outgoing customer reply. Decision centralized in
-// decideLeadUnitAvailabilityDisclosure (routeStateReducer); dedup persisted on the conversation
-// (leadUnitAvailabilityDisclosed, re-arms when the unit key or kind changes). Wired at BOTH publish
-// funnels — publishLiveTwilioReply (/webhooks/twilio) and publishCustomerReplyDraft (main pipeline +
-// regenerate) — so live and regen stay in parity. Fail-safe: any resolver error returns the reply
-// unchanged (never block or mangle a reply over a disclosure lookup).
+// Thin wrapper: the disclosure's reasoning moved to domain/leadUnitAvailabilityDisclosure.ts to
+// pay for this slice's wiring under the source-size ratchet. Behaviour is byte-identical; the
+// resolver and the route-outcome recorder are injected because both are index.ts-local.
 async function maybeApplyLeadUnitAvailabilityDisclosure(
   conv: any,
   text: string,
   opts: { protectedReply?: boolean; scope: "live" | "regen" | "manual" }
 ): Promise<string> {
-  try {
-    const body = String(text ?? "").trim();
-    if (!body || !conv) return text;
-    const availability = await resolveLeadUnitAvailabilityForReply(conv);
-    const marker = (conv as any)?.leadUnitAvailabilityDisclosed as
-      | { key?: string; kind?: string }
-      | undefined;
-    const decision = decideLeadUnitAvailabilityDisclosure({
-      unavailableKind: availability?.kind ?? null,
-      unitOwnedByThisConv: !!availability?.ownedByThisConv,
-      alreadyDisclosedForThisUnit: !!(
-        availability &&
-        marker &&
-        marker.key === availability.key &&
-        marker.kind === availability.kind
-      ),
-      isProtectedReplyKind: !!opts.protectedReply
-    });
-    if (decision.kind === "none" || !availability) return text;
-    const applied = appendLeadUnitAvailabilityDisclosure(text, {
-      kind: availability.kind,
-      unitLabel: availability.unitLabel
-    });
-    // Mark disclosed either way — if the text already carried the disclosure (e.g. the cadence
-    // override composed it), repeating it on the next turn is exactly what the marker prevents.
-    (conv as any).leadUnitAvailabilityDisclosed = {
-      key: availability.key,
-      kind: availability.kind,
-      at: new Date().toISOString()
-    };
-    if (applied.appended) {
-      recordRouteOutcome(opts.scope, "lead_unit_availability_disclosed", {
-        convId: conv.id,
-        leadKey: conv.leadKey,
-        kind: availability.kind,
-        unitKey: availability.key
-      });
-    }
-    return applied.text;
-  } catch (e: any) {
-    console.warn("[lead-unit-disclosure] failed:", e?.message ?? e);
-    return text;
-  }
+  return applyLeadUnitAvailabilityDisclosure({
+    conv,
+    text,
+    protectedReply: opts.protectedReply,
+    resolveAvailability: resolveLeadUnitAvailabilityForReply,
+    onDisclosed: d => recordRouteOutcome(opts.scope, "lead_unit_availability_disclosed", d)
+  });
+}
+
+/** Thin wrapper: the reasoning + the stamp live in domain/financeApplicationOffer.ts. */
+async function maybeApplyFinanceApplicationOffer(
+  conv: any,
+  text: string,
+  protectedReply: boolean,
+  scope: "live" | "regen" | "manual"
+): Promise<string> {
+  const dp: any = await getDealerProfileHot();
+  return applyFinanceApplicationOfferToReply({
+    conv,
+    text,
+    protectedReply,
+    history: buildHistory(conv, 8),
+    creditAppUrl: dp?.creditAppUrl,
+    bookingUrl: dp?.bookingUrl,
+    onOffered: () =>
+      recordRouteOutcome(scope, "finance_application_offer_appended", { convId: conv?.id, leadKey: conv?.leadKey })
+  });
 }
 
 /**
@@ -59141,6 +59133,9 @@ if (authToken && signature) {
     // templates like the ballpark payment quote — the path that priced Ryan Tower's held
     // Street Glide without disclosing the hold) carries the one-time disclosure too.
     // forceSend marks compliance messages (opt-out confirmations) — never touch those.
+    // The early live funnel publishes DETERMINISTIC templates that bypass publishCustomerReplyDraft
+    // — the co-signer nudge Maxie actually received is one of them — so the offer is applied here too.
+    publishedText = await maybeApplyFinanceApplicationOffer(conv, publishedText, !!options?.forceSend, "live");
     publishedText = await maybeApplyLeadUnitAvailabilityDisclosure(conv, publishedText, {
       protectedReply: !!options?.forceSend,
       scope: "live"
