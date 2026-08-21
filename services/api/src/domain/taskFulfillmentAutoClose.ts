@@ -208,6 +208,48 @@ export function isQuietTriggeredTask(task: { summary?: string | null }): boolean
   return QUIET_TRIGGERED_TODO_MARKERS.some(marker => summary.includes(marker));
 }
 
+// ---------------------------------------------------------------------------
+// A "book this visit" task closes on the CALENDAR, never on the conversation (+17168603628,
+// reported 2026-08-20).
+//
+// The scheduling-leak safety net mints exactly one task per stalled thread: "Schedule the visit for
+// <who> — a time was discussed but nothing is booked. Confirm a time (check availability) and put it
+// on the calendar." Its objective is a STATE FACT (an appointment exists), not a conversational one,
+// and it already HAS a purpose-built closer: the state-reconcile pass retires it the moment
+// isSchedulingLeakConversation goes false — once the visit is booked, the lead closes, or it ages out.
+//
+// The LLM fulfillment judge is a second, competing closer that reads the last 8 messages and closes
+// the task when the TALK looks settled. Lance Scarafia (+17168603628, 2026-08-17): the rep asked
+// "Would you like to schedule your 1,000 mile service for Thursday 9/3?", Lance replied "Yes", the
+// rep said "Thank you!" — and the judge closed the booking task at 0.90 ("customer replied 'Yes' and
+// dealer acknowledged"). `conv.appointment` is absent to this day. Three days later the leak detector
+// re-minted the task (scheduling_leak_flagged, 2026-08-20T19:17Z) and the cycle restarts.
+//
+// MEASURED on the live store (route audit, 181 daily files): of 545 auto-closes, 39 were this task
+// family across 21 conversations — and 18 of the 21 have NO appointment record at all. The 3 that DID
+// book would have been retired by the reconcile pass regardless, so refusing them here costs nothing.
+//
+// AGENTS.md bucket: INVARIANT GUARD / side-effect gate (deterministic allowed; it matches OUR OWN
+// generated task summary and reads OUR OWN appointment state, never customer intent). FAIL DIRECTION:
+// it can only ever REFUSE a close, so it fails toward a "book this visit" task staying in the staff
+// inbox — never toward a discussed-but-unbooked visit going quiet. That is the direction the booking
+// funnel needs.
+//
+// Deliberately NOT gated on isSchedulingLeakConversation: that predicate requires the thread to be
+// IDLE for hours, and this hook runs seconds after a message — the guard would have shipped inert.
+// ---------------------------------------------------------------------------
+
+/**
+ * The scheduling-leak task's summary marker. Owned here rather than inline in index.ts so the
+ * generator, the reconcile-pass retirement, and this guard all read ONE spelling — two copies of a
+ * marker is how a family silently stops matching on one side of the fence.
+ */
+export const SCHEDULING_LEAK_TODO_MARKER = "a time was discussed but nothing is booked";
+
+export function isSchedulingLeakTask(task: { summary?: string | null }): boolean {
+  return String(task?.summary ?? "").includes(SCHEDULING_LEAK_TODO_MARKER);
+}
+
 export type TaskAutoCloseDecision = { close: boolean; reason: string };
 
 /**
@@ -226,6 +268,13 @@ export function decideTaskAutoClose(input: {
   task?: { summary?: string | null } | null;
   /** true only when this run was triggered by a fresh dealer OUTBOUND (not an inbound / backfill). */
   dealerOutboundTrigger?: boolean;
+  /**
+   * Is the visit actually on the books? Same expression the sibling soft-close referee uses
+   * (`!!conv.appointment?.bookedEventId`). Required to close a scheduling-leak task; a
+   * console-confirmed appointment with no calendar event still retires via the reconcile pass, so
+   * a strict reading here strands nothing.
+   */
+  appointmentBooked?: boolean;
 }): TaskAutoCloseDecision {
   const min = input.minConfidence ?? TASK_AUTO_CLOSE_MIN_CONFIDENCE;
   if (!input.eligible) return { close: false, reason: "ineligible_task" };
@@ -238,6 +287,12 @@ export function decideTaskAutoClose(input: {
   // thread. Reported BEFORE the flag check so the shadow log shows the real blocker.
   if (input.task && isQuietTriggeredTask(input.task) && !input.dealerOutboundTrigger) {
     return { close: false, reason: "quiet_task_needs_new_outbound" };
+  }
+  // A "put it on the calendar" task is fulfilled by an appointment, not by a settled-sounding
+  // conversation. Reported BEFORE the flag check, same as the quiet guard, so the shadow log names
+  // the real blocker.
+  if (input.task && isSchedulingLeakTask(input.task) && !input.appointmentBooked) {
+    return { close: false, reason: "booking_task_needs_a_booked_appointment" };
   }
   if (!input.enabled) return { close: false, reason: "shadow_would_close" };
   return { close: true, reason: "fulfilled_high_confidence" };
