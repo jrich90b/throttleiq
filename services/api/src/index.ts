@@ -1254,6 +1254,7 @@ import {
 } from "./domain/suppressionStore.js";
 import { findRelatedConversations, resolveLeadIdentity } from "./domain/leadIdentity.js";
 import { buildKpiOverview } from "./domain/kpiAnalytics.js";
+import { registerAnalyticsRoutes } from "./routes/analytics.js";
 import { registerCopilotRoutes } from "./routes/copilot.js";
 import { isPhoneLogConversation } from "./domain/phoneLogLead.js";
 import {
@@ -39285,65 +39286,7 @@ app.get("/conversations", (req, res) => {
   res.json({ ok: true, systemMode: getSystemMode(), conversations });
 });
 
-app.get("/analytics/kpi", async (req, res) => {
-  const user = (req as any).user ?? null;
-  if (String(user?.role ?? "").toLowerCase() !== "manager") {
-    return res.status(403).json({ ok: false, error: "manager access required" });
-  }
-  const source = String(req.query?.source ?? "all").trim();
-  const ownerId = String(req.query?.ownerId ?? "all").trim();
-  const leadType = String(req.query?.leadType ?? "all")
-    .trim()
-    .toLowerCase();
-  const leadScope = String(req.query?.leadScope ?? "include_walkins")
-    .trim()
-    .toLowerCase();
-  const appointmentSetter = String(req.query?.appointmentSetter ?? "all")
-    .trim()
-    .toLowerCase();
-  const callOwnerId = String(req.query?.callOwnerId ?? ownerId ?? "all").trim();
-  const from = String(req.query?.from ?? "").trim();
-  const to = String(req.query?.to ?? "").trim();
-
-  const conversations = getAllConversations();
-  const schedulerCfg = await getSchedulerConfig();
-  const overview = buildKpiOverview(
-    conversations,
-    {
-      source: source || "all",
-      ownerId: ownerId || "all",
-      leadType: (leadType || "all") as "all" | "new" | "used" | "walk_in",
-      leadScope: (leadScope || "include_walkins") as
-        | "online_only"
-        | "include_walkins"
-        | "walkin_only"
-        | "phone_log_only",
-      callOwnerId: callOwnerId || "all",
-      appointmentSetter: (appointmentSetter || "all") as
-        | "all"
-        | "ai_sms"
-        | "human_sms"
-        | "human_email"
-        | "human_phone"
-        | "human_manual"
-        | "customer_public_booking"
-        | "unknown",
-      from: from || undefined,
-      to: to || undefined
-    },
-    {
-      businessHours: {
-        timezone: String(schedulerCfg.timezone || "America/New_York"),
-        businessHours: schedulerCfg.businessHours ?? {}
-      }
-    }
-  );
-
-  res.json({
-    ok: true,
-    overview
-  });
-});
+registerAnalyticsRoutes(app);
 
 registerCopilotRoutes(app);
 // All three department endpoints (the handoff + "bring in"/"hand back") live in routes/departmentCollaboration.ts.

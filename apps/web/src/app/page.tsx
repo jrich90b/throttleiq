@@ -2002,6 +2002,299 @@ type KpiOverview = {
   }>;
 };
 
+/**
+ * The Appointments report — "who set it, and did they show?" (Joe, 2026-08-21).
+ *
+ * Deliberately a SEPARATE payload from KpiOverview with its own date range, because the two range
+ * on different things: the KPI Overview ranges on when the LEAD arrived, this ranges on when the
+ * APPOINTMENT is. Sharing one date picker between them would silently answer the wrong question
+ * for a pay period.
+ */
+type AppointmentAttendanceState = "showed" | "no_show" | "cancelled" | "not_logged" | "upcoming";
+
+type AppointmentGroupRow = {
+  key: string;
+  label: string;
+  booked: number;
+  showed: number;
+  noShow: number;
+  cancelled: number;
+  notLogged: number;
+  upcoming: number;
+  showRatePct: number | null;
+};
+
+type AppointmentReport = {
+  totals: {
+    booked: number;
+    showed: number;
+    noShow: number;
+    cancelled: number;
+    notLogged: number;
+    upcoming: number;
+    showRatePct: number | null;
+    conflicts: number;
+  };
+  bySetter: AppointmentGroupRow[];
+  byBookedWith: AppointmentGroupRow[];
+  rows: Array<{
+    convId: string;
+    customer: string;
+    customerPhone: string;
+    whenIso: string | null;
+    whenLocal: string;
+    appointmentType: string;
+    setterKind: "ai" | "customer" | "staff_named" | "staff_unattributed" | "unknown";
+    setterName: string | null;
+    setterChannelLabel: string;
+    bookedWith: string | null;
+    attendance: AppointmentAttendanceState;
+    outcomeStatus: string;
+    conflict: boolean;
+  }>;
+  skippedUndated: number;
+};
+
+const APPOINTMENT_RESULT_LABEL: Record<AppointmentAttendanceState, string> = {
+  showed: "Showed",
+  no_show: "No-show",
+  cancelled: "Cancelled",
+  not_logged: "Not logged",
+  upcoming: "Upcoming"
+};
+
+/**
+ * "Not logged" is styled as a WARNING, not a neutral blank. It is the single most common way this
+ * report can quietly cost a salesperson credit — about one appointment in four across 2026 has no
+ * outcome recorded — so it has to look like an open item, not a tidy zero.
+ */
+const APPOINTMENT_RESULT_CLASS: Record<AppointmentAttendanceState, string> = {
+  showed: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30",
+  no_show: "bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/30",
+  cancelled: "bg-gray-500/15 text-gray-700 dark:text-gray-300 border-gray-500/30",
+  not_logged: "bg-amber-500/20 text-amber-800 dark:text-amber-200 border-amber-500/40",
+  upcoming: "bg-sky-500/15 text-sky-700 dark:text-sky-300 border-sky-500/30"
+};
+
+function appointmentSetterDisplay(row: AppointmentReport["rows"][number]): string {
+  if (row.setterName) return row.setterName;
+  if (row.setterKind === "ai") return "AI agent";
+  if (row.setterKind === "customer") return "Customer self-booked";
+  if (row.setterKind === "staff_unattributed") return "Staff — name not recorded";
+  return "Unknown";
+}
+
+/**
+ * "Who set the appointment, and did they show?" — the commission view (Joe, 2026-08-21).
+ *
+ * The design rule throughout: an unknown is shown AS an unknown. `Not logged` gets a warning chip
+ * rather than being folded into the no-shows, and a booking whose setter was never recorded says
+ * so instead of borrowing the calendar owner's name. Both would look tidier and both would be a
+ * quiet lie about somebody's pay.
+ */
+function AppointmentsReportPanel({
+  report,
+  loading,
+  onRefresh,
+  onDownloadCsv
+}: {
+  report: AppointmentReport | null;
+  loading: boolean;
+  onRefresh: () => void;
+  onDownloadCsv: () => void;
+}) {
+  const groupTable = (title: string, hint: string, rows: AppointmentGroupRow[]) => (
+    <div className="border rounded-lg overflow-hidden">
+      <div className="px-3 py-2 bg-[var(--surface-2)] border-b border-[var(--border)]">
+        <div className="text-sm font-semibold">{title}</div>
+        <div className="text-xs text-gray-500">{hint}</div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="text-xs text-gray-600 bg-[var(--surface-2)]">
+            <tr>
+              <th className="text-left px-3 py-2">Name</th>
+              <th className="text-right px-3 py-2">Booked</th>
+              <th className="text-right px-3 py-2">Showed</th>
+              <th className="text-right px-3 py-2">No-show</th>
+              <th className="text-right px-3 py-2">Cancelled</th>
+              <th className="text-right px-3 py-2">Not logged</th>
+              <th className="text-right px-3 py-2">Upcoming</th>
+              <th className="text-right px-3 py-2">Show rate</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(row => (
+              <tr key={`${title}-${row.key}`} className="border-t border-[var(--border)]">
+                <td className="px-3 py-2">{row.label}</td>
+                <td className="px-3 py-2 text-right font-medium">{row.booked}</td>
+                <td className="px-3 py-2 text-right">{row.showed}</td>
+                <td className="px-3 py-2 text-right">{row.noShow}</td>
+                <td className="px-3 py-2 text-right">{row.cancelled}</td>
+                <td className={`px-3 py-2 text-right ${row.notLogged > 0 ? "text-amber-700 dark:text-amber-300 font-semibold" : ""}`}>
+                  {row.notLogged}
+                </td>
+                <td className="px-3 py-2 text-right">{row.upcoming}</td>
+                <td className="px-3 py-2 text-right">
+                  {row.showRatePct == null ? <span className="text-gray-400">—</span> : `${row.showRatePct}%`}
+                </td>
+              </tr>
+            ))}
+            {rows.length === 0 ? (
+              <tr>
+                <td className="px-3 py-3 text-gray-500" colSpan={8}>
+                  No appointments in this date range.
+                </td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-xl font-semibold">Appointments — who set it, who showed</h2>
+          <p className="text-xs text-gray-500 mt-1">
+            Every appointment whose date falls in the selected window, with who booked it and how it turned out.
+          </p>
+        </div>
+        <div className="flex gap-2 shrink-0">
+          <button className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)]" onClick={onRefresh}>
+            Refresh
+          </button>
+          <button
+            className="px-3 py-2 border rounded text-sm font-medium hover:bg-[var(--surface-2)]"
+            onClick={onDownloadCsv}
+            disabled={!report || report.rows.length === 0}
+          >
+            Download CSV
+          </button>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="text-sm text-gray-500">Loading appointments…</div>
+      ) : !report ? (
+        <div className="text-sm text-gray-500">No appointment data for this date range.</div>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 xl:grid-cols-5 gap-3">
+            {[
+              ["Booked", report.totals.booked, ""],
+              ["Showed", report.totals.showed, "text-emerald-600 dark:text-emerald-400"],
+              ["No-show", report.totals.noShow, "text-rose-600 dark:text-rose-400"],
+              ["Not logged", report.totals.notLogged, "text-amber-600 dark:text-amber-400"],
+              [
+                "Show rate",
+                report.totals.showRatePct == null ? "—" : `${report.totals.showRatePct}%`,
+                ""
+              ]
+            ].map(([label, value, tone]) => (
+              <div key={`appt-card-${label}`} className="border rounded-lg p-3 bg-[var(--surface-2)]">
+                <div className="text-xs text-gray-600">{label}</div>
+                <div className={`mt-1 text-2xl font-semibold ${tone}`}>{value}</div>
+              </div>
+            ))}
+          </div>
+
+          {report.totals.notLogged > 0 ? (
+            <div className="border border-amber-500/40 bg-amber-500/10 rounded px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+              <strong>{report.totals.notLogged}</strong>{" "}
+              {report.totals.notLogged === 1 ? "appointment has" : "appointments have"} no outcome recorded — nobody
+              said whether the customer showed. Those are not counted as shows or no-shows, so the show rate above
+              ignores them entirely.
+            </div>
+          ) : null}
+
+          {report.totals.conflicts > 0 ? (
+            <div className="border border-rose-500/40 bg-rose-500/10 rounded px-3 py-2 text-xs text-rose-800 dark:text-rose-200">
+              <strong>{report.totals.conflicts}</strong> contradict themselves — marked did-not-show while also
+              carrying an outcome that implies the customer came in. Flagged in the table below; the strict reading
+              (did-not-show) is what the totals use.
+            </div>
+          ) : null}
+
+          {report.skippedUndated > 0 ? (
+            <div className="text-xs text-gray-500">
+              {report.skippedUndated} appointment{report.skippedUndated === 1 ? "" : "s"} skipped — no usable date on
+              the record, so {report.skippedUndated === 1 ? "it cannot" : "they cannot"} be placed in any period.
+            </div>
+          ) : null}
+
+          {groupTable(
+            "By who set it",
+            "Bookings made in the console name the person. Bookings confirmed by text or phone land on the shared dealership number, so the system knows a human did it but not which one.",
+            report.bySetter
+          )}
+
+          {groupTable(
+            "By whose calendar it's on",
+            "Not the same question as who set it — one person often books onto another's calendar.",
+            report.byBookedWith
+          )}
+
+          <div className="border rounded-lg overflow-hidden">
+            <div className="px-3 py-2 bg-[var(--surface-2)] border-b border-[var(--border)] text-sm font-semibold">
+              Every appointment
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-xs text-gray-600 bg-[var(--surface-2)]">
+                  <tr>
+                    <th className="text-left px-3 py-2">When</th>
+                    <th className="text-left px-3 py-2">Customer</th>
+                    <th className="text-left px-3 py-2">Type</th>
+                    <th className="text-left px-3 py-2">Set by</th>
+                    <th className="text-left px-3 py-2">Booked with</th>
+                    <th className="text-left px-3 py-2">Result</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.rows.map(row => (
+                    <tr key={`appt-row-${row.convId}-${row.whenIso ?? ""}`} className="border-t border-[var(--border)]">
+                      <td className="px-3 py-2 whitespace-nowrap">{row.whenLocal}</td>
+                      <td className="px-3 py-2">{row.customer}</td>
+                      <td className="px-3 py-2 text-gray-600">{row.appointmentType.replace(/_/g, " ") || "—"}</td>
+                      <td className="px-3 py-2">
+                        <span className={row.setterName ? "" : "text-gray-500 italic"}>
+                          {appointmentSetterDisplay(row)}
+                        </span>
+                        <div className="text-xs text-gray-500">{row.setterChannelLabel}</div>
+                      </td>
+                      <td className="px-3 py-2">{row.bookedWith ?? <span className="text-gray-400">—</span>}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        <span
+                          className={`inline-block rounded border px-2 py-0.5 text-xs font-medium ${APPOINTMENT_RESULT_CLASS[row.attendance]}`}
+                        >
+                          {APPOINTMENT_RESULT_LABEL[row.attendance]}
+                        </span>
+                        {row.conflict ? (
+                          <span className="ml-2 text-xs text-rose-600 dark:text-rose-400">conflicting record</span>
+                        ) : null}
+                      </td>
+                    </tr>
+                  ))}
+                  {report.rows.length === 0 ? (
+                    <tr>
+                      <td className="px-3 py-3 text-gray-500" colSpan={6}>
+                        No appointments in this date range.
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function kpiPct(value: number | null | undefined): string {
   return `${Number(value ?? 0).toFixed(1)}%`;
 }
@@ -3063,6 +3356,13 @@ export default function Home() {
   const [kpiCallOwnerFilter, setKpiCallOwnerFilter] = useState("all");
   const [kpiFrom, setKpiFrom] = useState<string>("");
   const [kpiTo, setKpiTo] = useState<string>("");
+  /** Which manager report is on screen. The two have separate date ranges on purpose. */
+  const [kpiTab, setKpiTab] = useState<"overview" | "appointments">("overview");
+  const [apptReport, setApptReport] = useState<AppointmentReport | null>(null);
+  const [apptLoading, setApptLoading] = useState(false);
+  const [apptError, setApptError] = useState<string | null>(null);
+  const [apptFrom, setApptFrom] = useState<string>("");
+  const [apptTo, setApptTo] = useState<string>("");
   /**
    * KPI filters are COLLAPSED on a phone by default (2026-08-12).
    *
@@ -3921,6 +4221,53 @@ export default function Home() {
     if (!kpiFrom) setKpiFrom(dateInputOffset(30));
     if (!kpiTo) setKpiTo(dateInputOffset(0));
   }, [kpiFrom, kpiTo]);
+
+  /**
+   * The Appointments report defaults to THE CURRENT MONTH, not a rolling 30 days, because the
+   * question behind it is a pay period. A rolling window would straddle two of them.
+   */
+  useEffect(() => {
+    if (apptFrom && apptTo) return;
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    // Whole current month, end included — so appointments still to come show as "Upcoming"
+    // rather than falling outside the window and looking like they never existed.
+    if (!apptFrom) setApptFrom(`${year}-${pad(month + 1)}-01`);
+    if (!apptTo) {
+      const lastDay = new Date(year, month + 1, 0).getDate();
+      setApptTo(`${year}-${pad(month + 1)}-${pad(lastDay)}`);
+    }
+  }, [apptFrom, apptTo]);
+
+  async function loadAppointmentReport() {
+    if (!isManager) return;
+    setApptLoading(true);
+    setApptError(null);
+    try {
+      const params = new URLSearchParams();
+      if (apptFrom) params.set("from", `${apptFrom}T00:00:00.000Z`);
+      if (apptTo) params.set("to", `${apptTo}T23:59:59.999Z`);
+      const resp = await fetch(`/api/analytics/appointments?${params.toString()}`, { cache: "no-store" });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || !data?.ok || !data?.report) {
+        throw new Error(data?.error ?? "Failed to load the appointments report");
+      }
+      setApptReport(data.report as AppointmentReport);
+    } catch (err: any) {
+      setApptError(err?.message ?? "Failed to load the appointments report");
+    } finally {
+      setApptLoading(false);
+    }
+  }
+
+  function downloadAppointmentCsv() {
+    const params = new URLSearchParams({ format: "csv" });
+    if (apptFrom) params.set("from", `${apptFrom}T00:00:00.000Z`);
+    if (apptTo) params.set("to", `${apptTo}T23:59:59.999Z`);
+    window.open(`/api/analytics/appointments?${params.toString()}`, "_blank");
+  }
 
   useEffect(() => {
     if (!kpiCallOwnerOptions.some(o => o.id === kpiCallOwnerFilter)) {
@@ -8320,6 +8667,12 @@ export default function Home() {
     kpiFrom,
     kpiTo
   ]);
+
+  useEffect(() => {
+    if (!isManager || section !== "kpi" || kpiTab !== "appointments") return;
+    if (!apptFrom || !apptTo) return;
+    void loadAppointmentReport();
+  }, [section, isManager, kpiTab, apptFrom, apptTo]);
 
   useEffect(() => {
     if (!isManager || section !== "campaigns") return;
@@ -14784,21 +15137,57 @@ export default function Home() {
               <span aria-hidden="true">{kpiFiltersOpenMobile ? "▲" : "▼"}</span>
             </button>
             <div className={kpiFiltersOpenMobile ? "space-y-3" : "hidden sm:block space-y-3"}>
-            <div className="text-xs text-gray-600">Date range</div>
-            <div className="grid grid-cols-2 gap-2">
-              <input
-                type="date"
-                className="w-full border rounded px-2 py-2 text-sm"
-                value={kpiFrom}
-                onChange={e => setKpiFrom(e.target.value)}
-              />
-              <input
-                type="date"
-                className="w-full border rounded px-2 py-2 text-sm"
-                value={kpiTo}
-                onChange={e => setKpiTo(e.target.value)}
-              />
-            </div>
+            {kpiTab === "appointments" ? (
+              <>
+                {/*
+                  The Appointments report gets its OWN range, and it is labelled by what it ranges
+                  ON. The KPI filters below range on when the LEAD ARRIVED; this one ranges on the
+                  appointment date. They answer different questions and one shared picker would
+                  quietly give a pay-period answer from a lead-cohort window.
+                */}
+                <div className="text-xs text-gray-600">Appointment date</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="date"
+                    aria-label="Appointments from"
+                    className="w-full border rounded px-2 py-2 text-sm"
+                    value={apptFrom}
+                    onChange={e => setApptFrom(e.target.value)}
+                  />
+                  <input
+                    type="date"
+                    aria-label="Appointments to"
+                    className="w-full border rounded px-2 py-2 text-sm"
+                    value={apptTo}
+                    onChange={e => setApptTo(e.target.value)}
+                  />
+                </div>
+                <p className="text-xs text-gray-500">
+                  Counts appointments whose date falls in this window — not the leads that arrived in it.
+                </p>
+              </>
+            ) : (
+              <>
+                <div className="text-xs text-gray-600">Lead arrival date</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="date"
+                    className="w-full border rounded px-2 py-2 text-sm"
+                    value={kpiFrom}
+                    onChange={e => setKpiFrom(e.target.value)}
+                  />
+                  <input
+                    type="date"
+                    className="w-full border rounded px-2 py-2 text-sm"
+                    value={kpiTo}
+                    onChange={e => setKpiTo(e.target.value)}
+                  />
+                </div>
+                <p className="text-xs text-gray-500">
+                  Filters on when each lead first came in. For a pay period, use the Appointments tab.
+                </p>
+              </>
+            )}
             <div className="grid grid-cols-3 gap-2">
               <button
                 className="px-2 py-1.5 border rounded text-xs hover:bg-[var(--surface-2)]"
@@ -14828,6 +15217,13 @@ export default function Home() {
                 90d
               </button>
             </div>
+            {/*
+              Everything below filters the LEAD-COHORT report only. Hidden on the Appointments tab
+              rather than left visible-but-inert: a filter that looks live and changes nothing is
+              worse than no filter, because it reads as "I already narrowed this".
+            */}
+            {kpiTab === "appointments" ? null : (
+            <>
             <div>
               <div className="text-xs text-gray-600 mb-1">Lead origin</div>
               <select
@@ -14904,7 +15300,23 @@ export default function Home() {
                 ))}
               </select>
             </div>
-            {kpiError ? <div className="text-xs text-red-600">{kpiError}</div> : null}
+            </>
+            )}
+            {kpiTab === "appointments" ? (
+              <button
+                className="w-full px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)]"
+                onClick={() => void loadAppointmentReport()}
+              >
+                Refresh appointments
+              </button>
+            ) : null}
+            {kpiTab === "appointments"
+              ? apptError
+                ? <div className="text-xs text-red-600">{apptError}</div>
+                : null
+              : kpiError
+                ? <div className="text-xs text-red-600">{kpiError}</div>
+                : null}
             </div>
           </div>
         ) : section === "inbox" ? (
@@ -17492,6 +17904,36 @@ export default function Home() {
           />
         ) : section === "kpi" ? (
           <div className="space-y-5">
+            <div className="flex gap-1 border-b border-[var(--border)]">
+              {([
+                ["overview", "KPI Overview"],
+                ["appointments", "Appointments"]
+              ] as const).map(([key, label]) => (
+                <button
+                  key={`kpi-tab-${key}`}
+                  type="button"
+                  aria-current={kpiTab === key ? "page" : undefined}
+                  className={
+                    kpiTab === key
+                      ? "px-4 py-2 text-sm font-semibold border-b-2 border-emerald-500 text-[var(--foreground)]"
+                      : "px-4 py-2 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-[var(--foreground)]"
+                  }
+                  onClick={() => setKpiTab(key)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {kpiTab === "appointments" ? (
+              <AppointmentsReportPanel
+                report={apptReport}
+                loading={apptLoading}
+                onRefresh={() => void loadAppointmentReport()}
+                onDownloadCsv={downloadAppointmentCsv}
+              />
+            ) : (
+            <div className="space-y-5">
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="text-xl font-semibold">Manager KPI Overview</h2>
@@ -17996,6 +18438,8 @@ export default function Home() {
                   </div>
                 </div>
               </>
+            )}
+            </div>
             )}
           </div>
         ) : section === "calendar" ? (

@@ -224,6 +224,7 @@
     "cadence_advance:eval",
     "cadence_replacement:eval",
     "appointment_attribution:eval",
+    "appointment_setter_report:eval",
     "campaign_asset_format:eval",
     "campaign_brief_extraction:eval",
     "campaign_copy_budget:eval",
