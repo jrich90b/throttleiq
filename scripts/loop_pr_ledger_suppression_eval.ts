@@ -10,6 +10,8 @@
 import assert from "node:assert/strict";
 import {
   findingKeyMarker,
+  findingKeyOf,
+  findMergedPrsForFindingKey,
   partitionWorkOrdersByLoopPr,
   type OpenPrSummary,
   type MergedPrSummary
@@ -130,6 +132,69 @@ assert.equal((allCovered.payload as any).stop, true, "all work orders covered �
   assert.equal((amb.payload as any).stop, false, "work remains → stop:false");
 }
 
+// --- regression-of-disposed is NEVER suppressed (2026-08-21, Paul Harrigan +17169467451) ---
+{
+  // The real row, from next.json generated 2026-08-20T08:55Z: the box RESTORED it because the key had
+  // been disposed with a --deploy-ts boundary and the defect recurred after it. The local filter then
+  // dropped it as "covered by PR #681 (merged)" — eating the one signal that says a fix did not hold.
+  const KEY_CONV = "+17169467451";
+  const regressionRow = {
+    convId: KEY_CONV,
+    dimension: "corpus_replay_judge_fail",
+    tier: 1,
+    regressionOfDisposed: true
+  };
+  const coveringPrs = [
+    { number: 681, body: `finding-key: ${findingKeyMarker(findingKeyOf(KEY_CONV, "corpus_replay_judge_fail"))}`, mergedAt: new Date(NOW - DAY).toISOString() }
+  ];
+  // Sanity: the marker really does match, so the row WOULD have been dropped without the carve-out.
+  assert.equal(
+    findMergedPrsForFindingKey(coveringPrs, findingKeyOf(KEY_CONV, "corpus_replay_judge_fail"), { nowMs: NOW }).length,
+    1,
+    "the covering PR must match the key, or this eval proves nothing"
+  );
+
+  const part = partitionWorkOrdersByLoopPr([regressionRow], { openPrs: [], mergedPrs: coveringPrs, nowMs: NOW });
+  assert.equal(part.kept.length, 1, "a regression-of-disposed row survives merged-PR coverage");
+  assert.equal(part.suppressed.length, 0, "…and is not suppressed");
+  assert.equal(part.regressionKept.length, 1, "…and is reported so the drop is visible, not silent");
+  assert.equal(part.regressionKept[0].prNumbers[0], 681, "…naming the PR that claimed the key");
+
+  // An OPEN PR is no different: the recurrence postdates whatever that PR claims.
+  const openCover = partitionWorkOrdersByLoopPr([regressionRow], {
+    openPrs: [{ number: 999, body: `finding-key: ${findingKeyMarker(findingKeyOf(KEY_CONV, "corpus_replay_judge_fail"))}` }],
+    mergedPrs: [],
+    nowMs: NOW
+  });
+  assert.equal(openCover.kept.length, 1, "an OPEN PR does not suppress a regression either");
+  assert.equal(openCover.regressionKept.length, 1, "…and it is reported");
+
+  // The flag is opt-in and strict: an ordinary row with the same key still suppresses normally, so
+  // this carve-out cannot become a blanket "never dedup anything".
+  const ordinary = partitionWorkOrdersByLoopPr(
+    [{ convId: KEY_CONV, dimension: "corpus_replay_judge_fail", tier: 1 }],
+    { openPrs: [], mergedPrs: coveringPrs, nowMs: NOW }
+  );
+  assert.equal(ordinary.kept.length, 0, "the same key WITHOUT the regression tag still suppresses");
+  assert.equal(ordinary.regressionKept.length, 0, "…and reports no regression");
+
+  const falsey = partitionWorkOrdersByLoopPr(
+    [{ convId: KEY_CONV, dimension: "corpus_replay_judge_fail", regressionOfDisposed: false }],
+    { openPrs: [], mergedPrs: coveringPrs, nowMs: NOW }
+  );
+  assert.equal(falsey.kept.length, 0, "regressionOfDisposed:false is not a carve-out");
+
+  // And the payload the digest reads carries it.
+  const out = applyLedgerToPayload(
+    { workOrders: [regressionRow], workOrderCount: 1, byTier: { "0": 0, "1": 1, "2": 0 }, byAction: {}, notifyCount: 0, stop: false },
+    { openPrs: [], mergedPrs: coveringPrs, nowMs: NOW }
+  );
+  assert.equal((out.payload as any).workOrderCount, 1, "the regression row stays in the filtered payload");
+  assert.equal((out.payload as any).regressionKeptCount, 1, "payload carries the regression-kept count");
+  assert.equal((out.payload as any).regressionKept[0].dimension, "corpus_replay_judge_fail", "…with the dimension for the digest line");
+  assert.equal((out.payload as any).suppressedByOpenPrCount, 0, "…and nothing was recorded as suppressed");
+}
+
 // --- ledger FILE payload (the gh-less box's substitute for live gh) ---
 {
   const { parseLoopPrLedgerPayload } = await import("../services/api/src/domain/loopPrDedup.ts");
@@ -152,4 +217,4 @@ assert.equal((allCovered.payload as any).stop, true, "all work orders covered �
   assert.ok(filtered && filtered.openPrs.length === 1 && filtered.mergedPrs.length === 0, "rows without a PR number are dropped; missing lists default empty");
 }
 
-console.log("PASS loop_pr_ledger_suppression eval — exact-key open/merged suppression + coverage cap on shared keys + fail-safe keeps + payload recompute + box ledger-file freshness guard");
+console.log("PASS loop_pr_ledger_suppression eval — exact-key open/merged suppression + coverage cap on shared keys + regression-of-disposed never suppressed + fail-safe keeps + payload recompute + box ledger-file freshness guard");
