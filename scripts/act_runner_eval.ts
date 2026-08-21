@@ -198,6 +198,33 @@ assert.match(src, /process\.exit\(3\)/, "a duplicate-skip uses a distinct exit c
     assert.ok(child.includes("never introduce again"), "C1.2a resolves to its own text");
     assert.ok(!child.includes("**C1.3**"), "the C1.2a excerpt stops before the next rule");
   }
+  // --- NOTIFY-AFTER MUST SURVIVE A MERGE THAT SUCCEEDED BUT EXITED NON-ZERO -------------------
+  // Measured 2026-08-21 on PR #785: `gh pr merge --squash --delete-branch` merged, then died on
+  // "fatal: 'main' is already used by worktree" — true of EVERY worktree-based routine run. The
+  // throw skipped the Tier-2a notify, so a charter-covered change reached main with Joe never told.
+  // Notify-after IS the delegation: a merge he is not told about is an unsupervised merge.
+  assert.ok(
+    src.includes('execFileSync("gh", ["pr", "view", url, "--json", "state", "--jq", ".state"]'),
+    "a failed merge asks GitHub what actually happened instead of trusting gh's exit code"
+  );
+  assert.ok(
+    src.includes('if (state !== "MERGED")'),
+    "…and only a genuinely unmerged PR escalates — a merged-then-crashed run still reaches the notify"
+  );
+  {
+    // The ORDER is the load-bearing part: the recovery must sit between the merge attempt and the
+    // notify, or the notify is still unreachable when gh throws.
+    const shipBlock = src.slice(src.indexOf("if (gate.ship) {"), src.indexOf("// Escalation: the gate held this"));
+    const iMerge = shipBlock.indexOf('["pr", "merge", "--squash"');
+    const iRecover = shipBlock.indexOf('if (state !== "MERGED")');
+    const iNotify = shipBlock.indexOf("if (charterCitation) {");
+    assert.ok(iMerge >= 0 && iRecover > iMerge, "the merge-outcome recheck comes after the merge attempt");
+    assert.ok(iNotify > iRecover, "the Tier-2a notify comes after the recheck — it must be reachable when gh throws");
+    assert.ok(
+      shipBlock.slice(iMerge, iRecover).includes("catch (err)"),
+      "the merge call is inside a catch — an uncaught throw is what skipped the notify"
+    );
+  }
   assert.ok(
     /\/\^## North star\\b\/\.test\(l\)/.test(src),
     "NS resolves against the charter's '## North star' section heading"

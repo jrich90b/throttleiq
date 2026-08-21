@@ -751,7 +751,42 @@ if (sub === "review") {
   }
 
   if (gate.ship) {
-    execFileSync("gh", ["pr", "merge", "--squash", "--delete-branch", url], { stdio: "inherit" });
+    // `gh pr merge` can MERGE and then still exit non-zero on its local housekeeping — measured
+    // 2026-08-21 on PR #785: the squash landed, then `--delete-branch` died with "fatal: 'main' is
+    // already used by worktree", which is true of every worktree-based routine run. The throw
+    // skipped the notify below, so a Tier-2a merge reached main with Joe never told. Notify-after IS
+    // the delegation: a merge he is not told about is an unsupervised merge. So ask GitHub what
+    // actually happened rather than trusting the exit code.
+    let mergeError: unknown = null;
+    try {
+      execFileSync("gh", ["pr", "merge", "--squash", "--delete-branch", url], { stdio: "inherit" });
+    } catch (err) {
+      mergeError = err;
+    }
+    if (mergeError) {
+      const state = (() => {
+        try {
+          return String(
+            execFileSync("gh", ["pr", "view", url, "--json", "state", "--jq", ".state"], {
+              encoding: "utf8",
+              stdio: ["ignore", "pipe", "ignore"]
+            })
+          ).trim();
+        } catch {
+          return "";
+        }
+      })();
+      if (state !== "MERGED") {
+        // Genuinely not merged. Fail loudly and escalate — never silently continue as if it shipped.
+        console.error(`\ngh pr merge FAILED and the PR is ${state || "in an unknown state"}: ${url}`);
+        await notifyOperator(
+          `agent-watch: a reviewed fix could NOT be merged — ${title}`,
+          `The cross-model gate approved this, but merging failed and the PR is ${state || "in an unknown state"}.\n\nPR: ${url}\n\nIt is reviewed and green; merge it yourself, or leave it for the next run.`
+        );
+        process.exit(1);
+      }
+      console.log(`gh exited non-zero AFTER a successful merge (local housekeeping only) — continuing.`);
+    }
     console.log(`MERGED (squash). Deploy next to take it live.`);
     // Tier-2a notify-AFTER (Joe, 2026-07-30): a charter-covered merge tells Joe what changed, in
     // plain English, with the citation and the revert path — he holds the veto, not the pen.
