@@ -198,5 +198,29 @@
       "day_contains": "tomorrow",
       "time_contains": "4:15"
     }
+  },
+  {
+    "id": "staff_confirms_time_day_from_context_long_message_1",
+    "text": "Ya 11 will work, see you then",
+    "history": [
+      {
+        "direction": "in",
+        "body": "good morning I'm off today I was wondering if I can come out this morning to test ride the 2021 again and just touch base with you. I did get my loan approved through USAA"
+      },
+      {
+        "direction": "out",
+        "body": "Hey Paul, what time are you thinking?"
+      },
+      {
+        "direction": "in",
+        "body": "i'm free until about one or 2 o'clock would 11 o'clock be OK?"
+      }
+    ],
+    "expected": {
+      "state": "confirmed_booking",
+      "explicit_state": true,
+      "day_contains": "today",
+      "time_contains": "11"
+    }
   }
 ]
