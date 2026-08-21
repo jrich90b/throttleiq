@@ -370,6 +370,23 @@ export function buildClaudeDraftReviewSystemPrompt(charterRules?: string | null)
     "Style, warmth, phrasing preferences: verdict \"ok\". When unsure: verdict \"ok\". A noisy rewriter",
     "is worse than a missed flaw.",
     "",
+    // Each line below is a live failure this reviewer produced when the thread it read carried
+    // neither dates nor attachments — see renderClaudeReviewThreadLine for the three instances.
+    "READING THE CONVERSATION — every line is stamped with WHEN it was sent and WHAT came with it:",
+    "- \"[sent N photo/file attachments]\" means the customer ALREADY SENT those files; they are in",
+    "  hand. Do not ask for them again, and do not confuse them with something merely offered. If",
+    "  they wrote \"I can fax copies if you'd prefer\" alongside them, that is an OFFER of an",
+    "  alternative, not a request to receive anything — the right reply accepts what arrived.",
+    "- A line reading \"(no text — attachment only)\" IS the customer's most recent message. A draft",
+    "  that responds to it lightly is fine; a draft that answers some EARLIER message instead is the",
+    "  error, not the other way round.",
+    "- Dates are real. \"3 days ago\" means three days ago. A day or time agreed earlier in the thread",
+    "  does NOT carry forward to today on its own: if the last word on an appointment was days back",
+    "  and nothing since re-confirmed it, a draft asserting it is happening \"today\" is CLEARLY WRONG,",
+    "  and so is stamping that draft ok. Treat a stale plan as something to re-confirm, never assert.",
+    "- Repetition across days is visible to you and to nobody else. A draft that re-asks a question",
+    "  the customer already answered, or restates a message we sent days ago, is CLEARLY WRONG.",
+    "",
     "When you rewrite:",
     "- NEVER drop a concrete fact the draft carried: appointment days and times, quoted prices,",
     "  stock numbers, names. Dropping a real time slot is a regression, not a fix.",
@@ -414,10 +431,105 @@ export function buildClaudeDraftReviewSystemPrompt(charterRules?: string | null)
 
 export type ClaudeDraftReviewVerdict = { verdict: "ok" | "rewrite"; reason: string; fixedDraft: string };
 
+/**
+ * One rendered line of the conversation the reviewer reads.
+ *
+ * WHY THIS EXISTS (measured 2026-08-21, three live instances in one day): the reviewer used to be
+ * handed `{direction, body}` and nothing else, so it judged drafts against a thread with the
+ * evidence removed — and rewrote with full confidence anyway. Three distinct defect classes came
+ * out of those two missing fields:
+ *   1. NO MEDIA ⇒ inbound photos are invisible. Louis Campbell (+18147069399) texted 4 photos of
+ *      his title paperwork with "he believed you needed these; if you would prefer copies and then
+ *      faxed to you i can do that also at work". With the attachments stripped, "these" has no
+ *      referent and the only concrete noun left is "faxed" — so the reviewer asked him for HIS fax
+ *      number, and the thumbs-down redraft then asked him to fax documents already in hand.
+ *   2. EMPTY-BODY MESSAGES DROPPED ⇒ a photo-only text vanishes from the thread entirely, and the
+ *      message BEFORE it reads as the newest customer turn. Paul (+17169467451) sent a GIF with no
+ *      text; the product draft correctly said "Haha, nice GIF!" and the reviewer REPLACED it with a
+ *      reply to a message from four days earlier. The safety net made a good draft worse.
+ *   3. NO TIMESTAMPS ⇒ the whole thread reads as if it happened moments ago, while `nowMs` IS
+ *      passed, so the reviewer confidently resolves an undated "about 3pm" to TODAY. William
+ *      Higgins (+17165233086): a 3pm agreed on 8/18 became "Still good for about 3pm today", and
+ *      the reviewer stamped it `ok` — "correctly confirms the agreed 3pm pickup time".
+ *
+ * FAIL DIRECTION: every field here is ADDITIVE CONTEXT. A missing/unparseable `at` renders no date
+ * rather than a wrong one, and a media-only row still renders its attachment count — the reviewer
+ * may end up knowing less, never something false.
+ */
+export interface ClaudeReviewThreadMessage {
+  direction: string;
+  body: string;
+  /** ISO timestamp of the message. Absent/unparseable ⇒ the line renders undated. */
+  at?: string | null;
+  /** Number of attachments the customer sent with it (`mediaUrls.length`). */
+  mediaCount?: number;
+}
+
+function describeReviewThreadAge(atMs: number, nowMs: number): string {
+  const dayMs = 24 * 60 * 60 * 1000;
+  // Calendar-day difference, not elapsed hours: "yesterday at 4pm" must not read as "today"
+  // because only 20 hours have passed. Staleness is what the reviewer has to judge.
+  const startOfDay = (ms: number) => {
+    const d = new Date(ms);
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  };
+  const days = Math.round((startOfDay(nowMs) - startOfDay(atMs)) / dayMs);
+  if (days <= 0) return "today";
+  if (days === 1) return "yesterday";
+  return `${days} days ago`;
+}
+
+/**
+ * Render ONE thread line for the reviewer: who spoke, WHEN, what they attached, what they said.
+ * Pure and exported so `claude_draft_review_context:eval` can pin it without an API key.
+ */
+export function renderClaudeReviewThreadLine(m: ClaudeReviewThreadMessage, nowMs: number): string {
+  const who = m.direction === "in" ? "CUSTOMER" : "DEALERSHIP";
+  const atMs = Date.parse(String(m.at ?? ""));
+  const when = Number.isFinite(atMs)
+    ? ` (${new Date(atMs).toLocaleString("en-US", {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit"
+      })}, ${describeReviewThreadAge(atMs, nowMs)})`
+    : "";
+  const count = Number(m.mediaCount ?? 0);
+  // Named explicitly so the reviewer cannot mistake an arrived attachment for one merely offered.
+  const media = Number.isFinite(count) && count > 0 ? ` [sent ${count} photo/file attachment${count === 1 ? "" : "s"}]` : "";
+  const body = String(m.body ?? "").slice(0, 500).trim();
+  // A media-only message has no words; without this it renders as a bare label and reads as noise.
+  const text = body || (media ? "(no text — attachment only)" : "");
+  return `${who}${when}${media}: ${text}`;
+}
+
+/**
+ * The thread rows worth showing the reviewer. Kept next to the renderer because the two decisions
+ * are one decision: a message counts as REAL if it carries words OR attachments (dropping
+ * attachment-only rows is defect #2 above), and stale drafts never count.
+ */
+export function selectClaudeReviewThreadMessages(
+  messages: unknown,
+  opts?: { excludeId?: string }
+): ClaudeReviewThreadMessage[] {
+  return (Array.isArray(messages) ? messages : [])
+    .filter((m: any) => m?.direction === "in" || m?.direction === "out")
+    .filter((m: any) => String(m?.body ?? "").trim() || (Array.isArray(m?.mediaUrls) && m.mediaUrls.length > 0))
+    .filter((m: any) => !(opts?.excludeId && m?.id === opts.excludeId))
+    .filter((m: any) => String(m?.draftStatus ?? "") !== "stale")
+    .map((m: any) => ({
+      direction: String(m.direction),
+      body: String(m.body ?? ""),
+      at: m?.at ?? null,
+      mediaCount: Array.isArray(m?.mediaUrls) ? m.mediaUrls.length : 0
+    }));
+}
+
 /** Ask Claude. Any failure — no key, timeout, malformed reply — reads as "ok" (keep the draft). */
 export async function reviewDraftWithClaude(args: {
   draftBody: string;
-  thread: Array<{ direction: string; body: string }>;
+  thread: ClaudeReviewThreadMessage[];
   leadLine: string;
   channel?: "sms" | "email";
   nowMs?: number;
@@ -430,9 +542,10 @@ export async function reviewDraftWithClaude(args: {
   // leaves the draft unstamped for the human backstop.
   if (claudeReviewBreakerIsOpen(args.nowMs ?? Date.now())) return keep;
   try {
+    const reviewNowMs = args.nowMs ?? Date.now();
     const thread = args.thread
       .slice(-14)
-      .map(m => `${m.direction === "in" ? "CUSTOMER" : "DEALERSHIP"}: ${String(m.body ?? "").slice(0, 500)}`)
+      .map(m => renderClaudeReviewThreadLine(m, reviewNowMs))
       .join("\n");
     const result = await anthropicMessagesRequest({
       apiKey,
@@ -528,10 +641,7 @@ export async function processClaudeDraftReview(deps: {
     ]
       .filter(Boolean)
       .join(" | ") || "unknown";
-    const thread = (Array.isArray(conv.messages) ? conv.messages : [])
-      .filter(m => (m.direction === "in" || m.direction === "out") && String(m.body ?? "").trim())
-      .filter(m => m.id !== draft.id && String((m as any).draftStatus ?? "") !== "stale")
-      .map(m => ({ direction: String(m.direction), body: String(m.body ?? "") }));
+    const thread = selectClaudeReviewThreadMessages(conv.messages, { excludeId: draft.id });
     const verdict = await reviewDraftWithClaude({ draftBody: String(draft.body ?? ""), thread, leadLine, nowMs });
     // Review UNAVAILABLE (API failure, no credits, malformed reply) ⇒ no stamp — the draft stays
     // eligible and is retried when the service recovers — and a DISTINCT outcome so a dead net is
@@ -592,10 +702,7 @@ export async function processClaudeDraftReview(deps: {
       .filter(Boolean)
       .join(" | ") || "unknown";
     // No draft row to exclude here — the email draft lives on the conversation, not in the thread.
-    const thread = (Array.isArray(conv.messages) ? conv.messages : [])
-      .filter(m => (m.direction === "in" || m.direction === "out") && String(m.body ?? "").trim())
-      .filter(m => String((m as any).draftStatus ?? "") !== "stale")
-      .map(m => ({ direction: String(m.direction), body: String(m.body ?? "") }));
+    const thread = selectClaudeReviewThreadMessages(conv.messages);
     const verdict = await reviewDraftWithClaude({ draftBody: draft, thread, leadLine, channel: "email", nowMs });
     if (verdict.reason === "review_unavailable") {
       deps.recordOutcome("claude_email_draft_review_unavailable", {
