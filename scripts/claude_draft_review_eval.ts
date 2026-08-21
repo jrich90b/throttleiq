@@ -33,7 +33,9 @@ import {
   emailDraftReviewHash,
   recordClaudeReviewSuccess,
   recordClaudeReviewTransportFailure,
+  renderClaudeReviewThreadLine,
   resetClaudeReviewBreaker,
+  selectClaudeReviewThreadMessages,
   selectDraftsForClaudeReview,
   selectEmailDraftsForClaudeReview
 } from "../services/api/src/domain/claudeDraftReview.ts";
@@ -425,10 +427,126 @@ for (const [label, c] of NO_REVIEW) {
   );
 }
 
+// --- The thread the reviewer actually READS (2026-08-21) --------------------------------------
+// Three live defects in one day, all from the same two lines: the reviewer was handed
+// {direction, body} and nothing else. Attachments were invisible, attachment-only messages were
+// DELETED from the thread, and with no dates a time agreed days ago read as today. It then rewrote
+// correct drafts and stamped ok on wrong ones — the safety net manufacturing defects. Pinned on the
+// real conversations, because a regression here is invisible by construction: it degrades a
+// JUDGEMENT, and every count downstream still looks perfectly normal.
+{
+  const REVIEW_NOW = Date.UTC(2026, 7, 21, 16, 0, 0); // Fri Aug 21 2026, noon ET
+  const day = (n: number) => new Date(REVIEW_NOW - n * 24 * 60 * 60 * 1000).toISOString();
+
+  // DEFECT 1 — Louis Campbell +18147069399: 4 photos of his title paperwork, plus a fax OFFER.
+  // Stripped of the attachments, "these" had no referent and "faxed" was the only concrete noun
+  // left, so the reviewer asked LOUIS for HIS fax number and the redraft then asked him to send
+  // documents already in hand.
+  const louis = selectClaudeReviewThreadMessages([
+    { direction: "out", body: "She does need pictures of the VIN.", at: day(4), id: "m1" },
+    {
+      direction: "in",
+      body: "Taking to Scott he said he believed you needed these. If you would prefer copies and then faxed to you i can do that also at work.",
+      at: day(0),
+      id: "m2",
+      mediaUrls: ["a.jpg", "b.jpg", "c.jpg", "d.jpg"]
+    }
+  ]);
+  assert.equal(louis.length, 2, "both messages survive selection");
+  assert.equal(louis[1].mediaCount, 4, "the four attachments reach the reviewer");
+  const louisLine = renderClaudeReviewThreadLine(louis[1], REVIEW_NOW);
+  assert.ok(
+    /\[sent 4 photo\/file attachments\]/.test(louisLine),
+    "the reviewer is told the documents ARRIVED — this is the whole fax defect"
+  );
+  assert.ok(louisLine.includes("faxed to you"), "the customer's own words are still carried verbatim");
+
+  // DEFECT 2 — Paul +17169467451: a GIF with NO text. The old filter dropped it outright, so a
+  // message from 4 days earlier read as the newest customer turn and the reviewer replaced a
+  // correct "Haha, nice GIF!" with a reply to that stale message.
+  const paul = selectClaudeReviewThreadMessages([
+    { direction: "in", body: "sounds great thanks again for everything I'll keep you posted when that loan check comes in!", at: day(4), id: "p1" },
+    { direction: "in", body: "", at: day(0), id: "p2", mediaUrls: ["gif.gif"] }
+  ]);
+  assert.equal(paul.length, 2, "an attachment-only message is NOT dropped — dropping it was the defect");
+  assert.equal(paul[1].mediaCount, 1, "and it is still the LAST turn in the thread");
+  const paulLine = renderClaudeReviewThreadLine(paul[1], REVIEW_NOW);
+  assert.ok(/\[sent 1 photo\/file attachment\]/.test(paulLine), "singular attachment reads naturally");
+  assert.ok(
+    paulLine.includes("(no text — attachment only)"),
+    "a wordless message renders as a real turn, not a blank line the model skims past"
+  );
+
+  // DEFECT 3 — William Higgins +17165233086: "about 3pm" agreed 3 days earlier became "3pm today",
+  // and the reviewer stamped it ok — "correctly confirms the agreed 3pm pickup time". nowMs was
+  // ALREADY passed in, so it knew today's date; it just could not date the THREAD. Ages are
+  // calendar-day differences, so "yesterday at 4pm" can never read as today.
+  const will = selectClaudeReviewThreadMessages([
+    { direction: "in", body: "I could get there about 3pm if that works", at: day(3), id: "w1" },
+    { direction: "out", body: "That should work!", at: day(3), id: "w2" }
+  ]);
+  const willLine = renderClaudeReviewThreadLine(will[0], REVIEW_NOW);
+  assert.ok(/3 days ago/.test(willLine), "a 3-day-old agreed time is dated as 3 days old, not as now");
+  assert.ok(/Aug 18/.test(willLine), "the actual calendar day is shown, so a named day can be checked");
+  assert.ok(
+    /today/.test(renderClaudeReviewThreadLine({ direction: "in", body: "on my way", at: day(0) }, REVIEW_NOW)),
+    "and a message from today still reads as today"
+  );
+
+  // FAIL DIRECTION: additive context only. A missing or unparseable timestamp renders NO date
+  // rather than a wrong one — the reviewer may know less, never something false.
+  assert.equal(
+    renderClaudeReviewThreadLine({ direction: "in", body: "hello" }, REVIEW_NOW),
+    "CUSTOMER: hello",
+    "no timestamp ⇒ no date invented"
+  );
+  assert.equal(
+    renderClaudeReviewThreadLine({ direction: "in", body: "hi", at: "not-a-date" }, REVIEW_NOW),
+    "CUSTOMER: hi",
+    "an unparseable timestamp is dropped, never guessed"
+  );
+  // Stale ghosts the customer never received must not become context.
+  assert.equal(
+    selectClaudeReviewThreadMessages([
+      { direction: "out", body: "ghost", at: day(1), id: "g1", draftStatus: "stale" },
+      { direction: "in", body: "real", at: day(0), id: "g2" }
+    ]).length,
+    1,
+    "stale draft ghosts are still excluded"
+  );
+  assert.equal(
+    selectClaudeReviewThreadMessages([{ direction: "out", body: "the draft", at: day(0), id: "d1" }], { excludeId: "d1" }).length,
+    0,
+    "the draft under review is excluded from its own context"
+  );
+
+  // BOTH lanes must use the shared selector — the email lane drifting back to a body-only filter
+  // would reopen every defect above on the channel nobody re-reads.
+  const ctxSrc = fs.readFileSync(path.join(process.cwd(), "services/api/src/domain/claudeDraftReview.ts"), "utf8");
+  const ctxProc = ctxSrc.slice(ctxSrc.indexOf("export async function processClaudeDraftReview"));
+  assert.equal(
+    (ctxProc.match(/selectClaudeReviewThreadMessages\(/g) ?? []).length,
+    2,
+    "SMS and EMAIL lanes both build their thread through the shared selector"
+  );
+  assert.ok(
+    !/body: String\(m\.body \?\? ""\) \}\)\)/.test(ctxProc),
+    "no lane hand-rolls the old body-only thread again"
+  );
+  // The prompt has to TELL the model what the annotations mean, or the added context is inert.
+  const ctxPrompt = buildClaudeDraftReviewSystemPrompt(null);
+  assert.ok(ctxPrompt.includes("ALREADY SENT"), "prompt: attachments are in hand, do not re-ask for them");
+  assert.ok(ctxPrompt.includes("attachment only"), "prompt: an attachment-only message IS the latest turn");
+  assert.ok(
+    ctxPrompt.includes("does NOT carry forward to today on its own"),
+    "prompt: a stale agreed time is re-confirmed, never asserted — and stamping it ok is itself wrong"
+  );
+}
+
 // --- Three-point lane registration (a task missing anywhere silently never runs) -------------
 assert.ok((WORKER_TICK_TASKS as readonly string[]).includes("claude-draft-review"), "registered tick task");
 assert.ok((WORKER_MINUTE_LANE_TASKS as readonly string[]).includes("claude-draft-review"), "on the API minute lane");
 const minuteSchedule = WORKER_SCHEDULES.find(s => s.cron === "* * * * *");
 assert.ok(minuteSchedule && minuteSchedule.tasks.includes("claude-draft-review"), "on the worker minute schedule");
 
-console.log("PASS claude_draft_review:eval — SMS selection table (4 review-cases incl. sold/closed + 9 holds + cap) + EMAIL selection table, executed loop guard + cross-channel guard, kill switch, prompt rules, work-order wiring, 3-point lane registration, breaker replayed over the real 2026-08-20 outage");
+console.log("PASS claude_draft_review:eval — SMS selection table (4 review-cases incl. sold/closed + 9 holds + cap) + EMAIL selection table, executed loop guard + cross-channel guard, kill switch, prompt rules, work-order wiring, 3-point lane registration, breaker replayed over the real 2026-08-20 outage, and the REVIEWED THREAD itself (Louis' 4 attachments, Paul's attachment-only turn, William's 3-day-old 3pm) with both lanes on the shared selector");
