@@ -38,6 +38,11 @@ export const MANUAL_OUTBOUND_APPOINTMENT_PROMPT_RULES: string[] = [
   // leaving it empty is a lost appointment, and the cost of guessing is a wrong-day appointment.
   "- If the staff message confirms a time but names no day, and the recent messages already settle which day it is (the customer said 'today', 'tomorrow', 'in 45 minutes', 'on my way', or named a weekday that is being confirmed), put that day in requested.day and start normalized_text with it.",
   "- Only carry a day the recent messages actually settle. If nothing in them names a day, leave requested.day empty rather than guessing.",
+  // The day can sit ANY number of turns back. Measured 2026-08-20: the parser returned day:null on
+  // ~1 run in 3 when the customer said "today" two turns earlier and the message in between only
+  // refined the TIME ("maybe around like 3:45 ish"). A later message that narrows the time does not
+  // unsettle the day — that is the same lost booking as #676, and it also made the gate a coin flip.
+  "- The day may have been settled SEVERAL messages back, not only in the message right before the staff reply. A later message that only narrows the TIME (for example \"maybe around 3:45 ish\") does not unsettle a day already agreed — keep carrying it.",
   "- normalized_text must include requested.day whenever requested.day is known.",
   "- confidence is 0 to 1."
 ];
@@ -56,7 +61,11 @@ export const MANUAL_OUTBOUND_APPOINTMENT_EXAMPLES: string[] = [
   'input: "Staff: Can you call me?" output: {"state":"none","explicit_state":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.95}',
   'input: "Recent messages:\\nin: Oh okay I get out at 3 joe I should be able to stop today\\nStaff: Ok sounds good John, see you around 3!" output: {"state":"confirmed_booking","explicit_state":true,"requested":{"day":"today","time_text":"around 3","time_window":"range"},"reference":"none","normalized_text":"today around 3","confidence":0.9}',
   'input: "Recent messages:\\nin: I will most likely be there around 10am tomorrow if thats ok?\\nStaff: I’ll see you at 10:00 Am. Text me if anything changes." output: {"state":"confirmed_booking","explicit_state":true,"requested":{"day":"tomorrow","time_text":"10:00 AM","time_window":"exact"},"reference":"none","normalized_text":"tomorrow 10:00 AM","confidence":0.92}',
-  'input: "Recent messages:\\nin: Do you have that Road Glide in stock?\\nStaff: Ok 3:45 works!" output: {"state":"confirmed_booking","explicit_state":true,"requested":{"day":"","time_text":"3:45","time_window":"exact"},"reference":"none","normalized_text":"3:45","confidence":0.85}'
+  'input: "Recent messages:\\nin: Do you have that Road Glide in stock?\\nStaff: Ok 3:45 works!" output: {"state":"confirmed_booking","explicit_state":true,"requested":{"day":"","time_text":"3:45","time_window":"exact"},"reference":"none","normalized_text":"3:45","confidence":0.85}',
+  // The day is TWO turns back and the message in between only narrows the time. Production shape
+  // behind the ~1-in-3 wobble measured 2026-08-20; surface deliberately differs from the eval
+  // fixture so the eval keeps testing the rule rather than this string.
+  'input: "Recent messages:\\nin: I can swing by after work today\\nout: Perfect, see you around 5\\nin: traffic is bad, more like 5:30 probably\\nStaff: 5:30 is fine, see you then" output: {"state":"confirmed_booking","explicit_state":true,"requested":{"day":"today","time_text":"5:30","time_window":"exact"},"reference":"none","normalized_text":"today 5:30","confidence":0.9}'
 ];
 
 type ManualOutboundRequestedFields = {

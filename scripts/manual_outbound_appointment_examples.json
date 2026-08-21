@@ -174,5 +174,29 @@
       "day_contains": null,
       "time_contains": "3:45"
     }
+  },
+  {
+    "id": "staff_confirms_time_day_settled_two_turns_back",
+    "text": "Sounds good, 4:15 it is",
+    "history": [
+      {
+        "direction": "in",
+        "body": "I get off early tomorrow so I can come by then"
+      },
+      {
+        "direction": "out",
+        "body": "Great, does 4 work for you?"
+      },
+      {
+        "direction": "in",
+        "body": "make it 4:15, I have to drop my kid off first"
+      }
+    ],
+    "expected": {
+      "state": "confirmed_booking",
+      "explicit_state": true,
+      "day_contains": "tomorrow",
+      "time_contains": "4:15"
+    }
   }
 ]
