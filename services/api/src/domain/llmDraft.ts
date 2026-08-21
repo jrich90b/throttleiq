@@ -9,6 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isParserFlagEnabled } from "./llmFlags.js";
 import { appendDraftPromptFingerprint, buildDraftPromptFingerprint } from "./draftPromptFingerprint.js";
+import { buildHumanThreadNudgePrompt } from "./humanThreadNudgePrompt.js";
 import { fileURLToPath } from "node:url";
 import OpenAI from "openai";
 import type { Conversation } from "./conversationStore.js";
@@ -869,32 +870,7 @@ export async function composeHumanThreadNudgeWithLLM(args: {
   if (recent.length === 0) return null;
   const firstName = String(args.firstName ?? "").trim();
   const model = process.env.OPENAI_MODEL || "gpt-5-mini";
-  const historyLines = recent.map(m => `${m.direction === "in" ? "Customer" : "Rep"}: ${String(m.body).replace(/\s+/g, " ").slice(0, 220)}`);
-  const prompt = [
-    "A dealership REP has been personally texting this customer. The customer went quiet a few days",
-    "ago. Write ONE short bump that CONTINUES the rep's own thread — it must read as the rep circling",
-    "back, picking up exactly where the conversation left off.",
-    "",
-    "HARD RULES:",
-    "- You ARE the rep continuing their own thread. NEVER introduce yourself, NEVER sign a name, no",
-    '  "this is X from the dealership", no persona switch.',
-    "- Anchor on where the conversation actually left off (the last thing discussed or sent).",
-    "- ZERO new facts: no prices, payments, availability, dates, appointment times, or specs the rep",
-    "  did not already state. A bump asks or offers — it never informs.",
-    "- Match the rep's own tone from the thread (casual, contractions). 1-2 short sentences, no",
-    '  exclamation-mark spam, no "just checking in!" filler phrasing, no "Reply STOP".',
-    firstName ? `- The customer's first name is ${firstName}; use it naturally or not at all.` : "- The customer's name is unknown — do not invent one.",
-    "",
-    "Examples:",
-    'thread ends: Rep sent a dyno sheet, customer said "Awesome" then went quiet -> {"nudge":"Any thoughts since you looked over that dyno sheet? Happy to dig up anything else on the Breakout."}',
-    'thread ends: Rep said the trike order timeline, customer went quiet -> {"nudge":"Wanted to circle back on the trike — still want me to keep that build moving for you?"}',
-    'thread ends: Customer asked about trade value, rep answered, quiet since -> {"nudge":"Been thinking it over? If the trade numbers helped, I can line up a time for you to swing in whenever works."}',
-    "",
-    "The thread (oldest first):",
-    ...historyLines,
-    "",
-    'Return only JSON: { "nudge": "<the SMS text>" }'
-  ].join("\n");
+  const prompt = buildHumanThreadNudgePrompt({ firstName, recentMessages: recent });
   try {
     const parsed = await requestStructuredJson({
       model,

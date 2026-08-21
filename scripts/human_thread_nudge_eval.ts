@@ -39,6 +39,7 @@ import {
   HUMAN_THREAD_NUDGE_MIN_ANCHOR_CHARS
 } from "../services/api/src/domain/humanThreadNudge.ts";
 import { isThreadParkedOnInventoryPromise } from "../services/api/src/domain/conversationStore.ts";
+import { buildHumanThreadNudgePrompt } from "../services/api/src/domain/humanThreadNudgePrompt.ts";
 import {
   isThreadParkedOnUpcomingClass,
   readEnrollmentClassStartMs
@@ -571,11 +572,43 @@ eq(
 
 const llm = fs.readFileSync(path.join(process.cwd(), "services/api/src/domain/llmDraft.ts"), "utf8");
 const compIdx = llm.indexOf("export async function composeHumanThreadNudgeWithLLM");
-const comp = compIdx >= 0 ? llm.slice(compIdx, compIdx + 4200) : "";
+// To the END of the function, not a magic character count: a fixed 4200-char window silently
+// stopped covering the tail of the prompt the moment the prompt grew (2026-08-21), so rules added
+// at the bottom read as absent and pins on rules already there started failing for no reason.
+const compEnd = llm.indexOf("\nexport ", compIdx + 1);
+const comp = compIdx >= 0 ? llm.slice(compIdx, compEnd > compIdx ? compEnd : undefined) : "";
 eq("composer_default_on_kill_switch_zero", /HUMAN_THREAD_NUDGE_ENABLED \?\? "1"/.test(comp), true);
-eq("composer_bans_persona_intro", /NEVER introduce yourself/.test(comp), true);
+const nudgePrompt = buildHumanThreadNudgePrompt({
+  firstName: "Michael",
+  recentMessages: [{ direction: "out", body: "As long as the credit application was submitted to HDFS withing 30 days I can submit an application without it being another hard inquiry" }]
+});
+eq("composer_advance_never_restate_rule", /ADVANCE, NEVER RESTATE/.test(nudgePrompt), true);
+eq("composer_carries_the_live_counter_example", /re-reads the rep/.test(nudgePrompt), true);
+// The other half of the same rule. "Never restate" over-applied would silence the threads where a
+// bump is MOST useful — chasing a document that never arrived (+17166090270, +17164728139) repeats
+// an ask by nature, and that is the lane working, not a defect.
+eq("composer_allows_chasing_an_unanswered_ask", /Chasing something we ASKED FOR is not restating/.test(nudgePrompt), true);
+eq("composer_carries_the_chase_example", /able to send it over/.test(nudgePrompt), true);
+// The prompt is a real string now, so the thread actually reaches the model.
+eq("composer_prompt_carries_the_thread", nudgePrompt.includes("another hard inquiry"), true);
+eq("composer_prompt_uses_first_name", nudgePrompt.includes("first name is Michael"), true);
+
+// The PROMPT rules moved to domain/humanThreadNudgePrompt.ts (2026-08-21) — assert the string the
+// model is actually handed. The runtime backstop that REJECTS a persona intro the model produced
+// anyway still lives in llmDraft.ts, so that one stays pinned to this file's source.
+eq("composer_bans_persona_intro", /NEVER introduce yourself/.test(nudgePrompt), true);
+eq("composer_zero_new_facts_rule", /ZERO new facts/.test(nudgePrompt), true);
 eq("composer_persona_backstop_regex", /this is\|my name is/.test(comp) || comp.includes("(this is|my name is|i'?m)"), true);
-eq("composer_zero_new_facts_rule", /ZERO new facts/.test(comp), true);
+
+// --- ADVANCE, NEVER RESTATE (Joe 2026-08-21) --------------------------------------------------
+// "The nudge really should not repeat what was already relayed to the customer." Michael Layman
+// +15856894382: Scott explained the HDFS 30-day / hard-inquiry rule on 8/18; the bump restated it
+// almost sentence for sentence on 8/21. The old prompt CAUSED it — "anchor on the last thing sent"
+// plus "zero new facts" left restating as the lowest-effort output satisfying both. Fixed where it
+// was caused (the composer), not with a lexical suppressor downstream: measured over all 29 live
+// nudge threads, word-overlap cannot separate re-explaining a policy (a defect) from chasing a
+// document we already asked for (the lane working) — +17166090270 and +17164728139 are chases and
+// would have been silently killed.
 
 if (failures.length) {
   console.error("FAIL human_thread_nudge eval:");
@@ -583,5 +616,5 @@ if (failures.length) {
   process.exit(1);
 }
 console.log(
-  "PASS human_thread_nudge eval — decision table incl. manual-handoff widening + Zackary/Spence production pins, env defaults (LIVE draft mode, kill switch =0; autosend dark), tick-lane + composer voice-continuity pins, restatement guard executed on the Warren/Igor pairs"
+  "PASS human_thread_nudge eval — decision table incl. manual-handoff widening + Zackary/Spence production pins, env defaults (LIVE draft mode, kill switch =0; autosend dark), tick-lane + composer voice-continuity pins, the ADVANCE-NEVER-RESTATE rule + its live counter-example (Joe 8/21, Michael Layman), restatement guard executed on the Warren/Igor pairs"
 );
