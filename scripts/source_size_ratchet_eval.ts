@@ -584,7 +584,13 @@ const CEILINGS: Ceiling[] = [
     // domain/bookingIntentParser.ts, the way its staff-side sibling already lives in
     // domain/manualOutboundAppointment.ts — the day-from-context rule is now written once per
     // parser, in a file an eval can import instead of a hand-copy that drifts.
-    max: 16_049,
+    // 16_049 -> 16_022. The quiet-thread nudge's prompt moved to domain/humanThreadNudgePrompt.ts.
+    // The trigger was Joe's 2026-08-21 report that a bump re-told the customer what the rep had
+    // already told him: the fix is a prompt rule, and adding it here breached this ceiling — which
+    // is the ratchet working. Extracting rather than raising also lets human_thread_nudge:eval
+    // assert the real prompt string instead of grepping a character-window of this file, a window
+    // that had already stopped covering the end of that prompt.
+    max: 16_022,
     note: "every parser prompt + JSON schema; second-largest and on the same trajectory"
   }
 ];
