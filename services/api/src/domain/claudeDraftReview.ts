@@ -22,7 +22,9 @@
  */
 import { createHash } from "node:crypto";
 
+import { enforceNoReintroduction, GENERIC_DEALER_DISPLAY_NAME } from "./agentVoice.js";
 import { anthropicMessagesRequest, extractAnthropicToolInput } from "./anthropicRequest.js";
+import { getCachedDealerProfile } from "./dealerProfile.js";
 import { addOpsAnomaly } from "./opsAnomalyStore.js";
 import { loadReviewRelevantCharterRules } from "./policyCharterFeed.js";
 import {
@@ -511,6 +513,10 @@ export async function processClaudeDraftReview(deps: {
 }): Promise<{ reviewed: number; rewritten: number; emailReviewed: number; emailRewritten: number }> {
   if (!claudeDraftReviewEnabled()) return { reviewed: 0, rewritten: 0, emailReviewed: 0, emailRewritten: 0 };
   const nowMs = deps.nowMs ?? Date.now();
+  // Charter C1.2a post-check (both lanes). A `rewrite` composes the whole reply as free text, so
+  // there is no builder to gate — and the lane never re-reads its own output, by design. Read once:
+  // the profile does not change inside a minute-lane pass.
+  const dealerName = String(getCachedDealerProfile()?.dealerName ?? "").trim() || GENERIC_DEALER_DISPLAY_NAME;
   const picks = selectDraftsForClaudeReview({ conversations: getAllConversations(), nowMs });
   let rewritten = 0;
   for (const { conv, draft } of picks) {
@@ -537,8 +543,9 @@ export async function processClaudeDraftReview(deps: {
       continue;
     }
     if (verdict.verdict === "rewrite") {
+      const fixedBody = enforceNoReintroduction({ body: verdict.fixedDraft, dealerName, messages: conv.messages });
       saveOperatorDraft(conv, {
-        body: verdict.fixedDraft,
+        body: fixedBody,
         channel: "sms",
         actor: { userName: "Claude review" }
       });
@@ -598,8 +605,9 @@ export async function processClaudeDraftReview(deps: {
     }
     let storedHash = hash;
     if (verdict.verdict === "rewrite") {
+      const fixedBody = enforceNoReintroduction({ body: verdict.fixedDraft, dealerName, messages: conv.messages });
       saveOperatorDraft(conv, {
-        body: verdict.fixedDraft,
+        body: fixedBody,
         channel: "email",
         actor: { userName: CLAUDE_REVIEW_ACTOR },
         // Never let an email fix reach across and discard a pending SMS draft (see the option docs).
@@ -608,7 +616,7 @@ export async function processClaudeDraftReview(deps: {
       // The receipt must record what is STORED NOW, not what we reviewed: `emailDraft` has no id, so
       // a stamp carrying the OLD hash would leave our own rewrite unstamped and the next tick would
       // review it, rewrite it, and do so again — one API call a minute, forever.
-      storedHash = emailDraftReviewHash(verdict.fixedDraft);
+      storedHash = emailDraftReviewHash(fixedBody);
       emailRewritten += 1;
       void addOpsAnomaly({
         type: "other",

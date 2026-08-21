@@ -141,6 +141,7 @@
     "compliance:eval",
     "stale_handoff_todo:eval",
     "agent_voice:eval",
+    "reviewer_reintroduction_guard:eval",
     "dealer_identity_fallback:eval",
     "cadence_template_voice:eval",
     "cadence_invite_ab:eval",

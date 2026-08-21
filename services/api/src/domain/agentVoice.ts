@@ -1036,6 +1036,113 @@ export function stripAgentIntroPhraseForDealer(body: string, dealerName: string)
 }
 
 /**
+ * Dealer-name spellings a reply may plausibly use for THIS dealer, longest first.
+ *
+ * Derived from the profile name, never hardcoded — a hardcoded spelling would be an AH literal
+ * against a portability ratchet that only goes DOWN. "American Harley-Davidson" also yields
+ * "American Harley" because that is exactly how the live rewrites shortened it
+ * ("it's Stone at American Harley!", +17167995566, 2026-08-18).
+ */
+function dealerNameAnchors(dealerName: string): string[] {
+  const dealer = String(dealerName ?? "").trim();
+  if (!dealer) return [];
+  const anchors = new Set<string>([dealer]);
+  const beforeHyphen = (dealer.split(/[-–—]/)[0] ?? "").trim();
+  if (beforeHyphen.length >= 4) anchors.add(beforeHyphen);
+  const words = dealer.split(/\s+/).filter(Boolean);
+  if (words.length > 2) anchors.add(words.slice(0, 2).join(" "));
+  return [...anchors].sort((a, b) => b.length - a.length);
+}
+
+/**
+ * Charter **C1.2a** as a deterministic POST-CHECK on FREE-COMPOSED reply text.
+ *
+ * ⭐ WHY THIS EXISTS, and why it is a post-check rather than another prompt instruction.
+ * C1.2a ("Once the customer has received ANY message from us on the thread, never introduce
+ * again") is enforced at the TEMPLATE builders by `buildDealerRideIdentitySentence` /
+ * `shouldIntroduceOnAdfTouch`. The Claude draft-review lane does not use a builder: a `rewrite`
+ * verdict composes the whole reply as free text, so it has no builder to gate — and it re-introduced
+ * even with C1.2a in the prompt in front of it (`REVIEW_RELEVANT_CHARTER_SECTIONS` carries C1),
+ * because the lane's own rewrite is never read again by the product (the loop-stop guard in
+ * claudeDraftReview.ts is correct and must stay). Charter-in-the-prompt is necessary but not
+ * sufficient; the identity sentence wants a check on the OUTPUT.
+ *
+ * MEASURED on the live americanharley store 2026-08-21: of 18 standing reviewer-authored drafts on
+ * threads that had already received a delivered outbound, **4 re-introduced** — 1 of 11 SMS
+ * (+17167995566 "Hey Heather, it's Stone at American Harley!") and 3 of 7 email (+13155211619,
+ * +17165350779, +14027703000). Every one is a pending draft a staff member could approve as-is.
+ *
+ * Reading OUR OWN generated draft to enforce an invariant is deterministic by design (AGENTS.md
+ * allows deterministic invariant guards); this never reads customer intent.
+ *
+ * FAIL DIRECTION, both ways safe:
+ * - The gate is `hasCustomerReceivedOutbound`, whose provider allowlist fails toward "not received"
+ *   ⇒ we leave the intro in place, which on a genuine first touch is exactly C1.2.
+ * - An unmatched shape leaves the body byte-identical, so a miss keeps today's behaviour.
+ * - A match that would leave nothing behind returns the body untouched: deleting a reply is worse
+ *   than an extra introduction.
+ *
+ * PUNCTUATION, and why it is done this way. Where the greeting and the introduction share a line,
+ * the identity clause's OWN terminator becomes the greeting's terminator ("Hey Heather, it's Stone
+ * at American Harley! Just following up" → "Hey Heather! Just following up"), so no capitalisation
+ * surgery is needed. Where the greeting sits on its own line (the email layout), the line break is
+ * preserved and only the remainder's first letter is capitalised. Capitalising is safe in a way
+ * lowercasing never is: the worst case is an over-formal word, whereas a lowercasing rule would
+ * eventually lowercase a person's name.
+ */
+export function stripReintroductionOpener(body: string, dealerName: string): string {
+  const text = String(body ?? "");
+  const anchors = dealerNameAnchors(dealerName);
+  if (!anchors.length || !text.trim()) return text;
+  const anchorAlt = anchors.map(a => a.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  const re = new RegExp(
+    "^\\s*" +
+      // Optional greeting: "Hey Heather, " / "Hi Rick — " / "Good morning Bryan: "
+      "(?:(?<greetCore>(?:hey|hi|hello|good\\s+(?:morning|afternoon|evening))(?:\\s+[^,\\n—–]{1,30}?)?)\\s*(?<greetPunct>[,.!:—–])(?<greetGap>\\s*))?" +
+      // The self-introduction itself, anchored on this dealer's name
+      "(?:it[’']s|this is|my name is)\\s+[^.!?\\n]{0,60}?\\s+(?:over\\s+at|at|from|with)\\s+" +
+      `(?:${anchorAlt})` +
+      // Anything trailing inside the same clause ("in Buffalo"), then its terminator
+      "[^.!?\\n—–]{0,24}?\\s*(?<endPunct>[.!?,]|—|–)\\s*",
+    "i"
+  );
+  const match = re.exec(text);
+  if (!match) return text;
+  const rest = text.slice(match[0].length);
+  if (!rest.trim()) return text;
+  const greetCore = match.groups?.greetCore ?? "";
+  if (!greetCore) return rest.trim();
+  const greetGap = match.groups?.greetGap ?? "";
+  if (greetGap.includes("\n")) {
+    // Email layout: the greeting owns its own line. Keep it, keep the break, capitalise what follows.
+    const body = rest.trim();
+    return `${greetCore}${match.groups?.greetPunct ?? ","}${greetGap}${body.charAt(0).toUpperCase()}${body.slice(1)}`;
+  }
+  const punct = match.groups?.endPunct ?? match.groups?.greetPunct ?? ",";
+  const joiner = punct === "—" || punct === "–" ? ` ${punct} ` : `${punct} `;
+  return `${greetCore}${joiner}${rest}`.trim();
+}
+
+/**
+ * The C1.2a gate itself: strip a re-introduction ONLY when the customer has already received a
+ * message from us on this thread. On a genuine first touch the intro is INTENDED (charter C1.2 —
+ * "keep it; don't dedupe it away"), so the body comes back byte-identical.
+ *
+ * Pure, and pinned by `reviewer_reintroduction_guard:eval`.
+ */
+export function enforceNoReintroduction(args: {
+  body: string;
+  dealerName: string;
+  messages:
+    | ReadonlyArray<{ direction?: string | null; provider?: string | null; delivered?: boolean | null } | null | undefined>
+    | null
+    | undefined;
+}): string {
+  if (!hasCustomerReceivedOutbound(args.messages)) return String(args.body ?? "");
+  return stripReintroductionOpener(args.body, args.dealerName);
+}
+
+/**
  * Price-objection reply: acknowledge + offer a cheaper-unit watch (Joe ruling 2026-07-23,
  * +17166021492 Brian Serena). When a customer objects to a price WE quoted, the answer is
  * never a sticker re-quote — it's a warm ack plus an offer to keep an eye out for the same

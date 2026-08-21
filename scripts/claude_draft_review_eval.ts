@@ -325,7 +325,17 @@ for (const [label, c] of NO_REVIEW) {
   const emailBlock = src.slice(src.indexOf("for (const { conv, draft, hash } of emailPicks)"), src.indexOf("(conv as any).claudeEmailDraftReview ="));
   assert.ok(emailBlock.includes("keepPendingDraftsOnOtherChannel: true"), "the email rewrite must not discard the other channel's draft");
   assert.ok(emailBlock.includes("addOpsAnomaly"), "an email rewrite files a work order too — the instance heal becomes a class investigation");
-  assert.ok(emailBlock.includes("emailDraftReviewHash(verdict.fixedDraft)"), "the receipt stamps the STORED text, not the reviewed text");
+  // The receipt must hash what is STORED. DERIVED, not spelled: this line used to pin
+  // `emailDraftReviewHash(verdict.fixedDraft)` literally, and that spelling went stale the moment
+  // the stored body became a guarded copy of the rewrite (the charter C1.2a post-check,
+  // `enforceNoReintroduction`). Whatever expression the lane SAVES as the body is the one it must
+  // hash — hashing anything else leaves our own rewrite unstamped and re-reviewed once a minute.
+  const savedEmailBody = /saveOperatorDraft\(conv, \{\s*body: ([A-Za-z0-9_.]+),/.exec(emailBlock)?.[1] ?? "";
+  assert.ok(savedEmailBody, "the email rewrite must save a body");
+  assert.ok(
+    emailBlock.includes(`emailDraftReviewHash(${savedEmailBody})`),
+    "the receipt stamps the STORED text, not the reviewed text"
+  );
 }
 
 // --- THE BREAKER (measured 2026-08-20: 587 doomed calls in one day) --------------------------
