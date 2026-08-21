@@ -152,9 +152,52 @@ assert.match(src, /process\.exit\(3\)/, "a duplicate-skip uses a distinct exit c
     "--charter accepts the literal NS alongside C<n>.<m> rule ids"
   );
   assert.ok(
-    /--charter must be a rule id like C3\.2, or NS for the North star/.test(src),
+    /--charter must be a rule id like C3\.2 or C1\.2a, or NS for the North star/.test(src),
     "a bogus citation still hard-errors, and the message names both accepted forms"
   );
+  // LETTERED SUB-RULES, executed against the real charter. C1.2a and C1.4a exist and were REJECTED by
+  // the id pattern, which pushed a change implementing one toward citing its parent — a stretched
+  // citation, the exact thing the Tier-2a bar refuses. C1.2 ("keep the intro") and C1.2a ("…but only
+  // on a first touch") are close to opposite, so the parent is not a safe stand-in for the child.
+  const ID_RE = /^C\d+\.\d+[a-z]?$/;
+  for (const id of ["C3.2", "C1.2", "C1.2a", "C1.4a"]) {
+    assert.ok(ID_RE.test(id), `${id} must be a citable rule id`);
+  }
+  for (const bogus of ["C1", "1.2a", "C1.2ab", "NS2", ""]) {
+    assert.equal(ID_RE.test(bogus), false, `"${bogus}" must not pass as a rule id`);
+  }
+  assert.ok(
+    /\/\^C\\d\+\\\.\\d\+\[a-z\]\?\$\//.test(src),
+    "the id pattern in act_runner.ts is the lettered one — a sub-rule must be citable in its own right"
+  );
+  // …and the EXCERPT terminator carries the letter too. This assertion is the WIRING half: the
+  // executed check below re-implements the cut, so on its own it stays green while act_runner's own
+  // terminator is reverted (measured — that sabotage passed until this line existed).
+  assert.ok(
+    src.includes("/^- \\*\\*C\\d+\\.\\d+[a-z]?\\*\\*/"),
+    "act_runner's excerpt terminator recognises a lettered bullet — else a parent citation swallows its child"
+  );
+  {
+    // The EXCERPT boundary, executed over the real charter: a parent's excerpt must STOP at its
+    // lettered child, or citing C1.2 quietly hands the reviewer C1.2a's text too and the citation
+    // reads wider than the rule cited.
+    const md = fs.readFileSync("docs/policy_charter.md", "utf8").split(/\r?\n/);
+    const cut = (id: string) => {
+      const start = md.findIndex(l => l.includes(`**${id}**`));
+      assert.ok(start >= 0, `${id} is still in the charter`);
+      const out = [md[start]];
+      for (let i = start + 1; i < md.length; i += 1) {
+        if (/^- \*\*C\d+\.\d+[a-z]?\*\*/.test(md[i]) || /^#{1,3} /.test(md[i]) || /^---/.test(md[i])) break;
+        out.push(md[i]);
+      }
+      return out.join("\n");
+    };
+    const parent = cut("C1.2");
+    const child = cut("C1.2a");
+    assert.ok(!parent.includes("C1.2a"), "the C1.2 excerpt must NOT swallow its lettered child");
+    assert.ok(child.includes("never introduce again"), "C1.2a resolves to its own text");
+    assert.ok(!child.includes("**C1.3**"), "the C1.2a excerpt stops before the next rule");
+  }
   assert.ok(
     /\/\^## North star\\b\/\.test\(l\)/.test(src),
     "NS resolves against the charter's '## North star' section heading"

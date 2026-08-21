@@ -618,8 +618,12 @@ if (sub === "review") {
   const charterCitation = (() => {
     if (!charterId) return null;
     const isNorthStar = charterId === "NS";
-    if (!isNorthStar && !/^C\d+\.\d+$/.test(charterId)) {
-      console.error(`--charter must be a rule id like C3.2, or NS for the North star (got "${charterId}")`);
+    // Lettered sub-rules are real and were uncitable: the charter carries C1.2a and C1.4a, and both
+    // were rejected here, which pushed a change that implements one toward citing its PARENT — a
+    // stretched citation, exactly what the Tier-2a bar exists to refuse. C1.2 ("keep the intro") and
+    // C1.2a ("…but only on a first touch") are close to opposite, so the parent is not a safe stand-in.
+    if (!isNorthStar && !/^C\d+\.\d+[a-z]?$/.test(charterId)) {
+      console.error(`--charter must be a rule id like C3.2 or C1.2a, or NS for the North star (got "${charterId}")`);
       process.exit(2);
     }
     const charterPath = "docs/policy_charter.md";
@@ -651,7 +655,9 @@ if (sub === "review") {
     const excerpt: string[] = [lines[start]];
     for (let i = start + 1; i < lines.length; i += 1) {
       const l = lines[i];
-      if (/^- \*\*C\d+\.\d+\*\*/.test(l) || /^#{1,3} /.test(l) || /^---/.test(l)) break;
+      // A lettered sub-rule ENDS the parent's excerpt too — without this, citing C1.2 quietly hands
+      // the reviewer C1.2a's text as well, so the citation reads wider than the rule being cited.
+      if (/^- \*\*C\d+\.\d+[a-z]?\*\*/.test(l) || /^#{1,3} /.test(l) || /^---/.test(l)) break;
       excerpt.push(l);
     }
     return { id: charterId, excerpt: excerpt.join("\n").trim() };

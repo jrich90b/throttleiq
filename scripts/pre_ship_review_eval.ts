@@ -155,7 +155,10 @@ noShip({ ...clean, lawOk: false }, true, "law violation (e.g. new free-text rege
   assert.match(s, /set charter_covered=false \(it is not being claimed\)/, "no citation => the model is told coverage is not claimed");
   const runner2 = fs.readFileSync("scripts/act_runner.ts", "utf8");
   assert.match(runner2, /requireCharterCovered: !!charterCitation/, "the runner requires coverage exactly when a citation is claimed");
-  assert.match(runner2, /\^C\\d\+\\\.\\d\+\$/, "charter ids are validated before use");
+  // Validated before use, and the pattern takes the optional LETTER: the charter carries C1.2a and
+  // C1.4a, and rejecting them pushed a change implementing one toward citing its parent — a
+  // stretched citation, which is what this whole gate exists to refuse.
+  assert.ok(runner2.includes("/^C\\d+\\.\\d+[a-z]?$/"), "charter ids are validated before use, lettered sub-rules included");
   assert.match(runner2, /loop merged a charter-covered change/, "a Tier-2a merge notifies Joe AFTER, by design");
   assert.match(runner2, /gh", \["pr", "comment"/, "notification has a durable PR-comment fallback (the 7/29 silent-skip gap)");
 }
