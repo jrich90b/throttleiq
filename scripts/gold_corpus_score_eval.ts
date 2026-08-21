@@ -16,13 +16,23 @@
  * real run is read by a human, `GOLD_SCORE_FLOOR` is absent and the ratchet is INERT while every
  * structural assertion below still runs. Set the floor once the first score is in hand, with
  * headroom for judge jitter (55-74% self-agreement), and raise it only deliberately.
+ *
+ * ⚠️ AND IT STAYS UNSET *HERE*, even now that Joe has set one (25, 2026-08-21). The floor is applied
+ * by the RELEASE GATE (`scripts/gold_score_gate.ts`), which runs where the score exists. THIS eval
+ * runs in `ci:eval` — every worktree, every fresh clone, every other actor — and its ratchet branch
+ * FAILS when a floor is set but no report is present. Defaulting it here would red-line the suite for
+ * people who never asked about agent quality. Section "the floor Joe set" below pins that split so a
+ * future tidy-up cannot quietly unify the two defaults.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { pairKey, splitFor } from "../services/api/src/domain/goldCorpusHarvest.js";
 import {
+  GOLD_SCORE_DEFAULT_FLOOR,
   buildGoldEquivalencePrompt,
   checkGoldScoreFloor,
   isGoldScoreStale,
@@ -218,6 +228,82 @@ if (FLOOR === null) {
     failures += 1;
     console.error(`  FAIL ratchet: ${verdict.reason}`);
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The floor Joe set — 25, 2026-08-21, against a measured 32.5% (and 29.1% on 08/04).
+//
+// Pinned as a DECISION, not a spelling: what matters is that the release gate enforces a positive
+// floor by default, that the in-suite ratchet does NOT, and that the escape hatches behave. The gate
+// script is EXECUTED against a synthetic report (trap 3: a source-text assertion cannot prove a
+// script still runs), with `generatedAt` built relative to now so it can never go red at midnight.
+// ---------------------------------------------------------------------------------------------
+{
+  assert.equal(GOLD_SCORE_DEFAULT_FLOOR, 25, "Joe's floor, 2026-08-21");
+  assert.ok(
+    GOLD_SCORE_DEFAULT_FLOOR > 0 && GOLD_SCORE_DEFAULT_FLOOR < 32.5,
+    "a floor at or above the live reading turns judge jitter into a coin flip on every release"
+  );
+
+  // The pure ratchet, at the real floor and the real reading.
+  assert.equal(checkGoldScoreFloor({ scored: 163, correct: 53, score: 32.5 } as any, GOLD_SCORE_DEFAULT_FLOOR, 20).ok, true, "today's 32.5% ships");
+  assert.equal(checkGoldScoreFloor({ scored: 163, correct: 41, score: 25 } as any, GOLD_SCORE_DEFAULT_FLOOR, 20).ok, true, "exactly at the floor ships");
+  assert.equal(checkGoldScoreFloor({ scored: 163, correct: 40, score: 24.9 } as any, GOLD_SCORE_DEFAULT_FLOOR, 20).ok, false, "a hair under does not");
+  assert.equal(checkGoldScoreFloor({ scored: 3, correct: 3, score: 100 } as any, GOLD_SCORE_DEFAULT_FLOOR, 20).ok, false, "a thin run is a broken run, not a 100%");
+
+  // THIS eval must not adopt the default — the whole point of the split.
+  const selfSrc = fs.readFileSync(fileURLToPath(import.meta.url), "utf8");
+  assert.ok(
+    selfSrc.includes("process.env.GOLD_SCORE_FLOOR ? Number(process.env.GOLD_SCORE_FLOOR) : null"),
+    "the in-suite ratchet must stay null-by-default or ci:eval breaks wherever no score report exists"
+  );
+
+  // WIRING: the gate reads the shared constant, and the release script pulls a fresh score first.
+  const gateSrc = fs.readFileSync(new URL("./gold_score_gate.ts", import.meta.url), "utf8");
+  assert.ok(gateSrc.includes("GOLD_SCORE_DEFAULT_FLOOR"), "the gate must use the shared floor, not a second copy of 25");
+  const shSrc = fs.readFileSync(new URL("./release_gate_full.sh", import.meta.url), "utf8");
+  const pullAt = shSrc.indexOf("gold_score_report.json");
+  const checkAt = shSrc.indexOf("gold_score_gate.ts");
+  assert.ok(pullAt > 0 && checkAt > 0 && pullAt < checkAt, "the release gate must pull the box's score BEFORE it checks the floor");
+
+  // EXECUTE the gate against a synthetic report dir.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "goldgate-"));
+  const dir = path.join(tmp, "gold_score");
+  fs.mkdirSync(dir, { recursive: true });
+  const writeReport = (score: number, ageHours: number) =>
+    fs.writeFileSync(
+      path.join(dir, "gold_score_report.json"),
+      JSON.stringify({
+        generatedAt: new Date(Date.now() - ageHours * 3_600_000).toISOString(),
+        summary: { scored: 163, correct: Math.round((score / 100) * 163), score }
+      })
+    );
+  const runGate = (env: Record<string, string>) => {
+    const r = spawnSync("npx", ["tsx", fileURLToPath(new URL("./gold_score_gate.ts", import.meta.url))], {
+      env: { ...process.env, GOLD_SCORE_DIR: dir, GOLD_SCORE_FLOOR: "", ...env },
+      encoding: "utf8"
+    });
+    return { code: r.status, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+  };
+
+  writeReport(32.5, 1);
+  assert.equal(runGate({}).code, 0, "a fresh 32.5% passes the gate with no env at all — the floor is LIVE, not inert");
+
+  writeReport(19.6, 1);
+  const low = runGate({});
+  assert.equal(low.code, 1, "a collapsed score STOPS the release");
+  assert.ok(low.out.includes("below the floor"), "…and says why");
+
+  writeReport(32.5, 100);
+  assert.equal(runGate({}).code, 1, "a stale score stops it too — freshness is the gate's own question");
+
+  writeReport(32.5, 1);
+  assert.equal(runGate({ GOLD_SCORE_FLOOR: "0" }).code, 0, "GOLD_SCORE_FLOOR=0 is the deliberate emergency escape hatch");
+  writeReport(19.6, 1);
+  assert.equal(runGate({ GOLD_SCORE_FLOOR: "0" }).code, 0, "…and it really does disable the floor, not just lower it");
+  assert.equal(runGate({ GOLD_SCORE_FLOOR: "abc" }).code, 1, "a junk floor is refused, never silently replaced by the default");
+  fs.rmSync(tmp, { recursive: true, force: true });
+  console.log(`  ok  floor: default ${GOLD_SCORE_DEFAULT_FLOOR}, enforced by the release gate, inert in ci:eval`);
 }
 
 if (failures) {

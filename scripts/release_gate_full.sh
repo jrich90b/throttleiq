@@ -14,7 +14,8 @@
 #   2. working tree clean and synced to origin/main
 #   3. tsc --noEmit
 #   4. the full ci:eval suite
-#   5. the GOLDEN CORPUS number: a FRESH score at or above the floor
+#   5. the GOLDEN CORPUS number: a FRESH score at or above the floor (25, Joe 2026-08-21) — pulled
+#      from the box first, because the scorer runs there and this gate runs here
 #   6. deploy (api, and web only when asked)
 # The freeze is released on EVERY exit path, including failure and Ctrl-C.
 #
@@ -91,6 +92,18 @@ step "Golden corpus — how good is the agent, not just what has not regressed"
 if [ "$SKIP_GOLD" = "1" ]; then
   echo "    !! SKIPPED by --skip-gold. This gate no longer says anything about agent QUALITY."
 else
+  # The scorer runs on the BOX (LLM calls, minutes, and it needs the live store); the gate runs HERE.
+  # Without this pull the gate reads whatever stale copy this clone happens to hold — on 2026-08-21
+  # that was a 17-day-old file, so the very first enforcing run would have failed on staleness and
+  # blocked every release. Best-effort on purpose: if the pull fails we fall through to the local
+  # copy and let the freshness check decide, which is the same fail-closed answer, just slower to read.
+  GOLD_REMOTE="lightsail:/home/ubuntu/leadrider-runtime/americanharley/reports/gold_score"
+  mkdir -p reports/gold_score
+  if scp -q "$GOLD_REMOTE/gold_score_report.json" "$GOLD_REMOTE/gold_score_summary.json" reports/gold_score/ 2>/dev/null; then
+    echo "    pulled the box's gold score"
+  else
+    echo "    !! could not pull the box's gold score — checking the local copy, which may be stale"
+  fi
   npx tsx scripts/gold_score_gate.ts || fail "golden-corpus check failed (see the reason above)"
 fi
 
