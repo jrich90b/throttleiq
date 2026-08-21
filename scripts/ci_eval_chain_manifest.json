@@ -416,6 +416,7 @@
     "stale_held_flag_heal:eval",
     "scheduling_leak:eval",
     "schedule_request_confirmed_appointment:eval",
+    "booking_task_calendar_close:eval",
     "scheduling_auto_book_on_confirm:eval",
     "scheduling_deferral_followup_task:eval",
     "appointment_status_stale_past_day:eval",

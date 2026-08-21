@@ -1016,7 +1016,8 @@ import {
   decideDepartmentTaskSoftClose,
   isDepartmentTaskSoftCloseEnabled,
   decideReplyOwedTaskClose,
-  outboundActivityText
+  outboundActivityText,
+  SCHEDULING_LEAK_TODO_MARKER
 } from "./domain/taskFulfillmentAutoClose.js";
 import { decideCalendarEventReconcile } from "./domain/appointmentCalendarSync.js";
 import {
@@ -14482,7 +14483,7 @@ async function runTaskFulfillmentAutoClose(
     const enabled = isTaskFulfillmentAutoCloseEnabled();
     for (const task of eligible) {
       const verdict = verdicts.find(v => v.taskId === task.id) ?? null;
-      const decision = decideTaskAutoClose({ enabled, eligible: true, verdict, task, dealerOutboundTrigger: isOutboundTrigger });
+      const decision = decideTaskAutoClose({ enabled, eligible: true, verdict, task, dealerOutboundTrigger: isOutboundTrigger, appointmentBooked: !!conv?.appointment?.bookedEventId });
       // Persist the verdict on the task so staff can see WHY it did/didn't auto-close.
       if (verdict) {
         setTodoAutoCloseCheck(conv.id, task.id, {
@@ -31489,7 +31490,6 @@ async function processDueFollowUpsUnlocked() {
   // went idle — the agent didn't offer times / confirm / book (Nicholas Braun, 2026-06-25: said he'd
   // come ~10, nothing scheduled). Surface ONE staff "book this visit" todo so it doesn't fall through.
   // Deduped via schedulingLeakFlaggedAt (re-flag after 3d) + only when there's no open todo; capped.
-  const SCHEDULING_LEAK_TODO_MARKER = "a time was discussed but nothing is booked";
   // Retire scheduling-leak todos that are no longer current leaks (booked, closed, or aged out of the
   // actionable window) — self-cleans the over-broad first batch and keeps the inbox accurate going
   // forward (e.g. once the visit is on the calendar, or the lead goes cold past the max-idle window).
