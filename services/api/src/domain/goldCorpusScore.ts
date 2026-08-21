@@ -159,6 +159,30 @@ export function summarizeGoldScore(items: ReadonlyArray<GoldItemVerdict>): GoldS
 }
 
 /**
+ * THE FLOOR — 25%. Joe, 2026-08-21, on a measured reading of 32.5%.
+ *
+ * The two scores that have ever existed: **29.1%** (34/117, 2026-08-04) and **32.5%** (53/163,
+ * 2026-08-21). Nothing else. So this number is not a target and must not be read as one — it is a
+ * COLLAPSE TRIPWIRE, deliberately ~7 points under the live reading.
+ *
+ * Why not closer to 32.5: the judge behind the score self-agrees only 55-74% of the time. Majority-
+ * of-3 damps that but does not remove it, and a floor set near the reading turns every release into
+ * a coin flip on judge noise — the failure mode SKILL trap 8 records, where an assertion sane at
+ * authorship red-lined main one run in three for everyone. A tripwire answers the only question a
+ * release gate can honestly ask of this instrument: *did the agent fall off a cliff since yesterday?*
+ *
+ * Raise it deliberately, from a run of readings, never as a side effect of one good week. Moving
+ * this number is a release-gate threshold — Joe's call, not the loop's.
+ *
+ * ⚠️ APPLIED BY THE RELEASE GATE ONLY (`scripts/gold_score_gate.ts`). `gold_corpus_score_eval.ts`
+ * runs inside `ci:eval` and keeps its `null` default ON PURPOSE: it FAILS when a floor is set but no
+ * score report exists, and a report only ever exists where the scorer has actually run. Giving the
+ * in-suite eval a default would red-line `ci:eval` in every worktree, every fresh clone and for every
+ * other actor — a quality gate that works by breaking for people who never asked about it.
+ */
+export const GOLD_SCORE_DEFAULT_FLOOR = 25;
+
+/**
  * The ratchet. A score below the floor FAILS; at or above it PASSES.
  *
  * `minScored` guards the degenerate case that has bitten every ratchet here at least once: a run

@@ -17,17 +17,26 @@
  *
  *   npx tsx scripts/gold_score_gate.ts     # exit 0 = ok to ship, exit 1 = stop
  *
- * Env: GOLD_SCORE_FLOOR (required to enforce), GOLD_SCORE_MIN_SCORED (default 20),
+ * Env: GOLD_SCORE_FLOOR (default GOLD_SCORE_DEFAULT_FLOOR = 25, Joe 2026-08-21; set it to 0 to
+ *      disable the floor in an emergency without editing code), GOLD_SCORE_MIN_SCORED (default 20),
  *      GOLD_SCORE_MAX_AGE_HOURS (default 48), REPORT_ROOT / GOLD_SCORE_DIR.
  */
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { checkGoldScoreFloor, isGoldScoreStale } from "../services/api/src/domain/goldCorpusScore.ts";
+import {
+  GOLD_SCORE_DEFAULT_FLOOR,
+  checkGoldScoreFloor,
+  isGoldScoreStale
+} from "../services/api/src/domain/goldCorpusScore.ts";
 
 const MAX_AGE_HOURS = Number(process.env.GOLD_SCORE_MAX_AGE_HOURS ?? 48);
 const MIN_SCORED = Number(process.env.GOLD_SCORE_MIN_SCORED ?? 20);
-const FLOOR = process.env.GOLD_SCORE_FLOOR ? Number(process.env.GOLD_SCORE_FLOOR) : null;
+// Joe set the floor on 2026-08-21, so the default is a NUMBER and this gate now enforces. The env
+// var still wins when present — including `GOLD_SCORE_FLOOR=0`, the no-code-change escape hatch for
+// an emergency ship. `""` is treated as absent, so an empty var cannot silently disable the gate.
+const FLOOR_RAW = String(process.env.GOLD_SCORE_FLOOR ?? "").trim();
+const FLOOR = FLOOR_RAW === "" ? GOLD_SCORE_DEFAULT_FLOOR : Number(FLOOR_RAW);
 
 function reportPath(): string {
   const dir =
@@ -39,12 +48,16 @@ function reportPath(): string {
 function main(): void {
   const file = reportPath();
 
-  if (FLOOR === null) {
-    // Unset floor is a real state, not an error: the corpus may still be too thin to ratchet on.
-    // Say so loudly rather than implying the gate checked something it did not.
-    console.log("    !! GOLD_SCORE_FLOOR is unset — the golden-corpus check is INERT.");
+  if (!Number.isFinite(FLOOR)) {
+    // Only reachable via a junk override (GOLD_SCORE_FLOOR=abc). Refuse rather than fall back to the
+    // default: someone meant to change the floor and got it wrong, and silently enforcing a different
+    // number than they asked for is worse than stopping. `=0` is finite and disables deliberately.
+    console.error(`    GOLD_SCORE_FLOOR="${FLOOR_RAW}" is not a number — refusing to guess which floor you meant.`);
+    process.exit(1);
+  }
+  if (FLOOR <= 0) {
+    console.log(`    !! GOLD_SCORE_FLOOR=${FLOOR} — the golden-corpus check is DISABLED for this run.`);
     console.log("       The gate proved regressions only; it says NOTHING about agent quality.");
-    console.log("       Set GOLD_SCORE_FLOOR once the corpus is thick enough to trust.");
     process.exit(0);
   }
 
