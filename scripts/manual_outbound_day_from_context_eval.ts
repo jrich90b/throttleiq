@@ -115,6 +115,52 @@ assert.ok(
   "and one must show a day-less confirmation staying day-less"
 );
 
+// ------------------------------------------------- the two rules the Paul Harrigan shape needed
+// +17169467451, 2026-08-17, operator-reported the same afternoon: "This did not seem to book an
+// appointment at 11 today". The day WAS settled ("I'm off today ... come out this morning"), so the
+// earlier day-from-context rule should have carried it. MEASURED n=12 against the pre-fix prompt:
+// state was confirmed_booking 12/12 but the day carried only 5/12 — the booking was a coin flip and
+// it lost. After these two rules and the matching few-shot: 12/12, and both day-less negatives held
+// at 6/6, which is the direction that matters (a carried wrong day books a wrong appointment).
+// The LLM half replays as fixture staff_confirms_time_day_from_context_long_message_1 in
+// manual_outbound_appointment:eval; these are the pins that fail WITHOUT an API call.
+assert.ok(
+  rules.includes("asking only WHAT TIME"),
+  "a staff 'what time?' question must be documented as not unsettling the day"
+);
+assert.ok(
+  rules.includes("inside a longer message about several topics"),
+  "a day word buried in a multi-topic message must still count as settling the day"
+);
+{
+  // The few-shot has to carry BOTH features at once, or it teaches neither: a what-time question
+  // between the day and the confirmation, AND the day inside a longer multi-topic message.
+  const combined = MANUAL_OUTBOUND_APPOINTMENT_EXAMPLES.filter(
+    ex =>
+      ex.includes("Recent messages") &&
+      ex.includes('"day":"today"') &&
+      /what time were you thinking/i.test(ex)
+  );
+  assert.equal(
+    combined.length,
+    1,
+    `exactly one few-shot must show a what-time question sitting between the settled day and the confirmation, found ${combined.length}`
+  );
+  const [example] = combined;
+  const prompt = String(example).split("output:")[0] ?? "";
+  const dayLine = prompt.split("\\n").find(l => /\bday off today\b|\btoday\b/i.test(l)) ?? "";
+  assert.ok(
+    dayLine.length > 90,
+    `the day in that few-shot must sit inside a LONG multi-topic message, not a bare one (length ${dayLine.length})`
+  );
+  // …and it must not simply restate the production thread, or the eval stops testing the rule and
+  // starts testing one string (the same reason the 2026-08-20 few-shot was written off-surface).
+  assert.ok(
+    !prompt.includes("test ride the 2021") && !prompt.includes("USAA"),
+    "the few-shot surface must differ from the production thread it was learned from"
+  );
+}
+
 // -------------------------------------------------------------------------------- still WIRED
 const llmDraftSource = await fs.readFile(
   path.resolve("services/api/src/domain/llmDraft.ts"),

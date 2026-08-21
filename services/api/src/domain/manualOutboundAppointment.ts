@@ -43,6 +43,13 @@ export const MANUAL_OUTBOUND_APPOINTMENT_PROMPT_RULES: string[] = [
   // refined the TIME ("maybe around like 3:45 ish"). A later message that narrows the time does not
   // unsettle the day — that is the same lost booking as #676, and it also made the gate a coin flip.
   "- The day may have been settled SEVERAL messages back, not only in the message right before the staff reply. A later message that only narrows the TIME (for example \"maybe around 3:45 ish\") does not unsettle a day already agreed — keep carrying it.",
+  // Paul Harrigan +17169467451, 2026-08-17, operator-reported ("This did not seem to book an
+  // appointment at 11 today"). Measured n=12 against the deployed prompt: state was confirmed_booking
+  // 12/12 but the day carried only 5/12 — the booking was a coin flip and it lost. Two things
+  // separate it from the rule above: the day sat inside a LONG message about several topics, and a
+  // staff "what time?" question came in between. Asking what TIME is never a re-opening of the DAY.
+  "- A staff question asking only WHAT TIME (for example \"what time are you thinking?\") does not unsettle the day. If the customer had already said which day, that day still stands after the question and must be carried.",
+  "- A day word counts even when it sits inside a longer message about several topics. A customer who writes \"I'm off today, can I come out this morning to ride the bike again, and my loan got approved\" has settled the day as today, exactly like a message that says nothing else.",
   "- normalized_text must include requested.day whenever requested.day is known.",
   "- confidence is 0 to 1."
 ];
@@ -65,7 +72,13 @@ export const MANUAL_OUTBOUND_APPOINTMENT_EXAMPLES: string[] = [
   // The day is TWO turns back and the message in between only narrows the time. Production shape
   // behind the ~1-in-3 wobble measured 2026-08-20; surface deliberately differs from the eval
   // fixture so the eval keeps testing the rule rather than this string.
-  'input: "Recent messages:\\nin: I can swing by after work today\\nout: Perfect, see you around 5\\nin: traffic is bad, more like 5:30 probably\\nStaff: 5:30 is fine, see you then" output: {"state":"confirmed_booking","explicit_state":true,"requested":{"day":"today","time_text":"5:30","time_window":"exact"},"reference":"none","normalized_text":"today 5:30","confidence":0.9}'
+  'input: "Recent messages:\\nin: I can swing by after work today\\nout: Perfect, see you around 5\\nin: traffic is bad, more like 5:30 probably\\nStaff: 5:30 is fine, see you then" output: {"state":"confirmed_booking","explicit_state":true,"requested":{"day":"today","time_text":"5:30","time_window":"exact"},"reference":"none","normalized_text":"today 5:30","confidence":0.9}',
+  // The day is buried in a LONG multi-topic message AND a staff "what time?" question sits between
+  // it and the confirmation — the Paul Harrigan shape (+17169467451, 2026-08-17). Surface
+  // deliberately differs from that thread's wording so the eval keeps testing the rule, not this
+  // string. Note the customer's turn also names an availability WINDOW before the actual ask, which
+  // is what the confirmation answers.
+  'input: "Recent messages:\\nin: morning! I have the day off today so I was hoping to swing in and take the Street Glide out again, plus my credit union came back approved\\nout: What time were you thinking?\\nin: I have to be somewhere by 2 — would 10:30 work?\\nStaff: 10:30 works, see you then" output: {"state":"confirmed_booking","explicit_state":true,"requested":{"day":"today","time_text":"10:30","time_window":"exact"},"reference":"none","normalized_text":"today 10:30","confidence":0.9}'
 ];
 
 type ManualOutboundRequestedFields = {
