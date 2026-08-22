@@ -434,6 +434,7 @@
     "appointment_outcome_rescheduled:eval",
     "appointment_request_task_class:eval",
     "resume_followup_cadence:eval",
+    "takeover_cadence_resume:eval",
     "cadence_hold_ttl:eval",
     "conversation_outcome_audit:eval",
     "stale_finding_suppression:eval",
