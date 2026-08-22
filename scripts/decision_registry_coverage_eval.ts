@@ -161,6 +161,14 @@ NOT_PROJECTABLE.decideProactiveCadenceValue =
 NOT_PROJECTABLE.decideAdfEmailMirror =
   "compares two mid-turn draft strings; neither is persisted, so there is nothing to project";
 
+// Ride-challenge wrap-up revive: the verdict is a function of WALL-CLOCK time against the event
+// window (dormant before it matters, revive inside event+grace, dormant again after) — two harness
+// runs straddling 9/15 would legitimately differ, which would make the harness untrustworthy rather
+// than more thorough. Its decision table (incl. the convergence guarantee) is pinned by
+// ride_challenge_event_cadence:eval, which executes it directly.
+NOT_PROJECTABLE.decideRideChallengeWrapUpRevive =
+  "verdict depends on wall-clock now vs the 9/15 event window — sampling it would make the harness non-deterministic; table pinned by ride_challenge_event_cadence:eval";
+
 // --- the check ---------------------------------------------------------------------------------
 
 const src = (() => {
