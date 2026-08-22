@@ -744,6 +744,7 @@ import {
   isUnitRecordOwnedByConversation
 } from "./domain/leadUnitAvailabilityDisclosure.js";
 import { buildLongTermTimelineMessage } from "./domain/longTermMessage.js";
+import { realignRideChallengeCadences, reviveRideChallengeWrapUps } from "./domain/rideChallengeCadence.js";
 import { sendEmail } from "./domain/emailSender.js";
 import {
   canApplyDispositionCloseout,
@@ -804,8 +805,6 @@ import {
   decideReservationHandoffTurn,
   decideEventPromoTurn,
   decideOwnerThreadStepBack,
-  resolveRideChallengeEventTouch,
-  decideRideChallengeWrapUpRevive,
   RIDE_CHALLENGE_WRAPUP_MARKER,
   decideInProcessDealTurn,
   decideIndefiniteDeferTurn,
@@ -31182,83 +31181,12 @@ async function processDueFollowUpsUnlocked() {
   if (notifySweep.backfilled.length > 0 || notifySweep.reDated.length > 0) {
     console.log(`[state-reconcile] arrival-notify: ${notifySweep.backfilled.length} backfilled, ${notifySweep.reDated.length} re-dated, ${notifySweep.dedup.length} deduped`);
   }
-  // Ride-challenge cadence realign heal (Joe ruling 2026-07-09, +15857657010): legacy ride-challenge
-  // leads classified BEFORE the 6/24 event_promo source inference (aec61b68) are still on an ACTIVE
-  // standard/long_term drip — their next proactive touch should be the challenge wrap-up (9/15/26),
-  // not a sales nudge. Realign any ACTIVE cadence whose next touch lands before the event date by
-  // pausing it until then. Idempotent (a paused cadence is no longer status "active"); only DELAYS
-  // touches, never sends or closes (fail-safe).
-  let rideChallengeRealigned = 0;
-  for (const conv of convs) {
-    const cad: any = conv.followUpCadence;
-    if (!cad || String(cad.status ?? "") !== "active") continue;
-    const touch = resolveRideChallengeEventTouch({
-      leadSource: conv.lead?.source ?? null,
-      classificationBucket: conv.classification?.bucket ?? null,
-      classificationCta: conv.classification?.cta ?? null,
-      nowMs: Date.now(),
-      followUpIso: process.env.RIDE_CHALLENGE_FOLLOWUP_ISO ?? null
-    });
-    if (!touch) continue;
-    const nextDueMs = Date.parse(String(cad.nextDueAt ?? ""));
-    if (Number.isFinite(nextDueMs) && nextDueMs >= Date.parse(touch.pauseUntilIso)) continue; // already at/after the event
-    pauseFollowUpCadence(conv, touch.pauseUntilIso, "event_date");
-    saveConversation(conv);
-    rideChallengeRealigned += 1;
-    recordRouteOutcome("manual", "ride_challenge_cadence_event_realign", {
-      convId: conv.id,
-      leadKey: conv.leadKey,
-      pausedUntil: touch.pauseUntilIso
-    });
-  }
-  if (rideChallengeRealigned > 0) {
-    console.log(
-      `[state-reconcile] realigned ${rideChallengeRealigned} ride-challenge cadence(s) to the event wrap-up date`
-    );
-  }
-  // Ride-challenge WRAP-UP revive (Joe ruling 2026-08-21: "generate a draft on the 15th").
-  // The signup ack COMPLETED these cadences on the spot (advanceFollowUpCadence's reminder
-  // short-circuit) and the tick skips completed — so without this the 9/15 wrap-up never
-  // composes for the parked signups. decideRideChallengeWrapUpRevive (routeStateReducer) owns
-  // the decision: one-way (owed = lastSentStep < 1, so a sent wrap-up can never re-fire),
-  // staggered over 3 days so the approval box is not flooded, bounded to event+7d. The revived
-  // cadence flows through the NORMAL tick → a suggest-mode draft; every existing gate applies.
-  let rideChallengeWrapUpsRevived = 0;
-  for (const conv of convs) {
-    const cad: any = conv.followUpCadence;
-    if (!cad) continue;
-    // Closed threads never fire the tick's touch (it stops/skips closed) — leave them dormant
-    // rather than parking a zombie "active" cadence on a closed conversation.
-    if (conv.status === "closed" || conv.closedAt) continue;
-    const revive = decideRideChallengeWrapUpRevive({
-      convId: conv.id,
-      cadenceStatus: cad.status,
-      cadenceKind: cad.kind,
-      deferredMessage: cad.deferredMessage,
-      lastSentStep: cad.lastSentStep,
-      nowMs: Date.now(),
-      followUpIso: process.env.RIDE_CHALLENGE_FOLLOWUP_ISO ?? null
-    });
-    if (!revive) continue;
-    cad.status = "active";
-    cad.stopReason = undefined;
-    cad.nextDueAt = revive.nextDueAtIso;
-    cad.pausedUntil = undefined;
-    cad.pauseReason = undefined;
-    conv.updatedAt = nowIso();
-    saveConversation(conv);
-    rideChallengeWrapUpsRevived += 1;
-    recordRouteOutcome("manual", "ride_challenge_wrapup_revived", {
-      convId: conv.id,
-      leadKey: conv.leadKey,
-      nextDueAt: revive.nextDueAtIso
-    });
-  }
-  if (rideChallengeWrapUpsRevived > 0) {
-    console.log(
-      `[state-reconcile] revived ${rideChallengeWrapUpsRevived} ride-challenge wrap-up cadence(s) for the event touch`
-    );
-  }
+  // Ride-challenge cadence heals — realign legacy drips to the event date (Joe 7/09) and revive
+  // parked signups for the 9/15 wrap-up draft (Joe 8/21). Bodies + rationale live in
+  // domain/rideChallengeCadence.ts; both pinned by ride_challenge_event_cadence:eval.
+  const rideChallengeFollowUpIso = process.env.RIDE_CHALLENGE_FOLLOWUP_ISO ?? null;
+  realignRideChallengeCadences(convs, rideChallengeFollowUpIso, recordRouteOutcome);
+  reviveRideChallengeWrapUps(convs, rideChallengeFollowUpIso, recordRouteOutcome);
   // Stale "needs reply" / held-flag heal: a conversation flagged "the AI couldn't answer this in
   // context" whose held marker outlived a real reply (a reply went out after the hold) should drop the
   // flag + close its todo (s R Gurajala, 2026-06-25 — a sent draft cleared via finalizeDraftAsSent but
@@ -32662,11 +32590,8 @@ async function processDueFollowUpsUnlocked() {
       ];
       message = smsTemplates[Math.min(cadence.stepIndex, smsTemplates.length - 1)];
     } else if (String(cadence.deferredMessage ?? "").trim() === RIDE_CHALLENGE_WRAPUP_MARKER) {
-      // Ride-challenge wrap-up (Joe ruling 2026-08-21): the ONE deferred event touch these
-      // cadences exist for — must win over the generic long_term nurture builder, or the
-      // revived record composes a sales check-in instead of the mileage ask. Deterministic
-      // template (workflowRegressionGuards); no re-intro (the signup ack already introduced).
-      // The email arm below reuses `message`, so both renderings carry the wrap-up.
+      // Ride-challenge wrap-up (Joe 8/21): must win over the generic long_term builder, or the
+      // revived record composes a sales check-in instead of the mileage ask. Email arm reuses it.
       message = buildRideChallengeWrapUpReply({ firstName });
       cadenceNoRepeatFallbacks = [message];
     } else if (cadence.kind === "long_term") {

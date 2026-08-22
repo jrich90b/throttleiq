@@ -90,9 +90,20 @@ assert.ok(
   "intake wiring sits on the not-closed arm of the event-promo close (sweepstakes still close)"
 );
 
+// Heal bodies were extracted to domain/rideChallengeCadence.ts (source-size ratchet); index.ts
+// keeps one wiring call per heal. Guard both halves.
 const apiIndex = fs.readFileSync(path.join(process.cwd(), "services/api/src/index.ts"), "utf8");
-const healStart = apiIndex.indexOf("let rideChallengeRealigned = 0");
-const healBlock = healStart >= 0 ? apiIndex.slice(healStart, healStart + 1600) : "";
+const healModule = fs.readFileSync(
+  path.join(process.cwd(), "services/api/src/domain/rideChallengeCadence.ts"),
+  "utf8"
+);
+assert.ok(
+  apiIndex.includes("realignRideChallengeCadences(convs, rideChallengeFollowUpIso, recordRouteOutcome)") &&
+    apiIndex.includes("reviveRideChallengeWrapUps(convs, rideChallengeFollowUpIso, recordRouteOutcome)"),
+  "state-reconcile calls BOTH ride-challenge heals (realign + wrap-up revive)"
+);
+const healStart = healModule.indexOf("export function realignRideChallengeCadences");
+const healBlock = healStart >= 0 ? healModule.slice(healStart, healStart + 1600) : "";
 assert.ok(
   healBlock.includes('String(cad.status ?? "") !== "active"') &&
     healBlock.includes('pauseFollowUpCadence(conv, touch.pauseUntilIso, "event_date")') &&
@@ -178,8 +189,8 @@ assert.ok(buildRideChallengeWrapUpReply({ firstName: null }).startsWith("Hi — 
 
 // ── wiring source-guards: heal + compose branch ──
 {
-  const reviveStart = apiIndex.indexOf("let rideChallengeWrapUpsRevived = 0");
-  const reviveBlock = reviveStart >= 0 ? apiIndex.slice(reviveStart, reviveStart + 1800) : "";
+  const reviveStart = healModule.indexOf("export function reviveRideChallengeWrapUps");
+  const reviveBlock = reviveStart >= 0 ? healModule.slice(reviveStart, reviveStart + 1800) : "";
   assert.ok(
     reviveBlock.includes("decideRideChallengeWrapUpRevive({") &&
       reviveBlock.includes('recordRouteOutcome("manual", "ride_challenge_wrapup_revived"') &&
