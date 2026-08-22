@@ -48,7 +48,13 @@ import {
 } from "../services/api/src/domain/dispositionLedger.ts";
 import { isReportGradeStale, refreshSupersededGrades } from "../services/api/src/domain/anomalyClassifier.ts";
 import { readLoopPrLedger } from "./loopPrLedger.ts";
-import { formatStaleDetectorFeedBanner, type DetectorFeedSource } from "./detectorFeedFreshness.ts";
+import {
+  formatStaleDetectorFeedBanner,
+  resolveCycleSpreadHours,
+  resolveStaleHours,
+  summarizeDetectorFeeds,
+  type DetectorFeedSource
+} from "./detectorFeedFreshness.ts";
 import {
   formatStaleWorkOrderBanner,
   formatUnknownFlagError,
@@ -212,15 +218,33 @@ function announceWorkOrderFeed(report: { payload: any }): void {
   else console.log(`feed: ${nextPath} (generated ${report?.payload?.generatedAt ?? "?"})`);
 }
 
+/**
+ * RE-DERIVE freshness at READ time rather than trusting the `stale` flag baked into the work order —
+ * the same reason `list` re-checks dispositions and the deployed commit instead of believing the
+ * feed. The baked flag is computed by `anomaly_loop_detect` at 08:55 UTC, five minutes after the
+ * sweeps it grades; on 2026-08-22 four sweeps had died in a deploy window and measured 24.05h at
+ * that instant, under the 26h bound, so the work order recorded `staleFeedCount: 0` and carried it
+ * for the rest of the day. Recomputing from each feed's stored `stampedAt` fixes both halves: a
+ * newer bound applies to an older feed, and the age is the age NOW, not the age at merge time.
+ */
 function warnIfDetectorFeedsStale(report: { payload: any }): void {
-  const sources: DetectorFeedSource[] = Array.isArray(report?.payload?.feedSources) ? report.payload.feedSources : [];
-  if (!sources.length) return; // a feed written before this provenance existed — nothing to claim
-  const banner = formatStaleDetectorFeedBanner({
-    sources,
-    staleSources: sources.filter(s => s?.stale),
-    oldestAgeHours: report?.payload?.oldestFeedAgeHours ?? null,
-    staleHours: report?.payload?.feedStaleHours ?? 26
-  });
+  const stored: DetectorFeedSource[] = Array.isArray(report?.payload?.feedSources) ? report.payload.feedSources : [];
+  if (!stored.length) return; // a feed written before this provenance existed — nothing to claim
+  const summary = summarizeDetectorFeeds(
+    stored.map(s => ({
+      name: s?.name,
+      file: s?.file,
+      present: Boolean(s?.present),
+      generatedAt: s?.stampedAt ?? null,
+      findings: s?.findings ?? null
+    })),
+    {
+      nowMs: Date.now(),
+      staleHours: resolveStaleHours(),
+      cycleSpreadHours: resolveCycleSpreadHours()
+    }
+  );
+  const banner = formatStaleDetectorFeedBanner(summary);
   if (banner) console.warn(banner);
 }
 
