@@ -640,6 +640,7 @@ import {
   humanThreadNudgeMaxCount,
   humanThreadNudgeSpacingDays,
   resolveHumanThreadNudgeComposeGate,
+  buildHumanThreadNudgeComposeArgs,
   isHumanThreadNudgeRestatement,
   selectHumanThreadNudgeThread,
   hasOpenFutureDatedTodo
@@ -31292,13 +31293,11 @@ async function processDueFollowUpsUnlocked() {
         continue;
       }
       nudgeCompositions += 1;
-      const nudgeText = await composeHumanThreadNudgeWithLLM({
-        firstName: conv.lead?.firstName,
-        recentMessages: nudgeAnchors.map((m: any) => ({
-          direction: m.direction === "in" ? ("in" as const) : ("out" as const),
-          body: String(m.body ?? "")
-        }))
-      });
+      // The anchor mapping lives in the domain module: it carries each row's `at`, without which
+      // a four-day thread read as one live exchange (+17165233086, "3pm today" three days late).
+      const nudgeText = await composeHumanThreadNudgeWithLLM(
+        buildHumanThreadNudgeComposeArgs({ firstName: conv.lead?.firstName, anchors: nudgeAnchors, nowMs: now.getTime() })
+      );
       if (!nudgeText) continue;
       // The composed text can name a date the anchors never did, so the same guard runs on it too.
       if (referencesPastDatedEvent([nudgeText], { nowMs: now.getTime() })) {

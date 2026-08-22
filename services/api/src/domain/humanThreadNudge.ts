@@ -32,6 +32,8 @@
  *   HUMAN_THREAD_NUDGE_AUTOSEND  (default OFF) — the zero-touch carve-out (skips the queue)
  */
 
+import type { HumanThreadNudgePromptArgs } from "./humanThreadNudgePrompt.js";
+
 export const HUMAN_THREAD_NUDGE_QUIET_DAYS_DEFAULT = 3;
 export const HUMAN_THREAD_NUDGE_MAX_COUNT_DEFAULT = 2;
 export const HUMAN_THREAD_NUDGE_SPACING_DAYS_DEFAULT = 5;
@@ -430,4 +432,26 @@ export function decideHumanThreadNudge(input: HumanThreadNudgeInput): HumanThrea
     }
   }
   return { nudge: true, quietDays: Math.floor(quietMs / DAY_MS) };
+}
+
+/**
+ * The anchors, shaped for the composer. This mapping lived inline in index.ts and is exactly where
+ * the +17165233086 defect came from: it had `at` on every row and dropped it, so a thread spanning
+ * four days reached the model as one continuous exchange and a Tuesday 3pm came back as "3pm
+ * today". Out here it is one testable place instead of a lambda buried 31,000 lines into index.ts.
+ */
+export function buildHumanThreadNudgeComposeArgs(args: {
+  firstName?: string | null;
+  anchors: { direction?: unknown; body?: unknown; at?: unknown }[];
+  nowMs: number;
+}): HumanThreadNudgePromptArgs {
+  return {
+    firstName: args.firstName ?? null,
+    recentMessages: (args.anchors ?? []).map(m => ({
+      direction: m.direction === "in" ? ("in" as const) : ("out" as const),
+      body: String(m.body ?? ""),
+      at: m.at == null ? null : String(m.at)
+    })),
+    nowMs: args.nowMs
+  };
 }

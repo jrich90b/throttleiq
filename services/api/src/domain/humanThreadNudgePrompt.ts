@@ -12,20 +12,58 @@
  * as a suggest-mode draft. `humanThreadNudge.ts` owns WHETHER to bump; this owns WHAT it says.
  */
 
+import { PAST_EVENT_GUARD_DEFAULT_TIMEZONE } from "./pastEventGuard.js";
+import { describeThreadLineAge, formatThreadLineStamp } from "./threadRecency.js";
+
 export interface HumanThreadNudgePromptArgs {
   firstName?: string | null;
   /** The last few DELIVERED thread messages, oldest first — already filtered and capped. */
-  recentMessages: { direction: "in" | "out"; body: string }[];
+  recentMessages: { direction: "in" | "out"; body: string; at?: string | null }[];
+  /** The instant the bump is being written. Absent ⇒ lines render undated (see the note below). */
+  nowMs?: number;
+  /** The dealership's zone. Defaults to the same constant the lane's past-event guard uses. */
+  timeZone?: string;
 }
 
 export function buildHumanThreadNudgePrompt(args: HumanThreadNudgePromptArgs): string {
   const firstName = String(args.firstName ?? "").trim();
-  const historyLines = (args.recentMessages ?? []).map(
-    m => `${m.direction === "in" ? "Customer" : "Rep"}: ${String(m.body).replace(/\s+/g, " ").slice(0, 220)}`
-  );
+  // MEASURED 2026-08-22 on William Higgins +17165233086. On 8/18 he said "I could get there about
+  // 3pm if that works" and Scott answered "That should work!". THREE DAYS LATER this lane drafted
+  // "Still good for about 3pm today, William — want me to hold it and have paperwork ready when you
+  // arrive?" — asserting a three-day-old time as if it were happening today, on a thread carrying
+  // NO appointment at all. Replayed against the real anchors, the undated prompt reproduced it
+  // 4 times in 6, once almost word for word.
+  //
+  // CAUSE: the call site had `at` on every anchor and mapped it away, so eight messages spanning
+  // four days rendered as one continuous exchange. Same defect the draft REVIEWER was fixed for on
+  // 8/21 (`7ef1cb29`) — and it bites harder here, because the nudge is the one composer that BY
+  // DEFINITION only ever fires after the thread has gone quiet for days.
+  const nowMs = Number(args.nowMs);
+  const datable = Number.isFinite(nowMs);
+  // The box runs UTC and the dealership does not, so an unzoned stamp is off by hours and can be
+  // off by a DAY. Same constant `referencesPastDatedEvent` uses on this lane's composed text.
+  const timeZone = String(args.timeZone ?? "").trim() || PAST_EVENT_GUARD_DEFAULT_TIMEZONE;
+  const historyLines = (args.recentMessages ?? []).map(m => {
+    const who = m.direction === "in" ? "Customer" : "Rep";
+    const when = datable ? formatThreadLineStamp(m.at, nowMs, timeZone) : "";
+    return `${who}${when}: ${String(m.body).replace(/\s+/g, " ").slice(0, 220)}`;
+  });
+  // How long the thread has actually been dead, stated as a number rather than "a few days". The
+  // stamps alone were measurably not enough: with per-line dates but this line still vague, the
+  // composer went on asserting "3pm today" in 2 of 6 replays. The gap has to be the first thing
+  // it reads, because the gap is the whole reason this lane exists.
+  const lastAtMs = (() => {
+    const stamps = (args.recentMessages ?? [])
+      .map(m => Date.parse(String(m.at ?? "")))
+      .filter(ms => Number.isFinite(ms));
+    return stamps.length ? Math.max(...stamps) : NaN;
+  })();
+  const gapDays = datable && Number.isFinite(lastAtMs) ? describeThreadLineAge(lastAtMs, nowMs, timeZone) : "";
   return [
-    "A dealership REP has been personally texting this customer. The customer went quiet a few days",
-    "ago. Write ONE short bump that CONTINUES the rep's own thread — it must read as the rep circling",
+    datable && gapDays
+      ? `A dealership REP has been personally texting this customer. NOTHING HAS BEEN SAID IN THIS THREAD SINCE ${gapDays.toUpperCase()} — the last line below is ${gapDays}, not a live exchange you are joining.`
+      : "A dealership REP has been personally texting this customer. The customer went quiet a few days ago.",
+    "Write ONE short bump that CONTINUES the rep's own thread — it must read as the rep circling",
     "back, picking up exactly where the conversation left off.",
     "",
     "HARD RULES:",
@@ -50,6 +88,20 @@ export function buildHumanThreadNudgePrompt(args: HumanThreadNudgePromptArgs): s
     '  "Did you want me to go ahead and get that application started?"',
     "- Chasing something we ASKED FOR is not restating: if the rep requested a document, a photo or a",
     "  number and it never arrived, asking for it again IS the bump's job. Keep it to the ask.",
+    // The rule below exists because "ZERO new facts" did NOT cover this. In the William Higgins
+    // failure the 3pm was genuinely in the thread — the model invented only the DAY, which no rule
+    // named. A stored time and a stored day are separable, and only the time was protected.
+    ...(datable
+      ? [
+          "- EVERY LINE BELOW IS STAMPED WITH WHEN IT WAS SENT, AND THE DATES ARE REAL. A day or time",
+          "  the thread agreed on days ago does NOT carry forward to today on its own. Never say a",
+          "  stored time is happening \"today\", \"still on\", or \"all set\" — that is a fact about TODAY",
+          "  that nobody stated, even when the time itself came from the thread. If a plan was left",
+          "  open days back, the bump RE-OPENS it (\"did you still want to come grab it this week?\"),",
+          "  it never asserts it. Do not name a specific day or time the customer has not confirmed",
+          "  since."
+        ]
+      : []),
     "- ZERO new facts: no prices, payments, availability, dates, appointment times, or specs the rep",
     "  did not already state. A bump asks or offers — it never informs. Between this rule and the one",
     "  above you add nothing new AND repeat nothing old, so the bump is almost entirely a QUESTION",
@@ -73,8 +125,16 @@ export function buildHumanThreadNudgePrompt(args: HumanThreadNudgePromptArgs): s
     // is most useful. This pair is the live +17164728139 exchange.
     "thread ends: Rep asked for the co-buyer's driver's licence number to run the approval, customer went quiet",
     '  -> RIGHT {"nudge":"Still need that licence number to run the approval — able to send it over?"} (asking again for something that never arrived is the job, not a restatement)',
+    // The real 8/21 failure, verbatim, for the same reason the restatement counter-example is here.
+    ...(datable
+      ? [
+          "thread ends: Customer said days ago he could get there about 3pm and the rep said that should work; quiet since, nothing booked",
+          '  -> WRONG {"nudge":"Still good for about 3pm today — want me to hold it and have paperwork ready when you arrive?"} (the 3pm was days ago; "today" is invented, and nothing was ever booked)',
+          '  -> RIGHT {"nudge":"Never did catch up with you on picking it up — what day works this week?"}'
+        ]
+      : []),
     "",
-    "The thread (oldest first):",
+    datable ? "The thread (oldest first, each line stamped with when it was sent):" : "The thread (oldest first):",
     ...historyLines,
     "",
     'Return only JSON: { "nudge": "<the SMS text>" }'

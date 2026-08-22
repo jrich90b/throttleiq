@@ -9,7 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isParserFlagEnabled } from "./llmFlags.js";
 import { appendDraftPromptFingerprint, buildDraftPromptFingerprint } from "./draftPromptFingerprint.js";
-import { buildHumanThreadNudgePrompt } from "./humanThreadNudgePrompt.js";
+import { buildHumanThreadNudgePrompt, type HumanThreadNudgePromptArgs } from "./humanThreadNudgePrompt.js";
 import { fileURLToPath } from "node:url";
 import OpenAI from "openai";
 import type { Conversation } from "./conversationStore.js";
@@ -856,11 +856,9 @@ const HUMAN_THREAD_NUDGE_JSON_SCHEMA: { [key: string]: unknown } = {
   }
 };
 
-export async function composeHumanThreadNudgeWithLLM(args: {
-  firstName?: string | null;
-  /** The last few DELIVERED thread messages, oldest first. */
-  recentMessages: { direction: "in" | "out"; body: string }[];
-}): Promise<string | null> {
+// Args ARE the prompt's args — one declaration, so a field can never be added to the prompt and
+// silently not plumbed through here (which is how `at` went missing in the first place).
+export async function composeHumanThreadNudgeWithLLM(args: HumanThreadNudgePromptArgs): Promise<string | null> {
   // Default ON (Joe ruling 2026-07-23: nudge LIVE in draft mode). Kill switch = set to 0.
   const enabled = String(process.env.HUMAN_THREAD_NUDGE_ENABLED ?? "1").trim().toLowerCase();
   if (enabled === "0" || enabled === "false" || enabled === "no") return null;
@@ -870,7 +868,7 @@ export async function composeHumanThreadNudgeWithLLM(args: {
   if (recent.length === 0) return null;
   const firstName = String(args.firstName ?? "").trim();
   const model = process.env.OPENAI_MODEL || "gpt-5-mini";
-  const prompt = buildHumanThreadNudgePrompt({ firstName, recentMessages: recent });
+  const prompt = buildHumanThreadNudgePrompt({ ...args, firstName, recentMessages: recent });
   try {
     const parsed = await requestStructuredJson({
       model,
