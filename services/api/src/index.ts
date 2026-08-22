@@ -1023,6 +1023,7 @@ import {
   isDepartmentTaskSoftCloseEnabled,
   decideReplyOwedTaskClose,
   outboundActivityText,
+  buildTaskFulfillmentActivityWindow,
   SCHEDULING_LEAK_TODO_MARKER
 } from "./domain/taskFulfillmentAutoClose.js";
 import { decideCalendarEventReconcile } from "./domain/appointmentCalendarSync.js";
@@ -14447,31 +14448,9 @@ async function runTaskFulfillmentAutoClose(
         })
     );
     if (!eligible.length) return;
-    const provChannel = (p: string): "sms" | "email" | "call" =>
-      p === "sendgrid" || p === "sendgrid_adf" ? "email" : p.startsWith("voice") ? "call" : "sms";
-    const activity = [...(conv.messages ?? [])]
-      .slice(-8)
-      .map((m: any) => ({
-        direction: (m?.direction === "in" ? "in" : "out") as "in" | "out",
-        channel: provChannel(String(m?.provider ?? "")),
-        // Outbound media-only messages carry no body — describe them, or the classifier concludes
-        // "no photos were delivered" while the salesman was staring at 3 sent pictures.
-        text:
-          m?.direction === "in"
-            ? String(m?.body ?? "")
-            : outboundActivityText(m?.body, Array.isArray(m?.mediaUrls) ? m.mediaUrls.length : 0)
-      }))
-      .filter(a => a.text.trim());
-    // For an OUTBOUND trigger (a staff/agent send), make sure that just-sent message is the final
-    // item even if message-append timing differs. For an INBOUND trigger (a customer closure like
-    // "I'm all set"), the window already ends with that inbound — do NOT push it as an out action;
-    // the classifier still requires a prior dealer OUT in the window to have fulfilled anything.
-    if (
-      (action.direction ?? "out") !== "in" &&
-      (!activity.length || activity[activity.length - 1].text.replace(/\s+/g, " ").trim() !== actionText)
-    ) {
-      activity.push({ direction: "out", channel: action.channel, text: actionText });
-    }
+    // Window + when it ends, together in domain/taskFulfillmentAutoClose.ts beside the guard that
+    // reads latestActivityAtMs (a task may not be closed by evidence older than itself).
+    const { activity, latestActivityAtMs } = buildTaskFulfillmentActivityWindow(conv.messages, action, actionText);
     const verdicts = await classifyTaskFulfillmentWithLLM({
       tasks: eligible.map(t => ({ id: t.id, reason: t.reason, summary: t.summary })),
       activity
@@ -14480,7 +14459,7 @@ async function runTaskFulfillmentAutoClose(
     const enabled = isTaskFulfillmentAutoCloseEnabled();
     for (const task of eligible) {
       const verdict = verdicts.find(v => v.taskId === task.id) ?? null;
-      const decision = decideTaskAutoClose({ enabled, eligible: true, verdict, task, dealerOutboundTrigger: isOutboundTrigger, appointmentBooked: !!conv?.appointment?.bookedEventId });
+      const decision = decideTaskAutoClose({ enabled, eligible: true, verdict, task, dealerOutboundTrigger: isOutboundTrigger, appointmentBooked: !!conv?.appointment?.bookedEventId, taskCreatedAtMs: Date.parse(String(task.createdAt ?? "")), latestActivityAtMs });
       // Persist the verdict on the task so staff can see WHY it did/didn't auto-close.
       if (verdict) {
         setTodoAutoCloseCheck(conv.id, task.id, {

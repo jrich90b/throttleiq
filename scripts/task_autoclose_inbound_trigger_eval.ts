@@ -17,6 +17,7 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { buildTaskFulfillmentActivityWindow } from "../services/api/src/domain/taskFulfillmentAutoClose.ts";
 
 const index = fs.readFileSync("services/api/src/index.ts", "utf8");
 
@@ -29,9 +30,24 @@ assert.ok(
   /direction\?:\s*"out"\s*\|\s*"in"/.test(index),
   "runTaskFulfillmentAutoClose must accept an inbound trigger (direction 'out' | 'in')"
 );
-assert.ok(
-  /\(action\.direction \?\? "out"\) !== "in"/.test(index),
+// 2026-08-22: the window builder moved verbatim from index.ts to domain/taskFulfillmentAutoClose.ts
+// so it sits beside decideTaskAutoClose's evidence-age guard, which is a statement about this
+// window. The rule below used to be a source pin on index.ts; it is now EXECUTED against the moved
+// function, which is a stronger assertion and cannot go stale on the next relocation.
+const inboundWindow = buildTaskFulfillmentActivityWindow(
+  [{ direction: "in", provider: "twilio", at: "2026-08-22T13:00:00.000Z", body: "Thanks. I was just curious." }],
+  { channel: "sms", text: "Thanks. I was just curious.", direction: "in" },
+  "Thanks. I was just curious."
+);
+assert.equal(
+  inboundWindow.activity.filter(a => a.direction === "out").length,
+  0,
   "the runner must NOT force-append the action as an out item for an inbound trigger"
+);
+assert.equal(
+  buildTaskFulfillmentActivityWindow([], { channel: "sms", text: "on the way" }, "on the way").activity.length,
+  1,
+  "…while an OUTBOUND trigger still ends the window with the just-sent message"
 );
 assert.ok(
   /runTaskFulfillmentAutoClose\(conv,\s*\{\s*channel:\s*"sms",\s*text:\s*event\.body[^}]*direction:\s*"in"/.test(
@@ -129,8 +145,15 @@ assert.ok(
   ),
   "a picture-only MMS must produce a non-empty action text so the run does not abort on an empty body"
 );
-assert.ok(
-  /outboundActivityText\(m\?\.body, Array\.isArray\(m\?\.mediaUrls\) \? m\.mediaUrls\.length : 0\)/.test(flat),
+// Also executed rather than pinned since the window moved (2026-08-22): a picture-only outbound must
+// survive the window's own empty-text filter.
+assert.equal(
+  buildTaskFulfillmentActivityWindow(
+    [{ direction: "out", provider: "twilio", at: "2026-08-22T13:00:00.000Z", body: "", mediaUrls: ["a", "b", "c"] }],
+    { channel: "sms", text: "", direction: "in" },
+    ""
+  ).activity[0]?.text,
+  "[dealer sent 3 photos (picture-only message, no text)]",
   "the activity window must describe outbound media so media-only sends are not filtered out as empty"
 );
 assert.ok(

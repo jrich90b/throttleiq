@@ -88,6 +88,39 @@ eq(scoped.find((c: any) => c.department === "parts").notifiedCount, 2, "recordin
 const again = bringInDepartment(invited.collaborators, { department: "parts", at: T2 });
 ok(!again.added, "re-inviting an ALREADY ACTIVE department is a no-op for the entry list");
 
+// ── TASK-AWARE IDEMPOTENCY (live defect, 2026-08-22 — Robert Guarino +17163164302) ───────────
+// The SAME lesson as delivery-aware idempotency above, on the other side effect. The fulfillment
+// judge closed Robert's Parts task 54 SECONDS after Joe filed it, and because an already-active
+// department reported a flat no-op, clicking "bring in Parts" again could never restore it — the
+// thread stayed invisible to Brandon with the invite still showing active. A task is not permanent
+// state either: key on the side effect that can DISAPPEAR.
+ok(invited.shouldFileTask, "a fresh invite files the department's task");
+const taskGone = bringInDepartment(delivered, { department: "parts", at: T2, hasOpenDepartmentTask: false });
+ok(!taskGone.added, "re-filing the task appends no second collaborator entry");
+ok(!taskGone.shouldNotify, "…and does not re-text a department that was already reached");
+ok(taskGone.shouldFileTask, "THE FIX: an invite whose task is GONE re-files it on the next click");
+
+const taskStillOpen = bringInDepartment(delivered, { department: "parts", at: T2, hasOpenDepartmentTask: true });
+ok(!taskStillOpen.shouldFileTask, "a live task is never duplicated by a repeat invite");
+ok(
+  !taskStillOpen.added && !taskStillOpen.shouldNotify && !taskStillOpen.shouldFileTask,
+  "all three side effects intact => the route's true no-op path"
+);
+
+// Unknown (the caller did not say) must behave as it did before this fix — never a duplicate task.
+const unknownTaskState = bringInDepartment(delivered, { department: "parts", at: T2 });
+ok(!unknownTaskState.shouldFileTask, "an unstated task state is treated as present, never duplicated");
+
+ok(
+  handBackDepartment(delivered, { department: "parts", at: T3 }) &&
+    bringInDepartment(handBackDepartment(delivered, { department: "parts", at: T3 }).collaborators, {
+      department: "parts",
+      at: T3,
+      hasOpenDepartmentTask: true
+    }).shouldFileTask,
+  "a re-invite after a hand-back files a task even if a stale one is somehow still open"
+);
+
 // A second, different department can sit in the thread at the same time.
 const two = bringInDepartment(invited.collaborators, { department: "service", at: T2 });
 ok(two.added, "a different department can also be brought in");
@@ -176,19 +209,32 @@ assert.match(
 );
 n++;
 
-// Wiring pin 2b: the endpoint must ACT on shouldNotify, not on `added` — the early return may only
-// fire when BOTH are false, and delivery must be recorded so a zero stays retryable.
+// Wiring pin 2b: the endpoint must ACT on shouldNotify and shouldFileTask, not on `added` — the
+// early return may only fire when ALL THREE are false, and delivery must be recorded so a zero stays
+// retryable. The third term arrived 2026-08-22 with Robert Guarino: `added` was false, the text had
+// been delivered, and the TASK had been auto-closed 54s earlier, so the old two-term guard returned
+// a no-op and there was no way back to a task.
 assert.match(
   bringInBody,
-  /if \(!result\.added && !result\.shouldNotify\)/,
-  "the no-op early return must require BOTH already-present AND already-delivered"
+  /if \(!result\.added && !result\.shouldNotify && !result\.shouldFileTask\)/,
+  "the no-op early return must require already-present AND already-delivered AND task-still-open"
+);
+assert.match(
+  bringInBody,
+  /if \(result\.shouldFileTask\)\s*\{\s*\n\s*addTodo\(/,
+  "the task is filed on the referee's answer, never on a second inline open-task scan"
+);
+assert.match(
+  bringInBody,
+  /hasOpenDepartmentTask/,
+  "…and the route must TELL the referee whether a task is open — it cannot see the todo store"
 );
 assert.match(
   bringInBody,
   /recordDepartmentNotification\(/,
   "the endpoint must record what delivery achieved, or a failed text is unretryable forever"
 );
-n += 2;
+n += 4;
 
 // Wiring pin 3: two-path parity. The fence has to reach the composer from BOTH the live webhook and
 // regenerate, or a regenerated draft would freelance on parts pricing where a live one would not.

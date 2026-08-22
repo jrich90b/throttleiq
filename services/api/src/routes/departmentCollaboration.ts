@@ -144,29 +144,31 @@ export function registerDepartmentCollaborationRoutes(app: Express, deps: Depart
     if (!department) return;
     const note = String(req.body?.note ?? "").trim().slice(0, 400);
 
+    const hasOpenDepartmentTask = listOpenTodos().some(t => t.convId === conv.id && t.reason === department);
     const result = bringInDepartment((conv as any).departmentCollaborators, {
       department,
       invitedByUserId: String(user?.id ?? "").trim() || null,
       invitedByName: String(user?.name ?? user?.email ?? "").trim() || null,
       note,
-      at: new Date().toISOString()
+      at: new Date().toISOString(),
+      hasOpenDepartmentTask
     });
-    // Already in the thread AND already reached somebody: a true no-op. Never a second task, never a
-    // duplicate text.
-    if (!result.added && !result.shouldNotify) {
+    // Already in the thread, already reached somebody, AND the task is still open: a true no-op.
+    // Never a second task beside a live one, never a duplicate text.
+    if (!result.added && !result.shouldNotify && !result.shouldFileTask) {
       deps.recordRouteOutcome("manual", "bring_in_department_already_active", { convId: conv.id, department });
       return res.json({ ok: true, added: false, retried: false, conversation: conv });
     }
-    // Falling through with `added === false` is the RETRY path: the department is already in the
-    // thread but the last attempt reached nobody, so the notification below is still owed. The
-    // collaborator entry and the task are already there and are deliberately left alone.
+    // Falling through with `added === false` is a RETRY path: the department is already in the thread
+    // but one of the two side effects that can go away on their own is owed again — a notification
+    // that reached nobody, or a task that no longer exists. Whichever is already there is left alone.
     (conv as any).departmentCollaborators = result.collaborators;
 
     // The department's route in is this task. `allowSoldLead` is REQUIRED: addTodo drops every
     // non-"call" task on a sold/post_sale lead, which is exactly the thread this feature exists for.
     // An explicit human invite is unambiguous intent, sold or not.
     const summary = note || `${department} request`;
-    if (!listOpenTodos().some(t => t.convId === conv.id && t.reason === department)) {
+    if (result.shouldFileTask) {
       addTodo(conv, department, summary, undefined, undefined, undefined, undefined, { allowSoldLead: true });
     }
     saveConversation(conv);
