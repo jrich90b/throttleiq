@@ -23,6 +23,11 @@ export interface HumanThreadNudgePromptArgs {
   nowMs?: number;
   /** The dealership's zone. Defaults to the same constant the lane's past-event guard uses. */
   timeZone?: string;
+  /**
+   * Set on the SECOND attempt only, naming the day reference the first attempt produced. The guard
+   * that rejected it is absolute, so the retry exists purely to save the touch rather than lose it.
+   */
+  retryAfterDayReference?: string;
 }
 
 export function buildHumanThreadNudgePrompt(args: HumanThreadNudgePromptArgs): string {
@@ -131,6 +136,17 @@ export function buildHumanThreadNudgePrompt(args: HumanThreadNudgePromptArgs): s
           "thread ends: Customer said days ago he could get there about 3pm and the rep said that should work; quiet since, nothing booked",
           '  -> WRONG {"nudge":"Still good for about 3pm today — want me to hold it and have paperwork ready when you arrive?"} (the 3pm was days ago; "today" is invented, and nothing was ever booked)',
           '  -> RIGHT {"nudge":"Never did catch up with you on picking it up — what day works this week?"}'
+        ]
+      : []),
+    // Shown only on the retry. The generic rule already failed once for this thread, so the retry
+    // names the exact word that was rejected instead of repeating the rule louder.
+    ...(args.retryAfterDayReference
+      ? [
+          "",
+          `RETRY — your previous attempt was REJECTED for naming a day (${args.retryAfterDayReference}).`,
+          "Nothing in this thread is booked. Write the bump again naming NO day at all: no",
+          '"today"/"tonight"/"tomorrow", no weekday, no date. Ask which day works instead of',
+          "supposing one. A bare time with no day is fine; a day is not."
         ]
       : []),
     "",

@@ -25,6 +25,12 @@
  *    number, and a stale plan may not be asserted as happening today. Wiring is counted at the one
  *    call site (`at` + `nowMs`), the recency helpers are executed, and the reviewer's rendered line
  *    is pinned unchanged across the extraction into threadRecency.ts.
+ * 6. THE DAY GUARD, which is what makes 5 complete. The prompt took "asserts a stale time as today"
+ *    from 8/12 to 3/12 and a prompt cannot be trusted for the last 25%, so the invariant is
+ *    enforced on the OUTPUT: this lane never fires on a booked appointment, therefore ANY day a
+ *    bump names is unfounded. nudgeNamesAnUnfoundedDay is validated against 24 REAL model outputs
+ *    from the 2026-08-22 replay, and resolveHumanThreadNudgeText (retry once, then suppress) is
+ *    executed. End-to-end on the live anchors, n=24: 24 shipped, 5 retried, 0 suppressed, 0 bad.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -42,6 +48,8 @@ import {
   hasOpenFutureDatedTodo,
   anchorsHaveSomethingToContinue,
   buildHumanThreadNudgeComposeArgs,
+  nudgeNamesAnUnfoundedDay,
+  resolveHumanThreadNudgeText,
   HUMAN_THREAD_NUDGE_MIN_ANCHOR_CHARS
 } from "../services/api/src/domain/humanThreadNudge.ts";
 import { isThreadParkedOnInventoryPromise } from "../services/api/src/domain/conversationStore.ts";
@@ -437,7 +445,7 @@ eq(
 const restateIdx = lane.indexOf("isHumanThreadNudgeRestatement({");
 const ledgerIdx = lane.indexOf("conv.humanThreadNudge = {");
 eq("lane_calls_the_restatement_guard", restateIdx > 0, true);
-eq("lane_checks_restatement_after_compose", restateIdx > lane.indexOf("await composeHumanThreadNudgeWithLLM("), true);
+eq("lane_checks_restatement_after_compose", restateIdx > lane.indexOf("await resolveHumanThreadNudgeText("), true);
 // NOT just "the write comes later in the file" — that stays true when an early `continue` skips it,
 // which is exactly the shape this pin was written to catch (it passed a sabotage that inserted one).
 // Nothing between the guard and the ledger may leave the iteration.
@@ -562,7 +570,7 @@ eq("undated_todo_ignored", hasOpenFutureDatedTodo([{ convId: "+1", dueAt: "" }],
 
 // (d) The loop itself cannot be invoked from here, so its ORDER is asserted against the bounded
 // lane. These are the three facts the incident turned on.
-const composeIdx = lane.indexOf("await composeHumanThreadNudgeWithLLM(");
+const composeIdx = lane.indexOf("await resolveHumanThreadNudgeText(");
 const counterIdx = lane.indexOf("nudgeCompositions += 1;");
 const gateIdx = lane.indexOf("resolveHumanThreadNudgeComposeGate({");
 eq("lane_composes", composeIdx > 0, true);
@@ -681,10 +689,19 @@ eq("compose_args_missing_at_is_null", buildHumanThreadNudgeComposeArgs({ anchors
 // The built args are what the lane actually hands the composer — one call site, no inline mapping.
 const nudgeComposeCalls = (lane.match(/composeHumanThreadNudgeWithLLM\(/g) ?? []).length;
 eq("nudge_compose_call_site_count", nudgeComposeCalls, 1);
-const composeArgs = lane.slice(lane.indexOf("composeHumanThreadNudgeWithLLM("), lane.indexOf("if (!nudgeText)"));
+const composeArgs = lane.slice(lane.indexOf("const nudgeArgs ="), lane.indexOf("const nudgeText = nudge.text;"));
 eq("nudge_lane_uses_the_builder", /buildHumanThreadNudgeComposeArgs\(\{/.test(composeArgs), true);
 eq("nudge_lane_passes_now", /\bnowMs:\s*now\.getTime\(\)/.test(composeArgs), true);
 eq("nudge_lane_maps_nothing_inline", /recentMessages:/.test(composeArgs), false);
+// The lane must route the composition THROUGH the resolver — calling the composer directly is how
+// both output invariants get bypassed, and it would look perfectly reasonable in review.
+eq("nudge_lane_goes_through_the_resolver", /await resolveHumanThreadNudgeText\(\{/.test(composeArgs), true);
+eq("nudge_lane_records_the_suppression_reason", /human_thread_nudge_\$\{nudge\.suppressedReason\}/.test(composeArgs), true);
+// The lane may only ADAPT the past-event predicate for the resolver, never branch on it itself:
+// one occurrence (the callback), and no `if (referencesPastDatedEvent(...))` statement left behind.
+// A guard duplicated in two places is a guard that will drift out of agreement with itself.
+eq("nudge_lane_only_adapts_the_past_event_predicate", (lane.match(/referencesPastDatedEvent\(/g) ?? []).length, 1);
+eq("nudge_lane_keeps_no_inline_past_event_branch", /if \(referencesPastDatedEvent\(/.test(lane), false);
 
 // 6. TIMEZONE. Measured on the box 2026-08-22: it runs UTC, the dealership does not. Host-local
 //    rendering stamps an 11:52 AM ET message as "3:52 PM" and, after 8pm ET, lands it on the WRONG
@@ -713,11 +730,120 @@ const reviewSrc = fs.readFileSync(path.join(process.cwd(), "services/api/src/dom
 eq("reviewer_uses_the_shared_stamp", /from "\.\/threadRecency\.js"/.test(reviewSrc), true);
 eq("reviewer_kept_no_private_age_helper", /function describeReviewThreadAge/.test(reviewSrc), false);
 
+// --- THE DAY GUARD: what makes the dated-thread fix COMPLETE ------------------------------------
+// The prompt above is a large improvement and not a cure: replayed on the real +17165233086
+// anchors, n=12/side, asserting a stale time as "today" went 8/12 -> 3/12. A prompt cannot be
+// relied on for the last 25%, so the invariant is enforced on the OUTPUT.
+//
+// WHY IT CAN BE ABSOLUTE: decideHumanThreadNudge refuses to fire when appointmentBookedEventId is
+// set ("appointment_booked", asserted in the decision table above). On every thread this lane
+// reaches there is therefore NO confirmed appointment, so any day a bump names is a day nobody
+// agreed to. No legitimate exception exists — which is what makes this an invariant rather than a
+// judgement, and deterministic rather than a parser question. Fail direction is silence, the
+// direction pastEventGuard.ts already declares for this lane.
+//
+// THE FIXTURE IS 24 REAL MODEL OUTPUTS, not invented strings — the exact replies gpt-5-mini
+// produced on the live anchors during the 2026-08-22 measurement (12 undated, 12 dated). Written
+// with plausible-looking invented wordings this guard would have "passed" and proved nothing.
+const NUDGE_OUTPUTS_UNDATED_RUN: [string, boolean][] = [
+  ["You still good for 3pm today to pick it up?", true],
+  ["Want me to hold it for you at 3pm or should I plan on you possibly coming a bit later if anything changes?", false],
+  ["Still good for about 3pm today to pick it up?", true],
+  ["You still good for 3pm today to pick it up?", true],
+  ["Still good for 3pm today to pick it up?", true],
+  ["Want me to hold it for 3pm\u2014need a quick confirmation so I don't promise it to someone else.", false],
+  ["Still good for 3pm today to pick it up?", true],
+  ["Still good for 3pm today to pick it up?", true],
+  ["You still planning to come by around 3pm to pick it up?", false],
+  ["Still good for about 3pm today to pick it up? Want me to hold it for you until then?", true],
+  ["Planning on the 3pm pickup then \u2014 want me to have the bike warmed up and paperwork ready when you arrive?", false],
+  ["You still good for 3pm to pick it up today?", true]
+];
+const NUDGE_OUTPUTS_DATED_RUN: [string, boolean][] = [
+  ["You still good to come by around 3pm? Want me to hold it and have the paperwork ready?", false],
+  ["You still good to come by around 3pm today to pick it up, or want to pick a different time?", true],
+  ["You still good for about 3pm\u2014want me to hold it and have the paperwork ready when you arrive?", false],
+  ["You still good for about 3pm \u2014 want me to have it warmed up and paperwork ready when you arrive?", false],
+  ["Still planning on coming around 3pm today to pick it up?", true],
+  ["You still good for about 3pm\u2014want me to mark it and have paperwork ready?", false],
+  ["Still good for about 3pm\u2014do you want me to hold the bike and have paperwork ready when you arrive?", false],
+  ["Want me to hold it for you for that 3pm window, or would you rather me open it up if your plans change?", false],
+  ["Still good for about 3pm \u2014 you planning to come by then or want me to hold it a different time?", false],
+  ["Want me to hold it for you around 3pm, or should I tee up another time that works better?", false],
+  ["You still planning to come by around 3pm today to pick it up, or want to pick a different time?", true],
+  ["You still good for about 3pm \u2014 want me to hold it and have paperwork ready when you arrive?", false]
+];
+for (const [label, rows] of [["undated", NUDGE_OUTPUTS_UNDATED_RUN], ["dated", NUDGE_OUTPUTS_DATED_RUN]] as [string, [string, boolean][]][]) {
+  rows.forEach(([text, shouldFlag], i) => {
+    eq(`day_guard_${label}_${i}`, nudgeNamesAnUnfoundedDay(text) !== null, shouldFlag);
+  });
+}
+// The measured rates the fix is claimed on, re-derived from the fixture rather than asserted from
+// memory. If either moves, the claim in the PR and the commit message is stale.
+eq("day_guard_catches_8_of_12_undated", NUDGE_OUTPUTS_UNDATED_RUN.filter(([t]) => nudgeNamesAnUnfoundedDay(t)).length, 8);
+eq("day_guard_catches_3_of_12_dated", NUDGE_OUTPUTS_DATED_RUN.filter(([t]) => nudgeNamesAnUnfoundedDay(t)).length, 3);
+
+// A bare clock time is NOT a day — flagging it would suppress the lane working, which is the exact
+// over-application that got the ADVANCE-NEVER-RESTATE lexical suppressor rejected.
+eq("day_guard_allows_a_bare_time", nudgeNamesAnUnfoundedDay("Still good for about 3pm to pick it up?"), null);
+// Every RIGHT example the prompt itself teaches must survive its own guard, including the one that
+// contains both "day" and "week" — an open horizon is the CORRECT bump, not a violation.
+for (const ok of [
+  "Any thoughts since you looked over that dyno sheet? Happy to dig up anything else on the Breakout.",
+  "Wanted to circle back on the trike \u2014 still want me to keep that build moving for you?",
+  "Been thinking it over? If the trade numbers helped, I can line up a time for you to swing in whenever works.",
+  "Still want me to get that application going on our end? Takes me two minutes if you are good with it.",
+  "Still need that licence number to run the approval \u2014 able to send it over?",
+  "Never did catch up with you on picking it up \u2014 what day works this week?"
+]) eq(`day_guard_allows_prompt_right_example_${ok.slice(0, 22)}`, nudgeNamesAnUnfoundedDay(ok), null);
+// ...and every shape that IS a day gets named, so the route outcome can say which.
+eq("day_guard_names_today", nudgeNamesAnUnfoundedDay("see you today"), "today");
+eq("day_guard_names_tomorrow", nudgeNamesAnUnfoundedDay("still on for tomorrow?"), "tomorrow");
+eq("day_guard_names_weekday", nudgeNamesAnUnfoundedDay("see you Saturday"), "weekday");
+eq("day_guard_names_this_afternoon", nudgeNamesAnUnfoundedDay("stopping by this afternoon?"), "this <part of day>");
+eq("day_guard_names_a_date", nudgeNamesAnUnfoundedDay("locked in for Aug 25"), "month + date");
+eq("day_guard_names_a_numeric_date", nudgeNamesAnUnfoundedDay("good for 8/25?"), "numeric date");
+eq("day_guard_names_an_ordinal", nudgeNamesAnUnfoundedDay("good for the 25th?"), "ordinal date");
+
+// --- THE RESOLVER: bad text NEVER ships, and one retry saves most of the touches ----------------
+// Executed, not source-pinned: the whole point is what comes out the far end.
+const noPast = () => false;
+const resolved1 = await resolveHumanThreadNudgeText({ compose: async () => "Still good for 3pm today?", referencesPastDatedEvent: noPast });
+eq("resolver_suppresses_when_both_attempts_name_a_day", resolved1, { text: null, suppressedReason: "day_reference_suppressed" });
+let calls = 0;
+const resolved2 = await resolveHumanThreadNudgeText({
+  compose: async retry => { calls++; return retry ? "What day works this week?" : "Still good for 3pm today?"; },
+  referencesPastDatedEvent: noPast
+});
+eq("resolver_retries_once_and_keeps_the_clean_retry", resolved2, { text: "What day works this week?", suppressedReason: null });
+eq("resolver_retried_exactly_once", calls, 2);
+// The retry must be TOLD what was rejected, or it is just a second roll of the same dice.
+let sawRetryArg: string | undefined;
+await resolveHumanThreadNudgeText({
+  compose: async retry => { sawRetryArg = retry; return retry ? "what day works?" : "see you Saturday"; },
+  referencesPastDatedEvent: noPast
+});
+eq("resolver_tells_the_retry_what_was_rejected", sawRetryArg, "weekday");
+// A clean first attempt costs exactly one call — no gratuitous second LLM round-trip.
+let cleanCalls = 0;
+const resolved3 = await resolveHumanThreadNudgeText({
+  compose: async () => { cleanCalls++; return "Any thoughts on that dyno sheet?"; },
+  referencesPastDatedEvent: noPast
+});
+eq("resolver_single_call_on_a_clean_first_attempt", [resolved3.text, cleanCalls], ["Any thoughts on that dyno sheet?", 1]);
+// The past-dated-event invariant moved in here from index.ts and must still bite, with its own reason.
+const resolved4 = await resolveHumanThreadNudgeText({ compose: async () => "see you at the party", referencesPastDatedEvent: () => true });
+eq("resolver_keeps_the_past_event_invariant", resolved4, { text: null, suppressedReason: "past_event_suppressed" });
+// The retry prompt names the rejected word rather than repeating the rule louder.
+const retryPrompt = buildHumanThreadNudgePrompt({ firstName: "William", recentMessages: willAnchors, nowMs: WILL_NOW_MS, retryAfterDayReference: "today" });
+eq("retry_prompt_names_the_rejected_reference", /RETRY \u2014 your previous attempt was REJECTED for naming a day \(today\)/.test(retryPrompt), true);
+eq("first_attempt_prompt_has_no_retry_block", /RETRY \u2014 your previous attempt/.test(datedPrompt), false);
+
 if (failures.length) {
   console.error("FAIL human_thread_nudge eval:");
   for (const f of failures) console.error(f);
   process.exit(1);
 }
 console.log(
-  "PASS human_thread_nudge eval — decision table incl. manual-handoff widening + Zackary/Spence production pins, env defaults (LIVE draft mode, kill switch =0; autosend dark), tick-lane + composer voice-continuity pins, the ADVANCE-NEVER-RESTATE rule + its live counter-example (Joe 8/21, Michael Layman), restatement guard executed on the Warren/Igor pairs, dated-thread stamps + zoned recency helpers + the William Higgins stale-plan rule and its call-site wiring"
+  "PASS human_thread_nudge eval — decision table incl. manual-handoff widening + Zackary/Spence production pins, env defaults (LIVE draft mode, kill switch =0; autosend dark), tick-lane + composer voice-continuity pins, the ADVANCE-NEVER-RESTATE rule + its live counter-example (Joe 8/21, Michael Layman), restatement guard executed on the Warren/Igor pairs, dated-thread stamps + zoned recency helpers + the William Higgins stale-plan rule and its call-site wiring, the day-reference invariant validated on 24 real model outputs, and the retry-then-suppress resolver executed"
 );
