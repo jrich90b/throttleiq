@@ -1039,6 +1039,41 @@ export function stripAgentIntroPhraseForDealer(body: string, dealerName: string)
 }
 
 /**
+ * The 24-hour appointment reminder, in both forms. Selected by
+ * `resolveAppointmentReminderVariant` (transitionSafety.ts) — see there for the measurement.
+ *
+ * `confirm_ask` is TODAY'S TEXT, byte for byte. It is unchanged on purpose: where we never got a
+ * confirmation we genuinely need an answer, and that is the one place a YES/NO earns its keep.
+ *
+ * `warm_note` is the new one, and every word of it is doing a job:
+ *  - it **asks for nothing**, so it cannot re-ask a question the customer already settled — the
+ *    exact offence in the "boomed him" report (Peter Meredith +17168303999: a machine demanding a
+ *    keystroke two days after he wrote "Sounds good see you Monday");
+ *  - it **names no rep**. Signing a name is a live open question for Joe (the thread's rep vs the
+ *    brand voice), and a reminder signed by the brand persona after a week of texting a named rep
+ *    would land badly.
+ *    Naming nobody is correct under either answer, so this ships without waiting on that ruling;
+ *  - it **does not introduce us** (charter C1.2a) — by 24 hours before a booked visit the customer
+ *    has certainly heard from us;
+ *  - it carries **no availability or price claim**, nothing the store has to be right about.
+ *
+ * Pure and pinned by `appointment_reminder_variant:eval`, so the copy is testable without a send.
+ */
+export function buildAppointmentReminderMessage(
+  variant: "confirm_ask" | "warm_note",
+  whenLocal: string,
+  firstName?: string | null
+): string {
+  const when = String(whenLocal ?? "").trim();
+  if (variant === "confirm_ask") {
+    return `Reminder: you\u2019re scheduled for ${when}. Please reply YES to confirm or NO to reschedule.`;
+  }
+  const name = normalizeGreetingNameCase(firstName);
+  const greeting = name ? `Hey ${name}, ` : "Hey there, ";
+  return `${greeting}just a heads up \u2014 see you ${when}. No need to reply; text me if anything changes.`;
+}
+
+/**
  * Dealer-name spellings a reply may plausibly use for THIS dealer, longest first.
  *
  * Derived from the profile name, never hardcoded — a hardcoded spelling would be an AH literal

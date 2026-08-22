@@ -184,6 +184,7 @@
     "pipeline_funnel:eval",
     "schedule_day_capture:eval",
     "appointment_date_year_guard:eval",
+    "appointment_reminder_variant:eval",
     "test_ride_day_reask:eval",
     "test_ride_preferred_date_reply:eval",
     "test_ride_stock_check_first:eval",

@@ -23,6 +23,42 @@ export function shouldSuppressAppointmentConfirmationReminder(args: {
   return args.acknowledged === true || args.humanMode === true;
 }
 
+/** Which 24h reminder a booking gets: the YES/NO ask, or a warm note that asks for nothing. */
+export type AppointmentReminderVariant = "confirm_ask" | "warm_note";
+
+/**
+ * WHICH reminder to send — as opposed to `shouldSuppressAppointmentConfirmationReminder`, which only
+ * ever answered WHETHER, because a YES/NO ask was the only thing the code could send.
+ *
+ * ⭐ WHY. Charter **C4.4** suppresses "the 24h **YES/NO** reminder" once acknowledged or on human
+ * threads. It scopes the suppression to the robotic FORM, not to the idea of reminding — and the
+ * warm form Joe described the same week ("warm confirm naming the day + agent", 7/19 rulings) was
+ * never built, so "suppress" was the only lever available.
+ *
+ * MEASURED on the live americanharley store 2026-08-21, and this is the number that decides it:
+ * **all six no-shows had `acknowledged === true`. Six for six.** Confirming in your own words is
+ * being read as "will attend", and on this store's own record it has never once predicted it — the
+ * population C4.4 silences is exactly the population that forgets. Separately, the last customer
+ * reminder of any kind went out **2026-07-19**, the day before the ruling, and 0 of 72 booked
+ * appointments are eligible today.
+ *
+ * The variants:
+ *  - `confirm_ask` — no confirmation was ever given, so we genuinely need an answer. Unchanged.
+ *  - `warm_note` — they already told us they are coming. **Asks for nothing**, so it cannot re-ask a
+ *    settled question — which is exactly what "boomed" Peter Meredith (+17168303999): a machine
+ *    demanding a keystroke two days after he wrote "Sounds good see you Monday".
+ *
+ * Fail direction: the no-reply form is the safe one — its worst case is a customer reading one
+ * friendly sentence, against a measured 11% no-show rate. Nothing here reads customer text; it is a
+ * decision over flags we set ourselves. Pinned by appointment_reminder_variant:eval.
+ */
+export function resolveAppointmentReminderVariant(args: {
+  acknowledged?: boolean | null;
+  humanMode?: boolean | null;
+}): AppointmentReminderVariant {
+  return shouldSuppressAppointmentConfirmationReminder(args) ? "warm_note" : "confirm_ask";
+}
+
 export function isLogisticsProgressUpdateText(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;

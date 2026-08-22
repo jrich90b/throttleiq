@@ -523,7 +523,11 @@ const CEILINGS: Ceiling[] = [
     // was correct when measured and wrong an hour later. Re-derive against CURRENT main immediately
     // before merging — never carry a ceiling computed against the base you branched from (the #418
     // trap), and do not assume the ceiling you rebased onto is even green.
-    max: 69_976,
+    // 69_976 -> 69_973. The warm appointment reminder (Joe ruled 2026-08-22, charter C4.4). The
+    // variant decision and both copies live in domain/agentVoice.ts + transitionSafety.ts, so
+    // index.ts swaps an inline reminder string for one builder call and comes out 3 lines lighter.
+    // Authored against da537379 as 70_023 -> 70_020; re-derived here against a5d38654.
+    max: 69_973,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
