@@ -162,4 +162,57 @@ for (const [text, month, day, hour] of productionTurns) {
   n += 1;
 }
 
+{
+  // --- A CLOCK RANGE IS NOT A DATE, AND A NAMED DAY OUTRANKS IT -----------------------------
+  // Sibling of the bug above (a clock HOUR read as a year); here a clock RANGE is read as a DATE.
+  //
+  // Louis Campbell +18147069399, 2026-08-14. Staff: "What time do you figure you will be here?"
+  // Louis: "Around 9-9:30". Staff: "Ok sounds good, see you then". The booking landed on
+  // **Wed, Sep 9, 9:30 AM** — a real Google Calendar event 26 days out — because "9-9" matched
+  // parseExplicitDate as month 9 / day 9, and parseRequestedDayTime returns the explicit-date
+  // branch BEFORE the day-token branch. He came in the next morning and bought the bike.
+  //
+  // Measured on the pre-fix build: "tomorrow 9-9:30", "today 9-9:30" and "Monday 9-9:30" ALL
+  // resolved to Sep 9 — a day named out loud, silently discarded. That override is the dangerous
+  // half, so it is pinned first.
+  const REF = new Date("2026-08-14T21:58:34.325Z"); // the instant Louis's booking was made
+  const at = (text: string) => {
+    const r = parseRequestedDayTime(text, TZ, REF);
+    return r ? `${String(r.month).padStart(2, "0")}/${String(r.day).padStart(2, "0")} ${r.hour24}:${String(r.minute).padStart(2, "0")}` : null;
+  };
+
+  // 1. The named day WINS over a clock range. Louis's own turn is the first row.
+  assert.equal(at("tomorrow 9-9:30"), "08/15 9:30", "Louis: the day he was given, not September");
+  assert.equal(at("today 9-9:30"), "08/14 9:30", "'today' outranks a clock range");
+  assert.equal(at("Monday 9-9:30"), "08/17 9:30", "a weekday outranks a clock range");
+  assert.equal(at("tomorrow 10-10:30"), "08/15 10:30", "…and it is not special-cased to 9");
+  assert.equal(at("tomorrow 2-2:30"), "08/15 14:30", "…including an afternoon range");
+
+  // 2. No day anywhere ⇒ UNBOOKABLE. Inventing a September date is the fail-unsafe answer: it
+  //    creates a real calendar event on a day nobody agreed to. No booking beats a wrong booking.
+  for (const bare of ["9-9:30", "10-10:30", "2-2:30"]) {
+    assert.equal(at(bare), null, `a bare clock range with no day must not invent a date: ${bare}`);
+  }
+
+  // 3. GENUINE dates are untouched — the discriminator is the clock minutes, nothing else.
+  assert.equal(at("9/9 at 10"), "09/09 10:00", "a real slash date still resolves");
+  assert.equal(at("12/25/2026 at 9"), "12/25 9:00", "a real date with a year still resolves");
+  assert.equal(at("sep 9 at 9:30"), "09/09 9:30", "a month-name date still resolves");
+
+  // 4. Prepositioned windows are untouched, and still book at their START (charter C4.2).
+  assert.equal(at("tomorrow around 9-9:30"), "08/15 9:00", "'around' window books at its start");
+  assert.equal(at("tomorrow between 4 and 5"), "08/15 16:00", "'between' window books at its start");
+  assert.equal(at("today at 4-5"), "08/14 16:00", "an 'at' window books at its start");
+
+  // 5. The discriminator itself, at the source: the numeric date regex must refuse a day part
+  //    carrying clock minutes. Pinned here because every assertion above depends on that one
+  //    lookahead, and a future edit that drops it would otherwise only surface as a wrong booking.
+  const store = fs.readFileSync("services/api/src/domain/conversationStore.ts", "utf8");
+  assert.ok(
+    store.includes("[\\/\\-](\\d{1,2})(?!:\\d)"),
+    "parseExplicitDate must refuse a numeric date whose day part is followed by clock minutes"
+  );
+  n += 13;
+}
+
 console.log(`PASS appointment date year guard eval (${n} assertions)`);

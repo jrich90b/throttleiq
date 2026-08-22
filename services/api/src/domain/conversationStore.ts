@@ -7169,7 +7169,27 @@ function parseExplicitDate(text: string): { year: number; month: number; day: nu
     december: 12
   };
 
-  const m = text.match(/\b(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?\b/);
+  // `(?!:\d)` — a "date" whose day part carries CLOCK MINUTES is a time range, not a date.
+  //
+  // Louis Campbell +18147069399, 2026-08-14. Staff asked "What time do you figure you will be
+  // here?", he answered "Around 9-9:30", staff confirmed "Ok sounds good, see you then" — and the
+  // booking landed on **Wed, Sep 9, 9:30 AM**, a real Google Calendar event 26 days out, because
+  // "9-9" matched here as month 9 / day 9 and `parseRequestedDayTime` returns the explicit-date
+  // branch BEFORE the day-token branch. He came in the next morning and bought the bike; the
+  // phantom September event is still on the calendar.
+  //
+  // The override is the dangerous half: measured on this build, "tomorrow 9-9:30", "today 9-9:30"
+  // and "Monday 9-9:30" ALL resolved to Sep 9 — a day the customer named out loud, silently
+  // discarded by a time range. Nobody writes a date as "9-9:30"; the `:30` is the tell, and it is
+  // the narrowest possible discriminator. Genuine dates are untouched ("9/9", "9-9", "12/25/2026"),
+  // and prepositioned windows ("at 4-5", "between 4 and 5") never reached here anyway — the
+  // timeRange branch in parseRequestedDayTime nulls explicitDate first.
+  //
+  // Fail direction, both ways safe: with the date refused, "tomorrow 9-9:30" falls to the day-token
+  // path and books 9:00 tomorrow (charter C4.2 — a window books at its START), and a bare
+  // "9-9:30" with no day anywhere resolves to NOTHING rather than inventing a September date.
+  // No booking beats a wrong booking. Pinned by appointment_date_year_guard:eval.
+  const m = text.match(/\b(\d{1,2})[\/\-](\d{1,2})(?!:\d)(?:[\/\-](\d{2,4}))?\b/);
   if (m) {
     const month = Number(m[1]);
     const day = Number(m[2]);
