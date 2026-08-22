@@ -20,7 +20,7 @@ import { applyPriorJourneyCarryOver } from "./domain/priorJourney.js";
 import { readFirstTimeRiderPolicy, hasRiderCoursePublicInfo, readEnrollmentRidingHistory, isThreadParkedOnUpcomingClass, applyRiderExperienceState } from "./domain/firstTimeRiderPolicy.js";
 import { buildFirstTimeRiderGuidanceReply, buildInitialAdfFirstTimeRiderGuidanceReply, hasExplicitRiderCourseInfoText, hasAmbiguousRiderCourseInfoText, asksRiderCourseLogistics, RIDER_COURSE_LOGISTICS_TODO } from "./domain/firstTimeRiderReply.js";
 import { readRidingAcademyRecordFields } from "./domain/ridingAcademy.js";
-import { buildAgentIntro, buildDealerRideIdentitySentence, normalizeNonAdfReplySpacing, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildRidingAcademyEnrollmentAck, buildJumpstartOneOnOneInvite, buildFirstTimeRiderBeginnerReply, buildAcquiredVehicleAck, buildWatchAvailableReply, buildCholoWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, resolveIntroducedOwnerFirstName, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, resolveConversationAgentName, hasCustomerReceivedOutbound, hasRecentDeliveredHumanOutbound } from "./domain/agentVoice.js";
+import { buildAppointmentReminderMessage, buildAgentIntro, buildDealerRideIdentitySentence, normalizeNonAdfReplySpacing, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildRidingAcademyEnrollmentAck, buildJumpstartOneOnOneInvite, buildFirstTimeRiderBeginnerReply, buildAcquiredVehicleAck, buildWatchAvailableReply, buildCholoWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, resolveIntroducedOwnerFirstName, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, resolveConversationAgentName, hasCustomerReceivedOutbound, hasRecentDeliveredHumanOutbound } from "./domain/agentVoice.js";
 import {
   postSaleVehicleIsNew,
   postSaleAccessoryOrEnjoyMessage,
@@ -759,7 +759,8 @@ import {
   isResponseControlParserAccepted,
   isResponseControlParserConfidentDecision,
   isResponseControlNoResponseAccepted,
-  shouldSuppressAppointmentConfirmationReminder
+  shouldSuppressAppointmentConfirmationReminder,
+  resolveAppointmentReminderVariant
 } from "./domain/transitionSafety.js";
 import {
   buildFriendlyReachOutClose,
@@ -33419,24 +33420,20 @@ async function processAppointmentConfirmations() {
     if (isSuppressed(conv.leadKey)) continue;
     if (appt.confirmation?.status === "confirmed" || appt.confirmation?.status === "declined") continue;
     if (appt.confirmation?.sentAt) continue;
-    // Joe ruling 2026-07-20 (+17168303999, the "boomed him" report): no robotic YES/NO
-    // reminder when the customer already confirmed the booking in their own words
-    // (appointment.acknowledged) or a human owns the thread (mode === "human").
-    if (
-      shouldSuppressAppointmentConfirmationReminder({
-        acknowledged: appt.acknowledged,
-        humanMode: conv.mode === "human"
-      })
-    ) {
-      continue;
-    }
+    // Joe ruling 2026-07-20 (+17168303999, "boomed him") scopes its suppression to the YES/NO FORM
+    // (charter C4.4), not to reminding. A confirmed customer now gets a warm note that asks for
+    // nothing — all six of the store's no-shows had acknowledged. See resolveAppointmentReminderVariant.
+    const reminderVariant = resolveAppointmentReminderVariant({
+      acknowledged: appt.acknowledged,
+      humanMode: conv.mode === "human"
+    });
 
     const start = new Date(appt.whenIso);
     const diffMs = start.getTime() - now.getTime();
     if (diffMs > 24 * 60 * 60 * 1000 || diffMs <= 23 * 60 * 60 * 1000) continue;
 
     const when = formatSlotLocal(appt.whenIso, cfg.timezone);
-    const message = `Reminder: you’re scheduled for ${when}. Please reply YES to confirm or NO to reschedule.`;
+    const message = buildAppointmentReminderMessage(reminderVariant, when, (conv.lead as any)?.firstName);
     const systemMode = effectiveMode(conv);
     const from = process.env.TWILIO_FROM_NUMBER;
     const accountSid = process.env.TWILIO_ACCOUNT_SID;
