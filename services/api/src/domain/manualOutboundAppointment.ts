@@ -143,3 +143,87 @@ export function manualOutboundOffersMultipleTimeChoices(text: string, lower: str
 export function manualOutboundAsksScheduleQuestion(text: string, lower: string): boolean {
   return /\?/.test(text) || /\b(would|could|can|do|does|are|is|what|which|when)\b/i.test(lower);
 }
+
+// ── Day-resolution trace (2026-08-22) ────────────────────────────────────────────────────────────
+// WHY THIS EXISTS. Lucas Kaderabeck (+17168610158) said "12pm Saturday" on a FRIDAY; the confirmed
+// appointment was rewritten at 2026-08-22T05:22:19.953Z to Sat Aug 29 — a REAL Google Calendar event
+// a week late, on a live lead. The mechanism is proven by execution: `parseRequestedDayTime` resolves
+// a weekday token against a reference instant, and the weekday branch forces `offset === 0` to 7, so
+// the same stored phrase means Aug 22 parsed on Friday and Aug 29 parsed on Saturday. Exactly ONE of
+// this file's ~26 call sites passes that reference instant (the pending-request branch); the staff-
+// text and composed-phrase branches still use the wall clock, so a re-parse after midnight silently
+// moves the booking a week.
+//
+// WHAT IS STILL UNKNOWN, AND WHY THIS IS A TRACE AND NOT A PATCH. The write carried lane
+// `salesperson_manual_booking`, but NOTHING identifies which trigger ran at 05:22Z: there is no
+// route-audit row for this conversation in that window and no pm2 line. `appointment` is a REFEREED
+// field and a wrong guess books customers on the wrong day, so per AGENTS.md the fail-safe move is to
+// make the write announce itself first and patch the named site second. This function is PURE and
+// clock-free — the caller passes the instant — so an eval can execute it.
+//
+// The give-away to look for in the trace: `matchedSlotStart` disagreeing with `requestedIso` (Lucas's
+// record still described Fri Aug 21 11:00 while `whenIso` said Aug 29), and `referenceUsed: null`,
+// which is the wall-clock fallback that causes the drift.
+export type ManualOutboundDayResolutionTraceInput = {
+  convId?: string | null;
+  leadKey?: string | null;
+  /** The phrase actually handed to parseRequestedDayTime. */
+  parseSource?: string | null;
+  /** Did that phrase name a day of its own? A weekday token is what drifts. */
+  hasDayToken?: boolean | null;
+  /** The instant the day token was resolved against, or null when the wall clock was used. */
+  referenceUsed?: string | null;
+  /** What the parse produced, as stored. */
+  requestedIso?: string | null;
+  /** The appointment's whenIso BEFORE this write — a large jump is the symptom. */
+  priorWhenIso?: string | null;
+  /** The slot the record still claims to have matched. Disagreement is the Lucas fingerprint. */
+  matchedSlotStart?: string | null;
+};
+
+export function buildManualOutboundDayResolutionTrace(
+  input: ManualOutboundDayResolutionTraceInput
+): Record<string, unknown> {
+  const requestedIso = String(input?.requestedIso ?? "").trim() || null;
+  const priorWhenIso = String(input?.priorWhenIso ?? "").trim() || null;
+  const matchedSlotStart = String(input?.matchedSlotStart ?? "").trim() || null;
+  const dayShiftFromPrior = daysBetween(priorWhenIso, requestedIso);
+  const dayShiftFromMatchedSlot = daysBetween(matchedSlotStart, requestedIso);
+  return {
+    convId: String(input?.convId ?? "") || null,
+    leadKey: String(input?.leadKey ?? "") || null,
+    parseSource: String(input?.parseSource ?? "").slice(0, 200) || null,
+    hasDayToken: input?.hasDayToken === true,
+    // null means the wall clock was used — the drift condition this trace exists to catch.
+    referenceUsed: String(input?.referenceUsed ?? "").trim() || null,
+    usedWallClock: !String(input?.referenceUsed ?? "").trim(),
+    requestedIso,
+    priorWhenIso,
+    matchedSlotStart,
+    dayShiftFromPrior,
+    dayShiftFromMatchedSlot,
+    // THE SIGNATURE, corrected against the live record rather than assumed. The first draft looked
+    // for a delta of exactly 7 — the size of the weekday branch's slip. That is wrong on real data:
+    // Lucas's record shifts EIGHT days (Fri Aug 21 -> Sat Aug 29), because the stored `prior`/slot is
+    // the OLD Friday booking, not the correct-but-never-written Aug 22. The 7 is the gap between the
+    // right answer and the wrong one, which is precisely the number a trace can never see.
+    //
+    // What IS observable: a weekday token resolved off the wall clock can only ever mean a day inside
+    // the coming week, so landing a week or more BEYOND the slot the record already matched is a
+    // contradiction no legitimate confirm produces. Ordinary reschedules move by a day or two.
+    suspectedWeekdayWallClockSlip:
+      input?.hasDayToken === true &&
+      !String(input?.referenceUsed ?? "").trim() &&
+      ((dayShiftFromMatchedSlot !== null && dayShiftFromMatchedSlot >= 7) ||
+        (dayShiftFromPrior !== null && dayShiftFromPrior >= 7))
+  };
+}
+
+/** Whole days from `from` to `to`, or null when either side is missing or unparseable. */
+function daysBetween(from: string | null, to: string | null): number | null {
+  if (!from || !to) return null;
+  const a = Date.parse(from);
+  const b = Date.parse(to);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+  return Math.round((b - a) / 86_400_000);
+}

@@ -46,6 +46,7 @@
     "inventory_note_reply_fallback:eval",
     "manual_cadence_context:eval",
     "manual_outbound_appointment:eval",
+    "manual_outbound_day_resolution_trace:eval",
     "manual_outbound_day_from_context:eval",
     "pending_appointment_request_day:eval",
     "booking_intent_day_from_context:eval",

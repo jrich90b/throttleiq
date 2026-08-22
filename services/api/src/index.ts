@@ -1239,7 +1239,7 @@ import {
 } from "./domain/staffPing.js";
 import { isFinanceOutcomeContext, shouldPromptBusinessManagerFinanceOutcome } from "./domain/financeOutcomeGates.js";
 import {
-  composeManualOutboundRequestedPhrase, manualOutboundAsksScheduleQuestion, manualOutboundHasDayToken,
+  buildManualOutboundDayResolutionTrace, composeManualOutboundRequestedPhrase, manualOutboundAsksScheduleQuestion, manualOutboundHasDayToken,
   manualOutboundHasRescheduleWording, manualOutboundHasScheduleKeyword, manualOutboundHasTimeToken,
   manualOutboundOffersMultipleTimeChoices
 } from "./domain/manualOutboundAppointment.js";
@@ -51842,6 +51842,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (shouldInferManualAppointment && requested) {
       const whenUtc = localPartsToUtcDate(schedulerTimezone, requested).toISOString();
       const whenText = formatSlotLocal(whenUtc, schedulerTimezone);
+      recordRouteOutcome("manual", "manual_outbound_day_resolution", buildManualOutboundDayResolutionTrace({ convId: conv.id, leadKey: conv.leadKey, parseSource, hasDayToken, referenceUsed: null, requestedIso: whenUtc, priorWhenIso: conv.appointment?.whenIso ?? null, matchedSlotStart: conv.appointment?.matchedSlot?.start ?? null }));
       conv.appointment = conv.appointment ?? { status: "none", updatedAt: nowIso() };
       // Which parts of an EXPIRED booking die when a new time replaces them — the referee owns the
       // list so it cannot drift the way the five old teardown sites did.
@@ -51854,8 +51855,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       conv.appointment.whenIso = whenUtc;
       conv.appointment.whenText = whenText;
       conv.appointment.updatedAt = nowIso();
-      conv.appointment.sourceMessageId =
-        opts?.sourceMessageId ? String(opts.sourceMessageId) : conv.appointment.sourceMessageId;
+      conv.appointment.sourceMessageId = opts?.sourceMessageId ? String(opts.sourceMessageId) : conv.appointment.sourceMessageId;
       setAppointmentBookedBy(conv, {
         actor: "human",
         channel: opts?.channel === "email" ? "email" : opts?.channel === "sms" ? "sms" : "manual",
