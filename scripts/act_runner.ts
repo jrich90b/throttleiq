@@ -39,11 +39,16 @@ import {
 import {
   CODE_STATE_DISPOSITIONS,
   DISPOSITIONS,
+  POLICY_DISPOSITIONS,
+  findingKeyOfDispositionKey,
   isDisposition,
+  isReportScopedKey,
   parseDispositionLedgerPayload,
   partitionByDispositions,
+  reportScopeOf,
   serializeDispositionLedger,
   upsertDisposition,
+  withReportScope,
   type DispositionRecord
 } from "../services/api/src/domain/dispositionLedger.ts";
 import { isReportGradeStale, refreshSupersededGrades } from "../services/api/src/domain/anomalyClassifier.ts";
@@ -374,6 +379,45 @@ if (sub === "dispose") {
     console.error(`dispose requires --as <${DISPOSITIONS.join(" | ")}>`);
     process.exit(2);
   }
+
+  // SCOPE MUST BE STATED for a POLICY disposition. `no-action` / `joe-ruled` are timeless: they
+  // silence their key forever, and there is no `undispose` subcommand. A lead+dimension key covers
+  // EVERY report on that lead, and leads routinely carry several unrelated ones — see the header of
+  // domain/dispositionLedger.ts for the 2026-08-22 instance where the loop silenced a live defect
+  // with a disposition whose own --note said it must not, and the only repair was hand-editing the
+  // ledger. Prose in a note cannot narrow a key; only a key can.
+  //
+  // Code-state dispositions (`fixed`/`stale-echo`) are deliberately NOT gated: they carry a
+  // boundary, so a sibling report filed after it returns as regression-of-disposed rather than
+  // being eaten. The irreversible kind is the one that has to say what it means.
+  //
+  // Refusing costs one cycle — the finding stays open and comes back next tick. That is the safe
+  // direction, and the same shape as the unknown-flag refusal that fixed the stale work queue.
+  const reportAt = flag("report-at");
+  const allReports = has("all-reports");
+  if (POLICY_DISPOSITIONS.has(as) && !reportAt && !allReports) {
+    console.error(
+      `!! REFUSING: \`--as ${as}\` is a POLICY disposition — permanent, with no undo — and its SCOPE is not stated.\n` +
+        `   "${key}" names a LEAD+DIMENSION, and one lead routinely carries several unrelated reports\n` +
+        `   under one dimension. Disposing it silences every one of them, including any you did not read.\n` +
+        `   Pass ONE of:\n` +
+        `     --report-at <the reportedAt of the ONE report you verified>   (disposes that report only)\n` +
+        `     --all-reports                                                 (you checked every report on this key)\n` +
+        `   \`act_runner list\` prints each order's reportedAt; siblings share the key and differ only by it.`
+    );
+    process.exit(2);
+  }
+  if (reportAt && allReports) {
+    console.error("!! REFUSING: --report-at and --all-reports contradict each other. Pass exactly one.");
+    process.exit(2);
+  }
+  if (reportAt && !Number.isFinite(Date.parse(reportAt))) {
+    console.error(`!! REFUSING: --report-at "${reportAt}" is not a parseable timestamp. Copy it from the work order.`);
+    process.exit(2);
+  }
+  // The written key: report-scoped when a report was named, the legacy two-part form otherwise.
+  const writeKey = reportAt ? withReportScope(key, reportAt) : key;
+
   const ledgerPath = path.join(reportRoot, "anomaly_loop", "dispositions.json");
   let existing: DispositionRecord[] = [];
   if (fs.existsSync(ledgerPath)) {
@@ -388,7 +432,7 @@ if (sub === "dispose") {
     }
   }
   const records = upsertDisposition(existing, {
-    key,
+    key: writeKey,
     disposition: as,
     at: new Date().toISOString(),
     by: flag("by") || process.env.ROUTINE_NAME || "unknown",
@@ -397,12 +441,19 @@ if (sub === "dispose") {
   });
   fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
   fs.writeFileSync(ledgerPath, JSON.stringify(serializeDispositionLedger(records), null, 2));
-  const written = records.find(r => r.key === key)!;
-  console.log(`DISPOSED "${key}" as ${written.disposition} (by ${written.by}) → ${ledgerPath} (${records.length} record(s))`);
+  const written = records.find(r => r.key === writeKey)!;
+  console.log(`DISPOSED "${writeKey}" as ${written.disposition} (by ${written.by}) → ${ledgerPath} (${records.length} record(s))`);
   console.log(
     CODE_STATE_DISPOSITIONS.has(written.disposition)
       ? `   code-state disposition: an occurrence after ${written.deployTs ?? written.at} will resurface as regression-of-disposed`
-      : `   policy disposition: this key is suppressed permanently (not a defect)`
+      : `   policy disposition: suppressed permanently (not a defect)`
+  );
+  // Say out loud WHAT was silenced. A reader who wanted one report and got the whole lead should
+  // find that out here, not weeks later when a live defect turns out to have gone quiet.
+  console.log(
+    isReportScopedKey(writeKey)
+      ? `   scope: THIS REPORT ONLY (reportedAt ${reportAt}) — other reports on ${findingKeyOfDispositionKey(writeKey)} stay open`
+      : `   scope: EVERY report on ${writeKey}, including any not yet filed`
   );
   process.exit(0);
 }
@@ -418,10 +469,19 @@ if (sub === "list") {
   }
   warnIfReportStale(report);
   console.log(`${orders.length} work order(s) (Tier 2 first; superseded grades last):\n`);
+  // How many orders share each `id`. A count above one is the collision that makes an id-scoped
+  // disposition dangerous, and it is invisible in a list where the id simply appears twice.
+  const siblingKeys = new Map<string, number>();
+  for (const w of orders) siblingKeys.set(keyOf(w), (siblingKeys.get(keyOf(w)) ?? 0) + 1);
   for (const w of orders) {
     const stale = w?.gradeSuperseded ? "  [GRADE SUPERSEDED — reproduce first]" : "";
     console.log(`  [T${w.tier} ${w.action}] ${w.dimension}  (${w.severity})${stale}`);
     console.log(`     id: ${keyOf(w)}`);
+    // The report stamp is what tells two orders sharing an `id` apart, and it is the value
+    // `dispose --report-at` needs. Printing it is what makes that flag usable — without it the
+    // refusal message would name something the reader cannot see.
+    const stamp = reportScopeOf(w);
+    if (stamp) console.log(`     reported-at: ${stamp}${siblingKeys.get(keyOf(w))! > 1 ? `   (⚠ ${siblingKeys.get(keyOf(w))} reports share this id — dispose by report, not by id)` : ""}`);
     console.log(`     ${String(w.detail ?? "").trim()}\n`);
   }
   process.exit(0);
