@@ -745,6 +745,7 @@ import {
 } from "./domain/leadUnitAvailabilityDisclosure.js";
 import { buildLongTermTimelineMessage } from "./domain/longTermMessage.js";
 import { realignRideChallengeCadences, reviveRideChallengeWrapUps } from "./domain/rideChallengeCadence.js";
+import { resumeCadenceOnModeToggle, resumeTakeoverStoppedCadences } from "./domain/takeoverCadenceResume.js";
 import { sendEmail } from "./domain/emailSender.js";
 import {
   canApplyDispositionCloseout,
@@ -31187,6 +31188,16 @@ async function processDueFollowUpsUnlocked() {
   const rideChallengeFollowUpIso = process.env.RIDE_CHALLENGE_FOLLOWUP_ISO ?? null;
   realignRideChallengeCadences(convs, rideChallengeFollowUpIso, recordRouteOutcome);
   reviveRideChallengeWrapUps(convs, rideChallengeFollowUpIso, recordRouteOutcome);
+  // Takeover-stopped cadence resume (Joe 8/21: a takeover must not permanently kill the drip
+  // absent deal progress; resume WHERE IT LEFT OFF). Decision in routeStateReducer, body +
+  // per-tick cap in domain/takeoverCadenceResume.ts; pinned by takeover_cadence_resume:eval.
+  resumeTakeoverStoppedCadences(convs, {
+    nowMs: now.getTime(),
+    timeZone: cfg.timezone,
+    isSuppressed,
+    openTodos,
+    recordRouteOutcome
+  });
   // Stale "needs reply" / held-flag heal: a conversation flagged "the AI couldn't answer this in
   // context" whose held marker outlived a real reply (a reply went out after the hold) should drop the
   // flag + close its todo (s R Gurajala, 2026-06-25 — a sent draft cleared via finalizeDraftAsSent but
@@ -39731,7 +39742,7 @@ app.post("/conversations/:id/agent-context", async (req, res) => {
   return res.json({ ok: true, conversation: conv });
 });
 
-app.post("/conversations/:id/mode", requirePermission("canToggleHumanOverride"), (req, res) => {
+app.post("/conversations/:id/mode", requirePermission("canToggleHumanOverride"), async (req, res) => {
   const conv = getConversation(req.params.id);
   if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
   const mode = String(req.body?.mode ?? "").trim();
@@ -39739,6 +39750,11 @@ app.post("/conversations/:id/mode", requirePermission("canToggleHumanOverride"),
     return res.status(400).json({ ok: false, error: "Invalid mode" });
   }
   setConversationMode(conv.id, mode as any);
+  // Toggle-back resume (Joe 8/21) — body + rationale in domain/takeoverCadenceResume.ts.
+  if (mode === "suggest") {
+    const cfgForResume = await getSchedulerConfigHot();
+    resumeCadenceOnModeToggle(conv, cfgForResume.timezone || "America/New_York", recordRouteOutcome);
+  }
   return res.json({ ok: true, conversation: conv });
 });
 

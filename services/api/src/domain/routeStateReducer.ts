@@ -3266,6 +3266,66 @@ export function decideRideChallengeWrapUpRevive(input: {
   return { nextDueAtIso: new Date(eventMs + dayOffset * 24 * 60 * 60 * 1000).toISOString() };
 }
 
+// ── Human-takeover cadence RESUME (Joe rulings 2026-08-21) ────────────────────
+// Verbatim: "I don't want the cadence to all of a sudden stop on human takeovers if there
+// is not progress on the deal" + "after the two nudges it should pick back up on the
+// cadence where it left off." Today a manual takeover stops the drip permanently
+// (stopReason "manual_handoff") and the quiet-nudge lane caps at 2 bumps — after that,
+// silence forever. Census 8/21: the takeover/handoff seam is the single biggest quiet-lead
+// source (100+ of 291 uncovered leads).
+// The decision: a cadence stopped by manual_handoff RESUMES AT ITS CURRENT STEP when the
+// thread has sat quiet past the nudge window with NO deal progress. "No progress" is
+// structured state only (never comprehension): no delivered message either direction inside
+// the quiet bar, no booked appointment, no hold, not closed/sold, no open FUTURE-dated todo
+// (a dated staff promise owns the follow-up), not suppressed/call-only.
+// - QUIET BAR = 12 days since the last delivered message. The nudge lane fires at 3 quiet
+//   days and again 5 days later, so both bumps (sent or not) fit inside the bar — this
+//   naturally sequences "let the two nudges run first" without coupling to nudge state:
+//   an APPROVED bump resets the clock; an unapproved one changes nothing.
+// - ONE-WAY: resuming makes the cadence active; an active cadence no longer matches, so
+//   the decision cannot re-fire. If staff take over again, a fresh manual_handoff stop
+//   makes it eligible again — which is the intended loop, each round gated by 12 quiet days.
+// - stopReason "manual_handoff" ONLY: disposition stops (no_longer_owns, wrong_number,
+//   call_only, unit/order holds…) are judgements, not parking states — never resumed here.
+// Fail-direction: firing wrongly = one suggest-mode draft staff can dismiss (the resumed
+// touch still passes every cadence gate); not firing = today's permanent silence.
+export const HUMAN_TAKEOVER_RESUME_QUIET_DAYS = 12;
+
+export function decideHumanTakeoverCadenceResume(input: {
+  cadenceStatus?: string | null;
+  cadenceStopReason?: string | null;
+  cadenceStepIndex?: number | null;
+  lastDeliveredAtMs?: number | null; // newest delivered message, either direction
+  nowMs: number;
+  conversationClosed?: boolean;
+  sold?: boolean;
+  suppressed?: boolean; // STOP / opt-out / do-not-contact
+  contactPreference?: string | null; // "call_only" never gets a text
+  appointmentBookedEventId?: string | null;
+  hasHold?: boolean;
+  hasOpenFutureDatedTodo?: boolean;
+  hasPendingDraft?: boolean; // never stack on an unreviewed draft
+}): { resume: true; quietDays: number } | null {
+  if (String(input.cadenceStatus ?? "") !== "stopped") return null;
+  if (String(input.cadenceStopReason ?? "") !== "manual_handoff") return null;
+  if (input.cadenceStepIndex == null || !Number.isFinite(Number(input.cadenceStepIndex))) {
+    return null; // nowhere to resume to (Number(null) is 0 — the explicit null check is load-bearing)
+  }
+  if (input.conversationClosed || input.sold) return null;
+  if (input.suppressed) return null;
+  if (String(input.contactPreference ?? "").trim().toLowerCase() === "call_only") return null;
+  if (String(input.appointmentBookedEventId ?? "").trim()) return null;
+  if (input.hasHold) return null;
+  if (input.hasOpenFutureDatedTodo) return null;
+  if (input.hasPendingDraft) return null;
+  if (input.lastDeliveredAtMs == null) return null; // no anchor — never resume blind
+  const lastMs = Number(input.lastDeliveredAtMs);
+  if (!Number.isFinite(lastMs)) return null; // (Number(null) is 0 — the null check above is load-bearing)
+  const quietMs = input.nowMs - lastMs;
+  if (quietMs < HUMAN_TAKEOVER_RESUME_QUIET_DAYS * 24 * 60 * 60 * 1000) return null;
+  return { resume: true, quietDays: Math.floor(quietMs / (24 * 60 * 60 * 1000)) };
+}
+
 // ── Owner-named personal thread step-back (Joe, 2026-07-09, Mark Kocsis +17168609533) ──
 // A customer who opens with the assigned owner's NAME ("Hey Scott this is Mark"), replying to
 // that owner's own recent HUMAN outbound, is having a two-person conversation with their

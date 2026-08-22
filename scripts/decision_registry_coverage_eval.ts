@@ -169,6 +169,12 @@ NOT_PROJECTABLE.decideAdfEmailMirror =
 NOT_PROJECTABLE.decideRideChallengeWrapUpRevive =
   "verdict depends on wall-clock now vs the 9/15 event window — sampling it would make the harness non-deterministic; table pinned by ride_challenge_event_cadence:eval";
 
+// Takeover cadence resume: the verdict is a function of wall-clock quiet time (nowMs vs the
+// last delivered message) — two harness runs on different days would legitimately differ.
+// Its decision table (incl. one-way convergence) is pinned by takeover_cadence_resume:eval.
+NOT_PROJECTABLE.decideHumanTakeoverCadenceResume =
+  "verdict depends on wall-clock quiet days — sampling it would make the harness non-deterministic; table pinned by takeover_cadence_resume:eval";
+
 // --- the check ---------------------------------------------------------------------------------
 
 const src = (() => {
