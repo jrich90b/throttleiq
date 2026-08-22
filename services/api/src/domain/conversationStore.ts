@@ -1325,6 +1325,13 @@ export type Conversation = {
     // code/comprehension bug; these previews let the monitor diagnose it without re-running anything.
     inboundPreview?: string;
     draftPreview?: string;
+    /**
+     * The rejected draft IN FULL, not the 240-char preview (2026-08-22) — the input to the
+     * second-opinion pass. `draftPreview` exists to be READ by a human in a report and is truncated
+     * mid-sentence; handing that to a reviewer would have it grading a sentence we cut off
+     * ourselves. Quality holds only — the lane the second opinion covers.
+     */
+    draftBody?: string;
   } | null;
   // Context-fidelity SHADOW marker (Net 1 of the gap-detection loop): the scorer runs on every draft
   // and, in SHADOW mode, does not hold — but a MAJOR would-hold means this draft answered out of
@@ -3301,6 +3308,35 @@ export function finalizeDraftAsSent(
   scheduleSave();
 
   return { usedDraft: true, originalDraftBody: original };
+}
+
+/**
+ * The quality-gate hold marker, built where its TYPE lives rather than inline in index.ts.
+ *
+ * Pure. Two readers with different needs, which is the whole reason this is one function: the
+ * held-draft report and the console want `draftPreview` (short, human-readable, truncated), and the
+ * second-opinion pass wants `draftBody` (the rejected draft in full — see the type). Building them
+ * apart is how one of them silently becomes the other's input.
+ */
+export function buildQualityHoldMarker(args: {
+  reason: string;
+  judgeReason?: string;
+  channel: "sms" | "email";
+  draftText: string | null | undefined;
+  inboundBody: string | null | undefined;
+  at?: string;
+}): NonNullable<Conversation["draftHeld"]> {
+  const draft = String(args.draftText ?? "");
+  return {
+    at: args.at ?? new Date().toISOString(),
+    reason: args.reason,
+    judgeReason: args.judgeReason,
+    channel: args.channel,
+    // Diagnosis context for the agent-watch code-fix loop (the bridge).
+    inboundPreview: String(args.inboundBody ?? "").slice(0, 240),
+    draftPreview: draft.slice(0, 240),
+    draftBody: draft
+  };
 }
 
 /**
