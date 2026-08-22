@@ -167,10 +167,14 @@ assert.ok(
   "the guard is dealer-agnostic"
 );
 
-// --- 4. WIRING: both lanes of the review pass must route the rewrite through the guard ----------
+// --- 4. WIRING: EVERY lane of the review pass must route the rewrite through the guard ----------
 // Trap 2: a source-shape check cannot prove wiring on its own, so assert an EXPECTED COUNT of the
 // exact call shape, plus that the stored email hash is taken from the GUARDED body (hashing the
 // unguarded one would leave our own rewrite unstamped and re-reviewed once a minute, forever).
+//
+// The exact count is the load-bearing part, and it earned that on 2026-08-22: the HELD-draft lane
+// added a third rewrite path, and this assertion is what forced the check that the new path carries
+// C1.2a too. A `>= 2` here would have let an unguarded rewrite lane land in silence.
 const REVIEW_SRC = readFileSync(
   new URL("../services/api/src/domain/claudeDraftReview.ts", import.meta.url),
   "utf8"
@@ -178,8 +182,8 @@ const REVIEW_SRC = readFileSync(
 const CALL = "enforceNoReintroduction({ body: verdict.fixedDraft, dealerName, messages: conv.messages })";
 assert.equal(
   REVIEW_SRC.split(CALL).length - 1,
-  2,
-  "the C1.2a guard must be applied in BOTH the SMS and the EMAIL rewrite path — expected exactly 2 call sites"
+  3,
+  "the C1.2a guard must be applied in the SMS, EMAIL and HELD rewrite paths — expected exactly 3 call sites"
 );
 assert.ok(
   REVIEW_SRC.includes("saveOperatorDraft(conv, {\n        body: fixedBody,\n        channel: \"sms\""),

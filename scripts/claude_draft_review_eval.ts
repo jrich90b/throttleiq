@@ -37,7 +37,10 @@ import {
   resetClaudeReviewBreaker,
   selectClaudeReviewThreadMessages,
   selectDraftsForClaudeReview,
-  selectEmailDraftsForClaudeReview
+  selectEmailDraftsForClaudeReview,
+  selectHeldDraftsForClaudeReview,
+  heldDraftReviewKey,
+  CLAUDE_HELD_DRAFT_REVIEW_MAX_PER_TICK_DEFAULT
 } from "../services/api/src/domain/claudeDraftReview.ts";
 import {
   appendOutbound,
@@ -520,14 +523,16 @@ for (const [label, c] of NO_REVIEW) {
     "the draft under review is excluded from its own context"
   );
 
-  // BOTH lanes must use the shared selector — the email lane drifting back to a body-only filter
-  // would reopen every defect above on the channel nobody re-reads.
+  // EVERY lane must use the shared selector — a lane drifting back to a body-only filter would
+  // reopen every defect above on a channel nobody re-reads. The count is deliberately exact: a new
+  // lane that forgets the selector fails here rather than quietly grading an evidence-stripped
+  // thread. Three since 2026-08-22: SMS, EMAIL, HELD.
   const ctxSrc = fs.readFileSync(path.join(process.cwd(), "services/api/src/domain/claudeDraftReview.ts"), "utf8");
   const ctxProc = ctxSrc.slice(ctxSrc.indexOf("export async function processClaudeDraftReview"));
   assert.equal(
     (ctxProc.match(/selectClaudeReviewThreadMessages\(/g) ?? []).length,
-    2,
-    "SMS and EMAIL lanes both build their thread through the shared selector"
+    3,
+    "SMS, EMAIL and HELD lanes all build their thread through the shared selector"
   );
   assert.ok(
     !/body: String\(m\.body \?\? ""\) \}\)\)/.test(ctxProc),
@@ -549,4 +554,106 @@ assert.ok((WORKER_MINUTE_LANE_TASKS as readonly string[]).includes("claude-draft
 const minuteSchedule = WORKER_SCHEDULES.find(s => s.cron === "* * * * *");
 assert.ok(minuteSchedule && minuteSchedule.tasks.includes("claude-draft-review"), "on the worker minute schedule");
 
-console.log("PASS claude_draft_review:eval — SMS selection table (4 review-cases incl. sold/closed + 9 holds + cap) + EMAIL selection table, executed loop guard + cross-channel guard, kill switch, prompt rules, work-order wiring, 3-point lane registration, breaker replayed over the real 2026-08-20 outage, and the REVIEWED THREAD itself (Louis' 4 attachments, Paul's attachment-only turn, William's 3-day-old 3pm) with both lanes on the shared selector");
+// --- THE HELD-DRAFT LANE (2026-08-22) --------------------------------------------------------
+// Joe: "Why can't the anthropic checker write the draft then?" It already can — it was never shown
+// the drafts that need it most. A quality hold DISCARDS the draft, so the pending-draft lanes above
+// select nothing, and the console keeps saying "being fixed" for a repair that already gave up.
+// MEASURED across the route audit: 50 holds / 36 threads; 32 eventually answered (median 1.0h, p90
+// 19.9h, worst 286h) and 3 never were. Bryon Price (+17162648151) held 27.6h is the fixture below.
+const HELD_AT = new Date(NOW - 30 * MIN).toISOString();
+const BRYON_DRAFT =
+  "We'll have our team check the current price on that bike and follow up with exact numbers. For the trade value, we can start with an estimate based on the bike details and finalize it in person. We'll have someone call you today to go over the details.";
+function heldConv(overrides: Record<string, unknown> = {}, heldOverrides: Record<string, unknown> = {}) {
+  return conv(
+    {
+      id: "+17162648151",
+      draftHeld: {
+        at: HELD_AT,
+        reason: "live_regenerate",
+        judgeReason: "the thread already offered two concrete times; the draft ignores them and promises a call",
+        channel: "sms",
+        draftPreview: BRYON_DRAFT.slice(0, 240),
+        draftBody: BRYON_DRAFT,
+        ...heldOverrides
+      },
+      ...overrides
+    },
+    [CUSTOMER]
+  );
+}
+{
+  const picks = selectHeldDraftsForClaudeReview({ conversations: [heldConv()], nowMs: NOW });
+  assert.equal(picks.length, 1, "THE FIX: a quality-held draft with no pending row IS selected for a second opinion");
+  assert.equal(picks[0].draftBody, BRYON_DRAFT, "…and the reviewer gets the draft IN FULL, never the 240-char preview");
+  assert.match(picks[0].judgeReason, /two concrete times/, "…plus the first judge's reason, as steering");
+
+  // The pending-draft lanes own a thread that HAS a draft. Two lanes racing for one approval box is
+  // the last-writer-override failure mode, so this lane must stand down whenever a draft exists.
+  const withPending = heldConv({}, {});
+  withPending.messages = [CUSTOMER, FRESH_DRAFT];
+  assert.equal(selectHeldDraftsForClaudeReview({ conversations: [withPending], nowMs: NOW }).length, 0, "a hold WITH a pending draft belongs to the SMS lane, not this one");
+
+  // Scope: only the quality gate's own hold actions. A truncated-body hold and a context-fidelity
+  // hold are different lanes with their own handling (the latter already files a staff task).
+  for (const reason of ["draft_truncated", "context_fidelity_out_of_context", "", "something_new"]) {
+    assert.equal(
+      selectHeldDraftsForClaudeReview({ conversations: [heldConv({}, { reason })], nowMs: NOW }).length,
+      0,
+      `a "${reason}" hold is out of scope for the second opinion`
+    );
+  }
+  assert.equal(selectHeldDraftsForClaudeReview({ conversations: [heldConv({}, { reason: "live_hold" })], nowMs: NOW }).length, 1, "live_hold is in scope alongside live_regenerate");
+
+  // A hold written before this change carries only the truncated preview. Reviewing that would grade
+  // a sentence WE cut off, so those are left for the human backstop rather than half-read.
+  const legacy = heldConv();
+  delete (legacy as any).draftHeld.draftBody;
+  assert.equal(selectHeldDraftsForClaudeReview({ conversations: [legacy], nowMs: NOW }).length, 0, "a pre-fix hold with no full body is left alone, never graded on a truncated preview");
+
+  // Freshness + undatable, same shape as the sibling lanes.
+  assert.equal(selectHeldDraftsForClaudeReview({ conversations: [heldConv({}, { at: new Date(NOW - 30 * 60 * MIN).toISOString() })], nowMs: NOW }).length, 0, "the 24h ceiling bounds this lane too");
+  assert.equal(selectHeldDraftsForClaudeReview({ conversations: [heldConv({}, { at: "not-a-date" })], nowMs: NOW }).length, 0, "an undatable hold is left alone");
+  assert.equal(selectHeldDraftsForClaudeReview({ conversations: [conv({}, [CUSTOMER])], nowMs: NOW }).length, 0, "a thread with no hold is not selected");
+
+  // The receipt is what stops paying to re-ask the same question once a minute, forever.
+  const key = heldDraftReviewKey({ at: HELD_AT, draftBody: BRYON_DRAFT });
+  assert.equal(picks[0].key, key, "the selector reports the receipt key it will be stamped with");
+  assert.equal(
+    selectHeldDraftsForClaudeReview({ conversations: [heldConv({ claudeHeldDraftReview: { key, verdict: "ok", at: HELD_AT } })], nowMs: NOW }).length,
+    0,
+    "an already-reviewed hold is never re-reviewed — including a DECLINED one, which is the loop this would otherwise run forever"
+  );
+  // A NEW hold on the same thread is a new question: the key carries the body, so it re-qualifies.
+  assert.notEqual(heldDraftReviewKey({ at: HELD_AT, draftBody: "a different rejected draft" }), key, "the key changes when the rejected draft changes");
+  assert.equal(
+    selectHeldDraftsForClaudeReview({ conversations: [heldConv({ claudeHeldDraftReview: { key: "stale-key", verdict: "rewrite", at: HELD_AT } })], nowMs: NOW }).length,
+    1,
+    "a receipt for a DIFFERENT hold does not suppress this one"
+  );
+
+  const many = Array.from({ length: 6 }, (_, i) => heldConv({ id: `+1555000200${i}`, leadKey: `+1555000200${i}` }));
+  assert.equal(selectHeldDraftsForClaudeReview({ conversations: many, nowMs: NOW }).length, CLAUDE_HELD_DRAFT_REVIEW_MAX_PER_TICK_DEFAULT, "the per-tick budget bounds the spend");
+}
+{
+  // The two inversions, pinned at the source because they are the whole design and a future edit
+  // that "tidies" this lane to match its siblings would silently reintroduce the bug.
+  const src = fs.readFileSync(path.join(process.cwd(), "services/api/src/domain/claudeDraftReview.ts"), "utf8");
+  const lane = src.slice(src.indexOf("const heldPicks = selectHeldDraftsForClaudeReview"), src.indexOf("--- The email lane"));
+  assert.ok(lane.includes("saveOperatorDraft("), "a rewrite lands in the approval box (which also releases the hold)");
+  assert.ok(
+    lane.indexOf("saveOperatorDraft(") > lane.indexOf('verdict.verdict === "rewrite"'),
+    "publishing happens ONLY inside the rewrite branch — an `ok` must never publish the draft our own gate rejected"
+  );
+  assert.ok(
+    lane.includes("claudeHeldDraftReview") && lane.includes("claude_held_draft_review_declined"),
+    "a declined second opinion is stamped and recorded — that record is what a human backstop reads"
+  );
+  // Scoped to the LANE, not the file: the lane header names releaseHeldDraft in prose, and an
+  // assertion that cannot tell a mention from a call is the source-pin trap this suite keeps hitting.
+  assert.ok(
+    !/releaseHeldDraft\s*\(/.test(lane),
+    "this lane never clears the hold itself — saveOperatorDraft asks the referee (decideHeldDraftRelease)"
+  );
+}
+
+console.log("PASS claude_draft_review:eval — SMS selection table (4 review-cases incl. sold/closed + 9 holds + cap) + EMAIL selection table, executed loop guard + cross-channel guard, kill switch, prompt rules, work-order wiring, 3-point lane registration, breaker replayed over the real 2026-08-20 outage, and the REVIEWED THREAD itself (Louis' 4 attachments, Paul's attachment-only turn, William's 3-day-old 3pm) with all three lanes on the shared selector, and the HELD lane (Bryon +17162648151) that gives a repair-abandoned draft a second opinion");

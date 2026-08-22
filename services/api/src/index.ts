@@ -534,6 +534,7 @@ import {
   resolveConversationDetailDisplay, stampEmailDraft,
   startPostSaleCadence,
   releaseHeldDraft,
+  buildQualityHoldMarker,
   applyAppointmentTeardown,
   applyStaleBookingReplacement,
   applyInventoryWatchDefaults,
@@ -5766,15 +5767,14 @@ async function publishCustomerReplyDraft(args: {
   if (gate.held) {
     discardPendingDrafts(args.conv, "draft_quality_held");
     delete args.conv.emailDraft;
-    args.conv.draftHeld = {
-      at: new Date().toISOString(),
+    // Carries the rejected draft in FULL as well as the preview — the second-opinion lane's input.
+    args.conv.draftHeld = buildQualityHoldMarker({
       reason: gate.reason,
       judgeReason: gate.judgeReason,
       channel: args.channel,
-      // Diagnosis context for the agent-watch code-fix loop (the bridge).
-      inboundPreview: String(getLastInboundBody(args.conv) ?? "").slice(0, 240),
-      draftPreview: String(invariant.draftText ?? "").slice(0, 240)
-    };
+      draftText: invariant.draftText,
+      inboundBody: getLastInboundBody(args.conv)
+    });
     saveConversation(args.conv);
     recordDecisionTrace({
       scope: args.routeScope ?? "live",

@@ -252,6 +252,86 @@ export function selectDraftsForClaudeReview(args: {
   return out;
 }
 
+// --- THE HELD-DRAFT LANE (2026-08-22) ----------------------------------------------------------
+// Joe: "Why can't the anthropic checker write the draft then?"
+//
+// It already can — it just never got shown the drafts that need it most. The OpenAI-side quality
+// gate judges a draft, hands it to the repair step ONCE (`selfHeal`, one attempt by design), and if
+// the rewrite still fails the re-judge it HOLDS: the draft is discarded and nothing is stored. The
+// console then says "The AI's draft is being fixed — nothing for you to do yet", which is false —
+// the repair already gave up and nothing further is coming.
+//
+// The lanes above select on a draft that EXISTS, and a held thread has none by construction (the
+// hold path calls discardPendingDrafts). So the one case with the strongest claim on a second
+// opinion — a draft our own gate rejected and our own repair could not fix — was the only case the
+// second opinion never saw.
+//
+// MEASURED 2026-08-22 across the whole route audit: 50 holds over 36 threads. 32 eventually got a
+// real reply — median 1.0h, but p90 19.9h, four over a day, the worst 286h — and **3 never got one
+// at all**, including Bryon Price (+17162648151), held 27.6h at the time of writing behind a draft
+// that promised a call the thread had already superseded with two concrete times.
+//
+// TWO THINGS INVERT HERE, and both are the point:
+//
+//  1. A `rewrite` verdict is the SUCCESS case. Elsewhere a rewrite means the pipeline erred; here it
+//     means the second opinion did what the first repair could not, and `saveOperatorDraft` releases
+//     the hold on its own (`releaseHeldDraft(conv, "operator_draft")`) — so the card stops saying
+//     "being fixed" because there is finally something real to approve.
+//  2. An `ok` verdict must NOT publish. Claude finding the rejected draft acceptable does not
+//     overrule the gate that rejected it — two judges disagreeing is not a pass. The hold STAYS, and
+//     the receipt records that the second opinion also declined, which is what the follow-on change
+//     turns into an honest "needs your reply" card plus a staff task.
+//
+// Spend is bounded by the same guards as the other lanes plus the rarity of the state itself: at the
+// measured rate this is ~1-2 extra reviews a week, capped per tick, and the breaker above still
+// covers a dead vendor account.
+export const CLAUDE_HELD_DRAFT_REVIEW_MAX_PER_TICK_DEFAULT = 2;
+export const CLAUDE_HELD_DRAFT_REVIEW_MAX_AGE_MS_DEFAULT = 24 * 60 * 60 * 1000;
+
+/** Quality-gate hold actions. A truncated or context-fidelity hold is a different lane. */
+const QUALITY_HOLD_REASONS = new Set(["live_hold", "live_regenerate"]);
+
+export type ClaudeHeldDraftReviewReceipt = { key: string; verdict: "ok" | "rewrite"; at: string };
+
+/**
+ * Receipt key for a held draft. There is no message id (the draft row was discarded), so the key is
+ * the hold instant plus a hash of the rejected body — the same shape the email lane uses, for the
+ * same reason: without it the pass re-reviews the same hold once a minute, forever.
+ */
+export function heldDraftReviewKey(held: { at?: string | null; draftBody?: string | null }): string {
+  const body = String(held?.draftBody ?? "");
+  return `${String(held?.at ?? "")}:${createHash("sha1").update(body).digest("hex").slice(0, 12)}`;
+}
+
+export function selectHeldDraftsForClaudeReview(args: {
+  conversations: Conversation[];
+  nowMs: number;
+  maxPerTick?: number;
+  maxAgeMs?: number;
+}): Array<{ conv: Conversation; draftBody: string; judgeReason: string; key: string }> {
+  const maxPerTick = args.maxPerTick ?? CLAUDE_HELD_DRAFT_REVIEW_MAX_PER_TICK_DEFAULT;
+  const maxAgeMs = args.maxAgeMs ?? CLAUDE_HELD_DRAFT_REVIEW_MAX_AGE_MS_DEFAULT;
+  const out: Array<{ conv: Conversation; draftBody: string; judgeReason: string; key: string }> = [];
+  for (const conv of args.conversations) {
+    if (out.length >= maxPerTick) break;
+    const held: any = (conv as any).draftHeld;
+    if (!held || !QUALITY_HOLD_REASONS.has(String(held.reason ?? ""))) continue;
+    // A hold with a pending draft beside it is not the state this lane exists for — the SMS lane
+    // already owns that draft, and reviewing both would race for the same approval box.
+    if (getLatestPendingDraft(conv)) continue;
+    const draftBody = String(held.draftBody ?? "").trim();
+    if (!draftBody) continue; // pre-2026-08-22 holds carry only the truncated preview — leave them
+    const atMs = Date.parse(String(held.at ?? ""));
+    if (!Number.isFinite(atMs)) continue; // undatable ⇒ leave it alone
+    const age = args.nowMs - atMs;
+    if (age < 0 || age > maxAgeMs) continue;
+    const key = heldDraftReviewKey(held);
+    if (((conv as any).claudeHeldDraftReview as ClaudeHeldDraftReviewReceipt | undefined)?.key === key) continue;
+    out.push({ conv, draftBody, judgeReason: String(held.judgeReason ?? "").trim(), key });
+  }
+  return out;
+}
+
 // --- THE EMAIL LANE (2026-08-17) ---------------------------------------------------------------
 // Joe, 8/17: "a lot of drafts are coming through bad right now." The API was fine; the reviewer
 // simply could not see half the drafts. `conv.emailDraft` is a LIVE, SENDABLE draft the console's
@@ -618,13 +698,16 @@ export type ClaudeDraftReviewOutcome =
   | "claude_draft_review_unavailable"
   | "claude_email_draft_review_ok"
   | "claude_email_draft_review_rewrite"
-  | "claude_email_draft_review_unavailable";
+  | "claude_email_draft_review_unavailable"
+  | "claude_held_draft_review_rescued"
+  | "claude_held_draft_review_declined"
+  | "claude_held_draft_review_unavailable";
 
 export async function processClaudeDraftReview(deps: {
   recordOutcome: (outcome: ClaudeDraftReviewOutcome, detail: Record<string, unknown>) => void;
   nowMs?: number;
-}): Promise<{ reviewed: number; rewritten: number; emailReviewed: number; emailRewritten: number }> {
-  if (!claudeDraftReviewEnabled()) return { reviewed: 0, rewritten: 0, emailReviewed: 0, emailRewritten: 0 };
+}): Promise<{ reviewed: number; rewritten: number; emailReviewed: number; emailRewritten: number; heldReviewed: number; heldRescued: number }> {
+  if (!claudeDraftReviewEnabled()) return { reviewed: 0, rewritten: 0, emailReviewed: 0, emailRewritten: 0, heldReviewed: 0, heldRescued: 0 };
   const nowMs = deps.nowMs ?? Date.now();
   // Charter C1.2a post-check (both lanes). A `rewrite` composes the whole reply as free text, so
   // there is no builder to gate — and the lane never re-reads its own output, by design. Read once:
@@ -681,6 +764,67 @@ export async function processClaudeDraftReview(deps: {
     deps.recordOutcome(
       verdict.verdict === "rewrite" ? "claude_draft_review_rewrite" : "claude_draft_review_ok",
       { convId: conv.id, leadKey: conv.leadKey ?? null, draftId: draft.id, reason: verdict.reason }
+    );
+    saveConversation(conv);
+  }
+
+  // --- The HELD-draft lane, in the SAME task ---------------------------------------------------
+  // The drafts our own gate rejected and our own repair could not fix. See the lane header for why
+  // a `rewrite` is the success case here and an `ok` must never publish.
+  const heldPicks = selectHeldDraftsForClaudeReview({ conversations: getAllConversations(), nowMs });
+  let heldReviewed = 0;
+  let heldRewritten = 0;
+  for (const { conv, draftBody, judgeReason, key } of heldPicks) {
+    const lead = conv.lead ?? {};
+    const leadLine =
+      [
+        String((lead as any).firstName ?? (lead as any).name ?? "").trim(),
+        String((lead as any).source ?? "").trim(),
+        String((lead as any).vehicle?.description ?? "").trim(),
+        // The first judge's reason is the strongest steering available and costs nothing to pass:
+        // it names what to fix instead of leaving Claude to rediscover it.
+        judgeReason ? `our quality gate rejected this draft: ${judgeReason}` : ""
+      ]
+        .filter(Boolean)
+        .join(" | ") || "unknown";
+    const thread = selectClaudeReviewThreadMessages(conv.messages);
+    const verdict = await reviewDraftWithClaude({
+      draftBody,
+      thread,
+      leadLine,
+      channel: (conv as any).draftHeld?.channel === "email" ? "email" : "sms",
+      nowMs
+    });
+    if (verdict.reason === "review_unavailable") {
+      // No stamp: the hold stays eligible and is retried when the service recovers.
+      deps.recordOutcome("claude_held_draft_review_unavailable", {
+        convId: conv.id, leadKey: conv.leadKey ?? null, heldKey: key
+      });
+      continue;
+    }
+    heldReviewed += 1;
+    if (verdict.verdict === "rewrite") {
+      const fixedBody = enforceNoReintroduction({ body: verdict.fixedDraft, dealerName, messages: conv.messages });
+      // saveOperatorDraft releases the hold itself (`operator_draft`), so the "being fixed" card
+      // becomes a real draft in the approval box. Staff still approve it; nothing sends.
+      saveOperatorDraft(conv, {
+        body: fixedBody,
+        channel: (conv as any).draftHeld?.channel === "email" ? "email" : "sms",
+        actor: { userName: CLAUDE_REVIEW_ACTOR }
+      });
+      heldRewritten += 1;
+    }
+    // Recorded on BOTH verdicts. An `ok` is the one that matters operationally: the second opinion
+    // declined too, so this thread owes a human — and the receipt is what stops us paying to ask
+    // again every minute.
+    (conv as any).claudeHeldDraftReview = {
+      key,
+      verdict: verdict.verdict,
+      at: new Date(nowMs).toISOString()
+    } satisfies ClaudeHeldDraftReviewReceipt;
+    deps.recordOutcome(
+      verdict.verdict === "rewrite" ? "claude_held_draft_review_rescued" : "claude_held_draft_review_declined",
+      { convId: conv.id, leadKey: conv.leadKey ?? null, heldKey: key, reason: verdict.reason }
     );
     saveConversation(conv);
   }
@@ -747,5 +891,5 @@ export async function processClaudeDraftReview(deps: {
   }
 
   if (picks.length || emailPicks.length) await flushConversationStore();
-  return { reviewed: picks.length, rewritten, emailReviewed: emailPicks.length, emailRewritten };
+  return { reviewed: picks.length, rewritten, emailReviewed: emailPicks.length, emailRewritten, heldReviewed, heldRescued: heldRewritten };
 }
