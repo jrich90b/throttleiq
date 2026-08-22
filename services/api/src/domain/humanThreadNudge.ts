@@ -32,6 +32,8 @@
  *   HUMAN_THREAD_NUDGE_AUTOSEND  (default OFF) — the zero-touch carve-out (skips the queue)
  */
 
+import type { HumanThreadNudgePromptArgs } from "./humanThreadNudgePrompt.js";
+
 export const HUMAN_THREAD_NUDGE_QUIET_DAYS_DEFAULT = 3;
 export const HUMAN_THREAD_NUDGE_MAX_COUNT_DEFAULT = 2;
 export const HUMAN_THREAD_NUDGE_SPACING_DAYS_DEFAULT = 5;
@@ -430,4 +432,93 @@ export function decideHumanThreadNudge(input: HumanThreadNudgeInput): HumanThrea
     }
   }
   return { nudge: true, quietDays: Math.floor(quietMs / DAY_MS) };
+}
+
+/**
+ * The anchors, shaped for the composer. This mapping lived inline in index.ts and is exactly where
+ * the +17165233086 defect came from: it had `at` on every row and dropped it, so a thread spanning
+ * four days reached the model as one continuous exchange and a Tuesday 3pm came back as "3pm
+ * today". Out here it is one testable place instead of a lambda buried 31,000 lines into index.ts.
+ */
+export function buildHumanThreadNudgeComposeArgs(args: {
+  firstName?: string | null;
+  anchors: { direction?: unknown; body?: unknown; at?: unknown }[];
+  nowMs: number;
+}): HumanThreadNudgePromptArgs {
+  return {
+    firstName: args.firstName ?? null,
+    recentMessages: (args.anchors ?? []).map(m => ({
+      direction: m.direction === "in" ? ("in" as const) : ("out" as const),
+      body: String(m.body ?? ""),
+      at: m.at == null ? null : String(m.at)
+    })),
+    nowMs: args.nowMs
+  };
+}
+
+/**
+ * Does this bump NAME A DAY? — the output invariant that makes the dated-thread fix complete.
+ *
+ * WHY THIS CAN BE ABSOLUTE, when a prompt rule cannot. `decideHumanThreadNudge` refuses to fire at
+ * all when `appointmentBookedEventId` is set (`reason: "appointment_booked"`). So on EVERY thread
+ * this lane reaches, there is by construction no confirmed appointment — which means any day a
+ * bump names is a day nobody agreed to. There is no legitimate exception to reason about, and that
+ * is what turns a judgement call into an invariant.
+ *
+ * Deterministic on purpose, and allowed to be: this reads OUR OWN generated text, not customer
+ * intent, and it is an invariant guard whose fail direction is silence — the direction
+ * `pastEventGuard.ts` already declares for exactly this lane. It is not the lexical suppressor the
+ * ADVANCE-NEVER-RESTATE rule rejected: "did this sentence re-explain a policy" is semantic and
+ * word-overlap genuinely could not decide it, whereas "does this string contain a day word" is a
+ * closed vocabulary with an exact answer.
+ *
+ * Deliberately NOT flagged: a bare clock time ("about 3pm"), and open-ended horizons ("this week",
+ * "what day works"). Re-opening a plan is the bump's job; asserting one is the defect. The prompt's
+ * own RIGHT examples must all pass this, and `human_thread_nudge:eval` asserts that they do.
+ *
+ * Returns the offending phrase (for the route outcome) or null.
+ */
+const NUDGE_DAY_REFERENCE_PATTERNS: { label: string; re: RegExp }[] = [
+  { label: "today", re: /\btoday\b/i },
+  { label: "tonight", re: /\btonight\b/i },
+  { label: "tomorrow", re: /\b(tomorrow|tmrw|tmw)\b/i },
+  // "this afternoon" is a day reference; "this week" deliberately is not.
+  { label: "this <part of day>", re: /\bthis (morning|afternoon|evening)\b/i },
+  { label: "weekday", re: /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i },
+  { label: "month + date", re: /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}\b/i },
+  { label: "numeric date", re: /\b\d{1,2}\/\d{1,2}\b/ },
+  { label: "ordinal date", re: /\bthe \d{1,2}(st|nd|rd|th)\b/i }
+];
+
+export function nudgeNamesAnUnfoundedDay(text: unknown): string | null {
+  const s = String(text ?? "");
+  for (const { label, re } of NUDGE_DAY_REFERENCE_PATTERNS) if (re.test(s)) return label;
+  return null;
+}
+
+export type HumanThreadNudgeResolution = { text: string | null; suppressedReason: string | null };
+
+/**
+ * Compose the bump, then hold it to both output invariants — retrying ONCE before giving up so a
+ * single unlucky sample does not cost the lane a touch it should have made.
+ *
+ * Measured on the live +17165233086 anchors, n=12: the dated prompt still named a day 3 times. One
+ * retry takes the expected loss to roughly 6% while the number that actually matters — bumps that
+ * ship asserting a day nobody agreed to — is ZERO, because the guard runs on the text that ships.
+ */
+export async function resolveHumanThreadNudgeText(args: {
+  compose: (extra?: string) => Promise<string | null>;
+  referencesPastDatedEvent: (text: string) => boolean;
+}): Promise<HumanThreadNudgeResolution> {
+  let lastDay: string | null = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const text = await args.compose(attempt === 0 ? undefined : (lastDay ?? undefined));
+    if (!text) return { text: null, suppressedReason: attempt === 0 ? null : "day_reference_suppressed" };
+    // Past-dated events were already this lane's invariant; it just lived in index.ts.
+    if (args.referencesPastDatedEvent(text)) return { text: null, suppressedReason: "past_event_suppressed" };
+    const day = nudgeNamesAnUnfoundedDay(text);
+    if (!day) return { text, suppressedReason: null };
+    lastDay = day;
+  }
+  return { text: null, suppressedReason: "day_reference_suppressed" };
 }

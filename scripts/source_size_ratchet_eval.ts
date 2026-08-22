@@ -527,6 +527,11 @@ const CEILINGS: Ceiling[] = [
     // variant decision and both copies live in domain/agentVoice.ts + transitionSafety.ts, so
     // index.ts swaps an inline reminder string for one builder call and comes out 3 lines lighter.
     // Authored against da537379 as 70_023 -> 70_020; re-derived here against a5d38654.
+    // HELD at 69_952 on 2026-08-22 with the tree one line UNDER it. The dated-thread nudge slice
+    // moved its anchor mapping out to humanThreadNudge.ts and freed a line, but PR #800 is proven
+    // green sitting EXACTLY on 69_952; taking the ceiling to 69_951 would red-line a finished PR
+    // over one line. Not a raise — the forbidden direction — just a deferral. Owed: -1 on the next
+    // index.ts slice after #800 lands.
     // 69_973 -> 69_952. The department-invite task guard (Robert Guarino, +17163164302). The
     // classifier's activity window moved verbatim to domain/taskFulfillmentAutoClose.ts, beside the
     // `latestActivityAtMs` guard that is a statement ABOUT that window — index.ts pays one import
@@ -614,13 +619,16 @@ const CEILINGS: Ceiling[] = [
     // domain/bookingIntentParser.ts, the way its staff-side sibling already lives in
     // domain/manualOutboundAppointment.ts — the day-from-context rule is now written once per
     // parser, in a file an eval can import instead of a hand-copy that drifts.
+    // 16_022 -> 16_020. The dated-thread nudge slice (William Higgins, +17165233086):
+    // composeHumanThreadNudgeWithLLM now takes HumanThreadNudgePromptArgs directly instead of
+    // re-declaring the same three fields, so a field added to the prompt cannot go unplumbed here.
     // 16_049 -> 16_022. The quiet-thread nudge's prompt moved to domain/humanThreadNudgePrompt.ts.
     // The trigger was Joe's 2026-08-21 report that a bump re-told the customer what the rep had
     // already told him: the fix is a prompt rule, and adding it here breached this ceiling — which
     // is the ratchet working. Extracting rather than raising also lets human_thread_nudge:eval
     // assert the real prompt string instead of grepping a character-window of this file, a window
     // that had already stopped covering the end of that prompt.
-    max: 16_022,
+    max: 16_020,
     note: "every parser prompt + JSON schema; second-largest and on the same trajectory"
   }
 ];

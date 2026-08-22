@@ -640,6 +640,8 @@ import {
   humanThreadNudgeMaxCount,
   humanThreadNudgeSpacingDays,
   resolveHumanThreadNudgeComposeGate,
+  buildHumanThreadNudgeComposeArgs,
+  resolveHumanThreadNudgeText,
   isHumanThreadNudgeRestatement,
   selectHumanThreadNudgeThread,
   hasOpenFutureDatedTodo
@@ -31292,22 +31294,19 @@ async function processDueFollowUpsUnlocked() {
         continue;
       }
       nudgeCompositions += 1;
-      const nudgeText = await composeHumanThreadNudgeWithLLM({
-        firstName: conv.lead?.firstName,
-        recentMessages: nudgeAnchors.map((m: any) => ({
-          direction: m.direction === "in" ? ("in" as const) : ("out" as const),
-          body: String(m.body ?? "")
-        }))
+      // BOTH output invariants live in the domain resolver now (a past-dated event, and naming any
+      // day on a lane that by construction has no booked appointment), along with the one retry.
+      const nudgeArgs = buildHumanThreadNudgeComposeArgs({ firstName: conv.lead?.firstName, anchors: nudgeAnchors, nowMs: now.getTime() });
+      const nudge = await resolveHumanThreadNudgeText({
+        compose: retryAfterDayReference => composeHumanThreadNudgeWithLLM({ ...nudgeArgs, retryAfterDayReference }),
+        referencesPastDatedEvent: t => referencesPastDatedEvent([t], { nowMs: now.getTime() })
       });
-      if (!nudgeText) continue;
-      // The composed text can name a date the anchors never did, so the same guard runs on it too.
-      if (referencesPastDatedEvent([nudgeText], { nowMs: now.getTime() })) {
-        recordRouteOutcome("manual", "human_thread_nudge_past_event_suppressed", {
-          convId: conv.id,
-          leadKey: conv.leadKey
-        });
+      if (!nudge.text) {
+        if (nudge.suppressedReason)
+          recordRouteOutcome("manual", `human_thread_nudge_${nudge.suppressedReason}`, { convId: conv.id, leadKey: conv.leadKey });
         continue;
       }
+      const nudgeText = nudge.text;
       const nudgeMessage = ensureInitialSmsOptOutFooter(conv, nudgeText, {
         provider: "twilio",
         from: process.env.TWILIO_FROM_NUMBER ?? "salesperson",

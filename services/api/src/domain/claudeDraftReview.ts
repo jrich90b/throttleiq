@@ -27,6 +27,7 @@ import { anthropicMessagesRequest, extractAnthropicToolInput } from "./anthropic
 import { getCachedDealerProfile } from "./dealerProfile.js";
 import { addOpsAnomaly } from "./opsAnomalyStore.js";
 import { loadReviewRelevantCharterRules } from "./policyCharterFeed.js";
+import { formatThreadLineStamp } from "./threadRecency.js";
 import {
   getAllConversations,
   getLatestPendingDraft,
@@ -545,36 +546,16 @@ export interface ClaudeReviewThreadMessage {
   mediaCount?: number;
 }
 
-function describeReviewThreadAge(atMs: number, nowMs: number): string {
-  const dayMs = 24 * 60 * 60 * 1000;
-  // Calendar-day difference, not elapsed hours: "yesterday at 4pm" must not read as "today"
-  // because only 20 hours have passed. Staleness is what the reviewer has to judge.
-  const startOfDay = (ms: number) => {
-    const d = new Date(ms);
-    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  };
-  const days = Math.round((startOfDay(nowMs) - startOfDay(atMs)) / dayMs);
-  if (days <= 0) return "today";
-  if (days === 1) return "yesterday";
-  return `${days} days ago`;
-}
-
 /**
  * Render ONE thread line for the reviewer: who spoke, WHEN, what they attached, what they said.
  * Pure and exported so `claude_draft_review_context:eval` can pin it without an API key.
+ *
+ * The WHEN half now lives in `threadRecency.ts` — the quiet-thread nudge hit this same defect and
+ * needed the identical stamp (2026-08-22). Output is unchanged; the reviewer's own eval pins it.
  */
 export function renderClaudeReviewThreadLine(m: ClaudeReviewThreadMessage, nowMs: number): string {
   const who = m.direction === "in" ? "CUSTOMER" : "DEALERSHIP";
-  const atMs = Date.parse(String(m.at ?? ""));
-  const when = Number.isFinite(atMs)
-    ? ` (${new Date(atMs).toLocaleString("en-US", {
-        weekday: "short",
-        month: "short",
-        day: "numeric",
-        hour: "numeric",
-        minute: "2-digit"
-      })}, ${describeReviewThreadAge(atMs, nowMs)})`
-    : "";
+  const when = formatThreadLineStamp(m.at, nowMs);
   const count = Number(m.mediaCount ?? 0);
   // Named explicitly so the reviewer cannot mistake an arrived attachment for one merely offered.
   const media = Number.isFinite(count) && count > 0 ? ` [sent ${count} photo/file attachment${count === 1 ? "" : "s"}]` : "";
