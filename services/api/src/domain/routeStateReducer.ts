@@ -3055,10 +3055,28 @@ export function reduceStaleStateForInbound(input: StaleStateCleanupInput): Stale
   // manual_handoff threads carry a sticky schedule_request, 7 of them with a confirmed appointment;
   // the detector flags 8 conversations store-wide and NONE of those 7 — its population stays 8.
   //
+  // WIDENED 2026-08-22: this arm used to also require `mode === "manual_handoff"`. That condition was
+  // inherited from the population #767 happened to be measuring, NOT from the safety proof above.
+  // isSchedulingLeakConversation never reads followUp.mode at any point, so "a confirmed appointment
+  // is already invisible to the detector" is true in EVERY follow-up mode. The narrowing bought no
+  // safety; it only left the same stale-state bug live in the other modes.
+  //
+  // Measured on the live store 2026-08-22 (883 conversations), by executing this reducer over it:
+  // 118 threads carry a sticky schedule_request, 28 of those with a confirmed appointment. The arm
+  // fired on 8 (all manual_handoff) and now fires on 22 — the 14 added are 11 active and 3 with no
+  // follow-up mode recorded. The remaining 6 are correctly held back by reschedulePending below.
+  // Every one of the 14 has an appointment in the PAST (9.6 to 121.5 days old) — settled long ago,
+  // still steering the next draft.
+  //
+  // Honest scope: 11 of those 14 are CLOSED threads, so the live draft-steering reach is the 3 open
+  // ones (+17162453680, +17168039550, +17164233156), taking the arm from 3 to 6 open threads. The
+  // rest is latent — a closed thread that takes a new inbound would otherwise reopen still steering
+  // at a visit that already happened. The detector's flagged population was EXECUTED before and
+  // after the widening: 8 -> 8, delta 0.
+  //
   // reschedulePending / hasSchedulingIntent keep a LIVE scheduling exchange out of it: if the visit is
   // being moved, or the customer raised scheduling this very turn, the state is current, not stale.
   if (
-    mode === "manual_handoff" &&
     dialogState === "schedule_request" &&
     appointmentStatus === "confirmed" &&
     !appointmentReschedulePending &&
