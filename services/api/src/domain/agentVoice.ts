@@ -9,6 +9,9 @@
  * opener). Keep all intro wording here so future tweaks are one edit, never scattered.
  */
 import { demoRideAlreadyHappened } from "./leadSourceRules.js";
+// phoneLogLead's only conversationStore dependency is `import type`, which tsc erases, so this
+// adds no runtime edge back into the store module.
+import { isPhoneLogConversation } from "./phoneLogLead.js";
 
 /**
  * Neutral agent stand-in for fail paths where the dealer profile has no agentName.
@@ -1262,4 +1265,109 @@ export function buildUnpaidSeatLine(paymentMethods: string): string {
  */
 export function buildJumpstartRegistrationInvite(): string {
   return "We've also got a Jumpstart here you can try before class — want me to set up one-on-one time on it?";
+}
+
+/**
+ * WHO the agent says it is on this thread.
+ *
+ * Moved here from `index.ts` (agent-loop 2026-08-22) because every input it reads already
+ * lives in this module — `GENERIC_AGENT_DISPLAY_NAME`, `buildPersonaSelfIntroPattern`,
+ * `resolveIntroducedOwnerFirstName` — and the answer it returns is signed on a text to a
+ * customer, which is this file's whole subject. Pure function, no behaviour change in the
+ * move itself.
+ *
+ * The ladder, most specific first:
+ *   1. the send-time manual-sender lock (a rep deliberately took the thread over),
+ *   2. the historic backfill for threads that pre-date that lock (2026-06-11),
+ *   3. the lead owner, when the thread is one where a named human is already the face of it
+ *      (manual takeover, a walk-in, a PHONE LOG, or an owner who has introduced themselves),
+ *   4. the configured dealer persona, else the neutral generic.
+ */
+export function resolveConversationAgentName(conv: any, fallbackName?: string): string {
+  // Ultimate fallback is the neutral generic, never a hardcoded AH-era persona
+  // literal (identity-fallback sweep, 2026-07-17).
+  const normalizeAgentName = (raw: string | null | undefined, fallback = GENERIC_AGENT_DISPLAY_NAME): string => {
+    const clean = String(raw ?? "").trim();
+    if (!clean || /^(our team|sales team|team)$/i.test(clean)) return fallback;
+    return clean;
+  };
+  const fallback = normalizeAgentName(fallbackName, GENERIC_AGENT_DISPLAY_NAME);
+  // Persona self-intro matcher for the historic-backfill scan below — built from the
+  // resolved agent name (call sites pass the profile agentName as fallbackName), not a literal.
+  const personaSelfIntro = buildPersonaSelfIntroPattern(fallback === GENERIC_AGENT_DISPLAY_NAME ? null : fallback);
+  const leadFirst = String(conv?.lead?.firstName ?? "")
+    .trim()
+    .toLowerCase();
+  const leadFull = [conv?.lead?.firstName, conv?.lead?.lastName]
+    .map((v: unknown) => String(v ?? "").trim())
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  const leadDisplay = String(conv?.lead?.name ?? "")
+    .trim()
+    .toLowerCase();
+  const matchesLeadIdentity = (raw: string): boolean => {
+    const clean = String(raw ?? "").trim().toLowerCase();
+    if (!clean) return false;
+    const first = clean.split(/\s+/).filter(Boolean)[0] ?? "";
+    if (leadFirst && first === leadFirst) return true;
+    if (leadFull && clean === leadFull) return true;
+    if (leadDisplay && clean === leadDisplay) return true;
+    return false;
+  };
+  const lockedNameRaw = String(conv?.manualSender?.userName ?? "").trim();
+  if (lockedNameRaw && !/^(our team|sales team|team)$/i.test(lockedNameRaw)) {
+    const first = lockedNameRaw.split(/\s+/).filter(Boolean)[0] ?? "";
+    return normalizeAgentName(first || lockedNameRaw, fallback);
+  }
+  // Historic backfill: threads where staff already took over before the
+  // manualSender lock existed (2026-06-11) resolve to the FIRST staff sender
+  // who texted as themselves - same semantics the send-time lock applies.
+  for (const m of conv?.messages ?? []) {
+    if (m?.direction !== "out") continue;
+    const prov = String(m?.provider ?? "");
+    if (prov !== "twilio" && prov !== "sendgrid" && prov !== "human") continue;
+    const actor = String(m?.actorUserName ?? "").trim();
+    if (!actor || /^(our team|sales team|team)$/i.test(actor)) continue;
+    if (personaSelfIntro && personaSelfIntro.test(String(m?.body ?? ""))) continue;
+    if (matchesLeadIdentity(actor)) continue;
+    const first = actor.split(/\s+/).filter(Boolean)[0] ?? "";
+    return normalizeAgentName(first || actor, fallback);
+  }
+  const manualTakeover =
+    String(conv?.manualSender?.source ?? "").trim().toLowerCase() === "manual_takeover";
+  const walkInLead = Boolean(conv?.lead?.walkIn);
+  // A PHONE LOG is a walk-in that happened over the phone: a named rep has already spoken to
+  // this customer, and the lead record is that rep's own note about the call. The first touch
+  // must therefore come from the rep they just talked to, not from the dealer persona.
+  //
+  // WHY (Zack Busch, +17162489119, operator-reported 2026-08-19: "should have introduced as
+  // salesperson which is joe, not alexandra"). Joe took Zack's call, logged it in Traffic Log
+  // Pro, and the ADF landed with `leadOwner: Joe Hartrich`. Nothing had been sent yet, so the
+  // manual-sender lock was unset and the walk-in flag is not raised on a phone log — the ladder
+  // fell all the way through to the persona and drafted "Hey Zackary, it's Alexandra over at
+  // American Harley-Davidson." Joe rewrote it to "Hey Zack, it's Joe" before sending.
+  //
+  // MEASURED over the whole store, 10 phone-log conversations: on 7 of the 7 first touches a
+  // HUMAN wrote, the store signs as the lead owner ("this is Scott from American H-D", "it's Joe
+  // over at American Harley") — never the persona. The only machine draft we can read is Zack's,
+  // and it was rewritten. The dealership's own behaviour is unanimous.
+  //
+  // BLAST RADIUS on stored state: ZERO. All 10 already resolve to the owner via the arms above,
+  // because staff sends before anything else reads the name — this arm only ever fires on a
+  // first touch that has not been sent yet, which is exactly the turn that was wrong.
+  //
+  // FAIL DIRECTION: if the phone-log test is wrong we sign as the rep who OWNS the lead instead
+  // of the persona — still a real person at this store, and still bounded by `matchesLeadIdentity`
+  // below so we can never sign as the customer. The reverse (persona-signing a customer who just
+  // hung up with Scott) is the miss being fixed.
+  const phoneLogLead = isPhoneLogConversation(conv);
+  if (manualTakeover || walkInLead || phoneLogLead || resolveIntroducedOwnerFirstName({ ownerName: conv?.leadOwner?.name, messages: conv?.messages })) {
+    const ownerNameRaw = String(conv?.leadOwner?.name ?? "").trim();
+    if (ownerNameRaw && !/^(our team|sales team|team)$/i.test(ownerNameRaw) && !matchesLeadIdentity(ownerNameRaw)) {
+      const first = ownerNameRaw.split(/\s+/).filter(Boolean)[0] ?? "";
+      return normalizeAgentName(first || ownerNameRaw, fallback);
+    }
+  }
+  return fallback;
 }

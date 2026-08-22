@@ -508,7 +508,22 @@ const CEILINGS: Ceiling[] = [
     // `/analytics/kpi` was a verbatim relocation and `/analytics/appointments` never touched
     // index.ts at all. index.ts pays for one import and one register call and comes out 57 lines
     // lighter, so the ceiling takes the whole gain rather than leaving it as spendable slack.
-    max: 70_044,
+    // 70_044 -> 69_960. The phone-log first-touch signature fix (Zack Busch, +17162489119).
+    // `resolveConversationAgentName` moved verbatim to domain/agentVoice.ts, where every input it
+    // already reads lives (GENERIC_AGENT_DISPLAY_NAME, buildPersonaSelfIntroPattern,
+    // resolveIntroducedOwnerFirstName) — index.ts pays one import and comes out 63 lines lighter,
+    // so the behaviour change itself costs index.ts nothing and the ceiling takes the whole gain.
+    //
+    // This number was re-derived FOUR times while the branch was proving, and that is the part
+    // worth leaving here. Authored at 69_981 against b1540eb6; 1438ee9e then landed +54 and left
+    // main RED at 70_098 over a 70_044 ceiling, making the honest figure 70_035; da537379 then
+    // extracted the ride-challenge heals to domain/rideChallengeCadence.ts, bringing main to
+    // 70_023 and this branch to 69_960; then 8b7103c4 (takeover cadence resume) landed +16, putting
+    // main at 70_039 (green, 5 under its own ceiling) and this branch at 69_976. Every one of those
+    // was correct when measured and wrong an hour later. Re-derive against CURRENT main immediately
+    // before merging — never carry a ceiling computed against the base you branched from (the #418
+    // trap), and do not assume the ceiling you rebased onto is even green.
+    max: 69_976,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
