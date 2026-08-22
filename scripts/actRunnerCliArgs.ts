@@ -43,7 +43,7 @@ export const ACT_RUNNER_FLAGS: Readonly<Record<string, FlagSpec>> = {
   list: { value: ["in"], bool: [] },
   prep: { value: ["id", "in"], bool: ["top"] },
   "check-open-pr": { value: ["key"], bool: [] },
-  dispose: { value: ["key", "as", "by", "deploy-ts", "note"], bool: [] },
+  dispose: { value: ["key", "as", "by", "deploy-ts", "note", "report-at"], bool: ["all-reports"] },
   "open-pr": { value: ["title", "finding-key"], bool: ["eval-verified"] },
   review: {
     value: ["title", "finding-key", "finding", "charter"],

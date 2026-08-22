@@ -469,6 +469,7 @@
     "open_critic_human_send_exclusion:eval",
     "open_critic_watch_alert_scope:eval",
     "reported_issue:eval",
+    "disposition_report_scope:eval",
     "thumbs_down_action:eval",
     "thumbs_down_action_disposition:eval",
     "closed_watch_pause:eval",

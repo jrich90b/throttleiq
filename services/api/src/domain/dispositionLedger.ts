@@ -36,6 +36,88 @@
  */
 import { findingKeyOf, isMeaningfulFindingKey } from "./loopPrDedup.js";
 
+// ===================================================================================================
+// REPORT SCOPE — `convId::dimension` names a LEAD, not a FINDING (measured 2026-08-22)
+//
+// One conversation routinely carries SEVERAL unrelated reports under the SAME dimension, and the
+// two-part key collapses them all into one row. Disposing the one you verified silences the ones you
+// never looked at, permanently, if the disposition is a POLICY one.
+//
+// It happened, to an agent that knew: `+15307211080::reported_issue` holds two operator complaints
+// filed seven minutes apart on 8/15 — (a) "customer said STOP but I don't see the lead going to the
+// suppressed list", verified correct end to end (suppressions.json carries the record 4.7s after the
+// STOP, cadence stopped, thread closed, nothing sent after), and (b) "we don't have a 2025 street
+// glide in stock", a live first-touch defect. The loop disposed (a) `no-action` — and wrote the split
+// into its own `--note` in the same breath: "the second report on this same key is a DIFFERENT and
+// REAL defect … NOT disposed by this". The tool accepted it and printed "suppressed permanently".
+// The note is prose; the ledger is a key. (b) was silenced by a disposition whose own text said it
+// must not be, and the only repair was hand-editing the ledger (347 → 346) because there is no
+// `undispose`. Same day, `+17169941544::reported_issue` held THREE unrelated reports.
+//
+// So a discipline ("check the feed for siblings first") is not enough — it lost to someone actively
+// holding it. The key itself has to carry the scope.
+//
+// THE RULE: an optional third component identifies the individual report. A record written as
+// `convId::dimension::<reportStamp>` disposes THAT REPORT; the legacy two-part form still disposes
+// the whole dimension on that lead, so all 346 existing records keep their exact meaning.
+//
+// FAIL DIRECTION, both halves toward KEEPING findings: lookup tries the narrow key first and falls
+// back to the broad one, so report-scoping can only ever suppress LESS than before — never more. A
+// finding carrying no usable stamp simply has no narrow key and behaves exactly as it does today.
+// ===================================================================================================
+
+/** Separator for the optional third component. Same `::` the two-part key already uses. */
+const REPORT_SCOPE_SEPARATOR = "::";
+
+/**
+ * `convId::dimension` (whole dimension on this lead) or `convId::dimension::<stamp>` (one report).
+ * A blank/unusable stamp yields the two-part form rather than a trailing separator.
+ */
+export function dispositionKeyOf(
+  convId: string | null | undefined,
+  dimension: string | null | undefined,
+  reportStamp?: string | null
+): string {
+  const base = findingKeyOf(convId, dimension);
+  const stamp = String(reportStamp ?? "").trim();
+  return stamp ? `${base}${REPORT_SCOPE_SEPARATOR}${stamp}` : base;
+}
+
+/** Narrow an existing `convId::dimension` key to one report. Idempotent on an already-scoped key. */
+export function withReportScope(key: string, reportStamp: string): string {
+  const base = findingKeyOfDispositionKey(key);
+  const stamp = String(reportStamp ?? "").trim();
+  return stamp ? `${base}${REPORT_SCOPE_SEPARATOR}${stamp}` : base;
+}
+
+/** True for a key carrying a third component — i.e. one scoped to a single report. */
+export function isReportScopedKey(key: string | null | undefined): boolean {
+  return String(key ?? "").split(REPORT_SCOPE_SEPARATOR).length > 2;
+}
+
+/** The `convId::dimension` a key belongs to, whether or not it carries a report scope. */
+export function findingKeyOfDispositionKey(key: string | null | undefined): string {
+  const parts = String(key ?? "").split(REPORT_SCOPE_SEPARATOR);
+  return parts.length > 2 ? parts.slice(0, 2).join(REPORT_SCOPE_SEPARATOR) : String(key ?? "");
+}
+
+/**
+ * The stamp that identifies ONE report within a lead+dimension, or null.
+ *
+ * `reportedAt` first: it is the operator "Report issue" instant, unique per report, and it is the
+ * field this whole collision shows up in (every measured instance is `reported_issue`). `occurredAt`
+ * is the fallback for detector-minted findings that carry an event instead. `firstSeenAt` is
+ * DELIBERATELY NOT used — it is per-KEY, not per-report, so it would hand every sibling the same
+ * stamp and re-create the collision while looking like it had solved it.
+ */
+export function reportScopeOf(finding: DisposableFinding | null | undefined): string | null {
+  const reported = String(finding?.reportedAt ?? "").trim();
+  if (reported && Number.isFinite(Date.parse(reported))) return reported;
+  const occurred = String(finding?.occurredAt ?? "").trim();
+  if (occurred && Number.isFinite(Date.parse(occurred))) return occurred;
+  return null;
+}
+
 /** The vocabulary every routine disposes with (ROUTINE_CONTRACT.md "Staleness"). */
 export type Disposition = "fixed" | "stale-echo" | "no-action" | "joe-ruled";
 
@@ -250,8 +332,16 @@ export function partitionByDispositions<T extends DisposableFinding>(
   const regressions: DispositionRegression<T>[] = [];
   const ledger = args.ledger;
   for (const a of anomalies ?? []) {
-    const key = findingKeyOf(a?.convId ?? null, a?.dimension ?? null);
-    const record = ledger && isMeaningfulFindingKey(key) ? ledger.get(key) : undefined;
+    // NARROW FIRST, then broad. A record scoped to this exact report wins; failing that, the legacy
+    // whole-dimension record applies, so every pre-existing two-part disposition keeps its meaning.
+    // The order matters only for which RECORD is cited — either way this can suppress no more than
+    // the two-part lookup did on its own, which is the fail direction this module keeps throughout.
+    const broadKey = findingKeyOf(a?.convId ?? null, a?.dimension ?? null);
+    const scope = reportScopeOf(a);
+    const narrowKey = scope ? dispositionKeyOf(a?.convId ?? null, a?.dimension ?? null, scope) : null;
+    const lookup = ledger && isMeaningfulFindingKey(broadKey) ? ledger : null;
+    const record = (narrowKey ? lookup?.get(narrowKey) : undefined) ?? lookup?.get(broadKey);
+    const key = record && narrowKey && lookup?.get(narrowKey) === record ? narrowKey : broadKey;
     if (!record) {
       kept.push(a);
       continue;
@@ -338,10 +428,19 @@ export function restoreDisposedRegressions<T extends { convId?: unknown; dimensi
   survivors: readonly T[],
   regressions: readonly T[]
 ): RegressionShieldResult<T> {
-  // Same key function every suppression pass uses — `findingKeyOf` from loopPrDedup, already
-  // imported above and used by `partitionByDispositions`. Sharing it is the point: the shield must
-  // recognize a finding as "already present" by exactly the key the passes matched on to drop it.
-  const keyOf = (a: T) => findingKeyOf((a as any)?.convId ?? null, (a as any)?.dimension ?? null);
+  // Keyed the same way `partitionByDispositions` decides scope: by REPORT where the finding carries
+  // a stamp, by lead+dimension otherwise. The shield must recognize a finding as "already present"
+  // by the key the passes matched on to drop it — but the passes match by lead+dimension, and a lead
+  // carries several reports, so keying the shield that way too let ONE surviving report mask a
+  // regression on a DIFFERENT report of the same lead, and let two genuine regressions collapse into
+  // one restoration. Scoping by report can only ever restore MORE, which is this shield's whole
+  // declared fail direction: worst case is re-triaging a finding, never hiding one.
+  const keyOf = (a: T) =>
+    dispositionKeyOf(
+      (a as any)?.convId ?? null,
+      (a as any)?.dimension ?? null,
+      reportScopeOf(a as DisposableFinding)
+    );
   const present = new Set(survivors.map(keyOf));
   const restored: T[] = [];
   for (const r of regressions) {
