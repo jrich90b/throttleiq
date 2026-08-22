@@ -23,7 +23,9 @@ import {
   isQuietTriggeredTask,
   decideReplyOwedTaskClose,
   describeOutboundMedia,
-  outboundActivityText
+  outboundActivityText,
+  buildTaskFulfillmentActivityWindow,
+  activityChannelForProvider
 } from "../services/api/src/domain/taskFulfillmentAutoClose.ts";
 
 // --- Eligibility: the 0.85 classifier decides for ANY customer-facing task. Only structurally
@@ -388,4 +390,136 @@ assert.equal(
   "body whitespace is normalized exactly as before"
 );
 
-console.log("PASS task fulfillment auto-close gate eval (+ reply-owed closer + media-only visibility)");
+// --- A task may not be closed by evidence OLDER than itself (Robert Guarino +17163164302, 8/22).
+// Joe brought Parts in at 15:55:29.783Z; the backfill re-check closed the task 54s later at 0.90,
+// citing photos from 13:43Z and a reply at 14:04Z — two hours before the task existed. Nobody from
+// Parts had touched it, and the thread never reached Brandon's inbox.
+{
+  const CREATED = Date.parse("2026-08-22T15:55:29.783Z");
+  const NEWEST_MESSAGE = Date.parse("2026-08-22T14:30:58.562Z"); // the last real message on that thread
+  const strongVerdict = { taskId: "todo_ffb1bc5d8c9df_1787414129783", fulfilled: true, confidence: 0.9 };
+  const partsTask = { summary: "lights" };
+
+  const robert = decideTaskAutoClose({
+    enabled: true,
+    eligible: true,
+    verdict: strongVerdict,
+    task: partsTask,
+    dealerOutboundTrigger: false,
+    taskCreatedAtMs: CREATED,
+    latestActivityAtMs: NEWEST_MESSAGE
+  });
+  assert.equal(robert.close, false, "THE FIX: a 54-second-old task is not fulfilled by a two-hour-old photo exchange");
+  assert.equal(robert.reason, "task_newer_than_its_evidence", "and the shadow log names the real blocker");
+
+  // The same task, once something actually happens after it — a dealer reply an hour later.
+  const afterRealActivity = decideTaskAutoClose({
+    enabled: true,
+    eligible: true,
+    verdict: strongVerdict,
+    task: partsTask,
+    dealerOutboundTrigger: true,
+    taskCreatedAtMs: CREATED,
+    latestActivityAtMs: CREATED + 60 * 60 * 1000
+  });
+  assert.equal(afterRealActivity.close, true, "a task IS closable once the thread moves after it was filed");
+
+  // Exactly equal timestamps are not "after": a window that ends where the task begins saw nothing new.
+  assert.equal(
+    decideTaskAutoClose({
+      enabled: true, eligible: true, verdict: strongVerdict, task: partsTask,
+      dealerOutboundTrigger: true, taskCreatedAtMs: CREATED, latestActivityAtMs: CREATED
+    }).reason,
+    "task_newer_than_its_evidence",
+    "equal timestamps refuse — the boundary is strictly after"
+  );
+
+  // Missing either timestamp reproduces the pre-2026-08-22 behaviour rather than stranding the task.
+  const partial: Array<[string, Record<string, number>]> = [
+    ["no createdAt", { latestActivityAtMs: NEWEST_MESSAGE }],
+    ["no activity time", { taskCreatedAtMs: CREATED }],
+    ["neither", {}],
+    ["unparseable createdAt", { taskCreatedAtMs: Number.NaN, latestActivityAtMs: NEWEST_MESSAGE }]
+  ];
+  for (const [label, extra] of partial) {
+    const d = decideTaskAutoClose({
+      enabled: true, eligible: true, verdict: strongVerdict, task: partsTask, dealerOutboundTrigger: true, ...extra
+    });
+    assert.equal(d.close, true, `${label}: the guard is finite-gated and never strands a task`);
+  }
+
+  // Ordering: the guard reports BEFORE the flag check, like the quiet and booking guards, so a dark
+  // run's shadow log shows the real blocker instead of "shadow_would_close".
+  assert.equal(
+    decideTaskAutoClose({
+      enabled: false, eligible: true, verdict: strongVerdict, task: partsTask,
+      dealerOutboundTrigger: false, taskCreatedAtMs: CREATED, latestActivityAtMs: NEWEST_MESSAGE
+    }).reason,
+    "task_newer_than_its_evidence",
+    "the shadow log names this blocker, not the flag"
+  );
+
+  // ...but a weak verdict is still reported as weak: the new guard must not mask the older reasons.
+  assert.equal(
+    decideTaskAutoClose({
+      enabled: true, eligible: true, verdict: { ...strongVerdict, confidence: 0.4 }, task: partsTask,
+      dealerOutboundTrigger: false, taskCreatedAtMs: CREATED, latestActivityAtMs: NEWEST_MESSAGE
+    }).reason,
+    "below_confidence",
+    "confidence is still judged first"
+  );
+}
+
+// --- The window builder and the guard are one invariant, so they are pinned together: the window's
+// end is what `latestActivityAtMs` means.
+{
+  const messages = [
+    { direction: "in", provider: "twilio", at: "2026-08-22T13:43:43.294Z", body: "Here is a picture of the lights." },
+    { direction: "out", provider: "twilio", at: "2026-08-22T14:04:38.813Z", body: "Got both photos — thanks!" },
+    { direction: "out", provider: "twilio", at: "2026-08-22T14:30:58.562Z", body: "Thanks again for coming to see us." }
+  ];
+  const built = buildTaskFulfillmentActivityWindow(messages, { channel: "sms", text: "", direction: "in" }, "");
+  assert.equal(
+    new Date(built.latestActivityAtMs).toISOString(),
+    "2026-08-22T14:30:58.562Z",
+    "the window reports the NEWEST message time — what the guard compares the task against"
+  );
+  assert.equal(built.activity.length, 3, "an inbound trigger appends no synthetic action");
+
+  const withSend = buildTaskFulfillmentActivityWindow(messages, { channel: "sms", text: "on its way" }, "on its way");
+  assert.equal(
+    withSend.activity[withSend.activity.length - 1].text,
+    "on its way",
+    "an outbound trigger ends with the just-sent message"
+  );
+
+  assert.ok(
+    Number.isNaN(
+      buildTaskFulfillmentActivityWindow(
+        [{ direction: "in", provider: "twilio", body: "hi" }],
+        { channel: "sms", text: "", direction: "in" },
+        ""
+      ).latestActivityAtMs
+    ),
+    "no parseable timestamp => NaN, which switches the guard OFF rather than guessing"
+  );
+  assert.equal(activityChannelForProvider("sendgrid"), "email", "provider mapping moved verbatim");
+  assert.equal(activityChannelForProvider("voice_summary"), "call", "provider mapping moved verbatim");
+  assert.equal(activityChannelForProvider("twilio"), "sms", "provider mapping moved verbatim");
+}
+
+// The window builder now lives beside the guard; index.ts must not keep a second copy, and must pass
+// BOTH halves of the comparison or the refusal can never fire in production.
+{
+  const indexSrc = await fs.readFile(path.resolve("services/api/src/index.ts"), "utf8");
+  assert.ok(
+    indexSrc.includes("buildTaskFulfillmentActivityWindow(conv.messages, action, actionText)"),
+    "index.ts builds the classifier window through the domain helper"
+  );
+  assert.ok(
+    indexSrc.includes("latestActivityAtMs") && indexSrc.includes("taskCreatedAtMs: Date.parse(String(task.createdAt"),
+    "…and passes both taskCreatedAtMs and latestActivityAtMs into decideTaskAutoClose"
+  );
+}
+
+console.log("PASS task fulfillment auto-close gate eval (+ reply-owed closer + media-only visibility + evidence-age guard)");

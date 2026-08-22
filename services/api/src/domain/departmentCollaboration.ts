@@ -121,12 +121,28 @@ export type BringInResult = {
    * the state that already succeeded.
    */
   shouldNotify: boolean;
+  /**
+   * The caller MUST file the department's task. True for a new invite, and ALSO true when the
+   * department is already in the thread but has NO open task any more.
+   *
+   * THE SAME LESSON AS `shouldNotify`, second instance (live defect, 2026-08-22, +17163164302
+   * Robert Guarino): the task is not permanent state either. The fulfillment judge closed Robert's
+   * Parts task 54 seconds after Joe filed it, and because this function reported a flat no-op on an
+   * already-active department, clicking "bring in Parts" again could never restore it — the one
+   * recovery Joe had was gone, and the thread was invisible to Brandon with the invite still showing
+   * as active. An idempotency guard must key on the side effect that can DISAPPEAR, not on the state
+   * that already succeeded.
+   */
+  shouldFileTask: boolean;
 };
 
 /**
- * Bring a department in. Idempotent on purpose: inviting Parts twice must not mint a second todo or
- * text Brandon again, so a repeat invite while the first is still active is a no-op that reports
- * `added: false`. Re-inviting AFTER a hand-back is a genuinely new request and does add an entry.
+ * Bring a department in. Idempotent on purpose: inviting Parts twice must not mint a SECOND todo
+ * beside a live one or text Brandon again, so a repeat invite while both side effects still exist is
+ * a no-op that reports `added: false`. Re-inviting AFTER a hand-back is a genuinely new request and
+ * does add an entry. `hasOpenDepartmentTask` is what the caller knows and this function cannot: it is
+ * asked, not assumed, because "already invited" and "still has a task" stopped being the same thing
+ * the day something else closed the task.
  */
 export function bringInDepartment(
   collaborators: unknown,
@@ -136,17 +152,27 @@ export function bringInDepartment(
     invitedByName?: string | null;
     note?: string | null;
     at: string;
+    /** Does an OPEN task for this department exist on the thread right now? */
+    hasOpenDepartmentTask?: boolean;
   }
 ): BringInResult {
   const list = normalizeList(collaborators);
   const department = String(input.department).trim().toLowerCase() as CollaboratorDepartment;
-  if (!isCollaboratorDepartment(department)) return { collaborators: list, added: false, shouldNotify: false };
+  if (!isCollaboratorDepartment(department)) {
+    return { collaborators: list, added: false, shouldNotify: false, shouldFileTask: false };
+  }
   if (listActiveCollaboratorDepartments(list).includes(department)) {
-    // Already in the thread: never append a second entry or a second task. But if the last attempt
-    // reached NOBODY, the notification is still owed — let the caller retry it.
+    // Already in the thread: never append a second entry. But the two side effects that can go away
+    // on their own are still owed — a notification that reached NOBODY, and a task that no longer
+    // exists.
     const active = list.filter(e => isCollaboratorActive(e) && e.department === department);
     const everReached = active.some(e => Number(e.notifiedCount ?? 0) > 0);
-    return { collaborators: list, added: false, shouldNotify: !everReached };
+    return {
+      collaborators: list,
+      added: false,
+      shouldNotify: !everReached,
+      shouldFileTask: input.hasOpenDepartmentTask === false
+    };
   }
   const entry: DepartmentCollaborator = {
     department,
@@ -155,7 +181,7 @@ export function bringInDepartment(
     invitedByName: String(input.invitedByName ?? "").trim() || undefined,
     note: String(input.note ?? "").trim() || undefined
   };
-  return { collaborators: [...list, entry], added: true, shouldNotify: true };
+  return { collaborators: [...list, entry], added: true, shouldNotify: true, shouldFileTask: true };
 }
 
 /**

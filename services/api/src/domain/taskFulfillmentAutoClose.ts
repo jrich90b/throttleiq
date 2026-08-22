@@ -147,6 +147,63 @@ export function outboundActivityText(body: string | null | undefined, mediaCount
   return text || media;
 }
 
+export type TaskFulfillmentActivityItem = { direction: "in" | "out"; channel: "sms" | "email" | "call"; text: string };
+
+/** Provider -> the channel the classifier reasons about. */
+export function activityChannelForProvider(provider: string | null | undefined): "sms" | "email" | "call" {
+  const p = String(provider ?? "");
+  if (p === "sendgrid" || p === "sendgrid_adf") return "email";
+  return p.startsWith("voice") ? "call" : "sms";
+}
+
+/**
+ * The window the fulfillment classifier judges, plus WHEN that window ends. Lifted out of index.ts
+ * verbatim so it sits beside `decideTaskAutoClose`, whose `latestActivityAtMs` guard is a statement
+ * ABOUT this window: the judge may only close a task that is older than the newest thing it read.
+ * Keeping the two apart is how the window silently drifted past the guard in the first place.
+ *
+ * `latestActivityAtMs` is the newest parsed message timestamp in the WHOLE thread, not just the
+ * 8-message slice — an older slice can only ever make the guard stricter, never looser, and reading
+ * the true newest message is what makes "nothing has happened since" mean what it says. NaN when the
+ * thread carries no parseable timestamp, which switches the guard off rather than guessing.
+ */
+export function buildTaskFulfillmentActivityWindow(
+  messages: readonly any[] | null | undefined,
+  action: { channel: "sms" | "email" | "call"; text: string; direction?: "out" | "in"; mediaCount?: number | null },
+  actionText: string
+): { activity: TaskFulfillmentActivityItem[]; latestActivityAtMs: number } {
+  const list = Array.isArray(messages) ? messages : [];
+  const activity = list
+    .slice(-8)
+    .map((m: any) => ({
+      direction: (m?.direction === "in" ? "in" : "out") as "in" | "out",
+      channel: activityChannelForProvider(m?.provider),
+      // Outbound media-only messages carry no body — describe them, or the classifier concludes
+      // "no photos were delivered" while the salesman was staring at 3 sent pictures.
+      text:
+        m?.direction === "in"
+          ? String(m?.body ?? "")
+          : outboundActivityText(m?.body, Array.isArray(m?.mediaUrls) ? m.mediaUrls.length : 0)
+    }))
+    .filter(a => a.text.trim());
+  // For an OUTBOUND trigger (a staff/agent send), make sure that just-sent message is the final item
+  // even if message-append timing differs. For an INBOUND trigger (a customer closure like "I'm all
+  // set"), the window already ends with that inbound — do NOT push it as an out action; the
+  // classifier still requires a prior dealer OUT in the window to have fulfilled anything.
+  if (
+    (action.direction ?? "out") !== "in" &&
+    (!activity.length || activity[activity.length - 1].text.replace(/\s+/g, " ").trim() !== actionText)
+  ) {
+    activity.push({ direction: "out", channel: action.channel, text: actionText });
+  }
+  let latestActivityAtMs = NaN;
+  for (const m of list) {
+    const t = Date.parse(String(m?.at ?? ""));
+    if (Number.isFinite(t) && (!Number.isFinite(latestActivityAtMs) || t > latestActivityAtMs)) latestActivityAtMs = t;
+  }
+  return { activity, latestActivityAtMs };
+}
+
 export type TaskFulfillmentVerdict = {
   taskId: string;
   /** Did the action accomplish the task's objective (not merely promise to)? */
@@ -275,6 +332,27 @@ export function decideTaskAutoClose(input: {
    * a strict reading here strands nothing.
    */
   appointmentBooked?: boolean;
+  /**
+   * When the task was created, and the newest message in the window this verdict was drawn from.
+   *
+   * WHY (live defect, 2026-08-22, +17163164302 Robert Guarino): Joe brought PARTS into the thread at
+   * 15:55:29Z, the task was minted the same second, and the backfill re-check closed it 54 seconds
+   * later at 0.90 — citing photos the customer sent at 13:43Z and a reply at 14:04Z, two hours
+   * BEFORE the task existed. Nobody from Parts had touched it, and Brandon opened the console to an
+   * empty list. The window is built ONCE per run from the last 8 messages and judged against every
+   * eligible task, so a task minted after that history is graded on evidence that cannot be about it.
+   *
+   * The deterministic sibling closer has always had exactly this rule
+   * (`outbound_not_after_creation`, decideReplyOwedAutoClose above). The LLM path did not. Measured
+   * over every department task ever filed (37): 9 were auto-closed by this judge, and Robert's 54
+   * seconds is the fastest by two orders of magnitude (next 620s, median 6.2h) because his invite
+   * landed on a thread whose relevant exchange had already happened.
+   *
+   * Both are optional and the guard is `Number.isFinite`-gated on BOTH: a caller that cannot supply
+   * them reproduces the pre-2026-08-22 behaviour exactly, rather than stranding every task forever.
+   */
+  taskCreatedAtMs?: number;
+  latestActivityAtMs?: number;
 }): TaskAutoCloseDecision {
   const min = input.minConfidence ?? TASK_AUTO_CLOSE_MIN_CONFIDENCE;
   if (!input.eligible) return { close: false, reason: "ineligible_task" };
@@ -293,6 +371,17 @@ export function decideTaskAutoClose(input: {
   // the real blocker.
   if (input.task && isSchedulingLeakTask(input.task) && !input.appointmentBooked) {
     return { close: false, reason: "booking_task_needs_a_booked_appointment" };
+  }
+  // NOTHING has happened since this task was minted, so every word the judge read predates it and
+  // cannot be about it. Reported BEFORE the flag check, same as the two guards above, so the shadow
+  // log names the real blocker. Applies to EVERY task class on purpose: the defect is a property of
+  // the window, not of any one family.
+  if (
+    Number.isFinite(input.taskCreatedAtMs as number) &&
+    Number.isFinite(input.latestActivityAtMs as number) &&
+    (input.latestActivityAtMs as number) <= (input.taskCreatedAtMs as number)
+  ) {
+    return { close: false, reason: "task_newer_than_its_evidence" };
   }
   if (!input.enabled) return { close: false, reason: "shadow_would_close" };
   return { close: true, reason: "fulfilled_high_confidence" };

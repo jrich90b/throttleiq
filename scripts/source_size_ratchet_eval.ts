@@ -527,7 +527,12 @@ const CEILINGS: Ceiling[] = [
     // variant decision and both copies live in domain/agentVoice.ts + transitionSafety.ts, so
     // index.ts swaps an inline reminder string for one builder call and comes out 3 lines lighter.
     // Authored against da537379 as 70_023 -> 70_020; re-derived here against a5d38654.
-    max: 69_973,
+    // 69_973 -> 69_952. The department-invite task guard (Robert Guarino, +17163164302). The
+    // classifier's activity window moved verbatim to domain/taskFulfillmentAutoClose.ts, beside the
+    // `latestActivityAtMs` guard that is a statement ABOUT that window — index.ts pays one import
+    // and one call and comes out 21 lines lighter, so the fix funds itself and the ceiling takes the
+    // whole gain. Re-derived against 672650e7.
+    max: 69_952,
     note: "the inbound handler + most wiring; the file the de-tangle program exists to shrink"
   },
   {
