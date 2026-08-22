@@ -21,6 +21,7 @@ import {
 } from "../domain/visitFraming.js";
 import { hasDeliveredOrPendingDealerRideThankYou } from "../domain/dealerRideThankYouDedup.js";
 import { applyPriorJourneyCarryOver } from "../domain/priorJourney.js";
+import { resolveCampaignThreadOnNewLead } from "../domain/campaignThreadRelease.js";
 import {
   upsertConversationByLeadKey,
   createConversationForLeadKey,
@@ -4781,6 +4782,26 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       providerMessageId: event.providerMessageId
     });
     return res.status(200).json({ ok: true, parsed: true, duplicate: true, leadKey });
+  }
+  // A brand-new web lead un-hides a thread a campaign blast tagged. Without this, the lead lands in
+  // the Campaigns view and never appears in the working Inbox — Joe, 2026-08-22, on Matt Weiser
+  // (+17165072289): "That lead was buried in campaigns which is confusing to find." The release is
+  // refereed by domain/campaignThreadRelease.ts rather than written inline, because `campaignThread`
+  // already has two writers and ROUTINE_CONTRACT forbids adding the Nth.
+  {
+    const release = resolveCampaignThreadOnNewLead({
+      campaignThread: (conv as any).campaignThread ?? null,
+      isNewWebLead: event.provider === "sendgrid_adf",
+      leadReceivedAtIso: event.receivedAt
+    });
+    if (release.changed) {
+      (conv as any).campaignThread = release.campaignThread;
+      console.log("[sendgrid inbound] campaign thread released", {
+        convId: conv.id,
+        leadKey,
+        reason: release.reason
+      });
+    }
   }
   const hasOutboundBeforeInbound = Array.isArray(conv.messages) && conv.messages.some((m: any) => m.direction === "out");
   const isInitialAdf = event.provider === "sendgrid_adf" && !hasOutboundBeforeInbound;

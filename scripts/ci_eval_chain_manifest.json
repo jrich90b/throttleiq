@@ -558,6 +558,7 @@
     "past_purchase_complaint:eval",
     "past_purchase_complaint_parser:eval",
     "opt_out_display:eval",
+    "campaign_thread_release:eval",
     "dealer_hours_write_through:eval",
     "policy_charter_feed:eval"
   ]
