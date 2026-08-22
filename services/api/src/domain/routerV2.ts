@@ -12,6 +12,8 @@ export {
   decideEventPromoTurn,
   decideOwnerThreadStepBack,
   resolveRideChallengeEventTouch,
+  decideRideChallengeWrapUpRevive,
+  RIDE_CHALLENGE_WRAPUP_MARKER,
   decideInProcessDealTurn,
   decideIndefiniteDeferTurn,
   decideDecideSoonTurn,

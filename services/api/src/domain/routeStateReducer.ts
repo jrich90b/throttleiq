@@ -3213,6 +3213,59 @@ export function resolveRideChallengeEventTouch(input: {
   return { pauseUntilIso: new Date(eventMs).toISOString() };
 }
 
+// ── Ride-challenge WRAP-UP revive (Joe ruling 2026-08-21) ─────────────────────
+// "ride challenge should generate a draft on the 15th." ~44 signups sit parked with
+// followUpCadence {status:"completed", kind:"long_term", deferredMessage:
+// "ride_challenge_final_mileage"}: the signup ack (step 0) went out and
+// advanceFollowUpCadence's reminder short-circuit (conversationStore.ts) completed the
+// cadence on the spot — and the cadence tick skips completed, so the 9/15 wrap-up would
+// never compose. This decision revives exactly those records so the NORMAL tick drafts
+// the wrap-up (suggest mode — a draft in the approval box, never an auto-send).
+// - OWED = lastSentStep < 1 (only the signup ack ever went out). advanceFollowUpCadence
+//   stamps lastSentStep at send time, so after the wrap-up goes out lastSentStep is 1 and
+//   the guard can never fire again — the revive→send→complete cycle CONVERGES (eval-pinned;
+//   a decision table alone cannot catch a loop, assert convergence).
+// - STAGGERED (Joe, 8/21 "won't overwhelm"): a convId hash spreads revives across
+//   3 consecutive days from the event date, ~1/3 per day, so the approval box gets a
+//   normal-sized morning. Deterministic per lead — reconcile may run any number of times
+//   without reshuffling.
+// - BOUNDED: revive only until event + 7d grace. A wrap-up a month late reads as a bug,
+//   not a touch; late stragglers stay dormant.
+// Fail-direction: firing wrongly = one extra suggest-mode draft staff can dismiss;
+// not firing = today's silence. Structured cadence fields only, no comprehension.
+export const RIDE_CHALLENGE_WRAPUP_MARKER = "ride_challenge_final_mileage";
+const RIDE_CHALLENGE_WRAPUP_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
+const RIDE_CHALLENGE_WRAPUP_STAGGER_DAYS = 3;
+
+export function decideRideChallengeWrapUpRevive(input: {
+  convId: string;
+  cadenceStatus?: string | null;
+  cadenceKind?: string | null;
+  deferredMessage?: string | null;
+  lastSentStep?: number | null;
+  nowMs: number;
+  followUpIso?: string | null; // env override plumbed by the caller (RIDE_CHALLENGE_FOLLOWUP_ISO)
+}): { nextDueAtIso: string } | null {
+  if (String(input.cadenceStatus ?? "") !== "completed") return null;
+  if (String(input.cadenceKind ?? "") !== "long_term") return null;
+  if (String(input.deferredMessage ?? "").trim() !== RIDE_CHALLENGE_WRAPUP_MARKER) return null;
+  // Owed = the wrap-up (step 1) never went out. A missing/invalid lastSentStep reads as 0
+  // (owed) — matches the parked records, and a sent wrap-up always stamps a real 1.
+  const lastSentRaw = Number(input.lastSentStep ?? 0);
+  const lastSent = Number.isFinite(lastSentRaw) ? lastSentRaw : 0;
+  if (lastSent >= 1) return null;
+  const iso = String(input.followUpIso ?? "").trim() || DEFAULT_RIDE_CHALLENGE_FOLLOWUP_ISO;
+  const eventMs = Date.parse(iso);
+  if (!Number.isFinite(eventMs)) return null;
+  if (input.nowMs > eventMs + RIDE_CHALLENGE_WRAPUP_GRACE_MS) return null; // too late — stay dormant
+  // Deterministic per-lead stagger (djb2 over convId → day 0..2 after the event).
+  const id = String(input.convId ?? "");
+  let h = 5381;
+  for (let i = 0; i < id.length; i++) h = ((h * 33) ^ id.charCodeAt(i)) >>> 0;
+  const dayOffset = h % RIDE_CHALLENGE_WRAPUP_STAGGER_DAYS;
+  return { nextDueAtIso: new Date(eventMs + dayOffset * 24 * 60 * 60 * 1000).toISOString() };
+}
+
 // ── Owner-named personal thread step-back (Joe, 2026-07-09, Mark Kocsis +17168609533) ──
 // A customer who opens with the assigned owner's NAME ("Hey Scott this is Mark"), replying to
 // that owner's own recent HUMAN outbound, is having a two-person conversation with their

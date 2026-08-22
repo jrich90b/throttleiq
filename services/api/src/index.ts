@@ -805,6 +805,8 @@ import {
   decideEventPromoTurn,
   decideOwnerThreadStepBack,
   resolveRideChallengeEventTouch,
+  decideRideChallengeWrapUpRevive,
+  RIDE_CHALLENGE_WRAPUP_MARKER,
   decideInProcessDealTurn,
   decideIndefiniteDeferTurn,
   decideInternationalLeadTurn,
@@ -932,6 +934,7 @@ import {
   buildHiringManagerInquiryReply,
   buildMarketplaceSellMyBikeReviewReply,
   buildRideChallengeSignupReply,
+  buildRideChallengeWrapUpReply,
   buildTakeOffMilwaukeeEightEngineReply,
   buildUnlistedInventoryHandoffReply,
   hasPriorCustomerFacingOutbound,
@@ -31213,6 +31216,49 @@ async function processDueFollowUpsUnlocked() {
       `[state-reconcile] realigned ${rideChallengeRealigned} ride-challenge cadence(s) to the event wrap-up date`
     );
   }
+  // Ride-challenge WRAP-UP revive (Joe ruling 2026-08-21: "generate a draft on the 15th").
+  // The signup ack COMPLETED these cadences on the spot (advanceFollowUpCadence's reminder
+  // short-circuit) and the tick skips completed — so without this the 9/15 wrap-up never
+  // composes for the parked signups. decideRideChallengeWrapUpRevive (routeStateReducer) owns
+  // the decision: one-way (owed = lastSentStep < 1, so a sent wrap-up can never re-fire),
+  // staggered over 3 days so the approval box is not flooded, bounded to event+7d. The revived
+  // cadence flows through the NORMAL tick → a suggest-mode draft; every existing gate applies.
+  let rideChallengeWrapUpsRevived = 0;
+  for (const conv of convs) {
+    const cad: any = conv.followUpCadence;
+    if (!cad) continue;
+    // Closed threads never fire the tick's touch (it stops/skips closed) — leave them dormant
+    // rather than parking a zombie "active" cadence on a closed conversation.
+    if (conv.status === "closed" || conv.closedAt) continue;
+    const revive = decideRideChallengeWrapUpRevive({
+      convId: conv.id,
+      cadenceStatus: cad.status,
+      cadenceKind: cad.kind,
+      deferredMessage: cad.deferredMessage,
+      lastSentStep: cad.lastSentStep,
+      nowMs: Date.now(),
+      followUpIso: process.env.RIDE_CHALLENGE_FOLLOWUP_ISO ?? null
+    });
+    if (!revive) continue;
+    cad.status = "active";
+    cad.stopReason = undefined;
+    cad.nextDueAt = revive.nextDueAtIso;
+    cad.pausedUntil = undefined;
+    cad.pauseReason = undefined;
+    conv.updatedAt = nowIso();
+    saveConversation(conv);
+    rideChallengeWrapUpsRevived += 1;
+    recordRouteOutcome("manual", "ride_challenge_wrapup_revived", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      nextDueAt: revive.nextDueAtIso
+    });
+  }
+  if (rideChallengeWrapUpsRevived > 0) {
+    console.log(
+      `[state-reconcile] revived ${rideChallengeWrapUpsRevived} ride-challenge wrap-up cadence(s) for the event touch`
+    );
+  }
   // Stale "needs reply" / held-flag heal: a conversation flagged "the AI couldn't answer this in
   // context" whose held marker outlived a real reply (a reply went out after the hold) should drop the
   // flag + close its todo (s R Gurajala, 2026-06-25 — a sent draft cleared via finalizeDraftAsSent but
@@ -32615,6 +32661,14 @@ async function processDueFollowUpsUnlocked() {
         `Hi ${firstName} — ${repName} at ${dealerName}. Just checking back. How are you liking your ${bikeModel}? If you’re ever thinking about trading in, let me know.`
       ];
       message = smsTemplates[Math.min(cadence.stepIndex, smsTemplates.length - 1)];
+    } else if (String(cadence.deferredMessage ?? "").trim() === RIDE_CHALLENGE_WRAPUP_MARKER) {
+      // Ride-challenge wrap-up (Joe ruling 2026-08-21): the ONE deferred event touch these
+      // cadences exist for — must win over the generic long_term nurture builder, or the
+      // revived record composes a sales check-in instead of the mileage ask. Deterministic
+      // template (workflowRegressionGuards); no re-intro (the signup ack already introduced).
+      // The email arm below reuses `message`, so both renderings carry the wrap-up.
+      message = buildRideChallengeWrapUpReply({ firstName });
+      cadenceNoRepeatFallbacks = [message];
     } else if (cadence.kind === "long_term") {
       const longTerm = await buildLongTermFollowUp(conv, dealerProfile);
       message = longTerm.body;

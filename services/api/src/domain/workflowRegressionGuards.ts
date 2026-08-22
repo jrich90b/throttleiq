@@ -1108,6 +1108,21 @@ export function buildRideChallengeSignupReply(args: {
   );
 }
 
+// The 9/15 wrap-up touch (Joe ruling 2026-08-21: "generate a draft on the 15th").
+// Mirrors the signup ack's promise ("stop in and record your miles") — the wrap-up asks for
+// the FINAL reading. Deterministic template; deliberately NO agent intro: every recipient
+// already got the signup ack on this thread, so re-introducing would be the persona_reintro
+// charter miss (C1.2a). Invents nothing — no prize, no deadline beyond the event itself.
+export function buildRideChallengeWrapUpReply(args: { firstName?: string | null }): string {
+  const firstName = String(args.firstName ?? "").trim();
+  const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
+  return (
+    `${greeting}this year's ride challenge is wrapping up! ` +
+    "Stop in when you get a chance so we can record your final mileage. " +
+    "We'd love to hear how far you rode this season."
+  );
+}
+
 export function isDemoDayEventQuestionText(textRaw: string | null | undefined): boolean {
   const text = String(textRaw ?? "")
     .trim()
