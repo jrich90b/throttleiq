@@ -21,9 +21,11 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  DETECTOR_FEED_CYCLE_SPREAD_HOURS_DEFAULT,
   DETECTOR_FEED_STALE_HOURS_DEFAULT,
   describeDetectorFeed,
   formatStaleDetectorFeedBanner,
+  resolveCycleSpreadHours,
   resolveStaleHours,
   summarizeDetectorFeeds
 } from "./detectorFeedFreshness.ts";
@@ -120,6 +122,117 @@ assert.equal(resolveStaleHours({ DETECTOR_FEED_STALE_HOURS: "0" }), DETECTOR_FEE
 assert.equal(resolveStaleHours({}), DETECTOR_FEED_STALE_HOURS_DEFAULT, "unset falls back to the default");
 
 // ---------------------------------------------------------------------------
+// 2b. THE HOLE IN THE ABSOLUTE BOUND — the real 2026-08-22 reading.
+//
+// The same cron-vs-deploy failure recurred: a deploy at 08:45 UTC blew away node_modules and the
+// 08:50/08:52/08:53/08:54 sweeps died with ERR_MODULE_NOT_FOUND. But this time the work order was
+// built at 08:55 and read at 09:02, so the dead feeds measured 24.1-24.2h — UNDER the 26h bound.
+// `staleFeedCount` read 0 and forty hours of operator reports and draft-review rewrites were
+// invisible. These are the measured ages, to the tenth of an hour, off the box.
+// ---------------------------------------------------------------------------
+const AUG22_NOW_MS = Date.parse("2026-08-22T09:02:00.000Z");
+const aug22HoursAgo = (h: number) => new Date(AUG22_NOW_MS - h * 60 * 60 * 1000).toISOString();
+const aug22Feeds = [
+  { name: "outcome-audit (primary)", file: "/r/outcome_audit/latest.json", present: true, generatedAt: aug22HoursAgo(24.2), findings: 38 },
+  { name: "open-critic (discovery)", file: "/r/open_critic/latest.json", present: true, generatedAt: aug22HoursAgo(24.1), findings: 0 },
+  { name: "watch-fire-miss", file: "/r/watch_fire_miss/latest.json", present: true, generatedAt: aug22HoursAgo(24.1), findings: 4 },
+  { name: "operator-reported (ops anomaly)", file: "/r/ops_anomaly/latest.json", present: true, generatedAt: aug22HoursAgo(24.1), findings: 133 },
+  { name: "corpus-replay (offline flywheel)", file: "/r/corpus_replay/latest.json", present: true, generatedAt: aug22HoursAgo(23.3), findings: 31 },
+  { name: "intent-handled (comprehension)", file: "/r/intent_handled/anomalies.json", present: true, generatedAt: aug22HoursAgo(0.2), findings: 0 },
+  { name: "thumbs-down staff action", file: "/r/thumbs_down_action/latest.json", present: true, generatedAt: aug22HoursAgo(0.3), findings: 2 },
+  { name: "mdf-portal-health", file: "/r/mdf_health/latest.json", present: true, generatedAt: aug22HoursAgo(0.0), findings: 0 },
+  { name: "fabricated-frame (comprehension)", file: "/r/fabricated_frame/latest.json", present: true, generatedAt: aug22HoursAgo(0.6), findings: 0 }
+];
+
+// FIRST, pin the hole itself — so nobody ever "simplifies" this back to one rule. Every dead feed
+// passes the absolute bound cleanly; it is not a matter of a slightly-too-generous number.
+for (const f of aug22Feeds.slice(0, 5)) {
+  assert.equal(
+    describeDetectorFeed(f, { nowMs: AUG22_NOW_MS }).stale,
+    false,
+    `the ${f.name} feed is under the ${DETECTOR_FEED_STALE_HOURS_DEFAULT}h absolute bound — a daily feed read just after its window is ~24h old whether it ran or not`
+  );
+}
+
+const aug22 = summarizeDetectorFeeds(aug22Feeds, { nowMs: AUG22_NOW_MS });
+assert.deepEqual(
+  aug22.staleSources.map(s => s.name).sort(),
+  [
+    "corpus-replay (offline flywheel)",
+    "open-critic (discovery)",
+    "operator-reported (ops anomaly)",
+    "outcome-audit (primary)",
+    "watch-fire-miss"
+  ],
+  "the four feeds whose crons died are named, plus corpus-replay, whose 05:00 run had not yet written at 09:02"
+);
+for (const s of aug22.staleSources) {
+  assert.match(String(s.staleReason), /missed a detector cycle/i, "each says WHICH rule fired, in plain words");
+}
+assert.equal(
+  aug22.sources.filter(s => !s.stale).length,
+  4,
+  "the four feeds that ran this morning must NOT alarm — a banner that fires on healthy feeds trains the reader to skip it"
+);
+
+// NOW-INDEPENDENCE is the property that makes this rule work where the absolute one cannot: the
+// relative rule compares feeds to EACH OTHER, so the verdict at 08:55 (when anomaly_loop_detect
+// bakes it into next.json) is identical to the verdict at 09:02 (when act_runner re-derives it),
+// and identical again at 16:00.
+for (const readAt of ["2026-08-22T08:55:00.000Z", "2026-08-22T16:00:00.000Z"]) {
+  const later = summarizeDetectorFeeds(aug22Feeds, { nowMs: Date.parse(readAt) });
+  assert.deepEqual(
+    later.staleSources.map(s => s.name).sort(),
+    aug22.staleSources.map(s => s.name).sort(),
+    `the same feeds read at ${readAt} must produce the same verdict — the rule cannot depend on when it is run`
+  );
+}
+
+// HONEST LIMIT, stated so nobody mistakes it for coverage: when the WHOLE chain dies on the same
+// day there is no fresh sibling to measure against, and the relative rule says nothing. That case
+// belongs to the absolute bound and to the work order's own generatedAt, not to this rule.
+const allDead = summarizeDetectorFeeds(
+  aug22Feeds.map(f => ({ ...f, generatedAt: aug22HoursAgo(24.1) })),
+  { nowMs: AUG22_NOW_MS }
+);
+assert.equal(allDead.staleSources.length, 0, "a uniformly dead chain has no spread to detect — documented limit, not a bug");
+
+// A single feed cannot be compared to anything, so it never alarms on the relative rule alone.
+const lonely = summarizeDetectorFeeds([aug22Feeds[0]], { nowMs: AUG22_NOW_MS });
+assert.equal(lonely.staleSources.length, 0, "one feed has no siblings — the relative rule needs at least two");
+
+// The same-cycle bound is exclusive at the boundary, and its env override behaves like the other.
+const spreadProbe = (behindHours: number, cycleSpreadHours?: number) =>
+  summarizeDetectorFeeds(
+    [
+      { name: "fresh", file: "f", present: true, generatedAt: aug22HoursAgo(0) },
+      { name: "behind", file: "b", present: true, generatedAt: aug22HoursAgo(behindHours) }
+    ],
+    { nowMs: AUG22_NOW_MS, cycleSpreadHours }
+  ).staleSources.map(s => s.name);
+assert.deepEqual(spreadProbe(DETECTOR_FEED_CYCLE_SPREAD_HOURS_DEFAULT), [], "exactly at the same-cycle bound is not yet a miss");
+assert.deepEqual(spreadProbe(DETECTOR_FEED_CYCLE_SPREAD_HOURS_DEFAULT + 0.5), ["behind"], "half an hour past it is");
+assert.deepEqual(spreadProbe(12, 24), [], "a dealer with a wider detector block widens the bound");
+assert.equal(resolveCycleSpreadHours({ DETECTOR_FEED_CYCLE_SPREAD_HOURS: "12" }), 12, "a valid override is honoured");
+assert.equal(resolveCycleSpreadHours({ DETECTOR_FEED_CYCLE_SPREAD_HOURS: "nonsense" }), DETECTOR_FEED_CYCLE_SPREAD_HOURS_DEFAULT, "junk falls back to the default");
+assert.equal(resolveCycleSpreadHours({ DETECTOR_FEED_CYCLE_SPREAD_HOURS: "0" }), DETECTOR_FEED_CYCLE_SPREAD_HOURS_DEFAULT, "0 would alarm on everything — refused");
+assert.equal(resolveCycleSpreadHours({}), DETECTOR_FEED_CYCLE_SPREAD_HOURS_DEFAULT, "unset falls back to the default");
+
+// A feed already stale by the absolute bound keeps ITS reason — the new rule only ever adds.
+const mixed = summarizeDetectorFeeds(
+  [
+    { name: "fresh", file: "f", present: true, generatedAt: aug22HoursAgo(0) },
+    { name: "ancient", file: "a", present: true, generatedAt: aug22HoursAgo(121) }
+  ],
+  { nowMs: AUG22_NOW_MS }
+);
+assert.match(
+  String(mixed.staleSources.find(s => s.name === "ancient")?.staleReason),
+  /over the 26h daily bound/,
+  "the absolute rule still owns the feeds it already caught"
+);
+
+// ---------------------------------------------------------------------------
 // 3. EXECUTION — run both scripts end to end against a synthetic report root.
 // ---------------------------------------------------------------------------
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "detector-feed-freshness-"));
@@ -200,6 +313,59 @@ assert.ok(
 assert.ok(
   emptyList.stderr.includes("DETECTOR FEEDS ARE STALE"),
   "…but the stale-feed banner prints FIRST — a dead detector chain must never read as a quiet store"
+);
+
+// THE 2026-08-22 SHAPE, END TO END: a work order that BAKED IN `stale: false` for a feed that had
+// missed a cycle. `act_runner list` must re-derive from each feed's stored `stampedAt` and warn
+// anyway — trusting the baked flag is what carried a dead ops-anomaly feed all day.
+const bakedFreshPath = path.join(root, "anomaly_loop", "next.json");
+fs.writeFileSync(
+  bakedFreshPath,
+  JSON.stringify(
+    {
+      ...payload,
+      workOrders: [],
+      staleFeedCount: 0,
+      staleFeeds: [],
+      feedSources: [
+        {
+          name: "operator-reported (ops anomaly)",
+          file: "/r/ops_anomaly/latest.json",
+          present: true,
+          stampedAt: new Date(Date.now() - 24.1 * 3600 * 1000).toISOString(),
+          stampSource: "generatedAt",
+          findings: 133,
+          ageHours: 24.1,
+          stale: false
+        },
+        {
+          name: "mdf-portal-health",
+          file: "/r/mdf_health/latest.json",
+          present: true,
+          stampedAt: new Date(Date.now() - 0.2 * 3600 * 1000).toISOString(),
+          stampSource: "generatedAt",
+          findings: 0,
+          ageHours: 0.2,
+          stale: false
+        }
+      ]
+    },
+    null,
+    2
+  )
+);
+const bakedList = run("act_runner.ts", ["list"]);
+assert.ok(
+  bakedList.stderr.includes("DETECTOR FEEDS ARE STALE"),
+  `act_runner must RE-DERIVE freshness at read time, not trust the flag the work order baked in\n${bakedList.stderr}`
+);
+assert.ok(
+  bakedList.stderr.includes("operator-reported (ops anomaly)"),
+  "…and name the feed that actually missed the cycle"
+);
+assert.ok(
+  bakedList.stderr.includes("1 of 2 input feed(s) did not run"),
+  "…without dragging in the sibling that ran on time (it appears only as the feed being compared AGAINST)"
 );
 
 // A work order written before this provenance existed must not crash or invent an alarm.

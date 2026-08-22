@@ -34,6 +34,34 @@
  *  the box sit at 3.7-5.3h, so 26h flags a skipped day with a wide margin and no false alarm. */
 export const DETECTOR_FEED_STALE_HOURS_DEFAULT = 26;
 
+/**
+ * How far apart two feeds of the SAME daily cycle can legitimately sit. The box's detector block
+ * runs 05:00 UTC (corpus replay) through ~09:00 UTC (anomaly_loop_detect), so ~4h of honest spread;
+ * 8h carries that with margin and is still a third of the 24h a skipped cycle costs.
+ *
+ * WHY A SECOND RULE EXISTS AT ALL (measured 2026-08-22 — the elapsed bound above has a hole).
+ * The 26h bound was written against the 2026-08-18 reading, where the dead feeds were 28.8h old
+ * because the tick happened to read them at 13:40 UTC. On 2026-08-22 the SAME failure recurred —
+ * a deploy at 08:45 UTC blew away node_modules and the 08:50/08:52/08:53/08:54 sweeps all died with
+ * ERR_MODULE_NOT_FOUND — but the work order was built at 08:55 and read at 09:02, so the four dead
+ * feeds measured **24.1-24.2h**, comfortably under 26h. `staleFeedCount` read 0. Forty hours of
+ * operator reports and Claude-draft-review rewrites were invisible, and the queue looked healthy.
+ *
+ * That is not a badly-chosen number, it is the wrong SHAPE of test: a daily feed read shortly after
+ * its window is ~24h old whether it ran or not, so no fixed elapsed bound can separate "ran
+ * yesterday, about to run" from "missed today's run". This rule asks a question that has an answer
+ * either way — *did this feed write during the same cycle its siblings did?* — by comparing each
+ * feed to the FRESHEST feed in the set rather than to the wall clock. It is therefore independent
+ * of when the work order is read or built, which is why the 08:55 detect run would have caught it.
+ *
+ * Known, accepted false alarm: between 09:00 and ~09:42 UTC the corpus-replay feed (05:00 cron,
+ * ~4.7h runtime) has not yet written today while faster siblings have, so it reads stale. It is
+ * mid-run, but its DATA genuinely is yesterday's, and per the fail-direction note above a warning
+ * costs one look at a timestamp. It does not fire when every feed dies together — that case is what
+ * the absolute bound and the work order's own `generatedAt` are for.
+ */
+export const DETECTOR_FEED_CYCLE_SPREAD_HOURS_DEFAULT = 8;
+
 export type DetectorFeedInput = {
   /** Human label used in the banner, e.g. "operator-reported (ops anomaly)". */
   name: string;
@@ -124,20 +152,59 @@ export type DetectorFeedSummary = {
   /** Age of the OLDEST present feed — the honest age of the work order as a whole. */
   oldestAgeHours: number | null;
   staleHours: number;
+  cycleSpreadHours: number;
 };
+
+/**
+ * RELATIVE rule: flag any feed that sat out a daily cycle its siblings completed. Compares feeds to
+ * the freshest feed in the set, never to the wall clock, so the verdict is the same whether it is
+ * computed while the work order is built or hours later when it is read.
+ *
+ * Only ever ADDS staleness — a feed already stale by the absolute bound keeps its original reason,
+ * so the existing 2026-08-18 readings are untouched. Pure; exported for the eval.
+ */
+export function flagFeedsThatMissedTheCycle(
+  sources: DetectorFeedSource[],
+  cycleSpreadHours: number = DETECTOR_FEED_CYCLE_SPREAD_HOURS_DEFAULT
+): DetectorFeedSource[] {
+  const datable = (sources ?? []).filter(s => s.present && s.stampedAt != null);
+  const stamps = datable
+    .map(s => Date.parse(String(s.stampedAt)))
+    .filter(ms => Number.isFinite(ms));
+  if (stamps.length < 2) return sources ?? [];
+  const newestMs = Math.max(...stamps);
+  const newest = datable.find(s => Date.parse(String(s.stampedAt)) === newestMs);
+  return (sources ?? []).map(s => {
+    if (s.stale || !s.present || s.stampedAt == null) return s;
+    const ms = Date.parse(String(s.stampedAt));
+    if (!Number.isFinite(ms)) return s;
+    const behindHours = roundHours(newestMs - ms);
+    if (behindHours <= cycleSpreadHours) return s;
+    return {
+      ...s,
+      stale: true,
+      staleReason:
+        `missed a detector cycle its siblings ran — last wrote ${behindHours}h before the freshest ` +
+        `feed (${newest?.name ?? "unknown"}), over the ${cycleSpreadHours}h same-cycle bound`
+    };
+  });
+}
 
 export function summarizeDetectorFeeds(
   inputs: DetectorFeedInput[],
-  opts?: { nowMs?: number; staleHours?: number }
+  opts?: { nowMs?: number; staleHours?: number; cycleSpreadHours?: number }
 ): DetectorFeedSummary {
   const staleHours = opts?.staleHours ?? DETECTOR_FEED_STALE_HOURS_DEFAULT;
-  const sources = (inputs ?? []).map(i => describeDetectorFeed(i, { nowMs: opts?.nowMs, staleHours }));
+  const cycleSpreadHours = opts?.cycleSpreadHours ?? DETECTOR_FEED_CYCLE_SPREAD_HOURS_DEFAULT;
+  const described = (inputs ?? []).map(i => describeDetectorFeed(i, { nowMs: opts?.nowMs, staleHours }));
+  const sources = flagFeedsThatMissedTheCycle(described, cycleSpreadHours);
   const ages = sources.filter(s => s.present && s.ageHours != null).map(s => s.ageHours as number);
   return {
     sources,
     staleSources: sources.filter(s => s.stale),
     oldestAgeHours: ages.length ? Math.max(...ages) : null,
-    staleHours
+    staleHours,
+    cycleSpreadHours
   };
 }
 
@@ -146,6 +213,13 @@ export function summarizeDetectorFeeds(
 export function resolveStaleHours(env: Record<string, string | undefined> = process.env): number {
   const raw = Number(env.DETECTOR_FEED_STALE_HOURS);
   return Number.isFinite(raw) && raw > 0 ? raw : DETECTOR_FEED_STALE_HOURS_DEFAULT;
+}
+
+/** Same contract for the same-cycle bound: a dealer whose detector block spans more than 8h widens
+ *  it without a code change, and a junk value falls back rather than disabling the check. */
+export function resolveCycleSpreadHours(env: Record<string, string | undefined> = process.env): number {
+  const raw = Number(env.DETECTOR_FEED_CYCLE_SPREAD_HOURS);
+  return Number.isFinite(raw) && raw > 0 ? raw : DETECTOR_FEED_CYCLE_SPREAD_HOURS_DEFAULT;
 }
 
 /**

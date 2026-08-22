@@ -22,6 +22,7 @@ const { classifyOutcomeAnomaly, suppressStaleFindings, suppressAlreadyShippedEch
 );
 import {
   formatStaleDetectorFeedBanner,
+  resolveCycleSpreadHours,
   resolveStaleHours,
   summarizeDetectorFeeds,
   type DetectorFeedInput
@@ -60,6 +61,7 @@ const anomalies: any[] = Array.isArray(feed?.anomalies) ? feed.anomalies : [];
 // because the 08:50-08:54 crons died inside a deploy's npm install. Record every feed's age so a
 // quiet queue can be told apart from a quiet detector chain. See scripts/detectorFeedFreshness.ts.
 const feedStaleHours = resolveStaleHours();
+const feedCycleSpreadHours = resolveCycleSpreadHours();
 const feedProvenance: DetectorFeedInput[] = [];
 function mtimeMsOf(file: string): number | null {
   try {
@@ -138,7 +140,10 @@ for (const sib of [
   });
 }
 
-const feedFreshness = summarizeDetectorFeeds(feedProvenance, { staleHours: feedStaleHours });
+const feedFreshness = summarizeDetectorFeeds(feedProvenance, {
+  staleHours: feedStaleHours,
+  cycleSpreadHours: feedCycleSpreadHours
+});
 {
   const banner = formatStaleDetectorFeedBanner(feedFreshness);
   if (banner) console.warn(banner);
@@ -505,6 +510,7 @@ const payload = {
   staleFeeds: feedFreshness.staleSources,
   oldestFeedAgeHours: feedFreshness.oldestAgeHours,
   feedStaleHours: feedFreshness.staleHours,
+  feedCycleSpreadHours: feedFreshness.cycleSpreadHours,
   totalAnomalies: anomalies.length,
   rawAnomalyCount,
   suppressedByDispositionCount: suppressedByDisposition.length,
