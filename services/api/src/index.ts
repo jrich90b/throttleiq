@@ -20,7 +20,7 @@ import { applyPriorJourneyCarryOver } from "./domain/priorJourney.js";
 import { readFirstTimeRiderPolicy, hasRiderCoursePublicInfo, readEnrollmentRidingHistory, isThreadParkedOnUpcomingClass, applyRiderExperienceState } from "./domain/firstTimeRiderPolicy.js";
 import { buildFirstTimeRiderGuidanceReply, buildInitialAdfFirstTimeRiderGuidanceReply, hasExplicitRiderCourseInfoText, hasAmbiguousRiderCourseInfoText, asksRiderCourseLogistics, RIDER_COURSE_LOGISTICS_TODO } from "./domain/firstTimeRiderReply.js";
 import { readRidingAcademyRecordFields } from "./domain/ridingAcademy.js";
-import { buildAgentIntro, buildDealerRideIdentitySentence, normalizeNonAdfReplySpacing, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildRidingAcademyEnrollmentAck, buildJumpstartOneOnOneInvite, buildFirstTimeRiderBeginnerReply, buildAcquiredVehicleAck, buildWatchAvailableReply, buildCholoWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, resolveIntroducedOwnerFirstName, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, hasCustomerReceivedOutbound, hasRecentDeliveredHumanOutbound } from "./domain/agentVoice.js";
+import { buildAgentIntro, buildDealerRideIdentitySentence, normalizeNonAdfReplySpacing, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildRidingAcademyEnrollmentAck, buildJumpstartOneOnOneInvite, buildFirstTimeRiderBeginnerReply, buildAcquiredVehicleAck, buildWatchAvailableReply, buildCholoWatchAvailableReply, buildWatchAvailableBundleReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, resolveIntroducedOwnerFirstName, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName, resolveConversationAgentName, hasCustomerReceivedOutbound, hasRecentDeliveredHumanOutbound } from "./domain/agentVoice.js";
 import {
   postSaleVehicleIsNew,
   postSaleAccessoryOrEnjoyMessage,
@@ -21729,69 +21729,6 @@ function getPreferredSalespeopleForConv(
   return ordered;
 }
 
-function resolveConversationAgentName(conv: any, fallbackName?: string): string {
-  // Ultimate fallback is the neutral generic, never a hardcoded AH-era persona
-  // literal (identity-fallback sweep, 2026-07-17).
-  const normalizeAgentName = (raw: string | null | undefined, fallback = GENERIC_AGENT_DISPLAY_NAME): string => {
-    const clean = String(raw ?? "").trim();
-    if (!clean || /^(our team|sales team|team)$/i.test(clean)) return fallback;
-    return clean;
-  };
-  const fallback = normalizeAgentName(fallbackName, GENERIC_AGENT_DISPLAY_NAME);
-  // Persona self-intro matcher for the historic-backfill scan below — built from the
-  // resolved agent name (call sites pass the profile agentName as fallbackName), not a literal.
-  const personaSelfIntro = buildPersonaSelfIntroPattern(fallback === GENERIC_AGENT_DISPLAY_NAME ? null : fallback);
-  const leadFirst = String(conv?.lead?.firstName ?? "")
-    .trim()
-    .toLowerCase();
-  const leadFull = [conv?.lead?.firstName, conv?.lead?.lastName]
-    .map((v: unknown) => String(v ?? "").trim())
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-  const leadDisplay = String(conv?.lead?.name ?? "")
-    .trim()
-    .toLowerCase();
-  const matchesLeadIdentity = (raw: string): boolean => {
-    const clean = String(raw ?? "").trim().toLowerCase();
-    if (!clean) return false;
-    const first = clean.split(/\s+/).filter(Boolean)[0] ?? "";
-    if (leadFirst && first === leadFirst) return true;
-    if (leadFull && clean === leadFull) return true;
-    if (leadDisplay && clean === leadDisplay) return true;
-    return false;
-  };
-  const lockedNameRaw = String(conv?.manualSender?.userName ?? "").trim();
-  if (lockedNameRaw && !/^(our team|sales team|team)$/i.test(lockedNameRaw)) {
-    const first = lockedNameRaw.split(/\s+/).filter(Boolean)[0] ?? "";
-    return normalizeAgentName(first || lockedNameRaw, fallback);
-  }
-  // Historic backfill: threads where staff already took over before the
-  // manualSender lock existed (2026-06-11) resolve to the FIRST staff sender
-  // who texted as themselves - same semantics the send-time lock applies.
-  for (const m of conv?.messages ?? []) {
-    if (m?.direction !== "out") continue;
-    const prov = String(m?.provider ?? "");
-    if (prov !== "twilio" && prov !== "sendgrid" && prov !== "human") continue;
-    const actor = String(m?.actorUserName ?? "").trim();
-    if (!actor || /^(our team|sales team|team)$/i.test(actor)) continue;
-    if (personaSelfIntro && personaSelfIntro.test(String(m?.body ?? ""))) continue;
-    if (matchesLeadIdentity(actor)) continue;
-    const first = actor.split(/\s+/).filter(Boolean)[0] ?? "";
-    return normalizeAgentName(first || actor, fallback);
-  }
-  const manualTakeover =
-    String(conv?.manualSender?.source ?? "").trim().toLowerCase() === "manual_takeover";
-  const walkInLead = Boolean(conv?.lead?.walkIn);
-  if (manualTakeover || walkInLead || resolveIntroducedOwnerFirstName({ ownerName: conv?.leadOwner?.name, messages: conv?.messages })) {
-    const ownerNameRaw = String(conv?.leadOwner?.name ?? "").trim();
-    if (ownerNameRaw && !/^(our team|sales team|team)$/i.test(ownerNameRaw) && !matchesLeadIdentity(ownerNameRaw)) {
-      const first = ownerNameRaw.split(/\s+/).filter(Boolean)[0] ?? "";
-      return normalizeAgentName(first || ownerNameRaw, fallback);
-    }
-  }
-  return fallback;
-}
 
 function getLastNonVoiceOutbound(conv: any) {
   return getNonVoiceMessages(conv)

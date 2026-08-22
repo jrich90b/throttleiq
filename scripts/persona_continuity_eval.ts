@@ -143,11 +143,26 @@ assert.equal(
 );
 
 // resolveConversationAgentName must keep honoring the manualSender lock.
-const apiSource = await fs.readFile(path.resolve("services/api/src/index.ts"), "utf8");
-assert.match(
-  apiSource,
-  /const lockedNameRaw = String\(conv\?\.manualSender\?\.userName \?\? ""\)\.trim\(\);/,
-  "agent-name resolution must keep the manualSender lock branch"
+//
+// This was a source-text pin on index.ts (`const lockedNameRaw = …`) until 2026-08-22, when
+// the resolver moved verbatim to domain/agentVoice.ts and took the pin's text with it. A grep
+// for a variable declaration was never what this line was protecting anyway — it is protecting
+// the DECISION that a thread a rep took over keeps that rep's voice. Now that the resolver is
+// exported it can be executed, so the assertion asks the function the question directly and
+// survives the next refactor that moves or renames the branch.
+const { resolveConversationAgentName } = await import("../services/api/src/domain/agentVoice.ts");
+assert.equal(
+  resolveConversationAgentName(
+    {
+      lead: { firstName: "Kody" },
+      leadOwner: { name: "Giovanni Boccabella" },
+      manualSender: { userName: "Scott Hartrich", source: "manual_takeover" },
+      messages: []
+    },
+    fixtureAgentName
+  ),
+  "Scott",
+  "agent-name resolution must keep honoring the manualSender lock"
 );
 const llmSource = await fs.readFile(path.resolve("services/api/src/domain/llmDraft.ts"), "utf8");
 assert.match(
