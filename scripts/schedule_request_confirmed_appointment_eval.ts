@@ -24,6 +24,21 @@
  * Measured on the live store 2026-08-20: 58 manual_handoff threads carry a sticky schedule_request,
  * 7 with a confirmed appointment. The detector flags 8 conversations store-wide and NONE of those 7,
  * so the change leaves its population at 8.
+ *
+ * WIDENED 2026-08-22. The arm originally also required followUp.mode === "manual_handoff". That was
+ * never part of the proof — isSchedulingLeakConversation does not read followUp.mode at any point, so
+ * "a confirmed appointment is already invisible to the detector" holds in every mode. The narrowing
+ * only reflected the population #767 was measuring, and left the same stale-state bug live elsewhere.
+ *
+ * Measured 2026-08-22 by executing the reducer over 883 live conversations: 118 sticky
+ * schedule_request, 28 with a confirmed appointment; the arm fired on 8 and now fires on 22 (the 14
+ * added are 11 active + 3 with no follow-up mode), every one with an appointment 9.6-121.5 days in
+ * the PAST. 11 of the 14 are closed, so live reach goes from 3 to 6 OPEN threads and the rest is
+ * latent. The detector's flagged population, executed before and after: 8 -> 8, delta 0.
+ *
+ * NOTE for future triage: +17163160886 (Mark) surfaced this class in the 8/21 feed, but he is
+ * followUp.mode "manual_handoff" and was ALREADY covered by #767 — do not cite him as the uncovered
+ * instance. An earlier note claiming he was "active" did not survive execution against the store.
  */
 import assert from "node:assert/strict";
 
@@ -76,9 +91,52 @@ const ROWS: Row[] = [
     input: { followUpMode: "manual_handoff", dialogState: "schedule_request", ...CONFIRMED, hasSchedulingIntent: true },
     clearsDialogState: false
   },
+  // The follow-up mode is NOT part of the safety proof, and these rows are what says so. Until
+  // 2026-08-22 the arm also required manual_handoff, and this eval pinned "active => do not clear" —
+  // pinning the population #767 happened to measure rather than the argument that made it safe.
+  // isSchedulingLeakConversation never reads followUp.mode, so a confirmed appointment is invisible
+  // to it in EVERY mode. Mark +17163160886 (active, appointment confirmed, state pinned 2026-08-15)
+  // is the instance that flushed this out. If a future change re-narrows the arm to one mode, these
+  // rows fail and that is the alarm.
   {
-    name: "active thread (not manual_handoff) is untouched by the stale-state reducer",
+    name: "active thread with the visit already confirmed => clear (the mode is not the proof)",
     input: { followUpMode: "active", dialogState: "schedule_request", ...CONFIRMED },
+    clearsDialogState: true,
+    reason: "clear_schedule_request_appointment_confirmed"
+  },
+  {
+    name: "holding_inventory + confirmed visit => clear",
+    input: { followUpMode: "holding_inventory", dialogState: "schedule_request", ...CONFIRMED },
+    clearsDialogState: true,
+    reason: "clear_schedule_request_appointment_confirmed"
+  },
+  {
+    name: "paused_indefinite + confirmed visit => clear",
+    input: { followUpMode: "paused_indefinite", dialogState: "schedule_request", ...CONFIRMED },
+    clearsDialogState: true,
+    reason: "clear_schedule_request_appointment_confirmed"
+  },
+  {
+    name: "no follow-up mode recorded at all + confirmed visit => clear (6 of the 20 live threads)",
+    input: { followUpMode: "", dialogState: "schedule_request", ...CONFIRMED },
+    clearsDialogState: true,
+    reason: "clear_schedule_request_appointment_confirmed"
+  },
+  // The two guards have to survive the widening in the modes it newly reaches, not just in
+  // manual_handoff — otherwise widening the arm would quietly widen the guard-bypass with it.
+  {
+    name: "active + a reschedule in flight => keep the state, the visit is being moved",
+    input: { followUpMode: "active", dialogState: "schedule_request", ...CONFIRMED, appointmentReschedulePending: true },
+    clearsDialogState: false
+  },
+  {
+    name: "active + the customer raised scheduling THIS turn => keep it",
+    input: { followUpMode: "active", dialogState: "schedule_request", ...CONFIRMED, hasSchedulingIntent: true },
+    clearsDialogState: false
+  },
+  {
+    name: "active + schedule_request but NOTHING booked => untouched, still the detector's business",
+    input: { followUpMode: "active", dialogState: "schedule_request" },
     clearsDialogState: false
   },
   {
@@ -164,4 +222,25 @@ assert.equal(
   "clearing the dialog state must not change what the leak detector reports for this conversation"
 );
 
-console.log(`schedule_request_confirmed_appointment:eval — PASS (${ROWS.length} decision rows + 4 leak-detector invariants)`);
+// The widening rests entirely on the detector being blind to followUp.mode. Assert that by
+// EXECUTING it across every mode the store actually carries: if some future change teaches the
+// detector to care about the follow-up mode, the carve-out stops being provably free and this fails
+// before the arm can silently start costing the booking-funnel detector leads.
+for (const followUpMode of ["manual_handoff", "active", "holding_inventory", "paused_indefinite", ""]) {
+  const withMode = (appointment: Record<string, unknown> | null) => ({
+    ...mk(appointment),
+    followUp: { mode: followUpMode, reason: null }
+  });
+  assert.equal(
+    isSchedulingLeakConversation(withMode({ status: "confirmed", whenIso: "2026-08-15T16:00:00.000Z" }) as any, NOW),
+    false,
+    `a confirmed appointment must be invisible to the leak detector in followUp.mode "${followUpMode}"`
+  );
+  assert.equal(
+    isSchedulingLeakConversation(withMode(null) as any, NOW),
+    true,
+    `an unbooked stalled schedule_request must stay VISIBLE in followUp.mode "${followUpMode}"`
+  );
+}
+
+console.log(`schedule_request_confirmed_appointment:eval — PASS (${ROWS.length} decision rows + 14 leak-detector invariants)`);
